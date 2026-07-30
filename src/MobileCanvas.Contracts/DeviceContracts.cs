@@ -1,6 +1,6 @@
 namespace MobileCanvas.Contracts;
 
-public static class DeviceLabProtocol
+public static class MobileCanvasProtocol
 {
 	public const string Version = "1.0";
 }
@@ -53,7 +53,7 @@ public sealed record DisplayGeometry
 
 public sealed record DeviceTarget
 {
-	public string SchemaVersion { get; init; } = DeviceLabProtocol.Version;
+	public string SchemaVersion { get; init; } = MobileCanvasProtocol.Version;
 	public string Id { get; init; } = "";
 	public string Platform { get; init; } = "";
 	public string Provider { get; init; } = "";
@@ -115,7 +115,7 @@ public sealed record HostDiagnostics
 
 public sealed record DeviceCatalog
 {
-	public string SchemaVersion { get; init; } = DeviceLabProtocol.Version;
+	public string SchemaVersion { get; init; } = MobileCanvasProtocol.Version;
 	public DeviceTarget[] Devices { get; init; } = [];
 	public DeviceRuntime[] Runtimes { get; init; } = [];
 	public DeviceType[] DeviceTypes { get; init; } = [];
@@ -330,7 +330,7 @@ public sealed record ConfirmedOperationRequest
 /// </summary>
 public sealed record DeviceSelection
 {
-	public string SchemaVersion { get; init; } = DeviceLabProtocol.Version;
+	public string SchemaVersion { get; init; } = MobileCanvasProtocol.Version;
 	public bool HasSelection { get; init; }
 	public DeviceTarget? Device { get; init; }
 
@@ -355,7 +355,7 @@ public sealed record OperationResult
 
 public sealed record HostMetadata
 {
-	public string SchemaVersion { get; init; } = DeviceLabProtocol.Version;
+	public string SchemaVersion { get; init; } = MobileCanvasProtocol.Version;
 	public int ProcessId { get; init; }
 	public int Port { get; init; }
 	public string ControlToken { get; init; } = "";

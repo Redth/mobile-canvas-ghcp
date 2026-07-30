@@ -29,7 +29,7 @@ public sealed class DeviceServiceTests
 		Assert.NotNull(selection);
 		Assert.False(selection.HasSelection);
 		Assert.Null(selection.Device);
-		Assert.Equal(DeviceLabProtocol.Version, selection.SchemaVersion);
+		Assert.Equal(MobileCanvasProtocol.Version, selection.SchemaVersion);
 	}
 
 	[Fact]

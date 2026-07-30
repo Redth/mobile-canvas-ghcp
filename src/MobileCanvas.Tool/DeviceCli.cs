@@ -22,7 +22,7 @@ internal static class DeviceCli
 		var json = options.Flag("json") || (Console.IsOutputRedirected && !options.Flag("no-json"));
 		if (options.Flag("schema"))
 		{
-			Console.WriteLine(DeviceLabSchemas.For(command, action));
+			Console.WriteLine(MobileCanvasSchemas.For(command, action));
 			return 0;
 		}
 
@@ -305,7 +305,7 @@ internal static class DeviceCli
 					$"{catalog.DeviceTypes.Length} device types");
 				break;
 			case HostHealth health:
-				Console.WriteLine($"Device Lab host: {health.Status} (pid {health.ProcessId}, v{health.Version})");
+				Console.WriteLine($"Mobile Canvas host: {health.Status} (pid {health.ProcessId}, v{health.Version})");
 				break;
 			case CanvasOpenResult canvas:
 				Console.WriteLine(canvas.Url);
@@ -441,7 +441,7 @@ internal sealed class CliArguments
 		Context() ?? throw new ArgumentException("--session and --instance are required.");
 }
 
-internal static class DeviceLabSchemas
+internal static class MobileCanvasSchemas
 {
 	public static string For(string command, string action) =>
 		(command, action) switch

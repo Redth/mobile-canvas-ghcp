@@ -85,7 +85,7 @@ async function api(path, options = {}) {
     const payload = await response.json().catch(() => ({
       message: `${response.status} ${response.statusText}`,
     }));
-    const error = new Error(payload.message || "Device Lab request failed.");
+    const error = new Error(payload.message || "Mobile Canvas request failed.");
     error.code = payload.code;
     error.status = response.status;
     throw error;

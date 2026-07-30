@@ -322,7 +322,7 @@ public sealed partial class AndroidEmulatorBackend : IDeviceBackend, IAsyncDispo
 	}
 
 	/// <summary>
-	/// Launches an emulator with the two flags that decide whether Device Lab can use it at all.
+	/// Launches an emulator with the two flags that decide whether Mobile Canvas can use it at all.
 	/// </summary>
 	/// <remarks>
 	/// <c>-grpc</c> is mandatory rather than optional: the emulator only auto-enables gRPC on port
@@ -550,7 +550,7 @@ public sealed partial class AndroidEmulatorBackend : IDeviceBackend, IAsyncDispo
 
 	public Task<DeviceTarget> RevealAsync(string deviceId, CancellationToken cancellationToken = default) =>
 		throw new DeviceCapabilityException(
-			"Emulators have no window to reveal; Device Lab launches them headless-capable and renders them in the canvas.");
+			"Emulators have no window to reveal; Mobile Canvas launches them headless-capable and renders them in the canvas.");
 
 	#endregion
 
@@ -931,7 +931,7 @@ public sealed partial class AndroidEmulatorBackend : IDeviceBackend, IAsyncDispo
 		{
 			throw new DeviceCapabilityException(
 				$"Emulator '{avdId}' is running without its gRPC service, which happens when another emulator " +
-				"already holds port 8554. Restart it from Device Lab so it starts with an explicit gRPC port.");
+				"already holds port 8554. Restart it from Mobile Canvas so it starts with an explicit gRPC port.");
 		}
 
 		return await _connections.GetAsync(instance, cancellationToken).ConfigureAwait(false);
@@ -1137,7 +1137,7 @@ public sealed partial class AndroidEmulatorBackend : IDeviceBackend, IAsyncDispo
 	{
 		// avdmanager rejects spaces and most punctuation in AVD names.
 		var cleaned = AvdNamePattern().Replace(name, "_").Trim('_');
-		return string.IsNullOrEmpty(cleaned) ? "device_lab_avd" : cleaned;
+		return string.IsNullOrEmpty(cleaned) ? "mobile_canvas_avd" : cleaned;
 	}
 
 	/// <summary>

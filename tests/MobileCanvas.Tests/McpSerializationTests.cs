@@ -15,7 +15,7 @@ namespace MobileCanvas.Tests;
 public class McpSerializationTests
 {
 	[Fact]
-	public void ToolSerializerOptions_ResolvesDeviceLabContractTypes()
+	public void ToolSerializerOptions_ResolvesMobileCanvasContractTypes()
 	{
 		var info = DeviceMcpHost.ToolSerializerOptions.GetTypeInfo(typeof(DeviceTarget[]));
 
@@ -33,7 +33,7 @@ public class McpSerializationTests
 	}
 
 	[Fact]
-	public void ToolSerializerOptions_KeepDeviceLabCamelCaseNaming()
+	public void ToolSerializerOptions_KeepMobileCanvasCamelCaseNaming()
 	{
 		var target = new DeviceTarget
 		{
@@ -65,9 +65,9 @@ public class McpSerializationTests
 	}
 
 	[Fact]
-	public void DeviceLabContextAlone_CannotResolveMcpProtocolTypes()
+	public void MobileCanvasContextAlone_CannotResolveMcpProtocolTypes()
 	{
-		// Guards the tests above from becoming vacuous: passing the Device Lab
+		// Guards the tests above from becoming vacuous: passing the Mobile Canvas
 		// context's own options straight to WithTools is exactly what broke the
 		// AOT MCP server, so that failure mode must stay observable.
 		Assert.Throws<NotSupportedException>(

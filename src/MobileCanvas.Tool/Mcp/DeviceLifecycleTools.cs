@@ -16,8 +16,8 @@ public sealed class DeviceLifecycleTools(DeviceHostClient client)
 	[Description("Create an iOS simulator or Android emulator from an installed runtime/system image and device type returned by mobile_device_catalog.")]
 	public Task<DeviceTarget> Create(
 		[Description("Display name for the new device.")] string name,
-		[Description("Runtime identifier from the Device Lab catalog.")] string runtimeId,
-		[Description("Device type identifier from the Device Lab catalog.")] string deviceTypeId,
+		[Description("Runtime identifier from the device catalog.")] string runtimeId,
+		[Description("Device type identifier from the device catalog.")] string deviceTypeId,
 		[Description("Platform provider; currently ios.")] string platform = DevicePlatforms.Ios,
 		CancellationToken cancellationToken = default) =>
 		client.CreateDeviceAsync(

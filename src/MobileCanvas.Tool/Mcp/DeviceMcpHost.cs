@@ -12,7 +12,7 @@ namespace MobileCanvas.Tool;
 internal static class DeviceMcpHost
 {
 	/// <summary>
-	/// Device Lab contract types chained ahead of the MCP SDK's own source-generated
+	/// Mobile Canvas contract types chained ahead of the MCP SDK's own source-generated
 	/// context. Under Native AOT reflection-based serialization is disabled, so the
 	/// server cannot start unless both resolvers are present: ours for tool payloads
 	/// and the SDK's for protocol types such as <c>ContentBlock[]</c>.

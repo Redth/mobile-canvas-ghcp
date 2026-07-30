@@ -403,7 +403,7 @@ public sealed class DeviceHostClient
 		{
 			var entryAssembly = Path.Combine(AppContext.BaseDirectory, "mobile-canvas.dll");
 			if (!File.Exists(entryAssembly))
-				throw new InvalidOperationException("Could not determine the Device Lab assembly path.");
+				throw new InvalidOperationException("Could not determine the Mobile Canvas assembly path.");
 			startInfo.ArgumentList.Add(entryAssembly);
 		}
 		startInfo.ArgumentList.Add("host");
@@ -577,7 +577,7 @@ public sealed class DeviceHostClient
 		{
 			await EnsureSuccessAsync(response, cancellationToken).ConfigureAwait(false);
 			return await response.Content.ReadFromJsonAsync(typeInfo, cancellationToken).ConfigureAwait(false)
-				?? throw new InvalidOperationException("The Device Lab host returned an empty response.");
+				?? throw new InvalidOperationException("The Mobile Canvas host returned an empty response.");
 		}
 	}
 
@@ -599,7 +599,7 @@ public sealed class DeviceHostClient
 		{
 		}
 		throw new HttpRequestException(
-			$"Device Lab host returned {(int)response.StatusCode} {response.ReasonPhrase}.");
+			$"Mobile Canvas host returned {(int)response.StatusCode} {response.ReasonPhrase}.");
 	}
 
 	private static string WithContext(string path, CanvasContextKey context) =>

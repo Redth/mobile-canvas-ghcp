@@ -394,7 +394,7 @@ const canvas = createCanvas({
     return {
       title: result.title || "Mobile Device",
       url: result.url,
-      status: "Connected to local Device Lab host",
+      status: "Connected to local Mobile Canvas host",
     };
   },
   onClose: async (ctx) => {

@@ -36,7 +36,7 @@ public sealed class DeviceMediaTools(DeviceHostClient client)
 	public Task<RecordingStatus> StartRecording(
 		[Description("Provider-qualified device ID.")] string deviceId,
 		[Description("Maximum recording duration in seconds, from 1 through 3600.")] int timeoutSeconds = 180,
-		[Description("Optional absolute output path; omit to use the Device Lab artifacts directory.")] string? outputPath = null,
+		[Description("Optional absolute output path; omit to use the Mobile Canvas artifacts directory.")] string? outputPath = null,
 		CancellationToken cancellationToken = default) =>
 		client.StartRecordingAsync(
 			deviceId,
