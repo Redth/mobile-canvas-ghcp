@@ -55,7 +55,9 @@ drops video from ~50 FPS to ~3 FPS.
 /plugin install mobile-canvas
 ```
 
-This registers both the canvas extension and the MCP server.
+This registers both the canvas extension and the MCP server, and ships the
+executable itself, so nothing else needs installing. See
+[How the executable ships](docs/distribution.md).
 
 ### From source
 
@@ -67,6 +69,14 @@ cd mobile-canvas-ghcp
 ```
 
 Reload Copilot afterwards so it picks up the extension.
+
+### As a .NET global tool
+
+For a plain CLI/MCP install without the canvas:
+
+```bash
+dotnet tool install -g MobileCanvas.Tool
+```
 
 ## Usage
 
@@ -149,7 +159,8 @@ crosses to the canvas instead of the 41-577 MiB/s the emulator emits.
 ```bash
 dotnet build MobileCanvas.slnx
 dotnet test  tests/MobileCanvas.Tests/MobileCanvas.Tests.csproj
-./scripts/build.sh
+./scripts/build.sh          # builds one architecture into .build/bin/<rid>
+./scripts/release.sh        # rebuilds every shipped arch and refreshes runtimes/
 ```
 
 Two things to know before you change anything:
@@ -160,6 +171,10 @@ Two things to know before you change anything:
 - **`dotnet publish` does not build the Swift helper.** `scripts/build.sh`
   builds both. A stale helper fails only later, at stream start; check it with
   `mobile-screencap --help` and confirm an `encode` subcommand exists.
+
+Changing `src/` or `native/` also means re-running `scripts/release.sh` and
+committing `runtimes/`, because that bundle is what a plugin install actually
+executes. See [How the executable ships](docs/distribution.md).
 
 ## License
 

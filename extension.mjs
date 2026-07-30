@@ -1,26 +1,22 @@
 import { execFile } from "node:child_process";
-import { existsSync } from "node:fs";
-import { homedir } from "node:os";
-import { dirname, join } from "node:path";
-import { fileURLToPath } from "node:url";
 import { promisify } from "node:util";
 import { createCanvas, joinSession } from "@github/copilot-sdk/extension";
+import { resolveCommand } from "./lib/runtime.mjs";
 
 const execFileAsync = promisify(execFile);
-const extensionDir = dirname(fileURLToPath(import.meta.url));
 
-// A binary bundled beside the extension wins so the canvas UI and the host that
-// serves it always come from the same release.
-const command = [
-  process.env.MOBILE_CANVAS_COMMAND,
-  join(extensionDir, "bin", "mobile-canvas"),
-  join(homedir(), ".local", "bin", "mobile-canvas"),
-  join(homedir(), ".dotnet", "tools", "mobile-canvas"),
-].find((candidate) => candidate && existsSync(candidate)) || "mobile-canvas";
+// Resolved lazily and then cached: extracting the bundled binary should happen
+// on first use rather than at import time, so a resolution failure surfaces as
+// a readable action error instead of preventing the extension from loading.
+let resolved = null;
+function command() {
+  if (!resolved) resolved = resolveCommand();
+  return resolved.command;
+}
 
 async function runCli(args) {
   try {
-    const { stdout } = await execFileAsync(command, [...args, "--json"], {
+    const { stdout } = await execFileAsync(command(), [...args, "--json"], {
       encoding: "utf8",
       maxBuffer: 8 * 1024 * 1024,
       timeout: 120_000,

@@ -2,8 +2,8 @@
   "mcpServers": {
     "mobile-canvas": {
       "type": "stdio",
-      "command": "${CLAUDE_PLUGIN_ROOT}/bin/mobile-canvas",
-      "args": ["mcp"]
+      "command": "node",
+      "args": ["${CLAUDE_PLUGIN_ROOT}/scripts/mcp.mjs"]
     }
   }
 }

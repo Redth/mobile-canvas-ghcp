@@ -1,0 +1,39 @@
+{
+  "runtimes": {
+    "darwin-arm64": {
+      "rid": "osx-arm64",
+      "executable": "mobile-canvas",
+      "id": "8c005bac1cd07f6370f960cecd2c2a2d9c2a2c0bc6833234858108c5a54fea02",
+      "files": {
+        "mobile-canvas": {
+          "archive": "osx-arm64/mobile-canvas.gz",
+          "sha256": "8c005bac1cd07f6370f960cecd2c2a2d9c2a2c0bc6833234858108c5a54fea02",
+          "size": 26260560
+        },
+        "mobile-screencap": {
+          "archive": "osx-arm64/mobile-screencap.gz",
+          "sha256": "135ee4c4a5da251a1b59fc81bc078d264567f20a7829751f36eb4a11ebb2adc2",
+          "size": 520720
+        }
+      }
+    },
+    "darwin-x64": {
+      "rid": "osx-x64",
+      "executable": "mobile-canvas",
+      "id": "5008665fa7ce392120e02d86e84aa94b156c0dde090651c6a678b63ec0d6918a",
+      "files": {
+        "mobile-canvas": {
+          "archive": "osx-x64/mobile-canvas.gz",
+          "sha256": "5008665fa7ce392120e02d86e84aa94b156c0dde090651c6a678b63ec0d6918a",
+          "size": 27260416
+        },
+        "mobile-screencap": {
+          "archive": "osx-x64/mobile-screencap.gz",
+          "sha256": "135ee4c4a5da251a1b59fc81bc078d264567f20a7829751f36eb4a11ebb2adc2",
+          "size": 520720
+        }
+      }
+    }
+  },
+  "version": "0.1.0"
+}

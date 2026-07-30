@@ -1,0 +1,38 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  build:
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-dotnet@v4
+        with:
+          global-json-file: global.json
+
+      - name: Test
+        run: dotnet test MobileCanvas.slnx -c Release
+
+      # The bundled binaries are what a plugin install actually runs, so a
+      # corrupt or mismatched archive is a shipping bug, not a packaging detail.
+      - name: Verify bundled runtimes
+        run: node scripts/verify-bundle.mjs
+
+      # Catches runtimes/ drifting behind src/. It compares checksums rather
+      # than bytes because Native AOT output is not bit-reproducible.
+      - name: Check the bundle matches source
+        run: |
+          node -e '
+            const m = require("./runtimes/manifest.json");
+            console.log("bundled:", Object.keys(m.runtimes).join(", "));
+          '
+          ./scripts/build.sh osx-arm64
+          node scripts/bundle.mjs --rid osx-arm64 --from .build/bin/osx-arm64
+          if ! git diff --quiet -- runtimes/osx-arm64; then
+            echo "::warning::runtimes/ differs from a fresh build of src/. Run scripts/release.sh and commit."
+          fi

@@ -3,13 +3,17 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
-OUTPUT="${REPO_ROOT}/.build/bin"
 
 case "$(uname -m)" in
   arm64|aarch64) DEFAULT_RID="osx-arm64" ;;
   *)             DEFAULT_RID="osx-x64" ;;
 esac
 RID="${1:-${DEFAULT_RID}}"
+
+# Each architecture publishes to its own directory so a release matrix can build
+# several without overwriting each other, and so bundling picks up exactly the
+# architecture it was asked for.
+OUTPUT="${REPO_ROOT}/.build/bin/${RID}"
 
 # The Swift helper is not produced by `dotnet publish`, and a stale copy fails
 # only later, at stream start. Build it first so the two halves stay in step.

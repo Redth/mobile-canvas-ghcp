@@ -17,5 +17,16 @@
   ],
   "dependencies": {
     "@github/copilot-sdk": "latest"
-  }
+  },
+  "files": [
+    "extension.mjs",
+    "lib/",
+    "runtimes/",
+    "scripts/",
+    "web/",
+    "assets/",
+    "docs/",
+    "README.md",
+    "LICENSE"
+  ]
 }
