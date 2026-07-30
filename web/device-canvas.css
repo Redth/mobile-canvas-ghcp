@@ -1,0 +1,1269 @@
+/*
+ * The canvas provider protocol has no theme hint (CanvasHostContext only carries
+ * capabilities), so appearance follows the host webview's prefers-color-scheme.
+ * A data-theme attribute on <html> lets the user pin a theme when the host does
+ * not propagate one. The dark token block is intentionally repeated rather than
+ * using light-dark(), so a webview without that function still renders correctly.
+ */
+:root {
+  color-scheme: light dark;
+
+  --canvas-default: #ffffff;
+  --canvas-subtle: #f6f8fa;
+  --canvas-inset: #f6f8fa;
+  --control-default: #f6f8fa;
+  --control-hover: #eef1f4;
+  --control-active: #e6eaef;
+  --border-default: #d1d9e0;
+  --border-muted: #d8dee4;
+  --fg-default: #1f2328;
+  --fg-muted: #59636e;
+  --fg-subtle: #818b98;
+  --accent-fg: #0969da;
+  --accent-emphasis: #0969da;
+  --accent-muted: #ddf4ff;
+  --success-fg: #1a7f37;
+  --success-emphasis: #1f883d;
+  --success-muted: #dafbe1;
+  --danger-fg: #d1242f;
+  --danger-emphasis: #cf222e;
+  --danger-muted: #ffebe9;
+  --attention-fg: #9a6700;
+  --focus: #0969da;
+  --overlay-backdrop: #1f232866;
+  --shadow-popover: 0 8px 24px #1f232826;
+  --shadow-device: 0 1px 3px #1f23281f, 0 16px 40px #1f232833;
+  --scrim: #ffffffd9;
+
+  color: var(--fg-default);
+  background: var(--canvas-default);
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  font-synthesis: none;
+}
+
+:root[data-theme="dark"] {
+  color-scheme: only dark;
+
+  --canvas-default: #0d1117;
+  --canvas-subtle: #161b22;
+  --canvas-inset: #010409;
+  --control-default: #21262d;
+  --control-hover: #30363d;
+  --control-active: #3c444d;
+  --border-default: #30363d;
+  --border-muted: #21262d;
+  --fg-default: #f0f6fc;
+  --fg-muted: #8b949e;
+  --fg-subtle: #6e7681;
+  --accent-fg: #58a6ff;
+  --accent-emphasis: #1f6feb;
+  --accent-muted: #388bfd26;
+  --success-fg: #3fb950;
+  --success-emphasis: #238636;
+  --success-muted: #2ea04326;
+  --danger-fg: #f85149;
+  --danger-emphasis: #da3633;
+  --danger-muted: #f8514926;
+  --attention-fg: #d29922;
+  --focus: #58a6ff;
+  --overlay-backdrop: #010409b3;
+  --shadow-popover: 0 12px 36px #01040980;
+  --shadow-device: 0 1px 2px #01040999, 0 16px 40px #010409b3;
+  --scrim: #0d1117d9;
+}
+
+:root[data-theme="light"] {
+  color-scheme: only light;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --canvas-default: #0d1117;
+    --canvas-subtle: #161b22;
+    --canvas-inset: #010409;
+    --control-default: #21262d;
+    --control-hover: #30363d;
+    --control-active: #3c444d;
+    --border-default: #30363d;
+    --border-muted: #21262d;
+    --fg-default: #f0f6fc;
+    --fg-muted: #8b949e;
+    --fg-subtle: #6e7681;
+    --accent-fg: #58a6ff;
+    --accent-emphasis: #1f6feb;
+    --accent-muted: #388bfd26;
+    --success-fg: #3fb950;
+    --success-emphasis: #238636;
+    --success-muted: #2ea04326;
+    --danger-fg: #f85149;
+    --danger-emphasis: #da3633;
+    --danger-muted: #f8514926;
+    --attention-fg: #d29922;
+    --focus: #58a6ff;
+    --overlay-backdrop: #010409b3;
+    --shadow-popover: 0 12px 36px #01040980;
+    --shadow-device: 0 1px 2px #01040999, 0 16px 40px #010409b3;
+    --scrim: #0d1117d9;
+  }
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body {
+  width: 100%;
+  height: 100%;
+  margin: 0;
+  overflow: hidden;
+}
+
+body {
+  min-width: 0;
+  background: var(--canvas-default);
+  color: var(--fg-default);
+  font-size: 13px;
+  line-height: 1.5;
+}
+
+button,
+input,
+select {
+  font: inherit;
+}
+
+button {
+  color: inherit;
+}
+
+button,
+select {
+  touch-action: manipulation;
+}
+
+button:focus-visible,
+input:focus-visible,
+select:focus-visible,
+summary:focus-visible,
+#device-screen:focus-visible {
+  outline: 2px solid var(--focus);
+  outline-offset: 2px;
+}
+
+.hidden {
+  display: none !important;
+}
+
+/* Components set an explicit `display`, which outranks the UA's `[hidden] { display: none }`.
+   Without this, capability-hidden controls stay visible (Reveal showed on Android emulators). */
+[hidden] {
+  display: none !important;
+}
+
+.mono {
+  font-family: ui-monospace, SFMono-Regular, Consolas, "Liberation Mono", monospace;
+}
+
+.visually-hidden {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+}
+
+.icon-sprite {
+  position: absolute;
+  width: 0;
+  height: 0;
+  overflow: hidden;
+}
+
+.icon {
+  width: 16px;
+  height: 16px;
+  flex: 0 0 auto;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.5;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+.icon .fill-current,
+.fill-current {
+  fill: currentColor;
+  stroke: none;
+}
+
+/* ---------------------------------------------------------------- shell --- */
+
+.app-shell {
+  display: grid;
+  grid-template-rows: auto minmax(0, 1fr);
+  width: 100%;
+  height: 100dvh;
+}
+
+/* --------------------------------------------------------------- topbar --- */
+
+.topbar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+  padding: 8px;
+  border-bottom: 1px solid var(--border-default);
+  background: var(--canvas-subtle);
+}
+
+.selector-wrap {
+  position: relative;
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+.device-selector {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  min-width: 0;
+  padding: 5px 8px;
+  border: 1px solid var(--border-default);
+  border-radius: 6px;
+  background: var(--canvas-default);
+  cursor: pointer;
+  text-align: left;
+  transition: background 120ms ease, border-color 120ms ease;
+}
+
+.device-selector:hover {
+  background: var(--control-hover);
+}
+
+.device-selector[aria-expanded="true"] {
+  border-color: var(--accent-emphasis);
+}
+
+.selector-glyph {
+  display: grid;
+  place-items: center;
+  width: 24px;
+  height: 24px;
+  flex: 0 0 auto;
+  border-radius: 5px;
+  background: var(--accent-muted);
+  color: var(--accent-fg);
+}
+
+.selector-copy {
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+  min-width: 0;
+  flex: 1 1 auto;
+}
+
+.selector-name {
+  font-weight: 600;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.selector-detail {
+  color: var(--fg-muted);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.selector-chevron {
+  color: var(--fg-muted);
+  transition: transform 120ms ease;
+}
+
+.device-selector[aria-expanded="true"] .selector-chevron {
+  transform: rotate(180deg);
+}
+
+.topbar-actions {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex: 0 0 auto;
+}
+
+/* ------------------------------------------------------------- popover --- */
+
+.device-popover {
+  position: absolute;
+  z-index: 40;
+  top: calc(100% + 6px);
+  left: 0;
+  right: 0;
+  max-height: min(60dvh, 420px);
+  overflow-y: auto;
+  padding: 6px;
+  border: 1px solid var(--border-default);
+  border-radius: 8px;
+  background: var(--canvas-default);
+  box-shadow: var(--shadow-popover);
+}
+
+.popover-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 4px 6px 6px;
+  color: var(--fg-muted);
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.count {
+  display: inline-grid;
+  place-items: center;
+  min-width: 18px;
+  height: 18px;
+  padding: 0 5px;
+  border-radius: 9px;
+  background: var(--control-default);
+  color: var(--fg-muted);
+  font-size: 11px;
+  letter-spacing: 0;
+}
+
+.device-list {
+  display: grid;
+  gap: 2px;
+}
+
+.device-group {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 8px 8px 4px;
+  color: var(--fg-muted);
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.device-group:not(:first-child) {
+  margin-top: 4px;
+  border-top: 1px solid var(--border-muted, var(--border-default));
+  padding-top: 10px;
+}
+
+.segmented {
+  display: flex;
+  gap: 2px;
+  padding: 2px;
+  border: 1px solid var(--border-default);
+  border-radius: 7px;
+  background: var(--canvas-subtle);
+}
+
+.segmented-option {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  flex: 1 1 0;
+  min-height: 30px;
+  padding: 0 10px;
+  border: 1px solid transparent;
+  border-radius: 5px;
+  background: none;
+  color: var(--fg-muted);
+  font: inherit;
+  font-size: 12px;
+  font-weight: 500;
+  cursor: pointer;
+}
+
+.segmented-option:hover {
+  background: var(--control-hover);
+  color: var(--fg-default);
+}
+
+.segmented-option.selected {
+  border-color: var(--border-default);
+  background: var(--canvas-default);
+  color: var(--fg-default);
+  font-weight: 600;
+}
+
+.device-card {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  padding: 7px 8px;
+  border: 1px solid transparent;
+  border-radius: 6px;
+  background: none;
+  cursor: pointer;
+  text-align: left;
+}
+
+.device-card:hover {
+  background: var(--control-hover);
+}
+
+.device-card.selected {
+  border-color: var(--border-default);
+  background: var(--accent-muted);
+}
+
+.device-glyph {
+  display: grid;
+  place-items: center;
+  width: 26px;
+  height: 26px;
+  flex: 0 0 auto;
+  border-radius: 6px;
+  border: 1px solid var(--border-default);
+  background: var(--canvas-subtle);
+  color: var(--fg-muted);
+}
+
+.device-card.booted .device-glyph {
+  border-color: var(--success-fg);
+  color: var(--success-fg);
+}
+
+.device-copy {
+  display: grid;
+  gap: 1px;
+  min-width: 0;
+  flex: 1 1 auto;
+}
+
+.device-name {
+  font-weight: 600;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.device-detail {
+  color: var(--fg-muted);
+  font-size: 12px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.device-trailing {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  flex: 0 0 auto;
+}
+
+.state-dot,
+.status-dot {
+  width: 8px;
+  height: 8px;
+  flex: 0 0 auto;
+  border-radius: 50%;
+  background: var(--fg-subtle);
+}
+
+.state-dot.connected,
+.state-dot.ready,
+.status-dot.connected,
+.status-dot.ready,
+.device-card.booted .state-dot {
+  background: var(--success-fg);
+}
+
+.state-dot.pending,
+.status-dot.pending {
+  background: var(--attention-fg);
+}
+
+.state-dot.error,
+.status-dot.error {
+  background: var(--danger-fg);
+}
+
+.diagnostics {
+  margin: 0 0 6px;
+  padding: 7px 9px;
+  border: 1px solid var(--attention-fg);
+  border-radius: 6px;
+  background: var(--canvas-subtle);
+  color: var(--attention-fg);
+  font-size: 12px;
+}
+
+/* -------------------------------------------------------------- buttons --- */
+
+.button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  padding: 5px 12px;
+  border: 1px solid var(--border-default);
+  border-radius: 6px;
+  background: var(--control-default);
+  font-weight: 500;
+  cursor: pointer;
+  transition: background 120ms ease;
+}
+
+.button:hover:not(:disabled) {
+  background: var(--control-hover);
+}
+
+.button:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.button.primary {
+  border-color: transparent;
+  background: var(--success-emphasis);
+  color: #ffffff;
+}
+
+.button.primary:hover:not(:disabled) {
+  filter: brightness(1.08);
+}
+
+.button.danger {
+  color: var(--danger-fg);
+}
+
+.button.danger:hover:not(:disabled) {
+  border-color: var(--danger-emphasis);
+  background: var(--danger-emphasis);
+  color: #ffffff;
+}
+
+.button.danger.solid {
+  border-color: transparent;
+  background: var(--danger-emphasis);
+  color: #ffffff;
+}
+
+/* Compact square control used in the top bar, matching the GitHub app chrome. */
+.icon-button {
+  display: inline-grid;
+  place-items: center;
+  width: 28px;
+  height: 28px;
+  padding: 0;
+  border: 1px solid var(--border-default);
+  border-radius: 6px;
+  background: var(--control-default);
+  cursor: pointer;
+  color: var(--fg-muted);
+  transition: background 120ms ease, color 120ms ease;
+}
+
+.icon-button:hover:not(:disabled) {
+  background: var(--control-hover);
+  color: var(--fg-default);
+}
+
+.icon-button:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
+.icon-button.primary {
+  border-color: transparent;
+  background: var(--success-emphasis);
+  color: #ffffff;
+}
+
+.icon-button.primary:hover:not(:disabled) {
+  filter: brightness(1.08);
+  color: #ffffff;
+}
+
+/* -------------------------------------------------------------- toolbar --- */
+
+.toolbar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px;
+  border-bottom: 1px solid var(--border-muted);
+}
+
+/* Segmented group: adjacent buttons share a single divider, like the GitHub
+   app's run/stop/overflow cluster. */
+.tool-group {
+  display: inline-flex;
+  align-items: center;
+  border: 1px solid var(--border-default);
+  border-radius: 6px;
+  background: var(--control-default);
+  overflow: hidden;
+}
+
+.tool-button {
+  display: inline-grid;
+  place-items: center;
+  width: 30px;
+  height: 26px;
+  padding: 0;
+  border: 0;
+  border-left: 1px solid var(--border-default);
+  background: none;
+  color: var(--fg-muted);
+  cursor: pointer;
+  transition: background 120ms ease, color 120ms ease;
+}
+
+.tool-button:first-child {
+  border-left: 0;
+}
+
+.tool-button:hover:not(:disabled) {
+  background: var(--control-hover);
+  color: var(--fg-default);
+}
+
+.tool-button:active:not(:disabled) {
+  background: var(--control-active);
+}
+
+.tool-button:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+
+.tool-button.recording {
+  background: var(--danger-muted);
+  color: var(--danger-fg);
+}
+
+.toolbar-spacer {
+  flex: 1 1 auto;
+}
+
+/* ------------------------------------------------------------ workspace --- */
+
+.workspace {
+  display: grid;
+  grid-template-rows: minmax(0, 1fr);
+  min-height: 0;
+  overflow: hidden;
+}
+
+.device-view {
+  display: grid;
+  grid-template-rows: auto minmax(0, 1fr) auto;
+  min-height: 0;
+  height: 100%;
+}
+
+.stage {
+  display: grid;
+  grid-template-rows: minmax(0, 1fr) auto;
+  gap: 10px;
+  justify-items: center;
+  align-content: center;
+  min-height: 0;
+  padding: 14px 14px 10px;
+}
+
+/* Dedicated 1fr row so the fit calculation has a container whose height is the
+   space actually available to the device, excluding the status pill. */
+.stage-viewport {
+  display: grid;
+  place-items: center;
+  width: 100%;
+  min-height: 0;
+}
+
+.device-frame {
+  position: relative;
+  display: grid;
+  max-width: 100%;
+  max-height: 100%;
+  padding: 6px;
+  border: 1px solid var(--border-default);
+  border-radius: 22px;
+  background: var(--canvas-inset);
+  box-shadow: var(--shadow-device);
+  transition: border-color 120ms ease;
+}
+
+.device-frame.is-interacting {
+  border-color: var(--accent-emphasis);
+}
+
+#device-screen {
+  display: block;
+  max-width: 100%;
+  max-height: 100%;
+  border-radius: 16px;
+  background: #000000;
+  cursor: crosshair;
+  touch-action: none;
+}
+
+.stream-overlay {
+  position: absolute;
+  inset: 6px;
+  display: grid;
+  place-items: center;
+  padding: 12px;
+  border-radius: 16px;
+  background: var(--scrim);
+  color: var(--fg-muted);
+  text-align: center;
+}
+
+.input-indicator {
+  position: absolute;
+  width: 26px;
+  height: 26px;
+  margin: -13px 0 0 -13px;
+  border: 2px solid var(--accent-fg);
+  border-radius: 50%;
+  opacity: 0;
+  pointer-events: none;
+}
+
+.input-indicator.active {
+  animation: input-ping 420ms ease-out;
+}
+
+@keyframes input-ping {
+  0% { opacity: 0.9; transform: scale(0.4); }
+  100% { opacity: 0; transform: scale(1.35); }
+}
+
+/*
+ * Remote-control presentation.
+ *
+ * The accent follows the host application's own accent colour via the AccentColor system keyword,
+ * which the canvas provider protocol gives us no other way to learn. Browsers without it fall back
+ * to GitHub green. Everything below is glow and shadow, never text, so an unusual OS accent can
+ * never produce unreadable content.
+ */
+:root {
+  --automation-accent: var(--success-emphasis);
+}
+
+@supports (color: AccentColor) {
+  :root {
+    --automation-accent: AccentColor;
+  }
+}
+
+.device-frame.is-automated {
+  border-color: var(--automation-accent);
+}
+
+/*
+ * A separate element rather than a box-shadow on the frame: the frame already owns a drop shadow for
+ * elevation, and an inset glow on the same element would fight it. Layering also lets the glow fade
+ * independently of the border colour transition.
+ */
+.device-frame::after {
+  content: "";
+  position: absolute;
+  inset: 6px;
+  border-radius: 16px;
+  box-shadow:
+    inset 0 0 0 1px color-mix(in srgb, var(--automation-accent) 55%, transparent),
+    inset 0 0 26px 4px color-mix(in srgb, var(--automation-accent) 34%, transparent);
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 260ms ease;
+}
+
+.device-frame.is-automated::after {
+  opacity: 1;
+}
+
+.automation-cursor {
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 0;
+  height: 0;
+  opacity: 0;
+  pointer-events: none;
+  /* The frame glow is a ::after pseudo-element, so it paints last; lift the cursor above it. */
+  z-index: 1;
+  /*
+   * Position is transform-driven so the cursor animates on the compositor. Animating left/top would
+   * relayout the frame on every move, and an agent can emit moves faster than layout can keep up.
+   */
+  transform: translate3d(0, 0, 0);
+  transition: opacity 200ms ease;
+  will-change: transform;
+}
+
+.automation-cursor.is-visible {
+  opacity: 1;
+}
+
+/* Travel between points is eased so a jump reads as a deliberate move, not a teleport. */
+.automation-cursor.is-moving {
+  transition: transform var(--automation-travel, 260ms) cubic-bezier(0.33, 0, 0.2, 1), opacity 200ms ease;
+}
+
+.automation-pointer {
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 34px;
+  height: 34px;
+  fill: #ffffff;
+  stroke: color-mix(in srgb, var(--automation-accent) 70%, #000000);
+  stroke-width: 1.1;
+  stroke-linejoin: round;
+  /* Elevation in the accent colour, so the cursor reads as hovering above the device screen. */
+  filter:
+    drop-shadow(0 1px 1px #00000040)
+    drop-shadow(0 4px 10px color-mix(in srgb, var(--automation-accent) 65%, transparent));
+  transition: transform 110ms ease;
+}
+
+/* A press dips the pointer slightly, the same affordance a real cursor gets on mousedown. */
+.automation-cursor.is-pressed .automation-pointer {
+  transform: scale(0.86);
+}
+
+.automation-ripple {
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 46px;
+  height: 46px;
+  margin: -23px 0 0 -23px;
+  border: 2px solid var(--automation-accent);
+  border-radius: 50%;
+  opacity: 0;
+  background: color-mix(in srgb, var(--automation-accent) 22%, transparent);
+}
+
+.automation-ripple.is-clicking {
+  animation: automation-click 460ms ease-out;
+}
+
+@keyframes automation-click {
+  0% { opacity: 0.95; transform: scale(0.25); }
+  100% { opacity: 0; transform: scale(1.5); }
+}
+
+/*
+ * Respect reduced motion by removing travel and the ripple's growth, while keeping the cursor and
+ * glow visible. The information is "an agent is driving and it is here", which must survive the
+ * animation being switched off.
+ */
+@media (prefers-reduced-motion: reduce) {
+  .automation-cursor,
+  .automation-cursor.is-moving {
+    transition: opacity 200ms ease;
+  }
+
+  .automation-ripple.is-clicking {
+    animation: automation-click-static 460ms steps(1, end);
+  }
+
+  @keyframes automation-click-static {
+    0% { opacity: 0.9; }
+    100% { opacity: 0; }
+  }
+}
+
+/* Single compact readout combining input feedback and stream health. */
+.status-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  max-width: 100%;
+  padding: 4px 10px;
+  border: 1px solid var(--border-default);
+  border-radius: 999px;
+  background: var(--canvas-subtle);
+  color: var(--fg-muted);
+  font-size: 12px;
+  white-space: nowrap;
+}
+
+.pill-item {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.pill-divider {
+  width: 1px;
+  height: 12px;
+  flex: 0 0 auto;
+  background: var(--border-default);
+}
+
+.pill-value {
+  color: var(--fg-default);
+  font-variant-numeric: tabular-nums;
+}
+
+/* -------------------------------------------------------------- drawers --- */
+
+.drawers {
+  display: grid;
+  gap: 1px;
+  max-height: 45dvh;
+  overflow-y: auto;
+  border-top: 1px solid var(--border-default);
+  background: var(--border-muted);
+}
+
+.drawer {
+  background: var(--canvas-default);
+}
+
+.drawer > summary {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 8px 12px;
+  color: var(--fg-muted);
+  font-weight: 500;
+  cursor: pointer;
+  list-style: none;
+}
+
+.drawer > summary::-webkit-details-marker {
+  display: none;
+}
+
+.drawer > summary:hover {
+  background: var(--control-hover);
+  color: var(--fg-default);
+}
+
+.drawer > summary .icon {
+  transition: transform 120ms ease;
+}
+
+.drawer[open] > summary .icon {
+  transform: rotate(90deg);
+}
+
+.drawer-body {
+  display: grid;
+  gap: 12px;
+  padding: 4px 12px 12px;
+}
+
+.field-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(130px, 1fr));
+  gap: 8px;
+}
+
+.field-grid label,
+.dialog-field {
+  display: grid;
+  gap: 4px;
+  min-width: 0;
+}
+
+.field-grid label.field-wide {
+  grid-column: 1 / -1;
+}
+
+.field-grid label > span:not(.input-action-wrap),
+.dialog-field > span {
+  color: var(--fg-muted);
+  font-size: 12px;
+}
+
+select,
+input {
+  width: 100%;
+  min-width: 0;
+  padding: 5px 8px;
+  border: 1px solid var(--border-default);
+  border-radius: 6px;
+  background: var(--canvas-default);
+  color: var(--fg-default);
+}
+
+/* Read-only fields reuse the control box so the drawer reads as one grid, but
+   sit back visually because they report state rather than accept input. */
+input[readonly] {
+  background: var(--canvas-subtle);
+  color: var(--fg-muted);
+  cursor: default;
+  font-variant-numeric: tabular-nums;
+  text-overflow: ellipsis;
+}
+
+/* A degraded capture backend is the one read-only value worth noticing, since it
+   usually means a permission is missing rather than that the stream is broken. */
+input[readonly].field-degraded {
+  color: var(--danger-fg);
+}
+
+.input-action-wrap {
+  position: relative;
+  display: block;
+  min-width: 0;
+}
+
+.input-action-wrap input {
+  padding-right: 30px;
+  font-size: 12px;
+}
+
+.input-action {
+  position: absolute;
+  top: 50%;
+  right: 4px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  height: 22px;
+  padding: 0;
+  transform: translateY(-50%);
+  border: 0;
+  border-radius: 5px;
+  background: transparent;
+  color: var(--fg-muted);
+  cursor: pointer;
+  transition: background var(--motion-fast), color var(--motion-fast);
+}
+
+.input-action:hover:not(:disabled) {
+  background: var(--btn-hover-bg);
+  color: var(--fg-default);
+}
+
+.input-action:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.drawer.danger-drawer > summary {
+  color: var(--danger-fg);
+}
+
+.danger-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.drawer-note {
+  margin: 0;
+  color: var(--fg-muted);
+  font-size: 12px;
+}
+
+.theme-toggle {
+  display: inline-flex;
+  align-items: center;
+  justify-self: start;
+  border: 1px solid var(--border-default);
+  border-radius: 6px;
+  overflow: hidden;
+}
+
+.theme-toggle button {
+  padding: 4px 10px;
+  border: 0;
+  border-left: 1px solid var(--border-default);
+  background: var(--control-default);
+  color: var(--fg-muted);
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.theme-toggle button:first-child {
+  border-left: 0;
+}
+
+.theme-toggle button[aria-pressed="true"] {
+  background: var(--accent-muted);
+  color: var(--accent-fg);
+  font-weight: 600;
+}
+
+/* --------------------------------------------------------- empty states --- */
+
+.empty-state {
+  display: grid;
+  justify-items: center;
+  align-content: center;
+  gap: 8px;
+  height: 100%;
+  padding: 24px;
+  text-align: center;
+}
+
+.empty-icon {
+  display: grid;
+  place-items: center;
+  width: 44px;
+  height: 44px;
+  border: 1px solid var(--border-default);
+  border-radius: 12px;
+  background: var(--canvas-subtle);
+  color: var(--fg-muted);
+}
+
+.empty-icon.success {
+  border-color: var(--success-fg);
+  color: var(--success-fg);
+}
+
+.empty-state h2 {
+  margin: 4px 0 0;
+  font-size: 15px;
+}
+
+.empty-state p {
+  margin: 0;
+  max-width: 34ch;
+  color: var(--fg-muted);
+}
+
+.empty-state .button {
+  margin-top: 6px;
+}
+
+/* -------------------------------------------------------------- dialogs --- */
+
+dialog {
+  width: min(420px, calc(100vw - 32px));
+  padding: 0;
+  border: 1px solid var(--border-default);
+  border-radius: 10px;
+  background: var(--canvas-default);
+  color: var(--fg-default);
+  box-shadow: var(--shadow-popover);
+}
+
+dialog::backdrop {
+  background: var(--overlay-backdrop);
+}
+
+dialog form {
+  display: grid;
+  gap: 12px;
+  padding: 16px;
+}
+
+.dialog-heading {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.dialog-heading h2 {
+  margin: 2px 0 4px;
+  font-size: 15px;
+}
+
+.dialog-heading p {
+  margin: 0;
+  color: var(--fg-muted);
+  font-size: 12px;
+}
+
+.dialog-kicker {
+  color: var(--fg-subtle);
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.dialog-kicker.danger-text {
+  color: var(--danger-fg);
+}
+
+.close-button {
+  display: grid;
+  place-items: center;
+  width: 26px;
+  height: 26px;
+  flex: 0 0 auto;
+  padding: 0;
+  border: 0;
+  border-radius: 6px;
+  background: none;
+  color: var(--fg-muted);
+  cursor: pointer;
+}
+
+.close-button:hover {
+  background: var(--control-hover);
+  color: var(--fg-default);
+}
+
+.dialog-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+}
+
+.toast {
+  position: fixed;
+  left: 50%;
+  bottom: 16px;
+  z-index: 60;
+  max-width: min(440px, calc(100vw - 32px));
+  padding: 8px 14px;
+  border: 1px solid var(--border-default);
+  border-radius: 8px;
+  background: var(--canvas-subtle);
+  box-shadow: var(--shadow-popover);
+  transform: translateX(-50%);
+}
+
+.toast.error {
+  border-color: var(--danger-emphasis);
+  color: var(--danger-fg);
+}
+
+/* ----------------------------------------------------------- responsive --- */
+
+@media (max-width: 420px) {
+  .selector-detail {
+    display: none;
+  }
+
+  .stage {
+    padding: 10px 8px 8px;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+  }
+}

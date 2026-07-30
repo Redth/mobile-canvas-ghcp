@@ -1,0 +1,78 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net10.0</TargetFramework>
+    <LangVersion>14</LangVersion>
+    <AssemblyName>mobile-canvas</AssemblyName>
+    <RootNamespace>MobileCanvas.Tool</RootNamespace>
+    <PackAsTool>true</PackAsTool>
+    <ToolCommandName>mobile-canvas</ToolCommandName>
+    <PackageId>MobileCanvas.Tool</PackageId>
+    <Description>Discover, create, display, and control local mobile virtual devices.</Description>
+    <PackageReadmeFile>README.md</PackageReadmeFile>
+    <RuntimeIdentifiers>osx-arm64;osx-x64</RuntimeIdentifiers>
+    <PublishAot>true</PublishAot>
+    <OptimizationPreference>Speed</OptimizationPreference>
+    <EnableRequestDelegateGenerator>true</EnableRequestDelegateGenerator>
+    <EnableConfigurationBindingGenerator>true</EnableConfigurationBindingGenerator>
+    <JsonSerializerIsReflectionEnabledByDefault>false</JsonSerializerIsReflectionEnabledByDefault>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <FrameworkReference Include="Microsoft.AspNetCore.App" />
+    <PackageReference Include="ModelContextProtocol" />
+    <ProjectReference Include="..\MobileCanvas.Contracts\MobileCanvas.Contracts.csproj" />
+    <ProjectReference Include="..\MobileCanvas.Core\MobileCanvas.Core.csproj" />
+    <ProjectReference Include="..\MobileCanvas.Android\MobileCanvas.Android.csproj" />
+    <ProjectReference Include="..\MobileCanvas.iOS\MobileCanvas.iOS.csproj" />
+    <InternalsVisibleTo Include="MobileCanvas.Tests" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <EmbeddedResource Include="..\..\web\index.html" LogicalName="MobileCanvas.Web.index.html" />
+    <EmbeddedResource Include="..\..\web\device-canvas.js" LogicalName="MobileCanvas.Web.device-canvas.js" />
+    <EmbeddedResource Include="..\..\web\device-canvas.css" LogicalName="MobileCanvas.Web.device-canvas.css" />
+    <None Include="..\..\README.md" Pack="true" PackagePath="" Link="README.md" />
+  </ItemGroup>
+
+  <ItemGroup Condition="'$(PublishAot)' == 'true'">
+    <TrimmerRootAssembly Include="mobile-canvas" />
+    <TrimmerRootAssembly Include="MobileCanvas.Contracts" />
+    <TrimmerRootAssembly Include="MobileCanvas.Android" />
+    <TrimmerRootAssembly Include="MobileCanvas.iOS" />
+  </ItemGroup>
+
+  <!--
+    ScreenCaptureKit and VideoToolbox are unreachable from Native AOT .NET, so the iOS video path
+    lives in a small Swift helper that ships beside mobile-canvas. It is built on demand and only
+    when its sources change, and its absence is never fatal: the iOS backend falls back to idb.
+  -->
+  <PropertyGroup>
+    <ScreencapDirectory>$(MSBuildThisFileDirectory)../../native/mobile-screencap/</ScreencapDirectory>
+    <ScreencapBinary>$(ScreencapDirectory)out/mobile-screencap</ScreencapBinary>
+    <BuildScreencapHelper Condition="'$(BuildScreencapHelper)' == '' And $([MSBuild]::IsOSPlatform('OSX'))">true</BuildScreencapHelper>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ScreencapSource Include="$(ScreencapDirectory)Sources/*.swift" />
+    <ScreencapSource Include="$(ScreencapDirectory)build.sh" />
+  </ItemGroup>
+
+  <Target Name="BuildScreencapHelper"
+          BeforeTargets="BeforeBuild"
+          Condition="'$(BuildScreencapHelper)' == 'true'"
+          Inputs="@(ScreencapSource)"
+          Outputs="$(ScreencapBinary)">
+    <Exec Command="./build.sh" WorkingDirectory="$(ScreencapDirectory)" ContinueOnError="true" />
+  </Target>
+
+  <Target Name="CopyScreencapHelper" AfterTargets="Build" Condition="Exists('$(ScreencapBinary)')">
+    <Copy SourceFiles="$(ScreencapBinary)" DestinationFolder="$(OutDir)" SkipUnchangedFiles="true" />
+    <Exec Command="chmod +x '$(OutDir)mobile-screencap'" ContinueOnError="true" />
+  </Target>
+
+  <Target Name="PublishScreencapHelper" AfterTargets="Publish" Condition="Exists('$(ScreencapBinary)')">
+    <Copy SourceFiles="$(ScreencapBinary)" DestinationFolder="$(PublishDir)" SkipUnchangedFiles="true" />
+    <Exec Command="chmod +x '$(PublishDir)mobile-screencap'" ContinueOnError="true" />
+  </Target>
+</Project>

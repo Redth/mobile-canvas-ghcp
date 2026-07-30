@@ -1,0 +1,21 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <RootNamespace>MobileCanvas.Android</RootNamespace>
+  </PropertyGroup>
+  <ItemGroup>
+    <PackageReference Include="Google.Protobuf" />
+    <PackageReference Include="Grpc.Net.Client" />
+    <PackageReference Include="Grpc.Tools" PrivateAssets="All" />
+  </ItemGroup>
+  <ItemGroup>
+    <Protobuf Include="protos/emulator_controller.proto" GrpcServices="Client" ProtoRoot="protos" />
+  </ItemGroup>
+  <ItemGroup>
+    <ProjectReference Include="../MobileCanvas.Contracts/MobileCanvas.Contracts.csproj" />
+    <ProjectReference Include="../MobileCanvas.Core/MobileCanvas.Core.csproj" />
+  </ItemGroup>
+  <ItemGroup>
+    <InternalsVisibleTo Include="MobileCanvas.Tests" />
+  </ItemGroup>
+</Project>

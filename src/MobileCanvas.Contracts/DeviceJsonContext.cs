@@ -1,0 +1,50 @@
+using System.Text.Json;
+using System.Text.Json.Serialization;
+
+namespace MobileCanvas.Contracts;
+
+[JsonSourceGenerationOptions(
+	PropertyNamingPolicy = JsonKnownNamingPolicy.CamelCase,
+	DefaultIgnoreCondition = JsonIgnoreCondition.WhenWritingNull,
+	WriteIndented = false)]
+[JsonSerializable(typeof(DeviceCapabilities))]
+[JsonSerializable(typeof(DisplayGeometry))]
+[JsonSerializable(typeof(DeviceTarget))]
+[JsonSerializable(typeof(DeviceTarget[]))]
+[JsonSerializable(typeof(DeviceRuntime))]
+[JsonSerializable(typeof(DeviceRuntime[]))]
+[JsonSerializable(typeof(DeviceType))]
+[JsonSerializable(typeof(DeviceType[]))]
+[JsonSerializable(typeof(DependencyCheck))]
+[JsonSerializable(typeof(DependencyCheck[]))]
+[JsonSerializable(typeof(HostDiagnostics))]
+[JsonSerializable(typeof(HostDiagnostics[]))]
+[JsonSerializable(typeof(DeviceCatalog))]
+[JsonSerializable(typeof(CreateDeviceRequest))]
+[JsonSerializable(typeof(TapRequest))]
+[JsonSerializable(typeof(TouchRequest))]
+[JsonSerializable(typeof(SwipeRequest))]
+[JsonSerializable(typeof(TextInputRequest))]
+[JsonSerializable(typeof(KeyInputRequest))]
+[JsonSerializable(typeof(ButtonInputRequest))]
+[JsonSerializable(typeof(RotateRequest))]
+[JsonSerializable(typeof(AutomationEvent))]
+[JsonSerializable(typeof(StreamOptions))]
+[JsonSerializable(typeof(StreamDescriptor))]
+[JsonSerializable(typeof(RecordingStartRequest))]
+[JsonSerializable(typeof(RecordingStatus))]
+[JsonSerializable(typeof(MediaArtifact))]
+[JsonSerializable(typeof(CanvasOpenRequest))]
+[JsonSerializable(typeof(CanvasContextKey))]
+[JsonSerializable(typeof(CanvasOpenResult))]
+[JsonSerializable(typeof(CanvasBootstrapRequest))]
+[JsonSerializable(typeof(CanvasCloseRequest))]
+[JsonSerializable(typeof(SelectDeviceRequest))]
+[JsonSerializable(typeof(DeviceSelection))]
+[JsonSerializable(typeof(ConfirmedOperationRequest))]
+[JsonSerializable(typeof(ApiError))]
+[JsonSerializable(typeof(OperationResult))]
+[JsonSerializable(typeof(HostMetadata))]
+[JsonSerializable(typeof(HostHealth))]
+[JsonSerializable(typeof(JsonElement))]
+public partial class DeviceJsonContext : JsonSerializerContext;

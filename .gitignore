@@ -1,0 +1,7 @@
+bin/
+obj/
+.build/
+native/*/out/
+node_modules/
+*.user
+.DS_Store

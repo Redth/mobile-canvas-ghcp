@@ -1,0 +1,29 @@
+<Project>
+
+  <PropertyGroup>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <LangVersion>latest</LangVersion>
+    <DebugType>portable</DebugType>
+    <DebugSymbols>true</DebugSymbols>
+    <Authors>Jonathan Dick</Authors>
+    <Product>Mobile Canvas</Product>
+    <Copyright>Copyright © Mobile Canvas contributors</Copyright>
+    <PackageLicenseFile>LICENSE</PackageLicenseFile>
+    <PackageProjectUrl>https://github.com/Redth/mobile-canvas-ghcp</PackageProjectUrl>
+    <RepositoryUrl>https://github.com/Redth/mobile-canvas-ghcp</RepositoryUrl>
+    <PackageTags>ios;android;simulator;emulator;copilot;canvas;mcp;automation</PackageTags>
+    <EmbedUntrackedSources>true</EmbedUntrackedSources>
+    <SignAssembly>false</SignAssembly>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <None Include="$(MSBuildThisFileDirectory)LICENSE" Pack="true" PackagePath="" />
+  </ItemGroup>
+
+  <PropertyGroup>
+    <VersionPrefix>0.1.0</VersionPrefix>
+    <VersionSuffix>preview.1</VersionSuffix>
+  </PropertyGroup>
+
+</Project>

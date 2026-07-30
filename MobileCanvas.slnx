@@ -1,0 +1,12 @@
+<Solution>
+  <Folder Name="/src/">
+    <Project Path="src/MobileCanvas.Contracts/MobileCanvas.Contracts.csproj" />
+    <Project Path="src/MobileCanvas.Core/MobileCanvas.Core.csproj" />
+    <Project Path="src/MobileCanvas.iOS/MobileCanvas.iOS.csproj" />
+    <Project Path="src/MobileCanvas.Android/MobileCanvas.Android.csproj" />
+    <Project Path="src/MobileCanvas.Tool/MobileCanvas.Tool.csproj" />
+  </Folder>
+  <Folder Name="/tests/">
+    <Project Path="tests/MobileCanvas.Tests/MobileCanvas.Tests.csproj" />
+  </Folder>
+</Solution>

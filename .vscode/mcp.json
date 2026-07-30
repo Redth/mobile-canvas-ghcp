@@ -1,0 +1,9 @@
+{
+  "servers": {
+    "mobile-canvas": {
+      "type": "stdio",
+      "command": "mobile-canvas",
+      "args": ["mcp"]
+    }
+  }
+}

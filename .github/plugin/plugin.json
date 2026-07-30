@@ -1,0 +1,24 @@
+{
+  "name": "mobile-canvas",
+  "description": "View, create, boot, and interact with local iOS simulators and Android emulators in a Copilot canvas.",
+  "version": "0.1.0",
+  "author": {
+    "name": "Jonathan Dick",
+    "url": "https://github.com/Redth"
+  },
+  "repository": "https://github.com/Redth/mobile-canvas-ghcp",
+  "license": "MIT",
+  "keywords": [
+    "ios",
+    "android",
+    "simulator",
+    "emulator",
+    "copilot-canvas",
+    "mobile",
+    "device-control",
+    "mcp"
+  ],
+  "logo": "assets/preview.png",
+  "extensions": ".",
+  "mcpServers": ".mcp.json"
+}
