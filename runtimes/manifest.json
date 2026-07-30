@@ -3,12 +3,12 @@
     "darwin-arm64": {
       "rid": "osx-arm64",
       "executable": "mobile-canvas",
-      "id": "8c005bac1cd07f6370f960cecd2c2a2d9c2a2c0bc6833234858108c5a54fea02",
+      "id": "13c30503c0f82afdc06c32f6f23769c6046c4c728eaaadfa1a86d245348e6413",
       "files": {
         "mobile-canvas": {
           "archive": "osx-arm64/mobile-canvas.gz",
-          "sha256": "8c005bac1cd07f6370f960cecd2c2a2d9c2a2c0bc6833234858108c5a54fea02",
-          "size": 26260560
+          "sha256": "13c30503c0f82afdc06c32f6f23769c6046c4c728eaaadfa1a86d245348e6413",
+          "size": 26277072
         },
         "mobile-screencap": {
           "archive": "osx-arm64/mobile-screencap.gz",
@@ -20,12 +20,12 @@
     "darwin-x64": {
       "rid": "osx-x64",
       "executable": "mobile-canvas",
-      "id": "5008665fa7ce392120e02d86e84aa94b156c0dde090651c6a678b63ec0d6918a",
+      "id": "ebedf120b52c180f208846b0a2cec1a42926a241b9b2eae075d1b4266711a927",
       "files": {
         "mobile-canvas": {
           "archive": "osx-x64/mobile-canvas.gz",
-          "sha256": "5008665fa7ce392120e02d86e84aa94b156c0dde090651c6a678b63ec0d6918a",
-          "size": 27260416
+          "sha256": "ebedf120b52c180f208846b0a2cec1a42926a241b9b2eae075d1b4266711a927",
+          "size": 27264512
         },
         "mobile-screencap": {
           "archive": "osx-x64/mobile-screencap.gz",

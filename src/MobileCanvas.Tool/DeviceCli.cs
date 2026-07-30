@@ -1,4 +1,6 @@
 using System.Globalization;
+using System.Reflection;
+using System.Runtime.InteropServices;
 using System.Text.Json;
 using MobileCanvas.Contracts;
 
@@ -13,6 +15,12 @@ internal static class DeviceCli
 		if (args.Length == 0 || args[0] is "--help" or "-h" or "help")
 		{
 			Console.WriteLine(HelpText);
+			return 0;
+		}
+
+		if (args[0] is "--version" or "-v" or "version")
+		{
+			Console.WriteLine(VersionText);
 			return 0;
 		}
 
@@ -330,6 +338,26 @@ internal static class DeviceCli
 		}
 	}
 
+	private static string VersionText
+	{
+		get
+		{
+			var assembly = typeof(DeviceCli).Assembly;
+			var version = assembly
+				.GetCustomAttribute<AssemblyInformationalVersionAttribute>()?
+				.InformationalVersion;
+
+			// Source Link appends "+<commit>"; the hash identifies the exact build
+			// behind a bundled binary, so keep it rather than trimming it away.
+			if (string.IsNullOrEmpty(version))
+			{
+				version = assembly.GetName().Version?.ToString() ?? "unknown";
+			}
+
+			return $"mobile-canvas {version} ({RuntimeInformation.RuntimeIdentifier})";
+		}
+	}
+
 	private const string HelpText = """
 		Mobile Canvas - discover and control local mobile virtual devices
 
@@ -352,6 +380,7 @@ internal static class DeviceCli
 		  mobile-canvas recording start|stop|status <id>
 		  mobile-canvas mcp
 		  mobile-canvas guide
+		  mobile-canvas --version
 		""";
 
 	private const string GuideText = """

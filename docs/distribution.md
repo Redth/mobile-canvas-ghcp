@@ -117,6 +117,18 @@ encode H.264 through the VideoToolbox helper, so Android video is currently
 macOS-only too. Adding a platform means solving portable encoding first; the
 manifest and resolver already handle any number of entries.
 
+## Verifying a build
+
+```console
+$ mobile-canvas --version
+mobile-canvas 0.1.0-preview.1+04d869a665085a68f6bc7a8257348b09ba2f927c (osx-arm64)
+```
+
+Source Link appends the commit, so a user can identify exactly which build a
+bundled binary came from. That commit is the one the binary was **built from**,
+which is necessarily the parent of the commit that adds it to `runtimes/` — an
+artifact cannot contain its own hash. Expect it to trail `git log` by one.
+
 ## Releasing
 
 ```bash
