@@ -20,5 +20,5 @@
   ],
   "logo": "assets/preview.png",
   "extensions": ".",
-  "mcpServers": ".mcp.json"
+  "mcpServers": "./.mcp.json"
 }
