@@ -180,7 +180,10 @@
           <div class="stage-viewport">
             <div id="device-frame" class="device-frame">
               <canvas id="device-screen" tabindex="0" aria-label="Interactive device screen"></canvas>
-              <div id="stream-overlay" class="stream-overlay" role="status" aria-live="polite">Starting live view...</div>
+              <div id="stream-overlay" class="stream-overlay" role="status" aria-live="polite">
+                <span class="stream-overlay-spinner" aria-hidden="true"></span>
+                <span id="stream-overlay-text" class="stream-overlay-text">Connecting</span>
+              </div>
               <div id="input-indicator" class="input-indicator" aria-hidden="true"></div>
               <!--
                 The remote-control layer. It sits above the screen but never takes pointer events, so

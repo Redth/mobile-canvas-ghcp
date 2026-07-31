@@ -17,6 +17,7 @@ const elements = {
   floatBar: document.querySelector(".float-bar"),
   navPill: document.querySelector("#nav-pill"),
   overlay: document.querySelector("#stream-overlay"),
+  overlayText: document.querySelector("#stream-overlay-text"),
   fps: document.querySelector("#fps-select"),
   scale: document.querySelector("#scale-select"),
   mode: document.querySelector("#stream-mode"),
@@ -323,8 +324,7 @@ async function selectDevice(device, persist) {
     await updateRecordingStatus();
   } else {
     state.display = null;
-    elements.overlay.textContent = `${capitalize(platformInfo(state.selected?.platform).noun)} is powered off`;
-    elements.overlay.classList.remove("hidden");
+    showOverlay(`${capitalize(platformInfo(state.selected?.platform).noun)} is powered off`);
     setStreamMode("offline");
     setActualFps(0);
     setInputStatus("ready", `Boot the ${platformInfo(state.selected?.platform).noun} to interact`);
@@ -648,12 +648,21 @@ function applyScreenRadius(renderedWidth) {
   elements.frame.dataset.cornerCurve = state.display?.cornerCurve || "circular";
 }
 
+/**
+ * The screen's only status surface. `busy` adds a spinner and an animated ellipsis, so waiting reads
+ * as progress; terminal messages stay plain text and end the motion.
+ */
+function showOverlay(message, { busy = false } = {}) {
+  elements.overlayText.textContent = message;
+  elements.overlay.dataset.busy = busy ? "true" : "false";
+  elements.overlay.classList.remove("hidden");
+}
+
 function startStream() {
   stopStream();
   if (!state.selected || state.selected.state !== "booted") return;
 
-  elements.overlay.textContent = "Starting live view...";
-  elements.overlay.classList.remove("hidden");
+  showOverlay("Connecting", { busy: true });
   setStreamMode("connecting");
   state.frameClock = performance.now();
 
@@ -957,8 +966,7 @@ function startPngFallback(label) {
       elements.overlay.classList.add("hidden");
       countFrame();
     } catch (error) {
-      elements.overlay.textContent = error.message;
-      elements.overlay.classList.remove("hidden");
+      showOverlay(error.message);
     } finally {
       if (!state.detached && state.selected?.state === "booted" && !state.socket) {
         state.pngTimer = setTimeout(capture, 750);
@@ -985,8 +993,7 @@ async function lifecycle(action) {
 
   if (action !== "reveal") {
     stopStream();
-    elements.overlay.textContent = `${formatAction(action)} in progress...`;
-    elements.overlay.classList.remove("hidden");
+    showOverlay(`${formatAction(action)} in progress`, { busy: true });
   }
 
   const response = await api(

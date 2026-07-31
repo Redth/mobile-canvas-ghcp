@@ -862,13 +862,53 @@ summary:focus-visible,
 .stream-overlay {
   position: absolute;
   inset: 6px;
-  display: grid;
-  place-items: center;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
   padding: 12px;
   border-radius: var(--screen-radius);
   background: var(--scrim);
   color: var(--fg-muted);
   text-align: center;
+}
+
+/* Busy states get a ring; terminal ones ("powered off", an error) are text only, so the spinner is
+   opt-in rather than something every caller has to remember to hide. */
+.stream-overlay-spinner {
+  display: none;
+  width: 26px;
+  height: 26px;
+  border: 2px solid color-mix(in srgb, var(--fg-muted) 25%, transparent);
+  border-top-color: var(--accent-fg);
+  border-radius: 50%;
+  animation: stream-overlay-spin 720ms linear infinite;
+}
+
+.stream-overlay[data-busy="true"] .stream-overlay-spinner {
+  display: block;
+}
+
+.stream-overlay-text {
+  font-size: 13px;
+  letter-spacing: 0.01em;
+}
+
+/* Busy labels are written without punctuation and get the ellipsis here, so every waiting state reads
+   the same. The spinner carries the motion: animating the dots would shift a centred label. */
+.stream-overlay[data-busy="true"] .stream-overlay-text::after {
+  content: "\2026";
+}
+
+@keyframes stream-overlay-spin {
+  to { transform: rotate(1turn); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .stream-overlay-spinner {
+    animation-duration: 2.4s;
+  }
 }
 
 /* Apple masks its displays with a squircle, not an arc. Progressive enhancement: engines without
