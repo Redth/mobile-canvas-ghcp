@@ -780,6 +780,37 @@ public sealed partial class AndroidEmulatorBackend : IDeviceBackend, IAsyncDispo
 
 	#endregion
 
+	#region UI hierarchy
+
+	public async Task<UiSnapshot> GetUiSnapshotAsync(
+		string deviceId,
+		bool includeRaw,
+		CancellationToken cancellationToken = default)
+	{
+		var serial = await RequireSerialAsync(deviceId, cancellationToken).ConfigureAwait(false);
+
+		// Dumping to /dev/tty writes the hierarchy straight to stdout. The alternative writes a file on
+		// the device and needs a second call to pull it back, which doubles the cost of every capture.
+		var dump = await RunAdbAsync(serial, ["exec-out", "uiautomator", "dump", "/dev/tty"], cancellationToken)
+			.ConfigureAwait(false)
+			?? throw new DeviceCapabilityException(
+				$"Could not read the view hierarchy from '{serial}'. uiautomator may be busy or the screen may be off.");
+
+		var display = await GetDisplayAsync(deviceId, cancellationToken).ConfigureAwait(false);
+		var root = UiAutomatorParser.Parse(dump, display.Scale);
+
+		return new UiSnapshot
+		{
+			DeviceId = deviceId,
+			Platform = DevicePlatforms.Android,
+			Root = root,
+			ElementCount = UiTree.Count(root),
+			Raw = includeRaw ? dump : null,
+		};
+	}
+
+	#endregion
+
 	#region Geometry
 
 	public async Task<DisplayGeometry> GetDisplayAsync(

@@ -479,6 +479,25 @@ public sealed class IosSimulatorBackend : IDeviceBackend, IAsyncDisposable
 		CancellationToken cancellationToken = default) =>
 		Task.FromResult(_recordings.GetStatus(deviceId));
 
+	public async Task<UiSnapshot> GetUiSnapshotAsync(
+		string deviceId,
+		bool includeRaw,
+		CancellationToken cancellationToken = default)
+	{
+		var companion = await GetCompanionAsync(deviceId, cancellationToken).ConfigureAwait(false);
+		var json = await companion.GetAccessibilityJsonAsync(cancellationToken).ConfigureAwait(false);
+		var root = AccessibilityParser.Parse(json);
+
+		return new UiSnapshot
+		{
+			DeviceId = deviceId,
+			Platform = DevicePlatforms.Ios,
+			Root = root,
+			ElementCount = UiTree.Count(root),
+			Raw = includeRaw ? json : null,
+		};
+	}
+
 	public async ValueTask DisposeAsync()
 	{
 		await _recordings.DisposeAsync().ConfigureAwait(false);

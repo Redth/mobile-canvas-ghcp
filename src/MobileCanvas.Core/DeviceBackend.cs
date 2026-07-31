@@ -26,6 +26,13 @@ public interface IDeviceBackend
 	Task PressButtonAsync(string deviceId, string button, CancellationToken cancellationToken = default);
 	Task RotateAsync(string deviceId, string orientation, CancellationToken cancellationToken = default);
 	Task<byte[]> ScreenshotAsync(string deviceId, CancellationToken cancellationToken = default);
+
+	/// <summary>
+	/// Captures the on-screen element tree, letting a caller locate a control by name instead of
+	/// guessing coordinates from a screenshot.
+	/// </summary>
+	Task<UiSnapshot> GetUiSnapshotAsync(string deviceId, bool includeRaw, CancellationToken cancellationToken = default);
+
 	Task<ILiveVideoSession> OpenVideoStreamAsync(string deviceId, StreamOptions options, CancellationToken cancellationToken = default);
 	Task<RecordingStatus> StartRecordingAsync(string deviceId, RecordingStartRequest request, CancellationToken cancellationToken = default);
 	Task<RecordingStatus> StopRecordingAsync(string deviceId, CancellationToken cancellationToken = default);
@@ -39,6 +46,14 @@ public interface ILiveVideoSession : IAsyncDisposable
 }
 
 public sealed class DeviceCapabilityException(string message) : InvalidOperationException(message);
+
+/// <summary>
+/// Raised when a UI query matches nothing. Distinct from a capability failure because the usual cause
+/// is a screen that has not finished changing, which a caller can retry.
+/// </summary>
+public sealed class UiElementNotFoundException(string description)
+	: KeyNotFoundException($"No on-screen element matched {description}.");
+
 
 public sealed class DeviceNotFoundException(string deviceId)
 	: KeyNotFoundException($"Device '{deviceId}' was not found.");

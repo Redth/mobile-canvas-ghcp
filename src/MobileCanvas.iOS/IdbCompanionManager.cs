@@ -198,6 +198,19 @@ internal sealed class IdbCompanionSession : IAsyncDisposable
 		}
 	}
 
+	/// <summary>
+	/// The accessibility hierarchy as idb's raw JSON. Nested format is requested because the flat
+	/// legacy format loses the parent/child structure a caller needs to tell one "Done" from another.
+	/// </summary>
+	public async Task<string> GetAccessibilityJsonAsync(CancellationToken cancellationToken)
+	{
+		ThrowIfUnavailable();
+		var response = await Client.accessibility_infoAsync(
+			new AccessibilityInfoRequest { Format = AccessibilityInfoRequest.Types.Format.Nested },
+			cancellationToken: cancellationToken);
+		return response.Json;
+	}
+
 	public async Task<IosLiveVideoSession> OpenVideoAsync(
 		StreamOptions options,
 		DisplayGeometry display,

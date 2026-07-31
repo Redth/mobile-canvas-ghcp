@@ -32,6 +32,7 @@ internal static class DeviceApi
 		MapSelection(app);
 		MapLifecycle(app);
 		MapInput(app);
+		MapUi(app);
 		MapMedia(app);
 	}
 
@@ -501,6 +502,40 @@ internal static class DeviceApi
 
 	private static AutomationActivityHub Hub(HttpContext context) =>
 		context.RequestServices.GetRequiredService<AutomationActivityHub>();
+
+	private static void MapUi(WebApplication app)
+	{
+		app.MapGet(
+			"/api/v1/devices/{deviceId}/ui",
+			(string deviceId, bool? raw, DeviceService devices, CancellationToken cancellationToken) =>
+				devices.GetUiSnapshotAsync(deviceId, raw ?? false, cancellationToken));
+		app.MapPost(
+			"/api/v1/devices/{deviceId}/ui/find",
+			(string deviceId, UiQuery query, DeviceService devices, CancellationToken cancellationToken) =>
+				devices.FindUiElementsAsync(deviceId, query, cancellationToken));
+		app.MapPost(
+			"/api/v1/devices/{deviceId}/ui/tap",
+			async (string deviceId, UiQuery query, DeviceService devices, HttpContext context, CancellationToken cancellationToken) =>
+			{
+				var result = await devices.TapUiElementAsync(deviceId, query, cancellationToken)
+					.ConfigureAwait(false);
+				// Announced after the fact because the coordinates are not known until the element is
+				// found, and the canvas animates a real point rather than the query that produced it.
+				await PublishAutomationAsync(
+					context,
+					new AutomationEvent
+					{
+						Kind = AutomationEventKinds.Tap,
+						DeviceId = deviceId,
+						X = result.Match?.CenterX ?? 0,
+						Y = result.Match?.CenterY ?? 0,
+						Detail = result.Match?.Element.Label,
+					},
+					devices,
+					cancellationToken).ConfigureAwait(false);
+				return result;
+			});
+	}
 
 	private static void MapMedia(WebApplication app)
 	{

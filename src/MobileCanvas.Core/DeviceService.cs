@@ -189,6 +189,71 @@ public sealed class DeviceService(IEnumerable<IDeviceBackend> backends)
 	public Task<RecordingStatus> GetRecordingStatusAsync(string deviceId, CancellationToken cancellationToken = default) =>
 		GetBackend(deviceId).GetRecordingStatusAsync(deviceId, cancellationToken);
 
+	public Task<UiSnapshot> GetUiSnapshotAsync(
+		string deviceId,
+		bool includeRaw = false,
+		CancellationToken cancellationToken = default) =>
+		GetBackend(deviceId).GetUiSnapshotAsync(deviceId, includeRaw, cancellationToken);
+
+	public async Task<UiQueryResult> FindUiElementsAsync(
+		string deviceId,
+		UiQuery query,
+		CancellationToken cancellationToken = default)
+	{
+		var snapshot = await GetUiSnapshotAsync(deviceId, false, cancellationToken).ConfigureAwait(false);
+		var matches = UiTree.Find(snapshot.Root, query);
+
+		return new UiQueryResult
+		{
+			DeviceId = deviceId,
+			Total = matches.Count,
+			Matches = [.. matches.Take(Math.Max(1, query.Limit))],
+		};
+	}
+
+	/// <summary>
+	/// Taps the first element a query matches.
+	/// </summary>
+	/// <remarks>
+	/// Capture and tap are joined here rather than left to the caller because the screen can change
+	/// between the two, and because it turns the common "press the button called X" into one call.
+	/// The number of matches comes back so an over-broad query is visible rather than silently
+	/// resolving to whichever element happened to be first.
+	/// </remarks>
+	public async Task<UiTapResult> TapUiElementAsync(
+		string deviceId,
+		UiQuery query,
+		CancellationToken cancellationToken = default)
+	{
+		var found = await FindUiElementsAsync(deviceId, query, cancellationToken).ConfigureAwait(false);
+		if (found.Matches.Length == 0)
+			throw new UiElementNotFoundException(Describe(query));
+
+		var match = found.Matches[0];
+		if (match.Element.Frame is null)
+			throw new DeviceCapabilityException(
+				$"The element matching {Describe(query)} reported no on-screen position, so it cannot be tapped.");
+
+		await TapAsync(
+			deviceId,
+			new TapRequest { X = match.CenterX, Y = match.CenterY },
+			cancellationToken).ConfigureAwait(false);
+
+		return new UiTapResult { DeviceId = deviceId, Match = match, Total = found.Total };
+	}
+
+	private static string Describe(UiQuery query)
+	{
+		var terms = new List<string>();
+		if (!string.IsNullOrWhiteSpace(query.Text))
+			terms.Add($"text '{query.Text}'");
+		if (!string.IsNullOrWhiteSpace(query.Identifier))
+			terms.Add($"identifier '{query.Identifier}'");
+		if (!string.IsNullOrWhiteSpace(query.Role))
+			terms.Add($"role '{query.Role}'");
+		return terms.Count == 0 ? "an empty query" : string.Join(" and ", terms);
+	}
+
 	private IDeviceBackend GetBackend(string deviceId) =>
 		GetBackendForPlatform(DeviceIdentity.GetPlatform(deviceId));
 

@@ -303,6 +303,49 @@ public sealed class DeviceHostClient
 			.ConfigureAwait(false);
 	}
 
+	public async Task<UiSnapshot> GetUiSnapshotAsync(
+		string deviceId,
+		bool includeRaw = false,
+		CancellationToken cancellationToken = default)
+	{
+		var response = await SendAsync(
+			HttpMethod.Get,
+			$"/api/v1/devices/{Escape(deviceId)}/ui{(includeRaw ? "?raw=true" : string.Empty)}",
+			cancellationToken).ConfigureAwait(false);
+		return await ReadAsync(response, DeviceJsonContext.Default.UiSnapshot, cancellationToken)
+			.ConfigureAwait(false);
+	}
+
+	public async Task<UiQueryResult> FindUiElementsAsync(
+		string deviceId,
+		UiQuery query,
+		CancellationToken cancellationToken = default)
+	{
+		var response = await SendAsync(
+			HttpMethod.Post,
+			$"/api/v1/devices/{Escape(deviceId)}/ui/find",
+			JsonContent.Create(query, DeviceJsonContext.Default.UiQuery),
+			cancellationToken).ConfigureAwait(false);
+		return await ReadAsync(response, DeviceJsonContext.Default.UiQueryResult, cancellationToken)
+			.ConfigureAwait(false);
+	}
+
+	public async Task<UiTapResult> TapUiElementAsync(
+		string deviceId,
+		UiQuery query,
+		CanvasContextKey? context = null,
+		CancellationToken cancellationToken = default)
+	{
+		var path = $"/api/v1/devices/{Escape(deviceId)}/ui/tap";
+		var response = await SendAsync(
+			HttpMethod.Post,
+			context is null ? path : WithContext(path, context),
+			JsonContent.Create(query, DeviceJsonContext.Default.UiQuery),
+			cancellationToken).ConfigureAwait(false);
+		return await ReadAsync(response, DeviceJsonContext.Default.UiTapResult, cancellationToken)
+			.ConfigureAwait(false);
+	}
+
 	public async Task<byte[]> ScreenshotAsync(
 		string deviceId,
 		CanvasContextKey? context = null,

@@ -140,5 +140,7 @@ public sealed class DeviceServiceTests
 			Task.FromResult(new RecordingStatus());
 		public Task<RecordingStatus> GetRecordingStatusAsync(string deviceId, CancellationToken cancellationToken = default) =>
 			Task.FromResult(new RecordingStatus());
+		public Task<UiSnapshot> GetUiSnapshotAsync(string deviceId, bool includeRaw, CancellationToken cancellationToken = default) =>
+			Task.FromResult(new UiSnapshot { DeviceId = deviceId });
 	}
 }

@@ -5,3 +5,6 @@ native/*/out/
 node_modules/
 *.user
 .DS_Store
+
+# Local tooling cache
+.impeccable/
