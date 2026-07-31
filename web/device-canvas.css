@@ -288,6 +288,12 @@ summary:focus-visible,
   text-overflow: ellipsis;
 }
 
+/* Definite-height flex items do not stretch, so they land at the top of a stretch row. */
+#selector-dot {
+  align-self: center;
+  margin-right: 8px;
+}
+
 .selector-chevron {
   color: var(--fg-muted);
   flex: 0 0 auto;
@@ -309,6 +315,8 @@ summary:focus-visible,
 
 /* ------------------------------------------------------------- popover --- */
 
+/* No inner padding: rows run edge to edge so their hover and selected states read as list lines
+   rather than as cards floating inside the menu. Fixed children re-add the inset themselves. */
 .device-popover {
   position: absolute;
   z-index: 40;
@@ -317,49 +325,43 @@ summary:focus-visible,
   right: 0;
   max-height: min(60dvh, 420px);
   overflow-y: auto;
-  padding: 6px;
+  padding: 0 0 4px;
   border: 1px solid var(--border-default);
   border-radius: 8px;
   background: var(--canvas-default);
   box-shadow: var(--shadow-popover);
 }
 
-.popover-head {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  padding: 4px 6px 6px;
-  color: var(--fg-muted);
-  font-size: 11px;
-  font-weight: 600;
-  letter-spacing: 0.04em;
-  text-transform: uppercase;
-}
-
+/* Plain number, not a pill: the count now sits on the tinted group band, and in light mode the old
+   pill fill was the same token as that band. */
 .count {
-  display: inline-grid;
-  place-items: center;
-  min-width: 18px;
-  height: 18px;
-  padding: 0 5px;
-  border-radius: 9px;
-  background: var(--control-default);
   color: var(--fg-muted);
   font-size: 11px;
+  font-variant-numeric: tabular-nums;
   letter-spacing: 0;
 }
 
 .device-list {
   display: grid;
-  gap: 2px;
+  gap: 0;
 }
 
+/*
+ * A tinted band, and sticky so the group a row belongs to stays on screen while scrolling a long
+ * emulator list. The background is what makes sticky viable -- a transparent header would smear
+ * rows underneath it.
+ */
 .device-group {
+  position: sticky;
+  top: 0;
+  z-index: 1;
   display: flex;
   align-items: center;
   justify-content: space-between;
   gap: 8px;
-  padding: 8px 8px 4px;
+  padding: 5px 10px;
+  border-bottom: 1px solid var(--border-muted, var(--border-default));
+  background: var(--canvas-subtle);
   color: var(--fg-muted);
   font-size: 11px;
   font-weight: 600;
@@ -368,9 +370,7 @@ summary:focus-visible,
 }
 
 .device-group:not(:first-child) {
-  margin-top: 4px;
   border-top: 1px solid var(--border-muted, var(--border-default));
-  padding-top: 10px;
 }
 
 .segmented {
@@ -412,14 +412,19 @@ summary:focus-visible,
   font-weight: 600;
 }
 
+/*
+ * Full-bleed list lines, not inset cards. The row spans the popover edge to edge so hover and
+ * selection read as a highlighted line, and the two-line copy stays because the OS version and
+ * power state are what distinguish a dozen similarly named emulators.
+ */
 .device-card {
   display: flex;
   align-items: center;
   gap: 8px;
   width: 100%;
-  padding: 7px 8px;
-  border: 1px solid transparent;
-  border-radius: 6px;
+  padding: 5px 10px;
+  border: 0;
+  border-radius: 0;
   background: none;
   cursor: pointer;
   text-align: left;
@@ -430,24 +435,19 @@ summary:focus-visible,
 }
 
 .device-card.selected {
-  border-color: var(--border-default);
   background: var(--accent-muted);
 }
 
 .device-glyph {
   display: grid;
   place-items: center;
-  width: 26px;
-  height: 26px;
+  width: 20px;
+  height: 20px;
   flex: 0 0 auto;
-  border-radius: 6px;
-  border: 1px solid var(--border-default);
-  background: var(--canvas-subtle);
   color: var(--fg-muted);
 }
 
 .device-card.booted .device-glyph {
-  border-color: var(--success-fg);
   color: var(--success-fg);
 }
 
@@ -459,6 +459,7 @@ summary:focus-visible,
 }
 
 .device-name {
+  min-width: 0;
   font-weight: 600;
   white-space: nowrap;
   overflow: hidden;
@@ -466,8 +467,9 @@ summary:focus-visible,
 }
 
 .device-detail {
+  min-width: 0;
   color: var(--fg-muted);
-  font-size: 12px;
+  font-size: 11px;
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -507,8 +509,10 @@ summary:focus-visible,
   background: var(--danger-fg);
 }
 
+/* Re-adds the inset the popover no longer provides, so the warning still reads as a boxed callout
+   among the full-bleed rows. */
 .diagnostics {
-  margin: 0 0 6px;
+  margin: 6px 6px 4px;
   padding: 7px 9px;
   border: 1px solid var(--attention-fg);
   border-radius: 6px;

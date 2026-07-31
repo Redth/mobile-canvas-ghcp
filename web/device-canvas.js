@@ -1,6 +1,5 @@
 const elements = {
   list: document.querySelector("#device-list"),
-  count: document.querySelector("#device-count"),
   diagnostics: document.querySelector("#diagnostics"),
   selector: document.querySelector("#device-selector"),
   popover: document.querySelector("#device-popover"),
@@ -192,28 +191,21 @@ function availablePlatforms() {
 
 function renderDeviceList() {
   const devices = state.catalog?.devices || [];
-  elements.count.textContent = String(devices.length);
   elements.list.replaceChildren();
 
-  const platforms = availablePlatforms();
-  // A single-platform machine is the common case, and a lone "iOS Simulators" heading directly
-  // under a popover already titled "Devices" is pure noise, so headings only appear when they
-  // actually separate something.
-  const showHeadings = platforms.length > 1;
-
-  for (const platform of platforms) {
+  // Every group is headed, including on a single-platform machine: the heading now carries the
+  // count, so dropping it would leave the menu with no total at all.
+  for (const platform of availablePlatforms()) {
     const group = devices.filter((device) => device.platform === platform);
     if (group.length === 0) continue;
 
-    if (showHeadings) {
-      const heading = document.createElement("div");
-      heading.className = "device-group";
-      heading.setAttribute("role", "presentation");
-      heading.innerHTML = `
-        <span>${escapeHtml(platformInfo(platform).label)}</span>
-        <span class="count">${group.length}</span>`;
-      elements.list.append(heading);
-    }
+    const heading = document.createElement("div");
+    heading.className = "device-group";
+    heading.setAttribute("role", "presentation");
+    heading.innerHTML = `
+      <span>${escapeHtml(platformInfo(platform).label)}</span>
+      <span class="count">${group.length}</span>`;
+    elements.list.append(heading);
 
     for (const device of group) elements.list.append(createDeviceCard(device));
   }
