@@ -499,6 +499,59 @@ public sealed class DeviceHostClient
 			.ConfigureAwait(false);
 	}
 
+	public async Task<PermissionListResult> ListPermissionsAsync(
+		string deviceId,
+		string bundleId,
+		CancellationToken cancellationToken = default)
+	{
+		var response = await SendAsync(
+			HttpMethod.Get,
+			$"/api/v1/devices/{Escape(deviceId)}/permissions?bundleId={Uri.EscapeDataString(bundleId)}",
+			cancellationToken).ConfigureAwait(false);
+		return await ReadAsync(response, DeviceJsonContext.Default.PermissionListResult, cancellationToken)
+			.ConfigureAwait(false);
+	}
+
+	public async Task<PermissionChangeResult> ChangePermissionAsync(
+		string deviceId,
+		PermissionChangeRequest request,
+		CancellationToken cancellationToken = default)
+	{
+		var response = await SendAsync(
+			HttpMethod.Post,
+			$"/api/v1/devices/{Escape(deviceId)}/permissions",
+			JsonContent.Create(request, DeviceJsonContext.Default.PermissionChangeRequest),
+			cancellationToken).ConfigureAwait(false);
+		return await ReadAsync(response, DeviceJsonContext.Default.PermissionChangeResult, cancellationToken)
+			.ConfigureAwait(false);
+	}
+
+	public async Task<DeviceSettings> GetSettingsAsync(
+		string deviceId,
+		CancellationToken cancellationToken = default)
+	{
+		var response = await SendAsync(
+			HttpMethod.Get,
+			$"/api/v1/devices/{Escape(deviceId)}/settings",
+			cancellationToken).ConfigureAwait(false);
+		return await ReadAsync(response, DeviceJsonContext.Default.DeviceSettings, cancellationToken)
+			.ConfigureAwait(false);
+	}
+
+	public async Task<DeviceSettings> UpdateSettingsAsync(
+		string deviceId,
+		DeviceSettingsRequest request,
+		CancellationToken cancellationToken = default)
+	{
+		var response = await SendAsync(
+			HttpMethod.Post,
+			$"/api/v1/devices/{Escape(deviceId)}/settings",
+			JsonContent.Create(request, DeviceJsonContext.Default.DeviceSettingsRequest),
+			cancellationToken).ConfigureAwait(false);
+		return await ReadAsync(response, DeviceJsonContext.Default.DeviceSettings, cancellationToken)
+			.ConfigureAwait(false);
+	}
+
 	public async Task<byte[]> ScreenshotAsync(
 		string deviceId,
 		CanvasContextKey? context = null,

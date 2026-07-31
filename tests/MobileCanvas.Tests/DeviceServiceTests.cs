@@ -352,6 +352,133 @@ public sealed class DeviceServiceTests
 		Assert.Equal("com.example.notes", backend.LastFileQuery?.BundleId);
 	}
 
+	[Theory]
+	[InlineData("")]
+	[InlineData("  ")]
+	[InlineData("allow")]
+	public async Task ChangePermission_RejectsAnActionThatIsNotOneOfTheThree(string action)
+	{
+		var service = new DeviceService([new FakeBackend()]);
+
+		var error = await Assert.ThrowsAsync<ArgumentException>(() => service.ChangePermissionAsync(
+			FakeBackend.Device.Id,
+			new PermissionChangeRequest { BundleId = "com.example.notes", Permission = "camera", Action = action }));
+
+		// The message has to name the alternatives: a caller who guessed "allow" has no other way to
+		// learn the vocabulary, and the platform tools accept a wrong verb without complaint.
+		Assert.Contains(PermissionActions.Grant, error.Message, StringComparison.Ordinal);
+		Assert.Contains(PermissionActions.Revoke, error.Message, StringComparison.Ordinal);
+		Assert.Contains(PermissionActions.Reset, error.Message, StringComparison.Ordinal);
+	}
+
+	[Theory]
+	[InlineData("")]
+	[InlineData("   ")]
+	public async Task ChangePermission_RequiresABundleAndAPermission(string blank)
+	{
+		var service = new DeviceService([new FakeBackend()]);
+
+		await Assert.ThrowsAsync<ArgumentException>(() => service.ChangePermissionAsync(
+			FakeBackend.Device.Id,
+			new PermissionChangeRequest { BundleId = blank, Permission = "camera" }));
+
+		await Assert.ThrowsAsync<ArgumentException>(() => service.ChangePermissionAsync(
+			FakeBackend.Device.Id,
+			new PermissionChangeRequest { BundleId = "com.example.notes", Permission = blank }));
+	}
+
+	[Fact]
+	public async Task ChangePermission_NamesTheKnownPermissionsWhenNoneIsGiven()
+	{
+		var service = new DeviceService([new FakeBackend()]);
+
+		var error = await Assert.ThrowsAsync<ArgumentException>(() => service.ChangePermissionAsync(
+			FakeBackend.Device.Id,
+			new PermissionChangeRequest { BundleId = "com.example.notes", Permission = "" }));
+
+		Assert.Contains(DevicePermissions.Camera, error.Message, StringComparison.Ordinal);
+	}
+
+	[Fact]
+	public async Task ChangePermission_NormalisesTheActionBeforePassingItDown()
+	{
+		var backend = new FakeBackend();
+		var service = new DeviceService([backend]);
+
+		// A caller typing " Grant " means grant, and the backend switches on an exact string.
+		await service.ChangePermissionAsync(
+			FakeBackend.Device.Id,
+			new PermissionChangeRequest
+			{
+				BundleId = "com.example.notes",
+				Permission = " camera ",
+				Action = " Grant ",
+			});
+
+		Assert.Equal(PermissionActions.Grant, backend.LastPermissionChange?.Action);
+		Assert.Equal("camera", backend.LastPermissionChange?.Permission);
+	}
+
+	[Fact]
+	public async Task ChangePermission_LetsAPlatformSpecificNameThrough()
+	{
+		var backend = new FakeBackend();
+		var service = new DeviceService([backend]);
+
+		// The canonical list cannot cover every permission either platform has, so a name it does not
+		// know still reaches the backend -- which is the only layer that can say whether it is real.
+		await service.ChangePermissionAsync(
+			FakeBackend.Device.Id,
+			new PermissionChangeRequest
+			{
+				BundleId = "com.example.notes",
+				Permission = "android.permission.BODY_SENSORS",
+			});
+
+		Assert.Equal("android.permission.BODY_SENSORS", backend.LastPermissionChange?.Permission);
+	}
+
+	[Fact]
+	public async Task UpdateSettings_RejectsAnAppearanceThatIsNeitherLightNorDark()
+	{
+		var service = new DeviceService([new FakeBackend()]);
+
+		var error = await Assert.ThrowsAsync<ArgumentException>(() => service.UpdateSettingsAsync(
+			FakeBackend.Device.Id,
+			new DeviceSettingsRequest { Appearance = "auto" }));
+
+		// 'auto' is a real value on Android, but it names a rule rather than an appearance, so a
+		// caller who set it would not know what they were actually looking at.
+		Assert.Contains(DeviceAppearances.Dark, error.Message, StringComparison.Ordinal);
+	}
+
+	[Theory]
+	[InlineData(0)]
+	[InlineData(-1)]
+	[InlineData(11)]
+	public async Task UpdateSettings_RejectsAFontScaleThatWouldMakeTheDeviceUnusable(double scale)
+	{
+		var service = new DeviceService([new FakeBackend()]);
+
+		// `settings put system font_scale 0` is accepted by Android and renders text invisibly small,
+		// leaving a device nothing can be read on and no obvious way back.
+		await Assert.ThrowsAsync<ArgumentException>(() => service.UpdateSettingsAsync(
+			FakeBackend.Device.Id,
+			new DeviceSettingsRequest { FontScale = scale }));
+	}
+
+	[Fact]
+	public async Task UpdateSettings_RejectsARequestThatChangesNothing()
+	{
+		var service = new DeviceService([new FakeBackend()]);
+
+		// Every field unset would run the platform tool with no arguments, which on iOS reads back the
+		// current value and reports it as a change that was made.
+		await Assert.ThrowsAsync<ArgumentException>(() => service.UpdateSettingsAsync(
+			FakeBackend.Device.Id,
+			new DeviceSettingsRequest()));
+	}
+
 	private sealed class FakeBackend : IDeviceBackend
 	{
 		public static DeviceTarget Device { get; } = new()
@@ -476,6 +603,36 @@ public sealed class DeviceServiceTests
 				Report = Crashes.First(crash => crash.Id == crashId),
 				Content = "stack trace",
 			});
+		}
+
+		public PermissionChangeRequest? LastPermissionChange { get; private set; }
+		public DeviceSettingsRequest? LastSettingsChange { get; private set; }
+
+		public Task<PermissionListResult> ListPermissionsAsync(string deviceId, string bundleId, CancellationToken cancellationToken = default) =>
+			Task.FromResult(new PermissionListResult
+			{
+				DeviceId = deviceId,
+				BundleId = bundleId,
+				Permissions = [new() { Name = "camera", PlatformName = "camera", Granted = true }],
+				Total = 1,
+			});
+		public Task<PermissionChangeResult> ChangePermissionAsync(string deviceId, PermissionChangeRequest request, CancellationToken cancellationToken = default)
+		{
+			LastPermissionChange = request;
+			return Task.FromResult(new PermissionChangeResult
+			{
+				DeviceId = deviceId,
+				BundleId = request.BundleId,
+				Permission = request.Permission,
+				Action = request.Action,
+			});
+		}
+		public Task<DeviceSettings> GetSettingsAsync(string deviceId, CancellationToken cancellationToken = default) =>
+			Task.FromResult(new DeviceSettings { DeviceId = deviceId, Appearance = DeviceAppearances.Light });
+		public Task<DeviceSettings> UpdateSettingsAsync(string deviceId, DeviceSettingsRequest request, CancellationToken cancellationToken = default)
+		{
+			LastSettingsChange = request;
+			return Task.FromResult(new DeviceSettings { DeviceId = deviceId, Appearance = request.Appearance });
 		}
 
 		public Task<ILiveVideoSession> OpenVideoStreamAsync(string deviceId, StreamOptions options, CancellationToken cancellationToken = default) =>

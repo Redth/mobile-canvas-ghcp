@@ -67,6 +67,20 @@ public interface IDeviceBackend
 	/// <summary>Copies a file from this machine onto the device.</summary>
 	Task<FileTransferResult> PushFileAsync(string deviceId, FileTransferRequest request, CancellationToken cancellationToken = default);
 
+	/// <summary>Reports the permissions one app holds.</summary>
+	Task<PermissionListResult> ListPermissionsAsync(string deviceId, string bundleId, CancellationToken cancellationToken = default);
+
+	/// <summary>
+	/// Grants, revokes or resets one permission, then reads back what actually changed.
+	/// </summary>
+	Task<PermissionChangeResult> ChangePermissionAsync(string deviceId, PermissionChangeRequest request, CancellationToken cancellationToken = default);
+
+	/// <summary>Reads the device's display and accessibility settings.</summary>
+	Task<DeviceSettings> GetSettingsAsync(string deviceId, CancellationToken cancellationToken = default);
+
+	/// <summary>Applies the settings named in the request, leaving the rest alone.</summary>
+	Task<DeviceSettings> UpdateSettingsAsync(string deviceId, DeviceSettingsRequest request, CancellationToken cancellationToken = default);
+
 	Task<ILiveVideoSession> OpenVideoStreamAsync(string deviceId, StreamOptions options, CancellationToken cancellationToken = default);
 	Task<RecordingStatus> StartRecordingAsync(string deviceId, RecordingStartRequest request, CancellationToken cancellationToken = default);
 	Task<RecordingStatus> StopRecordingAsync(string deviceId, CancellationToken cancellationToken = default);

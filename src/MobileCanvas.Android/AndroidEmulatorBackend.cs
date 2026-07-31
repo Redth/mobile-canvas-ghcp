@@ -1592,6 +1592,280 @@ public sealed partial class AndroidEmulatorBackend : IDeviceBackend, IAsyncDispo
 
 	#endregion
 
+	#region Permissions and settings
+
+	/// <summary>
+	/// Maps the names that mean the same thing on both platforms onto Android's own.
+	/// </summary>
+	/// <remarks>
+	/// Several are one-to-many because Android splits what iOS treats as a single decision: location
+	/// into fine and coarse, contacts and calendar into read and write, photos into images and video.
+	/// A change fans out across the whole set so that asking for "location" produces the state a user
+	/// would recognise, rather than half of it.
+	/// </remarks>
+	private static readonly Dictionary<string, string[]> AndroidPermissions = new(StringComparer.OrdinalIgnoreCase)
+	{
+		[DevicePermissions.Camera] = ["android.permission.CAMERA"],
+		[DevicePermissions.Microphone] = ["android.permission.RECORD_AUDIO"],
+		[DevicePermissions.Location] =
+			["android.permission.ACCESS_FINE_LOCATION", "android.permission.ACCESS_COARSE_LOCATION"],
+		[DevicePermissions.LocationAlways] = ["android.permission.ACCESS_BACKGROUND_LOCATION"],
+		[DevicePermissions.Contacts] =
+			["android.permission.READ_CONTACTS", "android.permission.WRITE_CONTACTS"],
+		[DevicePermissions.Calendar] =
+			["android.permission.READ_CALENDAR", "android.permission.WRITE_CALENDAR"],
+		[DevicePermissions.Photos] =
+			["android.permission.READ_MEDIA_IMAGES", "android.permission.READ_MEDIA_VIDEO"],
+		[DevicePermissions.PhotosAdd] = ["android.permission.READ_MEDIA_VISUAL_USER_SELECTED"],
+		[DevicePermissions.MediaLibrary] = ["android.permission.READ_MEDIA_AUDIO"],
+		[DevicePermissions.Motion] = ["android.permission.ACTIVITY_RECOGNITION"],
+		[DevicePermissions.Notifications] = ["android.permission.POST_NOTIFICATIONS"],
+	};
+
+	public async Task<PermissionListResult> ListPermissionsAsync(
+		string deviceId,
+		string bundleId,
+		CancellationToken cancellationToken = default)
+	{
+		var serial = await RequireSerialAsync(deviceId, cancellationToken).ConfigureAwait(false);
+		var granted = await ReadPermissionStateAsync(serial, bundleId, deviceId, cancellationToken)
+			.ConfigureAwait(false);
+
+		// Reported by Android's own name, because that is what the manifest and the error messages
+		// use, with the canonical name attached where there is one.
+		var canonical = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+		foreach (var (name, platformNames) in AndroidPermissions)
+		{
+			foreach (var platformName in platformNames)
+				canonical[platformName] = name;
+		}
+
+		var permissions = granted
+			.Select(entry => new DevicePermission
+			{
+				Name = canonical.GetValueOrDefault(entry.Key, entry.Key),
+				PlatformName = entry.Key,
+				Granted = entry.Value,
+			})
+			.OrderBy(permission => permission.PlatformName, StringComparer.Ordinal)
+			.ToArray();
+
+		return new PermissionListResult
+		{
+			DeviceId = deviceId,
+			Platform = DevicePlatforms.Android,
+			BundleId = bundleId,
+			Permissions = permissions,
+			Total = permissions.Length,
+		};
+	}
+
+	public async Task<PermissionChangeResult> ChangePermissionAsync(
+		string deviceId,
+		PermissionChangeRequest request,
+		CancellationToken cancellationToken = default)
+	{
+		var serial = await RequireSerialAsync(deviceId, cancellationToken).ConfigureAwait(false);
+
+		var targets = AndroidPermissions.TryGetValue(request.Permission, out var mapped)
+			? mapped
+			: [request.Permission];
+
+		// A reset makes the app ask again, which is what 'revoke' already does here: Android has no
+		// third state, so the two collapse.
+		var verb = request.Action == PermissionActions.Grant ? "grant" : "revoke";
+
+		foreach (var target in targets)
+		{
+			var result = await RunAdbResultAsync(
+				serial,
+				["shell", "pm", verb, request.BundleId, target],
+				cancellationToken).ConfigureAwait(false);
+
+			var complaint = FindPermissionFailure(result);
+			if (complaint is not null)
+				throw new DeviceCapabilityException(
+					$"Could not {verb} '{target}' for '{request.BundleId}' on '{deviceId}': {complaint}");
+		}
+
+		// pm grant exits zero and prints nothing when the app never declared the permission, so the
+		// only way to know whether anything happened is to look afterwards.
+		var granted = await ReadPermissionStateAsync(serial, request.BundleId, deviceId, cancellationToken)
+			.ConfigureAwait(false);
+
+		var touched = targets
+			.Select(target => new DevicePermission
+			{
+				Name = request.Permission,
+				PlatformName = target,
+				Granted = granted.TryGetValue(target, out var value) ? value : null,
+			})
+			.ToArray();
+
+		if (touched.All(permission => permission.Granted is null))
+			throw new DeviceCapabilityException(
+				$"'{request.BundleId}' does not declare {string.Join(" or ", targets)}, so there is "
+				+ "nothing to change. Add it to the manifest and reinstall.");
+
+		return new PermissionChangeResult
+		{
+			DeviceId = deviceId,
+			BundleId = request.BundleId,
+			Permission = request.Permission,
+			Action = request.Action,
+			Permissions = touched,
+		};
+	}
+
+	private async Task<Dictionary<string, bool>> ReadPermissionStateAsync(
+		string serial,
+		string bundleId,
+		string deviceId,
+		CancellationToken cancellationToken)
+	{
+		var result = await RunAdbResultAsync(
+			serial,
+			["shell", "dumpsys", "package", QuoteForDeviceShell(bundleId)],
+			cancellationToken).ConfigureAwait(false);
+
+		// dumpsys answers an unknown package with a short report rather than an error, so the absence
+		// of the package header is what says the bundle ID is wrong.
+		if (!result.StandardOutput.Contains($"Package [{bundleId}]", StringComparison.Ordinal))
+			throw new DeviceCapabilityException(
+				$"'{bundleId}' is not installed on '{deviceId}'. Check the package with `app list`.");
+
+		return PermissionParser.ParseRuntimePermissions(result.StandardOutput);
+	}
+
+	/// <summary>
+	/// Reduces a pm failure to its first useful line.
+	/// </summary>
+	/// <remarks>
+	/// An unknown permission comes back as a twenty-line Java stack trace whose only informative part
+	/// is the exception line, and an unknown package as "Error: package not found". Neither is worth
+	/// handing to a reader whole.
+	/// </remarks>
+	private static string? FindPermissionFailure(ProcessResult result)
+	{
+		foreach (var line in $"{result.StandardError}\n{result.StandardOutput}".Split('\n'))
+		{
+			var text = line.Trim();
+			if (text.StartsWith("java.", StringComparison.Ordinal))
+				return text;
+			if (text.StartsWith("Error:", StringComparison.OrdinalIgnoreCase)
+				|| text.StartsWith("Failure", StringComparison.OrdinalIgnoreCase))
+			{
+				return text;
+			}
+		}
+
+		return result.ExitCode == 0 ? null : $"pm exited with code {result.ExitCode}";
+	}
+
+	public async Task<DeviceSettings> GetSettingsAsync(
+		string deviceId,
+		CancellationToken cancellationToken = default)
+	{
+		var serial = await RequireSerialAsync(deviceId, cancellationToken).ConfigureAwait(false);
+
+		var night = await RunAdbAsync(serial, ["shell", "cmd", "uimode", "night"], cancellationToken)
+			.ConfigureAwait(false);
+		var scale = await RunAdbAsync(
+			serial,
+			["shell", "settings", "get", "system", "font_scale"],
+			cancellationToken).ConfigureAwait(false);
+		var contrast = await RunAdbAsync(
+			serial,
+			["shell", "settings", "get", "secure", "high_text_contrast_enabled"],
+			cancellationToken).ConfigureAwait(false);
+
+		return new DeviceSettings
+		{
+			DeviceId = deviceId,
+			Platform = DevicePlatforms.Android,
+			Appearance = ParseNightMode(night),
+			FontScale = ParseSetting(scale) is { } text && double.TryParse(text, out var value) ? value : null,
+			IncreaseContrast = ParseSetting(contrast) switch
+			{
+				"1" => true,
+				"0" => false,
+				_ => null,
+			},
+		};
+	}
+
+	public async Task<DeviceSettings> UpdateSettingsAsync(
+		string deviceId,
+		DeviceSettingsRequest request,
+		CancellationToken cancellationToken = default)
+	{
+		var serial = await RequireSerialAsync(deviceId, cancellationToken).ConfigureAwait(false);
+
+		if (request.Appearance is { } appearance)
+		{
+			await RequireSettingAsync(
+				serial,
+				["shell", "cmd", "uimode", "night", appearance == DeviceAppearances.Dark ? "yes" : "no"],
+				cancellationToken).ConfigureAwait(false);
+		}
+
+		if (request.FontScale is { } scale)
+		{
+			await RequireSettingAsync(
+				serial,
+				["shell", "settings", "put", "system", "font_scale", scale.ToString("0.0###", CultureInfo.InvariantCulture)],
+				cancellationToken).ConfigureAwait(false);
+		}
+
+		if (request.IncreaseContrast is { } contrast)
+		{
+			await RequireSettingAsync(
+				serial,
+				["shell", "settings", "put", "secure", "high_text_contrast_enabled", contrast ? "1" : "0"],
+				cancellationToken).ConfigureAwait(false);
+		}
+
+		if (request.ContentSize is not null)
+			throw new DeviceCapabilityException(
+				"Android sizes text by scale rather than by named category. Use a font scale instead, "
+				+ "for example 1.3.");
+
+		return await GetSettingsAsync(deviceId, cancellationToken).ConfigureAwait(false);
+	}
+
+	private async Task RequireSettingAsync(string serial, string[] arguments, CancellationToken cancellationToken)
+	{
+		var result = await RunAdbResultAsync(serial, arguments, cancellationToken).ConfigureAwait(false);
+		if (FindPermissionFailure(result) is { } failure)
+			throw new DeviceCapabilityException($"Could not apply the setting: {failure}");
+	}
+
+	/// <summary>Reads the answer to <c>cmd uimode night</c>, which is "Night mode: yes".</summary>
+	private static string? ParseNightMode(string? output)
+	{
+		var value = output?.Trim();
+		if (value is null || !value.StartsWith("Night mode:", StringComparison.OrdinalIgnoreCase))
+			return null;
+
+		return value["Night mode:".Length..].Trim().ToLowerInvariant() switch
+		{
+			"yes" => DeviceAppearances.Dark,
+			"no" => DeviceAppearances.Light,
+
+			// 'auto' and 'custom' follow the clock, so neither names the appearance in force.
+			_ => null,
+		};
+	}
+
+	/// <summary>Reads a settings value, where an unset key answers with the literal "null".</summary>
+	private static string? ParseSetting(string? output)
+	{
+		var value = output?.Trim();
+		return value is null or "" or "null" ? null : value;
+	}
+
+	#endregion
+
 	#region Files
 
 	/// <summary>

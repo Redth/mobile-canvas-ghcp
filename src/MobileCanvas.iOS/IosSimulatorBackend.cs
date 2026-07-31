@@ -3,6 +3,7 @@ using MobileCanvas.Core;
 using Idb;
 using System.Collections.Concurrent;
 using System.Diagnostics;
+using System.Text.RegularExpressions;
 
 namespace MobileCanvas.iOS;
 
@@ -1024,6 +1025,351 @@ public sealed class IosSimulatorBackend : IDeviceBackend, IAsyncDisposable
 			Directory.CreateDirectory(parent);
 
 		return destination;
+	}
+
+	#endregion
+
+	#region Permissions and settings
+
+	/// <summary>
+	/// Maps the names that mean the same thing on both platforms onto the ones simctl accepts.
+	/// </summary>
+	/// <remarks>
+	/// <c>camera</c> is absent from <c>simctl help privacy</c> but works, verified against a running
+	/// simulator. <c>notifications</c> is refused outright, so it is not offered here.
+	/// </remarks>
+	private static readonly Dictionary<string, string> PrivacyServices = new(StringComparer.OrdinalIgnoreCase)
+	{
+		[DevicePermissions.Camera] = "camera",
+		[DevicePermissions.Microphone] = "microphone",
+		[DevicePermissions.Location] = "location",
+		[DevicePermissions.LocationAlways] = "location-always",
+		[DevicePermissions.Contacts] = "contacts",
+		[DevicePermissions.Calendar] = "calendar",
+		[DevicePermissions.Reminders] = "reminders",
+		[DevicePermissions.Photos] = "photos",
+		[DevicePermissions.PhotosAdd] = "photos-add",
+		[DevicePermissions.MediaLibrary] = "media-library",
+		[DevicePermissions.Motion] = "motion",
+	};
+
+	/// <summary>
+	/// The TCC row each simctl service writes, so a change can be read back.
+	/// </summary>
+	/// <remarks>
+	/// Derived by granting each service in turn against a live simulator and reading the table, not
+	/// from documentation. Two findings that a guess would have missed: <c>contacts</c> and
+	/// <c>contacts-limited</c> write the same row, and location writes no TCC row at all.
+	/// </remarks>
+	private static readonly Dictionary<string, string> TccServices = new(StringComparer.OrdinalIgnoreCase)
+	{
+		["camera"] = "kTCCServiceCamera",
+		["microphone"] = "kTCCServiceMicrophone",
+		["contacts"] = "kTCCServiceAddressBook",
+		["contacts-limited"] = "kTCCServiceAddressBook",
+		["calendar"] = "kTCCServiceCalendar",
+		["reminders"] = "kTCCServiceReminders",
+		["photos"] = "kTCCServicePhotos",
+		["photos-add"] = "kTCCServicePhotosAdd",
+		["media-library"] = "kTCCServiceMediaLibrary",
+		["motion"] = "kTCCServiceMotion",
+		["siri"] = "kTCCServiceSiri",
+	};
+
+	public async Task<PermissionListResult> ListPermissionsAsync(
+		string deviceId,
+		string bundleId,
+		CancellationToken cancellationToken = default)
+	{
+		var device = await GetDeviceAsync(deviceId, cancellationToken).ConfigureAwait(false);
+		var state = await ReadPrivacyStateAsync(device.NativeId, bundleId, cancellationToken)
+			.ConfigureAwait(false);
+
+		var permissions = new List<DevicePermission>();
+		foreach (var (canonical, service) in PrivacyServices)
+		{
+			permissions.Add(new DevicePermission
+			{
+				Name = canonical,
+				PlatformName = service,
+				Granted = state.GetValueOrDefault(service),
+			});
+		}
+
+		return new PermissionListResult
+		{
+			DeviceId = deviceId,
+			Platform = DevicePlatforms.Ios,
+			BundleId = bundleId,
+			Permissions = [.. permissions.OrderBy(permission => permission.Name, StringComparer.Ordinal)],
+			Total = permissions.Count,
+		};
+	}
+
+	public async Task<PermissionChangeResult> ChangePermissionAsync(
+		string deviceId,
+		PermissionChangeRequest request,
+		CancellationToken cancellationToken = default)
+	{
+		var device = await GetDeviceAsync(deviceId, cancellationToken).ConfigureAwait(false);
+
+		// simctl accepts a bundle ID it has never seen and exits zero, writing a row for an app that
+		// does not exist. Checking first is what turns a typo into a message.
+		await RequireInstalledAsync(device.NativeId, request.BundleId, cancellationToken)
+			.ConfigureAwait(false);
+
+		var service = PrivacyServices.TryGetValue(request.Permission, out var mapped)
+			? mapped
+			: request.Permission;
+
+		string[] arguments = request.Action == PermissionActions.Reset
+			? ["privacy", device.NativeId, "reset", service, request.BundleId]
+			: ["privacy", device.NativeId, request.Action, service, request.BundleId];
+
+		var result = await RunAsync(arguments, cancellationToken).ConfigureAwait(false);
+
+		// simctl reports a refused service on stderr and still exits zero -- 'notifications' answers
+		// "Operation not permitted" that way -- so the exit code alone would call it done.
+		var complaint = result.StandardError.Trim();
+		if (result.ExitCode != 0 || complaint.Contains("error", StringComparison.OrdinalIgnoreCase))
+			throw new DeviceCapabilityException(
+				$"Could not {request.Action} '{request.Permission}' for '{request.BundleId}': "
+				+ (complaint.Length > 0 ? complaint.Split('\n')[^1].Trim() : $"simctl exited with code {result.ExitCode}."));
+
+		var state = await ReadPrivacyStateAsync(device.NativeId, request.BundleId, cancellationToken)
+			.ConfigureAwait(false);
+
+		return new PermissionChangeResult
+		{
+			DeviceId = deviceId,
+			BundleId = request.BundleId,
+			Permission = request.Permission,
+			Action = request.Action,
+			Permissions =
+			[
+				new DevicePermission
+				{
+					Name = request.Permission,
+					PlatformName = service,
+					Granted = state.GetValueOrDefault(service),
+				},
+			],
+		};
+	}
+
+	/// <summary>
+	/// Reads what the simulator currently believes about one app's privacy decisions.
+	/// </summary>
+	/// <remarks>
+	/// <c>simctl privacy</c> only writes; there is no read. The state lives in two private stores
+	/// instead -- a TCC sqlite database, and locationd's plist for location alone -- and both are read
+	/// here rather than leaving every answer unknown. Because the schema is Apple's and undocumented,
+	/// a failed read degrades to null (unknown) rather than raising: granting still works, it just
+	/// cannot be confirmed.
+	/// </remarks>
+	private async Task<Dictionary<string, bool?>> ReadPrivacyStateAsync(
+		string udid,
+		string bundleId,
+		CancellationToken cancellationToken)
+	{
+		var state = new Dictionary<string, bool?>(StringComparer.OrdinalIgnoreCase);
+
+		var tcc = Path.Combine(SimulatorDataRoot(udid), "Library", "TCC", "TCC.db");
+		if (File.Exists(tcc))
+		{
+			var query = "select service, auth_value from access where client = '"
+				+ bundleId.Replace("'", "''", StringComparison.Ordinal) + "';";
+			var read = await _processRunner.RunAsync(
+				new ProcessRequest("sqlite3", [tcc, query]),
+				cancellationToken).ConfigureAwait(false);
+
+			if (read.ExitCode == 0)
+			{
+				foreach (var line in read.StandardOutput.Split('\n'))
+				{
+					var parts = line.Trim().Split('|');
+					if (parts.Length == 2 && int.TryParse(parts[1], out var authorization))
+					{
+						// 0 denies and 2 allows; 3 is the limited grant photos and contacts can hold,
+						// which is still access.
+						foreach (var (service, tccName) in TccServices)
+						{
+							if (tccName.Equals(parts[0], StringComparison.OrdinalIgnoreCase))
+								state[service] = authorization >= 2;
+						}
+					}
+				}
+			}
+		}
+
+		var location = await ReadLocationAuthorizationAsync(udid, bundleId, cancellationToken)
+			.ConfigureAwait(false);
+		if (location is not null)
+		{
+			state["location"] = location;
+			state["location-always"] = location;
+		}
+
+		return state;
+	}
+
+	/// <summary>
+	/// Reads location authorization, which locationd keeps outside TCC in its own plist.
+	/// </summary>
+	private async Task<bool?> ReadLocationAuthorizationAsync(
+		string udid,
+		string bundleId,
+		CancellationToken cancellationToken)
+	{
+		var clients = Path.Combine(SimulatorDataRoot(udid), "Library", "Caches", "locationd", "clients.plist");
+		if (!File.Exists(clients))
+			return null;
+
+		// -convert json fails on this whole file: locationd stores a type JSON cannot represent, and
+		// one such value anywhere makes plutil refuse the entire document. xml1 round-trips everything.
+		// plutil -extract is no use either -- its key path splits on '.', which every bundle ID contains.
+		var read = await _processRunner.RunAsync(
+			new ProcessRequest("plutil", ["-convert", "xml1", "-o", "-", clients]),
+			cancellationToken).ConfigureAwait(false);
+
+		return read.ExitCode == 0
+			? ParseLocationAuthorization(read.StandardOutput, bundleId)
+			: null;
+	}
+
+	/// <summary>
+	/// Finds one app's Authorization value in locationd's client list.
+	/// </summary>
+	internal static bool? ParseLocationAuthorization(string xml, string bundleId)
+	{
+		// locationd keys each client "i<bundle-id>:", but the same dict repeats the plain bundle ID
+		// under BundleId, so match on that rather than on a key format Apple can change.
+		var clients = xml.Split("<key>", StringSplitOptions.None);
+		for (var i = 0; i < clients.Length; i++)
+		{
+			if (!clients[i].StartsWith($"{bundleId}:", StringComparison.Ordinal)
+				&& !clients[i].StartsWith($"i{bundleId}:", StringComparison.Ordinal))
+			{
+				continue;
+			}
+
+			// Read forward only to the end of this client's dict: the next client's key ends the scan,
+			// so an app with no Authorization of its own never borrows the next app's.
+			for (var j = i; j < clients.Length; j++)
+			{
+				if (j > i && (clients[j].StartsWith($"i", StringComparison.Ordinal)
+					&& clients[j].Contains(":</key>", StringComparison.Ordinal)))
+				{
+					break;
+				}
+
+				if (!clients[j].StartsWith("Authorization</key>", StringComparison.Ordinal))
+					continue;
+
+				var match = Regex.Match(clients[j], @"<integer>(-?\d+)</integer>");
+				if (match.Success && int.TryParse(match.Groups[1].Value, out var value))
+				{
+					// 0 not determined, 2 authorized, 3 authorized always, 4 when in use.
+					return value >= 2;
+				}
+			}
+		}
+
+		return null;
+	}
+
+	private async Task RequireInstalledAsync(string udid, string bundleId, CancellationToken cancellationToken)
+	{
+		var result = await RunAsync(["get_app_container", udid, bundleId, "app"], cancellationToken)
+			.ConfigureAwait(false);
+
+		if (result.ExitCode != 0 || result.StandardOutput.Trim() is "" or "(null)")
+			throw new DeviceCapabilityException(
+				$"'{bundleId}' is not installed on '{udid}'. Check the bundle ID with `app list`.");
+	}
+
+	public async Task<DeviceSettings> GetSettingsAsync(
+		string deviceId,
+		CancellationToken cancellationToken = default)
+	{
+		var device = await RequireBootedAsync(deviceId, cancellationToken).ConfigureAwait(false);
+
+		var appearance = await ReadUiOptionAsync(device.NativeId, "appearance", cancellationToken)
+			.ConfigureAwait(false);
+		var contentSize = await ReadUiOptionAsync(device.NativeId, "content_size", cancellationToken)
+			.ConfigureAwait(false);
+		var contrast = await ReadUiOptionAsync(device.NativeId, "increase_contrast", cancellationToken)
+			.ConfigureAwait(false);
+
+		return new DeviceSettings
+		{
+			DeviceId = deviceId,
+			Platform = DevicePlatforms.Ios,
+			Appearance = DeviceAppearances.All.Contains(appearance) ? appearance : null,
+			ContentSize = contentSize,
+			IncreaseContrast = contrast switch
+			{
+				"enabled" => true,
+				"disabled" => false,
+				_ => null,
+			},
+		};
+	}
+
+	public async Task<DeviceSettings> UpdateSettingsAsync(
+		string deviceId,
+		DeviceSettingsRequest request,
+		CancellationToken cancellationToken = default)
+	{
+		var device = await RequireBootedAsync(deviceId, cancellationToken).ConfigureAwait(false);
+
+		if (request.Appearance is { } appearance)
+			await SetUiOptionAsync(device.NativeId, "appearance", appearance, cancellationToken).ConfigureAwait(false);
+
+		if (request.ContentSize is { } contentSize)
+			await SetUiOptionAsync(device.NativeId, "content_size", contentSize, cancellationToken).ConfigureAwait(false);
+
+		if (request.IncreaseContrast is { } contrast)
+			await SetUiOptionAsync(
+				device.NativeId,
+				"increase_contrast",
+				contrast ? "enabled" : "disabled",
+				cancellationToken).ConfigureAwait(false);
+
+		if (request.FontScale is not null)
+			throw new DeviceCapabilityException(
+				"iOS sizes text by named category rather than by scale. Use content size instead, "
+				+ "for example 'large' or 'accessibility-extra-large'.");
+
+		return await GetSettingsAsync(deviceId, cancellationToken).ConfigureAwait(false);
+	}
+
+	private async Task<string?> ReadUiOptionAsync(string udid, string option, CancellationToken cancellationToken)
+	{
+		var result = await RunAsync(["ui", udid, option], cancellationToken).ConfigureAwait(false);
+		if (result.ExitCode != 0)
+			return null;
+
+		var value = result.StandardOutput.Trim();
+
+		// simctl answers 'unsupported' or 'unknown' for a runtime that cannot report the option, and
+		// neither is a value a caller should act on.
+		return value is "" or "unsupported" or "unknown" ? null : value;
+	}
+
+	private async Task SetUiOptionAsync(
+		string udid,
+		string option,
+		string value,
+		CancellationToken cancellationToken)
+	{
+		var result = await RunAsync(["ui", udid, option, value], cancellationToken).ConfigureAwait(false);
+		if (result.ExitCode != 0 || result.StandardError.Contains("error", StringComparison.OrdinalIgnoreCase))
+			throw new DeviceCapabilityException(
+				$"Could not set {option} to '{value}': "
+				+ (result.StandardError.Trim() is { Length: > 0 } error
+					? error.Split('\n')[^1].Trim()
+					: $"simctl exited with code {result.ExitCode}."));
 	}
 
 	#endregion

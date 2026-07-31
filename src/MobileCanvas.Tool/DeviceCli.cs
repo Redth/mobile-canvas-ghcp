@@ -185,6 +185,36 @@ internal static class DeviceCli
 					HostPath = options.Required("input"),
 				},
 				cancellationToken).ConfigureAwait(false),
+			("permission", "list") => await Client.ListPermissionsAsync(
+				options.RequiredPosition(0, "device ID"),
+				options.Required("bundle"),
+				cancellationToken).ConfigureAwait(false),
+			("permission", "grant" or "revoke" or "reset") => await Client.ChangePermissionAsync(
+				options.RequiredPosition(0, "device ID"),
+				new PermissionChangeRequest
+				{
+					BundleId = options.Required("bundle"),
+					Permission = options.RequiredPosition(1, "permission"),
+					Action = action,
+				},
+				cancellationToken).ConfigureAwait(false),
+			("settings", "get") => await Client.GetSettingsAsync(
+				options.RequiredPosition(0, "device ID"),
+				cancellationToken).ConfigureAwait(false),
+			("settings", "set") => await Client.UpdateSettingsAsync(
+				options.RequiredPosition(0, "device ID"),
+				new DeviceSettingsRequest
+				{
+					Appearance = options.Value("appearance"),
+					FontScale = options.Value("font-scale") is { } scale
+						? double.Parse(scale, CultureInfo.InvariantCulture)
+						: null,
+					ContentSize = options.Value("content-size"),
+					IncreaseContrast = options.Value("contrast") is { } contrast
+						? bool.Parse(contrast)
+						: null,
+				},
+				cancellationToken).ConfigureAwait(false),
 			("screenshot", _) => await ScreenshotAsync(
 				action,
 				new CliArguments(args.Skip(1)),
@@ -501,6 +531,11 @@ internal static class DeviceCli
 		  mobile-canvas file list <id> [--bundle <bundle-id>] [--path <p>] [--json]
 		  mobile-canvas file pull <id> [--bundle <bundle-id>] --path <p> --output <host-path>
 		  mobile-canvas file push <id> [--bundle <bundle-id>] --path <p> --input <host-path>
+		  mobile-canvas permission list <id> --bundle <bundle-id> [--json]
+		  mobile-canvas permission grant|revoke|reset <id> <permission> --bundle <bundle-id>
+		  mobile-canvas settings get <id> [--json]
+		  mobile-canvas settings set <id> [--appearance light|dark] [--font-scale <n>]
+		                                  [--content-size <c>] [--contrast true|false]
 		  mobile-canvas screenshot <id> [--output <path>] [--json]
 		  mobile-canvas recording start|stop|status <id>
 		  mobile-canvas mcp
@@ -538,6 +573,16 @@ internal static class DeviceCli
 		absolute device path. Prefer `--bundle`: on Android nothing but the app can read those files, and
 		on iOS the container is a directory named after a GUID that changes when the app is reinstalled.
 		Android app access needs a debuggable build, and says so when the build is not one.
+
+		`permission` takes names that work on both platforms -- camera, microphone, location,
+		contacts, calendar, photos, notifications -- as well as a platform's own name. One name can
+		cover several Android permissions, so the result lists everything the change actually touched,
+		read back from the device rather than assumed: both platforms accept changes they then decline
+		to make.
+
+		`settings` covers the two things worth flipping mid-test: dark mode, and the text size that
+		breaks a layout. iOS names text sizes (`--content-size large`) where Android scales them
+		(`--font-scale 1.3`), and each says so if given the other.
 		""";
 }
 

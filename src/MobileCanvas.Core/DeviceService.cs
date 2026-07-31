@@ -451,6 +451,87 @@ public sealed class DeviceService(IEnumerable<IDeviceBackend> backends)
 			cancellationToken);
 	}
 
+	/// <summary>
+	/// Reports the permissions one app holds.
+	/// </summary>
+	public Task<PermissionListResult> ListPermissionsAsync(
+		string deviceId,
+		string bundleId,
+		CancellationToken cancellationToken = default) =>
+		GetBackend(deviceId).ListPermissionsAsync(deviceId, RequireBundleId(bundleId), cancellationToken);
+
+	/// <summary>
+	/// Grants, revokes or resets one permission.
+	/// </summary>
+	public Task<PermissionChangeResult> ChangePermissionAsync(
+		string deviceId,
+		PermissionChangeRequest request,
+		CancellationToken cancellationToken = default)
+	{
+		if (string.IsNullOrWhiteSpace(request.Permission))
+			throw new ArgumentException(
+				$"A permission is required. Names that work on both platforms: "
+				+ $"{string.Join(", ", DevicePermissions.All)}. A platform's own name also works.",
+				nameof(request));
+
+		var action = request.Action.Trim().ToLowerInvariant();
+		if (!PermissionActions.All.Contains(action))
+			throw new ArgumentException(
+				$"'{request.Action}' is not an action. Use one of: {string.Join(", ", PermissionActions.All)}.",
+				nameof(request));
+
+		return GetBackend(deviceId).ChangePermissionAsync(
+			deviceId,
+			request with
+			{
+				BundleId = RequireBundleId(request.BundleId),
+				Permission = request.Permission.Trim(),
+				Action = action,
+			},
+			cancellationToken);
+	}
+
+	/// <summary>
+	/// Reads the device's display and accessibility settings.
+	/// </summary>
+	public Task<DeviceSettings> GetSettingsAsync(
+		string deviceId,
+		CancellationToken cancellationToken = default) =>
+		GetBackend(deviceId).GetSettingsAsync(deviceId, cancellationToken);
+
+	/// <summary>
+	/// Applies the settings named in the request.
+	/// </summary>
+	public Task<DeviceSettings> UpdateSettingsAsync(
+		string deviceId,
+		DeviceSettingsRequest request,
+		CancellationToken cancellationToken = default)
+	{
+		if (request.Appearance is null && request.FontScale is null
+			&& request.ContentSize is null && request.IncreaseContrast is null)
+		{
+			throw new ArgumentException("Name at least one setting to change.", nameof(request));
+		}
+
+		var appearance = request.Appearance?.Trim().ToLowerInvariant();
+		if (appearance is not null && !DeviceAppearances.All.Contains(appearance))
+			throw new ArgumentException(
+				$"'{request.Appearance}' is not an appearance. Use one of: "
+				+ $"{string.Join(", ", DeviceAppearances.All)}.",
+				nameof(request));
+
+		// A negative or zero scale would be accepted by the platform and render nothing readable.
+		if (request.FontScale is { } scale && (scale <= 0 || scale > 10))
+			throw new ArgumentException(
+				$"A font scale of {scale} is out of range; 1.0 is the platform default.",
+				nameof(request));
+
+		return GetBackend(deviceId).UpdateSettingsAsync(
+			deviceId,
+			request with { Appearance = appearance },
+			cancellationToken);
+	}
+
 	private static string RequireBundleId(string bundleId) =>
 		string.IsNullOrWhiteSpace(bundleId)
 			? throw new ArgumentException(
