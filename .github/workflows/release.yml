@@ -3,19 +3,66 @@ name: Release runtimes
 # Rebuilds the binaries that ship inside the plugin. A Copilot plugin install is
 # a plain file copy, so whatever is committed under runtimes/ is exactly what
 # users execute -- this workflow is how that gets refreshed.
+#
+# Native AOT cannot cross-compile between operating systems ("Cross-OS native
+# compilation is not supported"), so every OS needs its own runner. Architectures
+# within one OS do cross-compile, which is why macOS builds both its slices.
 on:
   workflow_dispatch:
     inputs:
       version:
         description: Version to stamp into package.json
         required: false
+      commit:
+        description: Open a PR with the refreshed runtimes
+        type: boolean
+        default: true
 
 permissions:
   contents: write
   pull-requests: write
 
 jobs:
+  build:
+    name: ${{ matrix.rid }}
+    runs-on: ${{ matrix.os }}
+    # One unavailable architecture should not hide whether the others work.
+    continue-on-error: ${{ matrix.optional || false }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { rid: osx-arm64,   os: macos-15 }
+          - { rid: osx-x64,     os: macos-15 }
+          - { rid: win-x64,     os: windows-latest }
+          - { rid: linux-x64,   os: ubuntu-latest }
+          # ARM runners are not offered on every plan, so these may be skipped
+          # without failing the release.
+          - { rid: win-arm64,   os: windows-11-arm, optional: true }
+          - { rid: linux-arm64, os: ubuntu-24.04-arm, optional: true }
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-dotnet@v4
+        with:
+          global-json-file: global.json
+
+      - name: Build
+        shell: bash
+        run: ./scripts/build.sh "${{ matrix.rid }}"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: bin-${{ matrix.rid }}
+          path: .build/bin/${{ matrix.rid }}/mobile-*
+          if-no-files-found: error
+          retention-days: 1
+
   bundle:
+    needs: build
+    # Runs even when an optional architecture was unavailable, so a release
+    # ships whatever did build rather than nothing.
+    if: always()
     runs-on: macos-15
     steps:
       - uses: actions/checkout@v4
@@ -23,6 +70,11 @@ jobs:
       - uses: actions/setup-dotnet@v4
         with:
           global-json-file: global.json
+
+      - uses: actions/download-artifact@v4
+        with:
+          path: .build/artifacts
+          pattern: bin-*
 
       - name: Stamp version
         if: inputs.version != ''
@@ -36,21 +88,48 @@ jobs:
         env:
           VERSION: ${{ inputs.version }}
 
-      # Native AOT cross-compiles between macOS architectures, so one runner
-      # produces both slices and both get the identical universal Swift helper.
-      - name: Build and bundle both macOS architectures
+      # bundle.mjs merges into the existing manifest, so bundling each downloaded
+      # architecture in turn produces one manifest covering all of them.
+      - name: Bundle every architecture that built
         run: |
-          for rid in osx-arm64 osx-x64; do
-            ./scripts/build.sh "$rid"
-            node scripts/bundle.mjs --rid "$rid" --from ".build/bin/$rid"
+          shopt -s nullglob
+          found=0
+          for dir in .build/artifacts/bin-*; do
+            rid="${dir##*/bin-}"
+            echo "::group::$rid"
+            node scripts/bundle.mjs --rid "$rid" --from "$dir"
+            echo "::endgroup::"
+            found=$((found + 1))
           done
+          if [ "$found" -eq 0 ]; then
+            echo "no architectures built" >&2
+            exit 1
+          fi
+          echo "bundled $found architecture(s)"
 
       - name: Verify
         run: |
           node scripts/verify-bundle.mjs
           dotnet test MobileCanvas.slnx -c Release
 
+      - name: Summarise
+        run: |
+          {
+            echo '## Bundled runtimes'
+            echo
+            node -e '
+              const m = require("./runtimes/manifest.json");
+              for (const [key, e] of Object.entries(m.runtimes)) {
+                const mb = Object.values(e.files)
+                  .reduce((n, f) => n + f.size, 0) / 1024 / 1024;
+                const files = Object.keys(e.files).length;
+                console.log(`- \`${key}\` (${e.rid}) -- ${mb.toFixed(1)} MB, ${files} file(s)`);
+              }
+            '
+          } >> "$GITHUB_STEP_SUMMARY"
+
       - uses: peter-evans/create-pull-request@v7
+        if: inputs.commit
         with:
           branch: release/runtimes
           title: Refresh bundled runtimes

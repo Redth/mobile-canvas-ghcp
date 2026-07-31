@@ -5,9 +5,16 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
 
 case "$(uname -m)" in
-  arm64|aarch64) DEFAULT_RID="osx-arm64" ;;
-  *)             DEFAULT_RID="osx-x64" ;;
+  arm64|aarch64) ARCH="arm64" ;;
+  *)             ARCH="x64" ;;
 esac
+case "$(uname -s)" in
+  Darwin)          OS="osx" ;;
+  Linux)           OS="linux" ;;
+  MINGW*|MSYS*|CYGWIN*) OS="win" ;;
+  *)               OS="osx" ;;
+esac
+DEFAULT_RID="${OS}-${ARCH}"
 RID="${1:-${DEFAULT_RID}}"
 
 # Each architecture publishes to its own directory so a release matrix can build

@@ -10,7 +10,7 @@
     <PackageId>MobileCanvas.Tool</PackageId>
     <Description>Discover, create, display, and control local mobile virtual devices.</Description>
     <PackageReadmeFile>README.md</PackageReadmeFile>
-    <RuntimeIdentifiers>osx-arm64;osx-x64</RuntimeIdentifiers>
+    <RuntimeIdentifiers>osx-arm64;osx-x64;win-x64;win-arm64;linux-x64;linux-arm64</RuntimeIdentifiers>
     <PublishAot>true</PublishAot>
     <OptimizationPreference>Speed</OptimizationPreference>
     <EnableRequestDelegateGenerator>true</EnableRequestDelegateGenerator>
@@ -51,6 +51,11 @@
     <ScreencapDirectory>$(MSBuildThisFileDirectory)../../native/mobile-screencap/</ScreencapDirectory>
     <ScreencapBinary>$(ScreencapDirectory)out/mobile-screencap</ScreencapBinary>
     <BuildScreencapHelper Condition="'$(BuildScreencapHelper)' == '' And $([MSBuild]::IsOSPlatform('OSX'))">true</BuildScreencapHelper>
+    <!--
+      The helper is a Mach-O, so it must not follow a cross-RID publish. Building on
+      macOS for win-x64 would otherwise copy it into a Windows output directory.
+    -->
+    <ShipScreencapHelper Condition="'$(RuntimeIdentifier)' == '' Or $(RuntimeIdentifier.StartsWith('osx-'))">true</ShipScreencapHelper>
   </PropertyGroup>
 
   <ItemGroup>
@@ -60,18 +65,18 @@
 
   <Target Name="BuildScreencapHelper"
           BeforeTargets="BeforeBuild"
-          Condition="'$(BuildScreencapHelper)' == 'true'"
+          Condition="'$(BuildScreencapHelper)' == 'true' And '$(ShipScreencapHelper)' == 'true'"
           Inputs="@(ScreencapSource)"
           Outputs="$(ScreencapBinary)">
     <Exec Command="./build.sh" WorkingDirectory="$(ScreencapDirectory)" ContinueOnError="true" />
   </Target>
 
-  <Target Name="CopyScreencapHelper" AfterTargets="Build" Condition="Exists('$(ScreencapBinary)')">
+  <Target Name="CopyScreencapHelper" AfterTargets="Build" Condition="'$(ShipScreencapHelper)' == 'true' And Exists('$(ScreencapBinary)')">
     <Copy SourceFiles="$(ScreencapBinary)" DestinationFolder="$(OutDir)" SkipUnchangedFiles="true" />
     <Exec Command="chmod +x '$(OutDir)mobile-screencap'" ContinueOnError="true" />
   </Target>
 
-  <Target Name="PublishScreencapHelper" AfterTargets="Publish" Condition="Exists('$(ScreencapBinary)')">
+  <Target Name="PublishScreencapHelper" AfterTargets="Publish" Condition="'$(ShipScreencapHelper)' == 'true' And Exists('$(ScreencapBinary)')">
     <Copy SourceFiles="$(ScreencapBinary)" DestinationFolder="$(PublishDir)" SkipUnchangedFiles="true" />
     <Exec Command="chmod +x '$(PublishDir)mobile-screencap'" ContinueOnError="true" />
   </Target>
