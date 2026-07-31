@@ -163,6 +163,28 @@ internal static class DeviceCli
 				options.RequiredPosition(0, "device ID"),
 				options.Required("id"),
 				cancellationToken).ConfigureAwait(false),
+			("file", "list") => await Client.ListFilesAsync(
+				options.RequiredPosition(0, "device ID"),
+				new FileQuery { BundleId = options.Value("bundle"), Path = options.Value("path") ?? "" },
+				cancellationToken).ConfigureAwait(false),
+			("file", "pull") => await Client.PullFileAsync(
+				options.RequiredPosition(0, "device ID"),
+				new FileTransferRequest
+				{
+					BundleId = options.Value("bundle"),
+					DevicePath = options.Required("path"),
+					HostPath = options.Required("output"),
+				},
+				cancellationToken).ConfigureAwait(false),
+			("file", "push") => await Client.PushFileAsync(
+				options.RequiredPosition(0, "device ID"),
+				new FileTransferRequest
+				{
+					BundleId = options.Value("bundle"),
+					DevicePath = options.Required("path"),
+					HostPath = options.Required("input"),
+				},
+				cancellationToken).ConfigureAwait(false),
 			("screenshot", _) => await ScreenshotAsync(
 				action,
 				new CliArguments(args.Skip(1)),
@@ -476,6 +498,9 @@ internal static class DeviceCli
 		                         [--seconds <n>] [--limit <n>] [--json]
 		  mobile-canvas crashes list <id> [--text <s>] [--limit <n>] [--json]
 		  mobile-canvas crashes show <id> --id <crash-id> [--json]
+		  mobile-canvas file list <id> [--bundle <bundle-id>] [--path <p>] [--json]
+		  mobile-canvas file pull <id> [--bundle <bundle-id>] --path <p> --output <host-path>
+		  mobile-canvas file push <id> [--bundle <bundle-id>] --path <p> --input <host-path>
 		  mobile-canvas screenshot <id> [--output <path>] [--json]
 		  mobile-canvas recording start|stop|status <id>
 		  mobile-canvas mcp
@@ -507,6 +532,12 @@ internal static class DeviceCli
 
 		`crashes list` finds crashes the device recorded after the fact, including ones that happened
 		while nothing was watching. Pass an ID from that list to `crashes show` for the full report.
+
+		`file` addresses two places. With `--bundle` the path is relative to that app's data container,
+		which is where the database and the files it wrote actually live; without it the path is an
+		absolute device path. Prefer `--bundle`: on Android nothing but the app can read those files, and
+		on iOS the container is a directory named after a GUID that changes when the app is reinstalled.
+		Android app access needs a debuggable build, and says so when the build is not one.
 		""";
 }
 

@@ -397,6 +397,60 @@ public sealed class DeviceService(IEnumerable<IDeviceBackend> backends)
 			|| (crash.BundleId?.Contains(text, StringComparison.OrdinalIgnoreCase) ?? false);
 	}
 
+	/// <summary>
+	/// Lists a directory on the device, or inside one app's data container.
+	/// </summary>
+	public Task<FileListResult> ListFilesAsync(
+		string deviceId,
+		FileQuery query,
+		CancellationToken cancellationToken = default) =>
+		GetBackend(deviceId).ListFilesAsync(deviceId, query, cancellationToken);
+
+	/// <summary>
+	/// Copies a file off the device. The destination is resolved here so the path in the result is the
+	/// one a caller can hand to another tool.
+	/// </summary>
+	public Task<FileTransferResult> PullFileAsync(
+		string deviceId,
+		FileTransferRequest request,
+		CancellationToken cancellationToken = default)
+	{
+		if (string.IsNullOrWhiteSpace(request.DevicePath))
+			throw new ArgumentException("A device path is required.", nameof(request));
+		if (string.IsNullOrWhiteSpace(request.HostPath))
+			throw new ArgumentException("A host path to write to is required.", nameof(request));
+
+		return GetBackend(deviceId).PullFileAsync(
+			deviceId,
+			request with { HostPath = Path.GetFullPath(request.HostPath) },
+			cancellationToken);
+	}
+
+	/// <summary>
+	/// Copies a file onto the device.
+	/// </summary>
+	public Task<FileTransferResult> PushFileAsync(
+		string deviceId,
+		FileTransferRequest request,
+		CancellationToken cancellationToken = default)
+	{
+		if (string.IsNullOrWhiteSpace(request.DevicePath))
+			throw new ArgumentException("A device path is required.", nameof(request));
+		if (string.IsNullOrWhiteSpace(request.HostPath))
+			throw new ArgumentException("A host path to push is required.", nameof(request));
+
+		// Resolved against the host's working directory, which by the time a platform tool sees it is
+		// not the directory the caller was in.
+		var source = Path.GetFullPath(request.HostPath);
+		if (!File.Exists(source))
+			throw new FileNotFoundException($"No file exists at '{source}'.", source);
+
+		return GetBackend(deviceId).PushFileAsync(
+			deviceId,
+			request with { HostPath = source },
+			cancellationToken);
+	}
+
 	private static string RequireBundleId(string bundleId) =>
 		string.IsNullOrWhiteSpace(bundleId)
 			? throw new ArgumentException(

@@ -35,6 +35,7 @@ internal static class DeviceApi
 		MapUi(app);
 		MapApps(app);
 		MapDiagnostics(app);
+		MapFiles(app);
 		MapMedia(app);
 	}
 
@@ -595,6 +596,28 @@ internal static class DeviceApi
 			"/api/v1/devices/{deviceId}/crashes/{crashId}",
 			(string deviceId, string crashId, DeviceService devices, CancellationToken cancellationToken) =>
 				devices.GetCrashAsync(deviceId, crashId, cancellationToken));
+	}
+
+	private static void MapFiles(WebApplication app)
+	{
+		app.MapGet(
+			"/api/v1/devices/{deviceId}/files",
+			(string deviceId, string? bundleId, string? path,
+				DeviceService devices, CancellationToken cancellationToken) =>
+				devices.ListFilesAsync(
+					deviceId,
+					new FileQuery { BundleId = bundleId, Path = path ?? "" },
+					cancellationToken));
+		app.MapPost(
+			"/api/v1/devices/{deviceId}/files/pull",
+			(string deviceId, FileTransferRequest request,
+				DeviceService devices, CancellationToken cancellationToken) =>
+				devices.PullFileAsync(deviceId, request, cancellationToken));
+		app.MapPost(
+			"/api/v1/devices/{deviceId}/files/push",
+			(string deviceId, FileTransferRequest request,
+				DeviceService devices, CancellationToken cancellationToken) =>
+				devices.PushFileAsync(deviceId, request, cancellationToken));
 	}
 
 	private static void MapMedia(WebApplication app)

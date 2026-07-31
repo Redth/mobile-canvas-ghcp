@@ -269,6 +269,89 @@ public sealed class DeviceServiceTests
 		Assert.Equal("c1", backend.LastCrashId);
 	}
 
+	[Theory]
+	[InlineData("", "/tmp/out.bin")]
+	[InlineData("  ", "/tmp/out.bin")]
+	[InlineData("databases/notes.db", "")]
+	[InlineData("databases/notes.db", "  ")]
+	public async Task PullFile_RequiresBothPaths(string devicePath, string hostPath)
+	{
+		var service = new DeviceService([new FakeBackend()]);
+
+		await Assert.ThrowsAsync<ArgumentException>(() => service.PullFileAsync(
+			FakeBackend.Device.Id,
+			new FileTransferRequest { DevicePath = devicePath, HostPath = hostPath }));
+	}
+
+	[Fact]
+	public async Task PullFile_ResolvesTheHostPathBeforePassingItDown()
+	{
+		var backend = new FakeBackend();
+		var service = new DeviceService([backend]);
+
+		// A platform tool runs in its own working directory, so a relative path would land elsewhere --
+		// and the path in the result has to be one the caller can hand to another tool.
+		await service.PullFileAsync(
+			FakeBackend.Device.Id,
+			new FileTransferRequest { DevicePath = "databases/notes.db", HostPath = "notes.db" });
+
+		Assert.Equal(Path.GetFullPath("notes.db"), backend.LastPull?.HostPath);
+	}
+
+	[Fact]
+	public async Task PushFile_FailsWhenTheSourceDoesNotExist()
+	{
+		var service = new DeviceService([new FakeBackend()]);
+
+		// adb push reports a missing source on stdout and still exits zero, so catching it here is what
+		// keeps a typo from looking like a successful push.
+		await Assert.ThrowsAsync<FileNotFoundException>(() => service.PushFileAsync(
+			FakeBackend.Device.Id,
+			new FileTransferRequest
+			{
+				DevicePath = "files/seed.db",
+				HostPath = Path.Combine(Path.GetTempPath(), $"missing-{Guid.NewGuid():N}.db"),
+			}));
+	}
+
+	[Fact]
+	public async Task PushFile_ResolvesAnExistingSource()
+	{
+		var backend = new FakeBackend();
+		var service = new DeviceService([backend]);
+		var source = Path.Combine(Path.GetTempPath(), $"seed-{Guid.NewGuid():N}.db");
+		await File.WriteAllTextAsync(source, "seed");
+
+		try
+		{
+			await service.PushFileAsync(
+				FakeBackend.Device.Id,
+				new FileTransferRequest { DevicePath = "files/seed.db", HostPath = source });
+
+			Assert.Equal(Path.GetFullPath(source), backend.LastPush?.HostPath);
+		}
+		finally
+		{
+			File.Delete(source);
+		}
+	}
+
+	[Fact]
+	public async Task ListFiles_PassesTheQueryThroughUntouched()
+	{
+		var backend = new FakeBackend();
+		var service = new DeviceService([backend]);
+
+		// The path is device-side, so the host must not resolve it -- "files" on the device is not
+		// "files" here, and iOS reads a simulator's storage through this same host filesystem.
+		await service.ListFilesAsync(
+			FakeBackend.Device.Id,
+			new FileQuery { BundleId = "com.example.notes", Path = "databases" });
+
+		Assert.Equal("databases", backend.LastFileQuery?.Path);
+		Assert.Equal("com.example.notes", backend.LastFileQuery?.BundleId);
+	}
+
 	private sealed class FakeBackend : IDeviceBackend
 	{
 		public static DeviceTarget Device { get; } = new()
@@ -397,6 +480,47 @@ public sealed class DeviceServiceTests
 
 		public Task<ILiveVideoSession> OpenVideoStreamAsync(string deviceId, StreamOptions options, CancellationToken cancellationToken = default) =>
 			throw new NotSupportedException();
+
+		public FileQuery? LastFileQuery { get; private set; }
+		public FileTransferRequest? LastPull { get; private set; }
+		public FileTransferRequest? LastPush { get; private set; }
+
+		public Task<FileListResult> ListFilesAsync(string deviceId, FileQuery query, CancellationToken cancellationToken = default)
+		{
+			LastFileQuery = query;
+			return Task.FromResult(new FileListResult
+			{
+				DeviceId = deviceId,
+				Path = query.Path,
+				Files =
+				[
+					new() { Name = "notes.db", Path = "databases/notes.db", Size = 4096, Modified = "2026-07-31 14:21" },
+				],
+				Total = 1,
+			});
+		}
+		public Task<FileTransferResult> PullFileAsync(string deviceId, FileTransferRequest request, CancellationToken cancellationToken = default)
+		{
+			LastPull = request;
+			return Task.FromResult(new FileTransferResult
+			{
+				DeviceId = deviceId,
+				Operation = FileOperations.Pull,
+				DevicePath = request.DevicePath,
+				HostPath = request.HostPath,
+			});
+		}
+		public Task<FileTransferResult> PushFileAsync(string deviceId, FileTransferRequest request, CancellationToken cancellationToken = default)
+		{
+			LastPush = request;
+			return Task.FromResult(new FileTransferResult
+			{
+				DeviceId = deviceId,
+				Operation = FileOperations.Push,
+				DevicePath = request.DevicePath,
+				HostPath = request.HostPath,
+			});
+		}
 
 		public Task<RecordingStatus> StartRecordingAsync(string deviceId, RecordingStartRequest request, CancellationToken cancellationToken = default) =>
 			Task.FromResult(new RecordingStatus());

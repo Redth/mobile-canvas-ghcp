@@ -58,6 +58,15 @@ public interface IDeviceBackend
 	/// <summary>Reads one crash report in full, given an <see cref="CrashReport.Id"/>.</summary>
 	Task<CrashDetailResult> GetCrashAsync(string deviceId, string crashId, CancellationToken cancellationToken = default);
 
+	/// <summary>Lists a directory on the device, or inside one app's data container.</summary>
+	Task<FileListResult> ListFilesAsync(string deviceId, FileQuery query, CancellationToken cancellationToken = default);
+
+	/// <summary>Copies a file off the device onto this machine.</summary>
+	Task<FileTransferResult> PullFileAsync(string deviceId, FileTransferRequest request, CancellationToken cancellationToken = default);
+
+	/// <summary>Copies a file from this machine onto the device.</summary>
+	Task<FileTransferResult> PushFileAsync(string deviceId, FileTransferRequest request, CancellationToken cancellationToken = default);
+
 	Task<ILiveVideoSession> OpenVideoStreamAsync(string deviceId, StreamOptions options, CancellationToken cancellationToken = default);
 	Task<RecordingStatus> StartRecordingAsync(string deviceId, RecordingStartRequest request, CancellationToken cancellationToken = default);
 	Task<RecordingStatus> StopRecordingAsync(string deviceId, CancellationToken cancellationToken = default);

@@ -1592,6 +1592,372 @@ public sealed partial class AndroidEmulatorBackend : IDeviceBackend, IAsyncDispo
 
 	#endregion
 
+	#region Files
+
+	/// <summary>
+	/// Lists a directory on the device, or inside one app's data container.
+	/// </summary>
+	/// <remarks>
+	/// An app's own files are the ones worth reading, and nothing but the app can reach them, so a
+	/// bundle ID routes every command through <c>run-as</c>. That only works for a debuggable build --
+	/// which is what a developer is looking at -- and says so plainly when it does not.
+	/// </remarks>
+	public async Task<FileListResult> ListFilesAsync(
+		string deviceId,
+		FileQuery query,
+		CancellationToken cancellationToken = default)
+	{
+		var serial = await RequireSerialAsync(deviceId, cancellationToken).ConfigureAwait(false);
+		var path = NormalizeDevicePath(query.Path, query.BundleId);
+
+		// -A drops "." and ".."; -l gives the size and date; -L follows the symlinks Android uses for
+		// several of an app's own directories.
+		var result = await RunAppShellAsync(
+			serial,
+			query.BundleId,
+			["ls", "-lAL", QuoteForDeviceShell(path)],
+			cancellationToken).ConfigureAwait(false);
+
+		// ls writes "No such file or directory" and exits non-zero, but run-as writes its own refusal
+		// and exits zero, so both have to be looked at rather than just the code.
+		var failure = FindShellFailure(result);
+		if (failure is not null)
+			throw new DeviceCapabilityException(DescribeFileFailure(failure, path, query.BundleId, deviceId));
+
+		var files = LsParser.Parse(result.StandardOutput, path);
+
+		return new FileListResult
+		{
+			DeviceId = deviceId,
+			Platform = DevicePlatforms.Android,
+			Path = path,
+			Total = files.Length,
+			Files = [.. files.OrderByDescending(file => file.IsDirectory).ThenBy(file => file.Name, StringComparer.OrdinalIgnoreCase)],
+		};
+	}
+
+	/// <summary>
+	/// Copies a file off the device.
+	/// </summary>
+	/// <remarks>
+	/// An app-scoped pull cannot use <c>adb pull</c> at all: it reads as the shell user, which is
+	/// refused on <c>/data/data</c>, and <c>run-as</c> cannot stage a copy anywhere adb can reach
+	/// either -- <c>/data/local/tmp</c> rejects its writes. Both were measured rather than assumed. So
+	/// the bytes come back over <c>exec-out</c>, which unlike <c>adb shell</c> allocates no pty and
+	/// leaves them untouched.
+	/// </remarks>
+	public async Task<FileTransferResult> PullFileAsync(
+		string deviceId,
+		FileTransferRequest request,
+		CancellationToken cancellationToken = default)
+	{
+		var serial = await RequireSerialAsync(deviceId, cancellationToken).ConfigureAwait(false);
+		var path = NormalizeDevicePath(request.DevicePath, request.BundleId);
+
+		var expected = await RequireFileSizeAsync(serial, request.BundleId, path, deviceId, cancellationToken)
+			.ConfigureAwait(false);
+
+		var destination = PrepareDestination(request.HostPath, PathFileName(path));
+
+		// No quoting: exec-out hands the arguments to execvp rather than to a shell, so a quote would
+		// arrive as part of the file name instead of being stripped off it.
+		string[] arguments = string.IsNullOrWhiteSpace(request.BundleId)
+			? ["exec-out", "cat", path]
+			: ["exec-out", "run-as", request.BundleId, "cat", path];
+
+		var size = await RunAdbToFileAsync(serial, arguments, destination, cancellationToken)
+			.ConfigureAwait(false);
+
+		if (size != expected)
+		{
+			File.Delete(destination);
+			throw new DeviceCapabilityException(
+				$"Reading '{path}' from '{deviceId}' returned {size} bytes where the device reports "
+				+ $"{expected}, so the copy is incomplete and was discarded.");
+		}
+
+		return new FileTransferResult
+		{
+			DeviceId = deviceId,
+			DevicePath = path,
+			HostPath = destination,
+			Size = size,
+			Operation = FileOperations.Pull,
+		};
+	}
+
+	/// <summary>
+	/// Copies a file onto the device.
+	/// </summary>
+	/// <remarks>
+	/// An app-scoped push goes by way of <c>/data/local/tmp</c>: adb can write there and
+	/// <c>run-as</c> can read from it, which is the one direction that works. The staged copy is
+	/// removed afterwards so a fixture is not left where another app could read it.
+	/// </remarks>
+	public async Task<FileTransferResult> PushFileAsync(
+		string deviceId,
+		FileTransferRequest request,
+		CancellationToken cancellationToken = default)
+	{
+		var serial = await RequireSerialAsync(deviceId, cancellationToken).ConfigureAwait(false);
+		var path = NormalizeDevicePath(request.DevicePath, request.BundleId);
+		var size = new FileInfo(request.HostPath).Length;
+
+		if (string.IsNullOrWhiteSpace(request.BundleId))
+		{
+			var push = await RunAdbResultAsync(serial, ["push", request.HostPath, path], cancellationToken)
+				.ConfigureAwait(false);
+
+			if (push.ExitCode != 0)
+				throw new DeviceCapabilityException(
+					$"Could not push to '{path}' on '{deviceId}': {Explain(push)}");
+		}
+		else
+		{
+			await PushThroughStagingAsync(serial, request.BundleId, request.HostPath, path, deviceId, cancellationToken)
+				.ConfigureAwait(false);
+		}
+
+		return new FileTransferResult
+		{
+			DeviceId = deviceId,
+			DevicePath = path,
+			HostPath = request.HostPath,
+			Size = size,
+			Operation = FileOperations.Push,
+		};
+	}
+
+	private async Task PushThroughStagingAsync(
+		string serial,
+		string bundleId,
+		string hostPath,
+		string devicePath,
+		string deviceId,
+		CancellationToken cancellationToken)
+	{
+		var staged = $"/data/local/tmp/mobile-canvas-{Guid.NewGuid():N}";
+
+		var push = await RunAdbResultAsync(serial, ["push", hostPath, staged], cancellationToken)
+			.ConfigureAwait(false);
+
+		if (push.ExitCode != 0)
+			throw new DeviceCapabilityException(
+				$"Could not stage the file on '{deviceId}': {Explain(push)}");
+
+		try
+		{
+			var copy = await RunAdbResultAsync(
+				serial,
+				["shell", "run-as", bundleId, "cp", staged, QuoteForDeviceShell(devicePath)],
+				cancellationToken).ConfigureAwait(false);
+
+			var failure = FindShellFailure(copy);
+			if (failure is not null)
+				throw new DeviceCapabilityException(
+					DescribeFileFailure(failure, devicePath, bundleId, deviceId));
+		}
+		finally
+		{
+			// Not left behind: /data/local/tmp is readable by anything with shell access.
+			await RunAdbAsync(serial, ["shell", "rm", "-f", staged], cancellationToken).ConfigureAwait(false);
+		}
+	}
+
+	/// <summary>
+	/// Reports the size of a device file, and refuses anything that is not one.
+	/// </summary>
+	/// <remarks>
+	/// The size is the point: <c>adb exec-out</c> reports neither a non-zero exit code nor stderr when
+	/// the command under it fails, so a pull has no way to tell a truncated read from a whole one
+	/// except by knowing up front how many bytes to expect.
+	/// </remarks>
+	private async Task<long> RequireFileSizeAsync(
+		string serial,
+		string? bundleId,
+		string path,
+		string deviceId,
+		CancellationToken cancellationToken)
+	{
+		var probe = await RunAppShellAsync(
+			serial,
+			bundleId,
+			["ls", "-ld", QuoteForDeviceShell(path)],
+			cancellationToken).ConfigureAwait(false);
+
+		var failure = FindShellFailure(probe);
+		if (failure is not null)
+			throw new DeviceCapabilityException(DescribeFileFailure(failure, path, bundleId, deviceId));
+
+		if (LsParser.Parse(probe.StandardOutput, "").FirstOrDefault() is not { } entry)
+			throw new DeviceCapabilityException(
+				$"Could not read '{path}' on '{deviceId}': {probe.StandardOutput.Trim()}");
+
+		if (entry.IsDirectory)
+			throw new DeviceCapabilityException($"'{path}' is a directory, not a file.");
+
+		return entry.Size;
+	}
+
+	private Task<ProcessResult> RunAppShellAsync(
+		string serial,
+		string? bundleId,
+		string[] command,
+		CancellationToken cancellationToken) =>
+		RunAdbResultAsync(
+			serial,
+			string.IsNullOrWhiteSpace(bundleId)
+				? ["shell", .. command]
+				: ["shell", "run-as", bundleId, .. command],
+			cancellationToken);
+
+	/// <summary>
+	/// Finds the line explaining a device-shell failure, or null when there was none.
+	/// </summary>
+	/// <remarks>
+	/// <c>run-as</c> refuses an unknown or release-signed package by printing to stdout and exiting
+	/// zero, so an exit code alone reports success for a command that did nothing -- the same trap as
+	/// uiautomator, <c>am start</c> and <c>adb install</c>.
+	/// </remarks>
+	private static string? FindShellFailure(ProcessResult result)
+	{
+		if (result.StandardError.Trim() is { Length: > 0 } error)
+			return error.Split('\n')[0].Trim();
+
+		foreach (var line in result.StandardOutput.Split('\n'))
+		{
+			var text = line.Trim();
+			if (text.StartsWith("run-as:", StringComparison.Ordinal)
+				|| text.Contains("Permission denied", StringComparison.OrdinalIgnoreCase)
+				|| text.Contains("No such file or directory", StringComparison.OrdinalIgnoreCase))
+			{
+				return text;
+			}
+		}
+
+		return result.ExitCode == 0 ? null : $"the command exited with code {result.ExitCode}";
+	}
+
+	/// <summary>
+	/// Turns a device-shell refusal into something that says what to do about it.
+	/// </summary>
+	private static string DescribeFileFailure(string failure, string path, string? bundleId, string deviceId)
+	{
+		if (failure.Contains("not debuggable", StringComparison.OrdinalIgnoreCase)
+			|| failure.Contains("package not an application", StringComparison.OrdinalIgnoreCase)
+			|| failure.Contains("unknown package", StringComparison.OrdinalIgnoreCase))
+		{
+			return $"'{bundleId}' is not a debuggable build on '{deviceId}', so its files cannot be "
+				+ $"reached. Install a debug build, or use a path under /sdcard instead. ({failure})";
+		}
+
+		return $"Could not read '{path}' on '{deviceId}': {failure}";
+	}
+
+	private static string Explain(ProcessResult result) =>
+		result.StandardError.Trim() is { Length: > 0 } error
+			? error
+			: result.StandardOutput.Trim() is { Length: > 0 } output
+				? output
+				: $"adb exited with code {result.ExitCode}.";
+
+	/// <summary>
+	/// Reads an app-relative path as relative and a device path as absolute.
+	/// </summary>
+	private static string NormalizeDevicePath(string path, string? bundleId)
+	{
+		var trimmed = path.Trim();
+
+		if (string.IsNullOrWhiteSpace(bundleId))
+			return trimmed.Length == 0 ? "/" : trimmed;
+
+		// run-as starts in the app's data directory, so a relative path already means the right thing
+		// and a leading slash would escape to the device root.
+		var relative = trimmed.TrimStart('/');
+		return relative.Length == 0 ? "." : relative;
+	}
+
+	private static string PathFileName(string path)
+	{
+		var slash = path.TrimEnd('/').LastIndexOf('/');
+		var name = slash < 0 ? path : path[(slash + 1)..];
+		return name.Trim('/') is { Length: > 0 } trimmed ? trimmed : "file";
+	}
+
+	/// <summary>
+	/// Works out where a pull should land, creating the parent directory if it is missing.
+	/// </summary>
+	private static string PrepareDestination(string hostPath, string fileName)
+	{
+		var destination = Directory.Exists(hostPath) ? Path.Combine(hostPath, fileName) : hostPath;
+
+		var parent = Path.GetDirectoryName(destination);
+		if (!string.IsNullOrEmpty(parent))
+			Directory.CreateDirectory(parent);
+
+		return destination;
+	}
+
+	/// <summary>
+	/// Runs adb and streams stdout straight to a file, so nothing decodes the bytes on the way.
+	/// </summary>
+	/// <remarks>
+	/// Unlike <see cref="RunAdbBinaryAsync"/> this reports a failure rather than returning nothing: a
+	/// zero-length result is a legitimate answer for a file, so it cannot double as an error. These
+	/// guards are still not enough on their own -- <c>exec-out</c> exits zero and writes the failing
+	/// command's own complaint to stdout -- so the caller checks the byte count as well.
+	/// </remarks>
+	private async Task<long> RunAdbToFileAsync(
+		string serial,
+		string[] arguments,
+		string destination,
+		CancellationToken cancellationToken)
+	{
+		if (_locator.Adb is null)
+			throw new DeviceCapabilityException(
+				"adb was not found. Install Android platform-tools or set ANDROID_HOME.");
+
+		var startInfo = new ProcessStartInfo(_locator.Adb)
+		{
+			UseShellExecute = false,
+			CreateNoWindow = true,
+			RedirectStandardOutput = true,
+			RedirectStandardError = true,
+		};
+
+		startInfo.ArgumentList.Add("-s");
+		startInfo.ArgumentList.Add(serial);
+		foreach (var argument in arguments)
+			startInfo.ArgumentList.Add(argument);
+
+		using var process = Process.Start(startInfo)
+			?? throw new InvalidOperationException($"Failed to start '{_locator.Adb}'.");
+
+		long written;
+		var drainErrors = process.StandardError.ReadToEndAsync(cancellationToken);
+
+		await using (var file = File.Create(destination))
+		{
+			await process.StandardOutput.BaseStream.CopyToAsync(file, cancellationToken).ConfigureAwait(false);
+			written = file.Length;
+		}
+
+		await process.WaitForExitAsync(cancellationToken).ConfigureAwait(false);
+		var errors = await drainErrors.ConfigureAwait(false);
+
+		if (process.ExitCode != 0 || errors.Trim() is { Length: > 0 })
+		{
+			File.Delete(destination);
+			throw new DeviceCapabilityException(
+				$"Could not read the file from the device: "
+				+ (errors.Trim() is { Length: > 0 } text ? text : $"adb exited with code {process.ExitCode}."));
+		}
+
+		return written;
+	}
+
+	#endregion
+
 	#region AVD metadata
 
 	private static string? FindAvdDirectory(string avdId)

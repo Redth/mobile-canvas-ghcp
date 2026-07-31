@@ -841,6 +841,193 @@ public sealed class IosSimulatorBackend : IDeviceBackend, IAsyncDisposable
 
 	#endregion
 
+	#region Files
+
+	/// <summary>
+	/// Lists a directory in an app's data container, or under the simulator's own filesystem.
+	/// </summary>
+	/// <remarks>
+	/// A simulator's storage is just a directory on this Mac, so these are plain file operations rather
+	/// than a transfer protocol. That is the whole reason the paths are resolved and then re-checked to
+	/// still be inside their root: a device path is caller input, and here it addresses the host.
+	/// </remarks>
+	public async Task<FileListResult> ListFilesAsync(
+		string deviceId,
+		FileQuery query,
+		CancellationToken cancellationToken = default)
+	{
+		var (root, directory) = await ResolveAsync(deviceId, query.BundleId, query.Path, cancellationToken)
+			.ConfigureAwait(false);
+
+		if (!Directory.Exists(directory))
+		{
+			throw new DeviceCapabilityException(File.Exists(directory)
+				? $"'{query.Path}' is a file, not a directory."
+				: $"No directory '{query.Path}' exists on '{deviceId}'.");
+		}
+
+		var files = new List<DeviceFile>();
+		foreach (var path in Directory.EnumerateFileSystemEntries(directory))
+		{
+			cancellationToken.ThrowIfCancellationRequested();
+
+			var info = new System.IO.FileInfo(path);
+			var isDirectory = (info.Attributes & FileAttributes.Directory) != 0;
+
+			files.Add(new DeviceFile
+			{
+				Name = info.Name,
+				Path = Relative(root, path),
+				IsDirectory = isDirectory,
+				Size = isDirectory ? 0 : info.Length,
+				Modified = info.LastWriteTimeUtc.ToString("yyyy-MM-dd HH:mm:ss"),
+			});
+		}
+
+		return new FileListResult
+		{
+			DeviceId = deviceId,
+			Platform = DevicePlatforms.Ios,
+			Path = Relative(root, directory),
+			Total = files.Count,
+			Files = [.. files.OrderByDescending(file => file.IsDirectory).ThenBy(file => file.Name, StringComparer.OrdinalIgnoreCase)],
+		};
+	}
+
+	public async Task<FileTransferResult> PullFileAsync(
+		string deviceId,
+		FileTransferRequest request,
+		CancellationToken cancellationToken = default)
+	{
+		var (_, source) = await ResolveAsync(deviceId, request.BundleId, request.DevicePath, cancellationToken)
+			.ConfigureAwait(false);
+
+		if (!File.Exists(source))
+			throw new DeviceCapabilityException(
+				$"No file '{request.DevicePath}' exists on '{deviceId}'.");
+
+		var destination = PrepareDestination(request.HostPath, Path.GetFileName(source));
+		File.Copy(source, destination, overwrite: true);
+
+		return new FileTransferResult
+		{
+			DeviceId = deviceId,
+			DevicePath = request.DevicePath,
+			HostPath = destination,
+			Size = new System.IO.FileInfo(destination).Length,
+			Operation = FileOperations.Pull,
+		};
+	}
+
+	public async Task<FileTransferResult> PushFileAsync(
+		string deviceId,
+		FileTransferRequest request,
+		CancellationToken cancellationToken = default)
+	{
+		var (_, destination) = await ResolveAsync(deviceId, request.BundleId, request.DevicePath, cancellationToken)
+			.ConfigureAwait(false);
+
+		// A destination naming a directory takes the source's file name, the way cp does.
+		if (Directory.Exists(destination))
+			destination = Path.Combine(destination, Path.GetFileName(request.HostPath));
+
+		var parent = Path.GetDirectoryName(destination);
+		if (parent is not null && !Directory.Exists(parent))
+			throw new DeviceCapabilityException(
+				$"No directory '{Path.GetDirectoryName(request.DevicePath)}' exists on '{deviceId}' to write into.");
+
+		File.Copy(request.HostPath, destination, overwrite: true);
+
+		return new FileTransferResult
+		{
+			DeviceId = deviceId,
+			DevicePath = request.DevicePath,
+			HostPath = request.HostPath,
+			Size = new System.IO.FileInfo(destination).Length,
+			Operation = FileOperations.Push,
+		};
+	}
+
+	/// <summary>
+	/// Resolves a device path to a host path, and returns the root it must stay inside.
+	/// </summary>
+	private async Task<(string Root, string Path)> ResolveAsync(
+		string deviceId,
+		string? bundleId,
+		string path,
+		CancellationToken cancellationToken)
+	{
+		// Not RequireBooted: a shut-down simulator's storage is still on disk, and reading a file the
+		// app wrote before it stopped is exactly when someone asks.
+		var device = await GetDeviceAsync(deviceId, cancellationToken).ConfigureAwait(false);
+
+		var root = string.IsNullOrWhiteSpace(bundleId)
+			? SimulatorDataRoot(device.NativeId)
+			: await ResolveDataContainerAsync(device.NativeId, bundleId, cancellationToken).ConfigureAwait(false);
+
+		root = Path.GetFullPath(root);
+
+		if (!Directory.Exists(root))
+			throw new DeviceCapabilityException(
+				$"'{deviceId}' has no storage at '{root}'. Boot the simulator at least once.");
+
+		var resolved = Path.GetFullPath(Path.Combine(root, path.TrimStart('/')));
+
+		// The path came from a caller and addresses this Mac, so "../.." has to be caught here rather
+		// than trusted to a sandbox that does not exist.
+		if (resolved != root && !resolved.StartsWith(root + Path.DirectorySeparatorChar, StringComparison.Ordinal))
+			throw new DeviceCapabilityException($"'{path}' points outside the device's storage.");
+
+		return (root, resolved);
+	}
+
+	private async Task<string> ResolveDataContainerAsync(
+		string udid,
+		string bundleId,
+		CancellationToken cancellationToken)
+	{
+		var result = await RunAsync(["get_app_container", udid, bundleId, "data"], cancellationToken)
+			.ConfigureAwait(false);
+
+		var path = result.StandardOutput.Trim();
+
+		// simctl prints "(null)" and exits zero for an app with no data container of its own, which is
+		// every built-in app. Treating that as a path would produce a listing of nothing at all.
+		if (result.ExitCode != 0 || path.Length == 0 || path == "(null)")
+			throw new DeviceCapabilityException(
+				$"'{bundleId}' has no data container on '{udid}'. Built-in apps do not have one; "
+				+ "check the bundle ID with `app list`.");
+
+		return path;
+	}
+
+	private static string SimulatorDataRoot(string udid) => Path.Combine(
+		Environment.GetFolderPath(Environment.SpecialFolder.UserProfile),
+		"Library", "Developer", "CoreSimulator", "Devices", udid, "data");
+
+	/// <summary>Expresses a host path the way the caller addressed it, so it can be passed back in.</summary>
+	private static string Relative(string root, string path)
+	{
+		var relative = Path.GetRelativePath(root, path);
+		return relative == "." ? "/" : "/" + relative.Replace(Path.DirectorySeparatorChar, '/');
+	}
+
+	/// <summary>
+	/// Works out where a pull should land, creating the parent directory if it is missing.
+	/// </summary>
+	private static string PrepareDestination(string hostPath, string fileName)
+	{
+		var destination = Directory.Exists(hostPath) ? Path.Combine(hostPath, fileName) : hostPath;
+
+		var parent = Path.GetDirectoryName(destination);
+		if (!string.IsNullOrEmpty(parent))
+			Directory.CreateDirectory(parent);
+
+		return destination;
+	}
+
+	#endregion
+
 	public async ValueTask DisposeAsync()
 	{
 		await _recordings.DisposeAsync().ConfigureAwait(false);

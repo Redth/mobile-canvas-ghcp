@@ -457,6 +457,48 @@ public sealed class DeviceHostClient
 			.ConfigureAwait(false);
 	}
 
+	public async Task<FileListResult> ListFilesAsync(
+		string deviceId,
+		FileQuery query,
+		CancellationToken cancellationToken = default)
+	{
+		var path = $"/api/v1/devices/{Escape(deviceId)}/files"
+			+ $"?path={Uri.EscapeDataString(query.Path)}"
+			+ (string.IsNullOrWhiteSpace(query.BundleId) ? "" : $"&bundleId={Uri.EscapeDataString(query.BundleId)}");
+
+		var response = await SendAsync(HttpMethod.Get, path, cancellationToken).ConfigureAwait(false);
+		return await ReadAsync(response, DeviceJsonContext.Default.FileListResult, cancellationToken)
+			.ConfigureAwait(false);
+	}
+
+	public async Task<FileTransferResult> PullFileAsync(
+		string deviceId,
+		FileTransferRequest request,
+		CancellationToken cancellationToken = default)
+	{
+		var response = await SendAsync(
+			HttpMethod.Post,
+			$"/api/v1/devices/{Escape(deviceId)}/files/pull",
+			JsonContent.Create(request, DeviceJsonContext.Default.FileTransferRequest),
+			cancellationToken).ConfigureAwait(false);
+		return await ReadAsync(response, DeviceJsonContext.Default.FileTransferResult, cancellationToken)
+			.ConfigureAwait(false);
+	}
+
+	public async Task<FileTransferResult> PushFileAsync(
+		string deviceId,
+		FileTransferRequest request,
+		CancellationToken cancellationToken = default)
+	{
+		var response = await SendAsync(
+			HttpMethod.Post,
+			$"/api/v1/devices/{Escape(deviceId)}/files/push",
+			JsonContent.Create(request, DeviceJsonContext.Default.FileTransferRequest),
+			cancellationToken).ConfigureAwait(false);
+		return await ReadAsync(response, DeviceJsonContext.Default.FileTransferResult, cancellationToken)
+			.ConfigureAwait(false);
+	}
+
 	public async Task<byte[]> ScreenshotAsync(
 		string deviceId,
 		CanvasContextKey? context = null,
