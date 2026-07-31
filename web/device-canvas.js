@@ -84,6 +84,8 @@ const state = {
   streamMode: "idle",
   actualFps: 0,
   linkExpanded: false,
+  selectionTarget: null,
+  followTarget: null,
 };
 
 async function api(path, options = {}) {
@@ -128,11 +130,7 @@ async function refresh() {
   if (state.detached) return;
   elements.list.setAttribute("aria-busy", "true");
   try {
-    const response = await api("/api/v1/catalog");
-    state.catalog = await response.json();
-    renderDiagnostics();
-    renderDeviceList();
-    populateCreateOptions();
+    await loadCatalog();
 
     if (state.selected) {
       const updated = state.catalog.devices.find((device) => device.id === state.selected.id);
@@ -160,6 +158,14 @@ async function refresh() {
   } finally {
     elements.list.removeAttribute("aria-busy");
   }
+}
+
+async function loadCatalog() {
+  const response = await api("/api/v1/catalog");
+  state.catalog = await response.json();
+  renderDiagnostics();
+  renderDeviceList();
+  populateCreateOptions();
 }
 
 function renderDiagnostics() {
@@ -286,6 +292,9 @@ function closeDevicePopover() {
 }
 
 async function selectDevice(device, persist) {
+  // Recorded before the first await so a selection announcement that races this request can tell it
+  // is watching work already under way rather than starting a second switch to the same device.
+  state.selectionTarget = device.id;
   stopStream();
   if (persist) {
     setInputStatus("pending", "Selecting device");
@@ -1095,7 +1104,14 @@ function connectAutomationEvents() {
     } catch {
       return;
     }
-    // Several canvases can share one host, so ignore anything aimed at a device we are not showing.
+    // Events reach every canvas on the host, so a panel first works out whether it is the audience.
+    if (addressedToThisCanvas(activity)) {
+      // The host points a canvas at whatever device an agent addresses. Following that here is what
+      // keeps the panel from sitting on the device the person last picked while work happens
+      // somewhere else.
+      followSelection(activity.deviceId).catch(showError);
+    }
+    if (activity.kind === "selection") return;
     if (!state.selected || activity.deviceId !== state.selected.id) return;
     handleAutomationEvent(activity);
   });
@@ -1114,6 +1130,32 @@ function connectAutomationEvents() {
 function scheduleAutomationReconnect() {
   clearTimeout(automation.retryTimer);
   automation.retryTimer = setTimeout(connectAutomationEvents, 2000);
+}
+
+/**
+ * True when an event names this panel. Events without a canvas identity came from the bare CLI, which
+ * is not speaking on any panel's behalf, so those never move a selection.
+ */
+function addressedToThisCanvas(activity) {
+  if (!activity.sessionId || !activity.instanceId) return false;
+  return activity.sessionId === sessionStorage.getItem("mobile-canvas-session") &&
+    activity.instanceId === sessionStorage.getItem("mobile-canvas-instance");
+}
+
+async function followSelection(deviceId) {
+  if (!deviceId || state.detached) return;
+  if (state.selectionTarget === deviceId || state.selected?.id === deviceId) return;
+
+  state.followTarget = deviceId;
+  let device = state.catalog?.devices?.find((entry) => entry.id === deviceId);
+  if (!device) {
+    // A device the agent created moments ago is not in the catalog this panel loaded.
+    await loadCatalog();
+    // A later announcement overtook this one while the catalog loaded; that one wins.
+    if (state.followTarget !== deviceId) return;
+    device = state.catalog?.devices?.find((entry) => entry.id === deviceId);
+  }
+  if (device) await selectDevice(device, false);
 }
 
 function handleAutomationEvent(activity) {

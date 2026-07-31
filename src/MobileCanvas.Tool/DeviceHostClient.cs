@@ -220,63 +220,75 @@ public sealed class DeviceHostClient
 	public async Task TapAsync(
 		string deviceId,
 		TapRequest request,
+		CanvasContextKey? context = null,
 		CancellationToken cancellationToken = default) =>
 		await PostAsync(
 			$"/api/v1/devices/{Escape(deviceId)}/input/tap",
 			JsonContent.Create(request, DeviceJsonContext.Default.TapRequest),
+			context,
 			cancellationToken).ConfigureAwait(false);
 
 	public async Task SwipeAsync(
 		string deviceId,
 		SwipeRequest request,
+		CanvasContextKey? context = null,
 		CancellationToken cancellationToken = default) =>
 		await PostAsync(
 			$"/api/v1/devices/{Escape(deviceId)}/input/swipe",
 			JsonContent.Create(request, DeviceJsonContext.Default.SwipeRequest),
+			context,
 			cancellationToken).ConfigureAwait(false);
 
 	public async Task TypeTextAsync(
 		string deviceId,
 		string text,
+		CanvasContextKey? context = null,
 		CancellationToken cancellationToken = default) =>
 		await PostAsync(
 			$"/api/v1/devices/{Escape(deviceId)}/input/text",
 			JsonContent.Create(
 				new TextInputRequest { Text = text },
 				DeviceJsonContext.Default.TextInputRequest),
+			context,
 			cancellationToken).ConfigureAwait(false);
 
 	public async Task PressKeyAsync(
 		string deviceId,
 		ulong keyCode,
+		CanvasContextKey? context = null,
 		CancellationToken cancellationToken = default) =>
 		await PostAsync(
 			$"/api/v1/devices/{Escape(deviceId)}/input/key",
 			JsonContent.Create(
 				new KeyInputRequest { KeyCode = keyCode },
 				DeviceJsonContext.Default.KeyInputRequest),
+			context,
 			cancellationToken).ConfigureAwait(false);
 
 	public async Task PressButtonAsync(
 		string deviceId,
 		string button,
+		CanvasContextKey? context = null,
 		CancellationToken cancellationToken = default) =>
 		await PostAsync(
 			$"/api/v1/devices/{Escape(deviceId)}/input/button",
 			JsonContent.Create(
 				new ButtonInputRequest { Button = button },
 				DeviceJsonContext.Default.ButtonInputRequest),
+			context,
 			cancellationToken).ConfigureAwait(false);
 
 	public async Task RotateAsync(
 		string deviceId,
 		string orientation,
+		CanvasContextKey? context = null,
 		CancellationToken cancellationToken = default) =>
 		await PostAsync(
 			$"/api/v1/devices/{Escape(deviceId)}/input/rotate",
 			JsonContent.Create(
 				new RotateRequest { Orientation = orientation },
 				DeviceJsonContext.Default.RotateRequest),
+			context,
 			cancellationToken).ConfigureAwait(false);
 
 	public async Task<DisplayGeometry> GetDisplayAsync(
@@ -293,11 +305,13 @@ public sealed class DeviceHostClient
 
 	public async Task<byte[]> ScreenshotAsync(
 		string deviceId,
+		CanvasContextKey? context = null,
 		CancellationToken cancellationToken = default)
 	{
+		var path = $"/api/v1/devices/{Escape(deviceId)}/screenshot";
 		using var response = await SendAsync(
 			HttpMethod.Get,
-			$"/api/v1/devices/{Escape(deviceId)}/screenshot",
+			context is null ? path : WithContext(path, context),
 			cancellationToken).ConfigureAwait(false);
 		await EnsureSuccessAsync(response, cancellationToken).ConfigureAwait(false);
 		return await response.Content.ReadAsByteArrayAsync(cancellationToken).ConfigureAwait(false);
@@ -555,12 +569,13 @@ public sealed class DeviceHostClient
 	private async Task PostAsync(
 		string path,
 		HttpContent content,
+		CanvasContextKey? context,
 		CancellationToken cancellationToken)
 	{
 		using (content)
 		using (var response = await SendAsync(
 			HttpMethod.Post,
-			path,
+			context is null ? path : WithContext(path, context),
 			content,
 			cancellationToken).ConfigureAwait(false))
 		{

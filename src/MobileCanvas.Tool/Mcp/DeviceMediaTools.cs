@@ -18,7 +18,7 @@ public sealed class DeviceMediaTools(DeviceHostClient client)
 		[Description("Provider-qualified device ID.")] string deviceId,
 		CancellationToken cancellationToken = default)
 	{
-		var bytes = await client.ScreenshotAsync(deviceId, cancellationToken).ConfigureAwait(false);
+		var bytes = await client.ScreenshotAsync(deviceId, cancellationToken: cancellationToken).ConfigureAwait(false);
 		return
 		[
 			new TextContentBlock { Text = $"Captured {bytes.Length} byte PNG from {deviceId}." },

@@ -228,6 +228,14 @@ public sealed record AutomationEvent
 
 	/// <summary>Human-readable detail for the status pill, such as a button name or typed text.</summary>
 	public string? Detail { get; init; }
+
+	/// <summary>
+	/// Canvas panel the caller was acting on behalf of, when it identified one. Events are broadcast
+	/// to every connected canvas, so a panel uses this to tell "an agent is driving me" apart from
+	/// "an agent is driving the panel next door".
+	/// </summary>
+	public string? SessionId { get; init; }
+	public string? InstanceId { get; init; }
 }
 
 public static class AutomationEventKinds
@@ -241,6 +249,13 @@ public static class AutomationEventKinds
 	public const string Button = "button";
 	public const string Rotate = "rotate";
 	public const string Screenshot = "screenshot";
+
+	/// <summary>
+	/// The device a canvas is pointed at changed. Selection lives on the host so that agents and the
+	/// panel agree on "the current device"; without this notice the panel would keep showing whatever
+	/// it last chose while the agent worked somewhere else.
+	/// </summary>
+	public const string Selection = "selection";
 }
 
 public sealed record StreamOptions

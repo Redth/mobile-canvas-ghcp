@@ -19,7 +19,7 @@ public sealed class DeviceInteractionTools(DeviceHostClient client)
 		await client.TapAsync(
 			deviceId,
 			new TapRequest { X = x, Y = y, Duration = duration },
-			cancellationToken).ConfigureAwait(false);
+			cancellationToken: cancellationToken).ConfigureAwait(false);
 		return Result("tap", deviceId);
 	}
 
@@ -44,7 +44,7 @@ public sealed class DeviceInteractionTools(DeviceHostClient client)
 				EndY = endY,
 				Duration = duration,
 			},
-			cancellationToken).ConfigureAwait(false);
+			cancellationToken: cancellationToken).ConfigureAwait(false);
 		return Result("swipe", deviceId);
 	}
 
@@ -55,7 +55,7 @@ public sealed class DeviceInteractionTools(DeviceHostClient client)
 		[Description("Text to enter into the focused control on the device.")] string text,
 		CancellationToken cancellationToken = default)
 	{
-		await client.TypeTextAsync(deviceId, text, cancellationToken).ConfigureAwait(false);
+		await client.TypeTextAsync(deviceId, text, cancellationToken: cancellationToken).ConfigureAwait(false);
 		return Result("type-text", deviceId);
 	}
 
@@ -66,7 +66,7 @@ public sealed class DeviceInteractionTools(DeviceHostClient client)
 		[Description("USB HID keyboard usage code, such as 40 for Return or 42 for Backspace.")] ulong keyCode,
 		CancellationToken cancellationToken = default)
 	{
-		await client.PressKeyAsync(deviceId, keyCode, cancellationToken).ConfigureAwait(false);
+		await client.PressKeyAsync(deviceId, keyCode, cancellationToken: cancellationToken).ConfigureAwait(false);
 		return Result("press-key", deviceId);
 	}
 
@@ -77,7 +77,7 @@ public sealed class DeviceInteractionTools(DeviceHostClient client)
 		[Description("Button name. iOS: home, lock, side-button, siri, apple-pay. Android: home, back, apps, lock/power, volume-up, volume-down, menu.")] string button,
 		CancellationToken cancellationToken = default)
 	{
-		await client.PressButtonAsync(deviceId, button, cancellationToken).ConfigureAwait(false);
+		await client.PressButtonAsync(deviceId, button, cancellationToken: cancellationToken).ConfigureAwait(false);
 		return Result("press-button", deviceId);
 	}
 
@@ -93,7 +93,7 @@ public sealed class DeviceInteractionTools(DeviceHostClient client)
 		await client.TapAsync(
 			deviceId,
 			new TapRequest { X = x, Y = y, Duration = duration },
-			cancellationToken).ConfigureAwait(false);
+			cancellationToken: cancellationToken).ConfigureAwait(false);
 		return Result("long-press", deviceId);
 	}
 
@@ -104,7 +104,7 @@ public sealed class DeviceInteractionTools(DeviceHostClient client)
 		[Description("Target orientation: portrait, portrait-upside-down, landscape-left, or landscape-right.")] string orientation,
 		CancellationToken cancellationToken = default)
 	{
-		await client.RotateAsync(deviceId, orientation, cancellationToken).ConfigureAwait(false);
+		await client.RotateAsync(deviceId, orientation, cancellationToken: cancellationToken).ConfigureAwait(false);
 		return Result("rotate", deviceId);
 	}
 

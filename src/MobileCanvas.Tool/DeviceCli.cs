@@ -186,6 +186,7 @@ internal static class DeviceCli
 				Y = options.Double("y"),
 				Duration = options.Double("duration", 0),
 			},
+			options.Context(),
 			cancellationToken).ConfigureAwait(false);
 		return new OperationResult { Operation = "tap", DeviceId = id };
 	}
@@ -205,6 +206,7 @@ internal static class DeviceCli
 				EndY = options.Double("end-y"),
 				Duration = options.Double("duration", 0.35),
 			},
+			options.Context(),
 			cancellationToken).ConfigureAwait(false);
 		return new OperationResult { Operation = "swipe", DeviceId = id };
 	}
@@ -214,7 +216,8 @@ internal static class DeviceCli
 		CancellationToken cancellationToken)
 	{
 		var id = options.RequiredPosition(0, "device ID");
-		await Client.TypeTextAsync(id, options.Required("text"), cancellationToken).ConfigureAwait(false);
+		await Client.TypeTextAsync(id, options.Required("text"), options.Context(), cancellationToken)
+			.ConfigureAwait(false);
 		return new OperationResult { Operation = "type", DeviceId = id };
 	}
 
@@ -226,6 +229,7 @@ internal static class DeviceCli
 		await Client.PressKeyAsync(
 			id,
 			(ulong)options.Long("code"),
+			options.Context(),
 			cancellationToken).ConfigureAwait(false);
 		return new OperationResult { Operation = "key", DeviceId = id };
 	}
@@ -238,6 +242,7 @@ internal static class DeviceCli
 		await Client.PressButtonAsync(
 			id,
 			options.Required("button"),
+			options.Context(),
 			cancellationToken).ConfigureAwait(false);
 		return new OperationResult { Operation = "button", DeviceId = id };
 	}
@@ -250,6 +255,7 @@ internal static class DeviceCli
 		await Client.RotateAsync(
 			id,
 			options.Required("orientation"),
+			options.Context(),
 			cancellationToken).ConfigureAwait(false);
 		return new OperationResult { Operation = "rotate", DeviceId = id };
 	}
@@ -267,7 +273,8 @@ internal static class DeviceCli
 		var output = options.Value("output") ?? CreateScreenshotPath();
 		output = Path.GetFullPath(output);
 		Directory.CreateDirectory(Path.GetDirectoryName(output)!);
-		var bytes = await Client.ScreenshotAsync(id, cancellationToken).ConfigureAwait(false);
+		var bytes = await Client.ScreenshotAsync(id, options.Context(), cancellationToken)
+			.ConfigureAwait(false);
 		await File.WriteAllBytesAsync(output, bytes, cancellationToken).ConfigureAwait(false);
 		return new MediaArtifact
 		{

@@ -213,6 +213,7 @@ const canvas = createCanvas({
         "input", "tap", ctx.input.deviceId,
         "--x", String(ctx.input.x), "--y", String(ctx.input.y),
         "--duration", String(ctx.input.duration || 0),
+        ...contextArgs(ctx),
       ]),
     },
     {
@@ -233,6 +234,7 @@ const canvas = createCanvas({
         "input", "tap", ctx.input.deviceId,
         "--x", String(ctx.input.x), "--y", String(ctx.input.y),
         "--duration", String(ctx.input.duration || 1),
+        ...contextArgs(ctx),
       ]),
     },
     {
@@ -255,6 +257,7 @@ const canvas = createCanvas({
         "--start-x", String(ctx.input.startX), "--start-y", String(ctx.input.startY),
         "--end-x", String(ctx.input.endX), "--end-y", String(ctx.input.endY),
         "--duration", String(ctx.input.duration || 0.35),
+        ...contextArgs(ctx),
       ]),
     },
     {
@@ -269,7 +272,7 @@ const canvas = createCanvas({
         required: ["deviceId", "text"],
       },
       handler: (ctx) =>
-        runCli(["input", "type", ctx.input.deviceId, "--text", ctx.input.text]),
+        runCli(["input", "type", ctx.input.deviceId, "--text", ctx.input.text, ...contextArgs(ctx)]),
     },
     {
       name: "press_button",
@@ -290,7 +293,7 @@ const canvas = createCanvas({
         required: ["deviceId", "button"],
       },
       handler: (ctx) =>
-        runCli(["input", "button", ctx.input.deviceId, "--button", ctx.input.button]),
+        runCli(["input", "button", ctx.input.deviceId, "--button", ctx.input.button, ...contextArgs(ctx)]),
     },
     {
       name: "press_key",
@@ -305,7 +308,7 @@ const canvas = createCanvas({
         required: ["deviceId", "keyCode"],
       },
       handler: (ctx) =>
-        runCli(["input", "key", ctx.input.deviceId, "--code", String(ctx.input.keyCode)]),
+        runCli(["input", "key", ctx.input.deviceId, "--code", String(ctx.input.keyCode), ...contextArgs(ctx)]),
     },
     {
       name: "rotate_device",
@@ -322,7 +325,11 @@ const canvas = createCanvas({
         required: ["deviceId", "orientation"],
       },
       handler: (ctx) =>
-        runCli(["input", "rotate", ctx.input.deviceId, "--orientation", ctx.input.orientation]),
+        runCli([
+          "input", "rotate", ctx.input.deviceId,
+          "--orientation", ctx.input.orientation,
+          ...contextArgs(ctx),
+        ]),
     },
     {
       name: "take_screenshot",
@@ -338,6 +345,7 @@ const canvas = createCanvas({
       handler: (ctx) => runCli([
         "screenshot", ctx.input.deviceId,
         ...(ctx.input.output ? ["--output", ctx.input.output] : []),
+        ...contextArgs(ctx),
       ]),
     },
     {

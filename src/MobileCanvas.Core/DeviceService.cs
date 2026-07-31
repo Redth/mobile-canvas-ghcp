@@ -64,6 +64,15 @@ public sealed class DeviceService(IEnumerable<IDeviceBackend> backends)
 		CancellationToken cancellationToken = default) =>
 		SelectAsync(key.SessionId, key.InstanceId, deviceId, cancellationToken);
 
+	/// <summary>
+	/// The selected device ID, without asking a backend to describe it. Input runs on every tap, so it
+	/// needs a way to notice the canvas is pointed elsewhere that costs nothing when it is not.
+	/// </summary>
+	public string? GetSelectedId(CanvasContextKey key) =>
+		_selections.TryGetValue(SelectionKey(key.SessionId, key.InstanceId), out var deviceId)
+			? deviceId
+			: null;
+
 	public async Task<DeviceSelection> GetSelectionAsync(
 		string sessionId,
 		string instanceId,
