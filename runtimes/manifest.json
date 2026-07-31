@@ -1,4 +1,6 @@
 {
+  "version": "0.1.2",
+  "sourceHash": "70414e347c038f71715d1b53f01da6d005dc6600db71c4798c219693b23c1672",
   "runtimes": {
     "darwin-arm64": {
       "rid": "osx-arm64",
@@ -82,6 +84,5 @@
         }
       }
     }
-  },
-  "version": "0.1.2"
+  }
 }

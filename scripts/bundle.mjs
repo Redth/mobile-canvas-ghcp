@@ -19,6 +19,7 @@ import {
 import { gzipSync } from "node:zlib";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
+import { sourceHash } from "./source-hash.mjs";
 
 const packageRoot = dirname(dirname(fileURLToPath(import.meta.url)));
 const runtimesDir = join(packageRoot, "runtimes");
@@ -98,6 +99,10 @@ const manifest = existsSync(manifestPath)
 manifest.version = JSON.parse(
   readFileSync(join(packageRoot, "package.json"), "utf8"),
 ).version;
+// Recorded so CI can tell whether runtimes/ still matches src/ without rebuilding.
+// Comparing the built bytes cannot answer that: Native AOT is not bit-reproducible,
+// so a rebuild of identical source differs anyway.
+manifest.sourceHash = sourceHash().hash;
 manifest.runtimes[platformKey] = { rid, executable, id: primaryHash, files };
 
 // Sorted so a rebuild of one architecture produces no incidental diff noise
