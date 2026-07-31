@@ -101,6 +101,19 @@ internal static class DeviceCli
 			("input", "key") => await KeyAsync(options, cancellationToken).ConfigureAwait(false),
 			("input", "button") => await ButtonAsync(options, cancellationToken).ConfigureAwait(false),
 			("input", "rotate") => await RotateAsync(options, cancellationToken).ConfigureAwait(false),
+			("ui", "dump") => await Client.GetUiSnapshotAsync(
+				options.RequiredPosition(0, "device ID"),
+				options.Flag("raw"),
+				cancellationToken).ConfigureAwait(false),
+			("ui", "find") => await Client.FindUiElementsAsync(
+				options.RequiredPosition(0, "device ID"),
+				UiQueryFrom(options),
+				cancellationToken).ConfigureAwait(false),
+			("ui", "tap") => await Client.TapUiElementAsync(
+				options.RequiredPosition(0, "device ID"),
+				UiQueryFrom(options),
+				options.Context(),
+				cancellationToken).ConfigureAwait(false),
 			("screenshot", _) => await ScreenshotAsync(
 				action,
 				new CliArguments(args.Skip(1)),
@@ -186,6 +199,7 @@ internal static class DeviceCli
 				Y = options.Double("y"),
 				Duration = options.Double("duration", 0),
 			},
+			options.Context(),
 			cancellationToken).ConfigureAwait(false);
 		return new OperationResult { Operation = "tap", DeviceId = id };
 	}
@@ -205,6 +219,7 @@ internal static class DeviceCli
 				EndY = options.Double("end-y"),
 				Duration = options.Double("duration", 0.35),
 			},
+			options.Context(),
 			cancellationToken).ConfigureAwait(false);
 		return new OperationResult { Operation = "swipe", DeviceId = id };
 	}
@@ -214,7 +229,8 @@ internal static class DeviceCli
 		CancellationToken cancellationToken)
 	{
 		var id = options.RequiredPosition(0, "device ID");
-		await Client.TypeTextAsync(id, options.Required("text"), cancellationToken).ConfigureAwait(false);
+		await Client.TypeTextAsync(id, options.Required("text"), options.Context(), cancellationToken)
+			.ConfigureAwait(false);
 		return new OperationResult { Operation = "type", DeviceId = id };
 	}
 
@@ -226,6 +242,7 @@ internal static class DeviceCli
 		await Client.PressKeyAsync(
 			id,
 			(ulong)options.Long("code"),
+			options.Context(),
 			cancellationToken).ConfigureAwait(false);
 		return new OperationResult { Operation = "key", DeviceId = id };
 	}
@@ -238,6 +255,7 @@ internal static class DeviceCli
 		await Client.PressButtonAsync(
 			id,
 			options.Required("button"),
+			options.Context(),
 			cancellationToken).ConfigureAwait(false);
 		return new OperationResult { Operation = "button", DeviceId = id };
 	}
@@ -250,9 +268,22 @@ internal static class DeviceCli
 		await Client.RotateAsync(
 			id,
 			options.Required("orientation"),
+			options.Context(),
 			cancellationToken).ConfigureAwait(false);
 		return new OperationResult { Operation = "rotate", DeviceId = id };
 	}
+
+	/// <summary>
+	/// Builds a query from the shared <c>--text</c>/<c>--id</c>/<c>--role</c> flags used by every ui verb.
+	/// </summary>
+	private static UiQuery UiQueryFrom(CliArguments options) => new()
+	{
+		Text = options.Value("text"),
+		Identifier = options.Value("id"),
+		Role = options.Value("role"),
+		Exact = options.Flag("exact"),
+		Limit = options.Int("limit", 20),
+	};
 
 	private static async Task<MediaArtifact> ScreenshotAsync(
 		string firstArgument,
@@ -267,7 +298,8 @@ internal static class DeviceCli
 		var output = options.Value("output") ?? CreateScreenshotPath();
 		output = Path.GetFullPath(output);
 		Directory.CreateDirectory(Path.GetDirectoryName(output)!);
-		var bytes = await Client.ScreenshotAsync(id, cancellationToken).ConfigureAwait(false);
+		var bytes = await Client.ScreenshotAsync(id, options.Context(), cancellationToken)
+			.ConfigureAwait(false);
 		await File.WriteAllBytesAsync(output, bytes, cancellationToken).ConfigureAwait(false);
 		return new MediaArtifact
 		{
@@ -376,6 +408,9 @@ internal static class DeviceCli
 		  mobile-canvas input key <id> --code <USB-HID-code>
 		  mobile-canvas input button <id> --button <name>
 		  mobile-canvas input rotate <id> --orientation <name>
+		  mobile-canvas ui dump <id> [--raw] [--json]
+		  mobile-canvas ui find <id> [--text <s>] [--id <s>] [--role <s>] [--exact] [--limit <n>]
+		  mobile-canvas ui tap <id> [--text <s>] [--id <s>] [--role <s>] [--exact]
 		  mobile-canvas screenshot <id> [--output <path>] [--json]
 		  mobile-canvas recording start|stop|status <id>
 		  mobile-canvas mcp
@@ -389,6 +424,10 @@ internal static class DeviceCli
 		Boot a target before input, screenshots, recording, or streaming. Erase and delete always
 		require `--confirm` (or `confirm: true` through canvas/MCP). The host and canvas detach
 		without shutting down the device.
+
+		Prefer `ui find`/`ui tap` over screenshot-and-guess: they read the live accessibility tree,
+		so a tap lands on the element rather than on a coordinate that a layout change invalidates.
+		`ui dump --raw` returns the untouched platform payload when the normalized tree is not enough.
 		""";
 }
 

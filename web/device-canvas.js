@@ -1,6 +1,5 @@
 const elements = {
   list: document.querySelector("#device-list"),
-  count: document.querySelector("#device-count"),
   diagnostics: document.querySelector("#diagnostics"),
   selector: document.querySelector("#device-selector"),
   popover: document.querySelector("#device-popover"),
@@ -13,7 +12,12 @@ const elements = {
   detached: document.querySelector("#detached-state"),
   canvas: document.querySelector("#device-screen"),
   frame: document.querySelector("#device-frame"),
+  stage: document.querySelector(".stage"),
+  stageViewport: document.querySelector(".stage-viewport"),
+  floatBar: document.querySelector(".float-bar"),
+  navPill: document.querySelector("#nav-pill"),
   overlay: document.querySelector("#stream-overlay"),
+  overlayText: document.querySelector("#stream-overlay-text"),
   fps: document.querySelector("#fps-select"),
   scale: document.querySelector("#scale-select"),
   mode: document.querySelector("#stream-mode"),
@@ -48,6 +52,11 @@ const elements = {
   inputLatency: document.querySelector("#input-latency"),
   inputLatencyWrap: document.querySelector("#input-latency-wrap"),
   inputStateDot: document.querySelector("#input-state-dot"),
+  statusPill: document.querySelector(".status-pill"),
+  linkChip: document.querySelector("#link-chip"),
+  linkDetails: document.querySelector("#link-details"),
+  settingsDialog: document.querySelector("#settings-dialog"),
+  dataDialog: document.querySelector("#data-dialog"),
 };
 
 const state = {
@@ -59,6 +68,8 @@ const state = {
   pngTimer: null,
   frameCounter: 0,
   frameClock: performance.now(),
+  parser: null,
+  framePainted: false,
   pointer: null,
   wheel: null,
   wheelTimer: null,
@@ -70,6 +81,11 @@ const state = {
   scaleTimer: null,
   canvasContext: null,
   createPlatform: null,
+  streamMode: "idle",
+  actualFps: 0,
+  linkExpanded: false,
+  selectionTarget: null,
+  followTarget: null,
 };
 
 async function api(path, options = {}) {
@@ -114,11 +130,7 @@ async function refresh() {
   if (state.detached) return;
   elements.list.setAttribute("aria-busy", "true");
   try {
-    const response = await api("/api/v1/catalog");
-    state.catalog = await response.json();
-    renderDiagnostics();
-    renderDeviceList();
-    populateCreateOptions();
+    await loadCatalog();
 
     if (state.selected) {
       const updated = state.catalog.devices.find((device) => device.id === state.selected.id);
@@ -146,6 +158,14 @@ async function refresh() {
   } finally {
     elements.list.removeAttribute("aria-busy");
   }
+}
+
+async function loadCatalog() {
+  const response = await api("/api/v1/catalog");
+  state.catalog = await response.json();
+  renderDiagnostics();
+  renderDeviceList();
+  populateCreateOptions();
 }
 
 function renderDiagnostics() {
@@ -188,28 +208,21 @@ function availablePlatforms() {
 
 function renderDeviceList() {
   const devices = state.catalog?.devices || [];
-  elements.count.textContent = String(devices.length);
   elements.list.replaceChildren();
 
-  const platforms = availablePlatforms();
-  // A single-platform machine is the common case, and a lone "iOS Simulators" heading directly
-  // under a popover already titled "Devices" is pure noise, so headings only appear when they
-  // actually separate something.
-  const showHeadings = platforms.length > 1;
-
-  for (const platform of platforms) {
+  // Every group is headed, including on a single-platform machine: the heading now carries the
+  // count, so dropping it would leave the menu with no total at all.
+  for (const platform of availablePlatforms()) {
     const group = devices.filter((device) => device.platform === platform);
     if (group.length === 0) continue;
 
-    if (showHeadings) {
-      const heading = document.createElement("div");
-      heading.className = "device-group";
-      heading.setAttribute("role", "presentation");
-      heading.innerHTML = `
-        <span>${escapeHtml(platformInfo(platform).label)}</span>
-        <span class="count">${group.length}</span>`;
-      elements.list.append(heading);
-    }
+    const heading = document.createElement("div");
+    heading.className = "device-group";
+    heading.setAttribute("role", "presentation");
+    heading.innerHTML = `
+      <span>${escapeHtml(platformInfo(platform).label)}</span>
+      <span class="count">${group.length}</span>`;
+    elements.list.append(heading);
 
     for (const device of group) elements.list.append(createDeviceCard(device));
   }
@@ -279,6 +292,9 @@ function closeDevicePopover() {
 }
 
 async function selectDevice(device, persist) {
+  // Recorded before the first await so a selection announcement that races this request can tell it
+  // is watching work already under way rather than starting a second switch to the same device.
+  state.selectionTarget = device.id;
   stopStream();
   if (persist) {
     setInputStatus("pending", "Selecting device");
@@ -293,6 +309,9 @@ async function selectDevice(device, persist) {
   // A cursor left over from the previous device would point at coordinates that no longer mean
   // anything, so drop the overlay whenever the selection changes.
   endAutomation();
+  // The canvas keeps its last painted frame, so without this the previous device's screen shows
+  // through under the "Starting live view..." overlay as though it belonged to the new one.
+  clearScreen();
   elements.empty.classList.add("hidden");
   elements.detached.classList.add("hidden");
   elements.view.classList.remove("hidden");
@@ -314,10 +333,9 @@ async function selectDevice(device, persist) {
     await updateRecordingStatus();
   } else {
     state.display = null;
-    elements.overlay.textContent = `${capitalize(platformInfo(state.selected?.platform).noun)} is powered off`;
-    elements.overlay.classList.remove("hidden");
-    elements.mode.textContent = "offline";
-    elements.actualFps.textContent = "0 FPS";
+    showOverlay(`${capitalize(platformInfo(state.selected?.platform).noun)} is powered off`);
+    setStreamMode("offline");
+    setActualFps(0);
     setInputStatus("ready", `Boot the ${platformInfo(state.selected?.platform).noun} to interact`);
   }
 }
@@ -330,8 +348,8 @@ function showEmptySelection() {
   elements.view.classList.add("hidden");
   elements.detached.classList.add("hidden");
   elements.empty.classList.remove("hidden");
-  elements.mode.textContent = "idle";
-  elements.actualFps.textContent = "0 FPS";
+  setStreamMode("idle");
+  setActualFps(0);
   elements.geometry.value = "—";
   applyCaptureSource(null);
   elements.udid.value = "—";
@@ -349,6 +367,9 @@ function showEmptySelection() {
 const ACTION_CAPABILITY = {
   boot: "boot",
   home: "button",
+  back: "button",
+  apps: "button",
+  lock: "button",
   screenshot: "screenshot",
   record: "recording",
   restart: "restart",
@@ -377,12 +398,23 @@ function updateControlAvailability() {
   for (const button of document.querySelectorAll("[data-action]")) {
     const action = button.dataset.action;
     const capability = ACTION_CAPABILITY[action];
-    button.hidden = Boolean(state.selected && capability && capabilities[capability] === false);
+    // Back and Recents are Android hardware keys with no iOS equivalent, so they are gated on the
+    // platform as well as on the backend's capability flags.
+    const wrongPlatform = Boolean(
+      state.selected && button.dataset.platform && button.dataset.platform !== state.selected.platform);
+    button.hidden = wrongPlatform ||
+      Boolean(state.selected && capability && capabilities[capability] === false);
 
-    const needsBooted = ["home", "screenshot", "record", "restart", "shutdown"].includes(action);
+    const needsBooted =
+      ["home", "back", "apps", "lock", "screenshot", "record", "restart", "shutdown"].includes(action);
     button.disabled = !state.selected ||
       (action === "boot" ? booted : needsBooted && !booted);
   }
+
+  // A pill of entirely hidden buttons would still draw its border and eat a grid row.
+  elements.navPill.classList.toggle(
+    "hidden",
+    !Array.from(elements.navPill.querySelectorAll("[data-action]")).some((button) => !button.hidden));
 
   const erase = document.querySelector("#erase-button");
   const remove = document.querySelector("#delete-button");
@@ -397,6 +429,9 @@ function updateControlAvailability() {
 }
 
 const MAX_SCREEN_WIDTH = 480;
+// How far the hardware side button reaches past the frame's right edge at its hover size. Kept at
+// or under the stage's narrowest horizontal padding so the button is never clipped.
+const SIDE_BUTTON_REACH = 8;
 const AUTO_SCALE_MIN = 0.35;
 const AUTO_SCALE_MAX = 1;
 const AUTO_SCALE_STEP = 0.05;
@@ -432,6 +467,7 @@ function renderEncodeSize() {
   const source = state.display?.pixelWidth;
   if (!scale || !source) {
     elements.encodeSize.textContent = "—";
+    renderLinkHealth();
     return;
   }
 
@@ -439,6 +475,78 @@ function renderEncodeSize() {
   const height = Math.round(state.display.pixelHeight * scale);
   elements.encodeSize.textContent = `${width}x${height}`;
   elements.encodeSize.title = `Encoding at ${Math.round(scale * 100)}% of the ${state.display.pixelWidth}x${state.display.pixelHeight} framebuffer`;
+  renderLinkHealth();
+}
+
+/*
+ * Latency, frame rate, encode size and transport collapse into one traffic light. H.264 delivering
+ * frames is green, the PNG fallback or a half-starved stream is amber, and anything not delivering
+ * is red. The numbers stay one click away rather than permanently occupying the pill.
+ */
+const LINK_HEALTH = {
+  "H.264": "good",
+  PNG: "fair",
+  connecting: "fair",
+  idle: "poor",
+  offline: "poor",
+};
+
+const LINK_HEALTH_LABEL = { good: "healthy", fair: "degraded", poor: "not streaming" };
+
+/** Below half the requested rate the stream is visibly stuttering, which is worth flagging amber. */
+const STARVED_FPS_RATIO = 0.5;
+const IDLE_NAL_FLUSH_MS = 120;
+
+function setStreamMode(mode) {
+  state.streamMode = mode;
+  elements.mode.textContent = mode;
+  renderLinkHealth();
+}
+
+function setActualFps(fps) {
+  state.actualFps = fps;
+  elements.actualFps.textContent = `${fps.toFixed(1)} FPS`;
+  renderLinkHealth();
+}
+
+function renderLinkHealth() {
+  const chip = elements.linkChip;
+  if (!chip) return;
+
+  let health = LINK_HEALTH[state.streamMode] || "poor";
+  const target = Number(elements.fps.value) || 0;
+  // The Android emulator only sends a frame when the screen changes, so an idle stream sitting at
+  // zero is perfectly healthy and the frame rate cannot stand in for liveness. What green has to
+  // mean is that a picture actually arrived; the rate only demotes a stream that is visibly
+  // struggling to keep up while frames are genuinely flowing.
+  if (health === "good" &&
+      (!state.framePainted || (target > 0 && state.actualFps > 0 &&
+        state.actualFps < target * STARVED_FPS_RATIO))) {
+    health = "fair";
+  }
+  chip.dataset.health = health;
+
+  const summary = [
+    state.streamMode,
+    state.actualFps > 0 ? `${state.actualFps.toFixed(0)} FPS` : null,
+    elements.encodeSize.textContent !== "—" ? elements.encodeSize.textContent : null,
+  ].filter(Boolean).join(" · ");
+
+  chip.title = `Live view ${LINK_HEALTH_LABEL[health]} — ${summary}`;
+  chip.setAttribute(
+    "aria-label",
+    `${state.linkExpanded ? "Hide" : "Show"} stream details. Live view ${LINK_HEALTH_LABEL[health]}, ${summary}.`,
+  );
+}
+
+function setLinkExpanded(expanded) {
+  state.linkExpanded = expanded;
+  elements.statusPill.classList.toggle("is-expanded", expanded);
+  elements.linkChip.setAttribute("aria-expanded", String(expanded));
+  // The collapsed panel is only clipped to zero width, so it stays in the accessibility tree
+  // without this and screen readers would read four values that are not on screen.
+  elements.linkDetails.setAttribute("aria-hidden", String(!expanded));
+  renderLinkHealth();
 }
 
 /**
@@ -459,9 +567,13 @@ function reconcileAutoScale() {
  * A canvas has no intrinsic layout scaling, and percentage max-height cannot resolve against the
  * auto-height frame, so the fit is computed here instead of in CSS. Pointer mapping reads the
  * resulting bounding rect, so it stays correct at every size.
+ *
+ * The tool pills float over the top of the stage, so the frame is fitted twice: once against the
+ * full height, and again with the pills reserved only if the first result would actually run into
+ * them. On a wide canvas the pills sit clear of the frame's sides and the top space is given back.
  */
 function fitDeviceScreen() {
-  const stage = elements.canvas.closest(".stage-viewport");
+  const stage = elements.stageViewport;
   if (!stage) return;
 
   const aspect = state.display?.pointWidth && state.display?.pointHeight
@@ -475,29 +587,92 @@ function fitDeviceScreen() {
   const chromeY = parseFloat(frameStyle.paddingTop) + parseFloat(frameStyle.paddingBottom) +
     parseFloat(frameStyle.borderTopWidth) + parseFloat(frameStyle.borderBottomWidth);
 
-  const availableWidth = stage.clientWidth - chromeX;
-  const availableHeight = stage.clientHeight - chromeY;
-  if (availableWidth <= 0 || availableHeight <= 0) return;
+  // clientHeight excludes neither padding nor the reserve we may have written on a previous pass,
+  // so measure the unreserved height once and drive both passes from it.
+  const fullHeight = stage.clientHeight;
+  const unreserved = measureFit(aspect, stage.clientWidth - chromeX, fullHeight - chromeY);
+  if (!unreserved) return;
 
+  const reserve = pillReserve(unreserved.width + chromeX, unreserved.height + chromeY, stage);
+  const fitted = reserve <= 0
+    ? unreserved
+    : measureFit(aspect, stage.clientWidth - chromeX, fullHeight - reserve - chromeY) || unreserved;
+
+  stage.style.setProperty("--stage-top-reserve", `${reserve}px`);
+  elements.canvas.style.width = `${Math.floor(fitted.width)}px`;
+  elements.canvas.style.height = `${Math.floor(fitted.height)}px`;
+  applyScreenRadius(fitted.width);
+  reconcileAutoScale();
+}
+
+/** Largest width/height with the given aspect that fits the box, capped so phones stay life-sized. */
+function measureFit(aspect, availableWidth, availableHeight) {
+  if (availableWidth <= 0 || availableHeight <= 0) return null;
   let width = Math.min(availableWidth, MAX_SCREEN_WIDTH);
   let height = width / aspect;
   if (height > availableHeight) {
     height = availableHeight;
     width = height * aspect;
   }
+  return { width, height };
+}
 
-  elements.canvas.style.width = `${Math.floor(width)}px`;
-  elements.canvas.style.height = `${Math.floor(height)}px`;
-  reconcileAutoScale();
+/** Vertical space the floating pills need, or 0 when a centred frame of this size clears them. */
+function pillReserve(frameWidth, frameHeight, stage) {
+  const pills = Array.from(elements.floatBar?.querySelectorAll(".tool-pill") || []);
+  if (pills.length === 0) return 0;
+
+  const gap = 8;
+  const stageRect = stage.getBoundingClientRect();
+  const pillBottom = Math.max(...pills.map((pill) => pill.getBoundingClientRect().bottom));
+
+  // Where the frame would land if it were centred in the unreserved viewport. The side button hangs
+  // off the right edge, so the right pill has to clear that too rather than just the frame.
+  const frameLeft = stageRect.left + (stageRect.width - frameWidth) / 2;
+  const frameRight = frameLeft + frameWidth + SIDE_BUTTON_REACH;
+  const frameTop = stageRect.top + (stageRect.height - frameHeight) / 2;
+  if (frameTop >= pillBottom + gap) return 0;
+
+  const clearsSides = pills.every((pill) => {
+    const rect = pill.getBoundingClientRect();
+    return rect.right + gap <= frameLeft || rect.left - gap >= frameRight;
+  });
+  if (clearsSides) return 0;
+
+  return Math.max(0, Math.ceil(pillBottom + gap - stageRect.top));
+}
+
+/**
+ * Turn the panel's measured corner radius into CSS pixels for the size the screen is drawn at, so
+ * the crop tracks the real hardware instead of a fixed guess. Unknown radii keep the old default.
+ */
+function applyScreenRadius(renderedWidth) {
+  const points = state.display?.cornerRadius;
+  const pointWidth = state.display?.pointWidth;
+  const known = Number.isFinite(points) && points >= 0 && Number.isFinite(pointWidth) && pointWidth > 0;
+
+  elements.frame.style.setProperty(
+    "--screen-radius",
+    known ? `${(points * (renderedWidth / pointWidth)).toFixed(2)}px` : "16px");
+  elements.frame.dataset.cornerCurve = state.display?.cornerCurve || "circular";
+}
+
+/**
+ * The screen's only status surface. `busy` adds a spinner and an animated ellipsis, so waiting reads
+ * as progress; terminal messages stay plain text and end the motion.
+ */
+function showOverlay(message, { busy = false } = {}) {
+  elements.overlayText.textContent = message;
+  elements.overlay.dataset.busy = busy ? "true" : "false";
+  elements.overlay.classList.remove("hidden");
 }
 
 function startStream() {
   stopStream();
   if (!state.selected || state.selected.state !== "booted") return;
 
-  elements.overlay.textContent = "Starting live view...";
-  elements.overlay.classList.remove("hidden");
-  elements.mode.textContent = "connecting";
+  showOverlay("Connecting", { busy: true });
+  setStreamMode("connecting");
   state.frameClock = performance.now();
 
   if (!("VideoDecoder" in window) || !state.selected.capabilities.liveStream) {
@@ -517,6 +692,7 @@ function startStream() {
   state.socket = socket;
   socket.binaryType = "arraybuffer";
   const parser = new AnnexBDecoder();
+  state.parser = parser;
 
   socket.addEventListener("message", (event) => {
     if (state.socket !== socket) return;
@@ -529,14 +705,14 @@ function startStream() {
         fitDeviceScreen();
         renderEncodeSize();
       }
-      elements.mode.textContent = "H.264";
+      setStreamMode("H.264");
       applyCaptureSource(descriptor);
       return;
     }
     parser.push(new Uint8Array(event.data));
   });
   socket.addEventListener("open", () => {
-    if (state.socket === socket) elements.mode.textContent = "H.264";
+    if (state.socket === socket) setStreamMode("H.264");
   });
   socket.addEventListener("error", () => {
     if (state.socket === socket) startPngFallback("PNG");
@@ -549,6 +725,11 @@ function startStream() {
 }
 
 function stopStream() {
+  // The parser holds a pending flush timer that would otherwise fire into a closed decoder.
+  if (state.parser) {
+    state.parser.dispose();
+    state.parser = null;
+  }
   if (state.socket) {
     const socket = state.socket;
     state.socket = null;
@@ -563,9 +744,10 @@ function stopStream() {
     state.pngTimer = null;
   }
   state.frameCounter = 0;
+  state.framePainted = false;
   state.activeScale = null;
   clearTimeout(state.scaleTimer);
-  elements.actualFps.textContent = "0 FPS";
+  setActualFps(0);
   renderEncodeSize();
 }
 
@@ -575,16 +757,66 @@ class AnnexBDecoder {
     this.prefix = [];
     this.timestamp = 0;
     this.codec = "avc1.64001f";
+    this.idleTimer = null;
+    this.draining = false;
   }
 
   push(bytes) {
     this.buffer = concatBytes([this.buffer, bytes]);
     const starts = findStartCodes(this.buffer);
-    if (starts.length < 2) return;
-    for (let index = 0; index < starts.length - 1; index++) {
-      this.handleNal(this.buffer.slice(starts[index], starts[index + 1]));
+    if (starts.length >= 2) {
+      for (let index = 0; index < starts.length - 1; index++) {
+        this.handleNal(this.buffer.slice(starts[index], starts[index + 1]));
+      }
+      this.buffer = this.buffer.slice(starts.at(-1));
     }
-    this.buffer = this.buffer.slice(starts.at(-1));
+    this.armIdleFlush();
+  }
+
+  /**
+   * Nothing about a paused stream is visible without this.
+   *
+   * A NAL unit ends where the next one begins, so the trailing slice always has to wait for more
+   * bytes to prove it is complete, and a decoder configured for correct B-frame reordering holds
+   * its output back until more input arrives. Both are fine at 60 FPS. The Android emulator only
+   * emits a frame when the screen changes, so a static screen sends one keyframe and stops: the
+   * IDR sits in this buffer, and even once decoded the picture sits in the decoder's reorder queue.
+   * A gap in the stream is the only available signal that the producer is done, so it drains both.
+   * On a moving picture the timer is rearmed long before it can fire.
+   */
+  armIdleFlush() {
+    clearTimeout(this.idleTimer);
+    this.idleTimer = setTimeout(() => this.flush(), IDLE_NAL_FLUSH_MS);
+  }
+
+  flush() {
+    clearTimeout(this.idleTimer);
+    this.idleTimer = null;
+    // Anything shorter than a start code plus a header byte cannot be decoded, and re-buffering it
+    // is harmless because the next push concatenates onto it.
+    if (this.buffer.length >= 5) {
+      const nal = this.buffer;
+      this.buffer = new Uint8Array();
+      this.handleNal(nal);
+    }
+    this.drainDecoder();
+  }
+
+  drainDecoder() {
+    const decoder = state.decoder;
+    if (this.draining || !decoder || decoder.state !== "configured") return;
+    this.draining = true;
+    // flush() rejects with AbortError when the decoder is reset or closed mid-drain, which happens
+    // routinely when the stream restarts, so a rejection here is not worth surfacing.
+    decoder.flush()
+      .catch(() => {})
+      .finally(() => { this.draining = false; });
+  }
+
+  dispose() {
+    clearTimeout(this.idleTimer);
+    this.idleTimer = null;
+    this.buffer = new Uint8Array();
   }
 
   handleNal(nal) {
@@ -637,6 +869,12 @@ class AnnexBDecoder {
   }
 }
 
+function clearScreen() {
+  elements.canvas.width = 300;
+  elements.canvas.height = 150;
+  state.canvasContext = null;
+}
+
 function drawVideoFrame(frame) {
   // H.264 codes in 16-pixel macroblocks, so a frame whose real size is not a multiple of 16 carries
   // padding that the visible rectangle excludes. The short drawImage overload leaves that crop up to
@@ -671,6 +909,10 @@ function drawVideoFrame(frame) {
   );
   frame.close();
   elements.overlay.classList.add("hidden");
+  if (!state.framePainted) {
+    state.framePainted = true;
+    renderLinkHealth();
+  }
   countFrame();
 }
 
@@ -716,7 +958,7 @@ function startPngFallback(label) {
   }
   if (state.pngTimer) return;
 
-  elements.mode.textContent = label;
+  setStreamMode(label);
   const capture = async () => {
     state.pngTimer = null;
     try {
@@ -733,8 +975,7 @@ function startPngFallback(label) {
       elements.overlay.classList.add("hidden");
       countFrame();
     } catch (error) {
-      elements.overlay.textContent = error.message;
-      elements.overlay.classList.remove("hidden");
+      showOverlay(error.message);
     } finally {
       if (!state.detached && state.selected?.state === "booted" && !state.socket) {
         state.pngTimer = setTimeout(capture, 750);
@@ -750,7 +991,7 @@ function countFrame() {
   if (now - state.frameClock < 1000) return;
 
   const fps = state.frameCounter * 1000 / (now - state.frameClock);
-  elements.actualFps.textContent = `${fps.toFixed(1)} FPS`;
+  setActualFps(fps);
   state.frameCounter = 0;
   state.frameClock = now;
 }
@@ -761,8 +1002,7 @@ async function lifecycle(action) {
 
   if (action !== "reveal") {
     stopStream();
-    elements.overlay.textContent = `${formatAction(action)} in progress...`;
-    elements.overlay.classList.remove("hidden");
+    showOverlay(`${formatAction(action)} in progress`, { busy: true });
   }
 
   const response = await api(
@@ -864,7 +1104,14 @@ function connectAutomationEvents() {
     } catch {
       return;
     }
-    // Several canvases can share one host, so ignore anything aimed at a device we are not showing.
+    // Events reach every canvas on the host, so a panel first works out whether it is the audience.
+    if (addressedToThisCanvas(activity)) {
+      // The host points a canvas at whatever device an agent addresses. Following that here is what
+      // keeps the panel from sitting on the device the person last picked while work happens
+      // somewhere else.
+      followSelection(activity.deviceId).catch(showError);
+    }
+    if (activity.kind === "selection") return;
     if (!state.selected || activity.deviceId !== state.selected.id) return;
     handleAutomationEvent(activity);
   });
@@ -883,6 +1130,32 @@ function connectAutomationEvents() {
 function scheduleAutomationReconnect() {
   clearTimeout(automation.retryTimer);
   automation.retryTimer = setTimeout(connectAutomationEvents, 2000);
+}
+
+/**
+ * True when an event names this panel. Events without a canvas identity came from the bare CLI, which
+ * is not speaking on any panel's behalf, so those never move a selection.
+ */
+function addressedToThisCanvas(activity) {
+  if (!activity.sessionId || !activity.instanceId) return false;
+  return activity.sessionId === sessionStorage.getItem("mobile-canvas-session") &&
+    activity.instanceId === sessionStorage.getItem("mobile-canvas-instance");
+}
+
+async function followSelection(deviceId) {
+  if (!deviceId || state.detached) return;
+  if (state.selectionTarget === deviceId || state.selected?.id === deviceId) return;
+
+  state.followTarget = deviceId;
+  let device = state.catalog?.devices?.find((entry) => entry.id === deviceId);
+  if (!device) {
+    // A device the agent created moments ago is not in the catalog this panel loaded.
+    await loadCatalog();
+    // A later announcement overtook this one while the catalog loaded; that one wins.
+    if (state.followTarget !== deviceId) return;
+    device = state.catalog?.devices?.find((entry) => entry.id === deviceId);
+  }
+  if (device) await selectDevice(device, false);
 }
 
 function handleAutomationEvent(activity) {
@@ -1290,6 +1563,9 @@ document.querySelector("#create-cancel").addEventListener("click", () => element
 elements.fps.addEventListener("change", startStream);
 elements.scale.addEventListener("change", startStream);
 
+elements.linkChip.addEventListener("click", () => setLinkExpanded(!state.linkExpanded));
+setLinkExpanded(false);
+
 /*
  * The canvas provider protocol exposes no theme hint, so "auto" defers to the
  * host webview's prefers-color-scheme. The explicit choices are the escape hatch
@@ -1329,8 +1605,10 @@ try {
 applyTheme(storedTheme);
 
 if ("ResizeObserver" in window) {
-  const stage = elements.canvas.closest(".stage-viewport");
-  if (stage) new ResizeObserver(() => fitDeviceScreen()).observe(stage);
+  // Observe the border box: fitDeviceScreen() writes padding-top on this element, and a content-box
+  // observation would see that write as a resize and re-enter.
+  const stage = elements.stageViewport;
+  if (stage) new ResizeObserver(() => fitDeviceScreen()).observe(stage, { box: "border-box" });
 } else {
   window.addEventListener("resize", fitDeviceScreen);
 }
@@ -1343,6 +1621,15 @@ for (const button of document.querySelectorAll("[data-action]")) {
         break;
       case "home":
         await sendInput("button", { button: "home" }, "Home");
+        break;
+      case "back":
+        await sendInput("button", { button: "back" }, "Back");
+        break;
+      case "apps":
+        await sendInput("button", { button: "apps" }, "Recents");
+        break;
+      case "lock":
+        await sendInput("button", { button: "lock" }, "Lock");
         break;
       case "screenshot":
         await downloadScreenshot();
@@ -1357,6 +1644,12 @@ for (const button of document.querySelectorAll("[data-action]")) {
         break;
       case "detach":
         await detach();
+        break;
+      case "settings":
+        elements.settingsDialog.showModal();
+        break;
+      case "data":
+        elements.dataDialog.showModal();
         break;
       default:
         throw new Error(`Unknown action '${button.dataset.action}'.`);
@@ -1389,13 +1682,17 @@ elements.createForm.addEventListener("submit", (event) => {
 });
 
 document.querySelector("#erase-button").addEventListener("click", async (event) => {
+  const trigger = event.currentTarget;
+  // Stacking a second modal on the data dialog would leave the destructive sheet visible behind the
+  // confirmation, so hand the top layer over first.
+  elements.dataDialog.close();
   if (!await requestConfirmation({
     title: `Erase ${state.selected.name}?`,
     message: `All content and settings on this ${selectedNoun()} will be permanently removed.`,
     action: `Erase ${selectedNoun()}`,
   })) return;
 
-  runBusy(event.currentTarget, async () => {
+  runBusy(trigger, async () => {
     const response = await api(`/api/v1/devices/${encodeURIComponent(state.selected.id)}/erase`, {
       method: "POST",
       body: JSON.stringify({ confirm: true }),
@@ -1407,14 +1704,16 @@ document.querySelector("#erase-button").addEventListener("click", async (event) 
 });
 
 document.querySelector("#delete-button").addEventListener("click", async (event) => {
+  const trigger = event.currentTarget;
   const noun = selectedNoun();
+  elements.dataDialog.close();
   if (!await requestConfirmation({
     title: `Delete ${state.selected.name}?`,
     message: `The ${selectedNoun()} and all of its data will be permanently deleted.`,
     action: `Delete ${selectedNoun()}`,
   })) return;
 
-  runBusy(event.currentTarget, async () => {
+  runBusy(trigger, async () => {
     await api(`/api/v1/devices/${encodeURIComponent(state.selected.id)}`, {
       method: "DELETE",
       body: JSON.stringify({ confirm: true }),

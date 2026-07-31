@@ -11,6 +11,7 @@ public sealed class IosSimulatorBackend : IDeviceBackend, IAsyncDisposable
 	private readonly IProcessRunner _processRunner;
 	private readonly IdbCompanionManager _companions;
 	private readonly IosRecordingManager _recordings;
+	private readonly SimulatorDisplayProfiles _profiles;
 
 	// Input events resolve the target device before every send. Doing that through `simctl list`
 	// costs a 350-600ms subprocess, which dominated input latency and made drags feel detached.
@@ -25,6 +26,7 @@ public sealed class IosSimulatorBackend : IDeviceBackend, IAsyncDisposable
 		_processRunner = processRunner;
 		_companions = new IdbCompanionManager(processRunner);
 		_recordings = new IosRecordingManager(processRunner);
+		_profiles = new SimulatorDisplayProfiles(processRunner);
 	}
 
 	public string Platform => DevicePlatforms.Ios;
@@ -85,7 +87,19 @@ public sealed class IosSimulatorBackend : IDeviceBackend, IAsyncDisposable
 		var arguments = new[] { "io", device.NativeId, "enumerate" };
 		var result = await RunAsync(arguments, cancellationToken).ConfigureAwait(false);
 		EnsureSuccess("xcrun", ["simctl", .. arguments], result);
-		return SimctlDisplayParser.Parse(result.StandardOutput);
+		var display = SimctlDisplayParser.Parse(result.StandardOutput);
+
+		var cornerRadius = await _profiles.TryGetCornerRadiusAsync(
+			device.DeviceTypeId,
+			display.PixelWidth,
+			display.PixelHeight,
+			cancellationToken).ConfigureAwait(false);
+
+		return display with
+		{
+			CornerRadius = cornerRadius,
+			CornerCurve = DisplayCornerCurves.Continuous,
+		};
 	}
 
 	public async Task<DeviceTarget> CreateAsync(
@@ -464,6 +478,25 @@ public sealed class IosSimulatorBackend : IDeviceBackend, IAsyncDisposable
 		string deviceId,
 		CancellationToken cancellationToken = default) =>
 		Task.FromResult(_recordings.GetStatus(deviceId));
+
+	public async Task<UiSnapshot> GetUiSnapshotAsync(
+		string deviceId,
+		bool includeRaw,
+		CancellationToken cancellationToken = default)
+	{
+		var companion = await GetCompanionAsync(deviceId, cancellationToken).ConfigureAwait(false);
+		var json = await companion.GetAccessibilityJsonAsync(cancellationToken).ConfigureAwait(false);
+		var root = AccessibilityParser.Parse(json);
+
+		return new UiSnapshot
+		{
+			DeviceId = deviceId,
+			Platform = DevicePlatforms.Ios,
+			Root = root,
+			ElementCount = UiTree.Count(root),
+			Raw = includeRaw ? json : null,
+		};
+	}
 
 	public async ValueTask DisposeAsync()
 	{

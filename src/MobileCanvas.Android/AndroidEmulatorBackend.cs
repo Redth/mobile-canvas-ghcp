@@ -780,6 +780,37 @@ public sealed partial class AndroidEmulatorBackend : IDeviceBackend, IAsyncDispo
 
 	#endregion
 
+	#region UI hierarchy
+
+	public async Task<UiSnapshot> GetUiSnapshotAsync(
+		string deviceId,
+		bool includeRaw,
+		CancellationToken cancellationToken = default)
+	{
+		var serial = await RequireSerialAsync(deviceId, cancellationToken).ConfigureAwait(false);
+
+		// Dumping to /dev/tty writes the hierarchy straight to stdout. The alternative writes a file on
+		// the device and needs a second call to pull it back, which doubles the cost of every capture.
+		var dump = await RunAdbAsync(serial, ["exec-out", "uiautomator", "dump", "/dev/tty"], cancellationToken)
+			.ConfigureAwait(false)
+			?? throw new DeviceCapabilityException(
+				$"Could not read the view hierarchy from '{serial}'. uiautomator may be busy or the screen may be off.");
+
+		var display = await GetDisplayAsync(deviceId, cancellationToken).ConfigureAwait(false);
+		var root = UiAutomatorParser.Parse(dump, display.Scale);
+
+		return new UiSnapshot
+		{
+			DeviceId = deviceId,
+			Platform = DevicePlatforms.Android,
+			Root = root,
+			ElementCount = UiTree.Count(root),
+			Raw = includeRaw ? dump : null,
+		};
+	}
+
+	#endregion
+
 	#region Geometry
 
 	public async Task<DisplayGeometry> GetDisplayAsync(
@@ -836,7 +867,10 @@ public sealed partial class AndroidEmulatorBackend : IDeviceBackend, IAsyncDispo
 				var density = FindHardwareInt(entries, "hw.lcd.density");
 
 				if (width > 0 && height > 0)
-					return Build(width, height, density);
+				{
+					return await WithCornersAsync(Build(width, height, density), instance, cancellationToken)
+						.ConfigureAwait(false);
+				}
 			}
 			catch (RpcException exception)
 			{
@@ -854,7 +888,11 @@ public sealed partial class AndroidEmulatorBackend : IDeviceBackend, IAsyncDispo
 		var densityOutput = await RunAdbAsync(serial, ["shell", "wm", "density"], cancellationToken).ConfigureAwait(false);
 		var parsedDensity = densityOutput is null ? 0 : EmulatorDiscoveryParser.ParseWmDensity(densityOutput) ?? 0;
 
-		return Build(size.Width, size.Height, parsedDensity);
+		return await WithCornersAsync(
+				Build(size.Width, size.Height, parsedDensity),
+				instance,
+				cancellationToken)
+			.ConfigureAwait(false);
 
 		static DisplayGeometry Build(int width, int height, int density)
 		{
@@ -871,6 +909,33 @@ public sealed partial class AndroidEmulatorBackend : IDeviceBackend, IAsyncDispo
 				Orientation = width > height ? "landscape" : "portrait",
 			};
 		}
+	}
+
+	/// <summary>
+	/// Adds the panel's rounded-corner radius, which only the guest OS knows: the emulator hands out
+	/// a square framebuffer and the hardware config carries no corner geometry, so without this the
+	/// canvas would draw sharp corners on a device that has none. A failed lookup leaves the radius
+	/// unknown rather than failing the whole geometry read.
+	/// </summary>
+	private async Task<DisplayGeometry> WithCornersAsync(
+		DisplayGeometry geometry,
+		EmulatorInstance instance,
+		CancellationToken cancellationToken)
+	{
+		if (instance.Serial is not { } serial)
+			return geometry;
+
+		var output = await RunAdbAsync(serial, ["shell", "dumpsys", "display"], cancellationToken)
+			.ConfigureAwait(false);
+		if (output is null || EmulatorDiscoveryParser.ParseRoundedCornerRadius(output) is not { } pixels)
+			return geometry;
+
+		var scale = geometry.Scale > 0 ? geometry.Scale : 1.0;
+		return geometry with
+		{
+			CornerRadius = Math.Round(pixels / scale, 2),
+			CornerCurve = DisplayCornerCurves.Circular,
+		};
 	}
 
 	private static int FindHardwareInt(IEnumerable<Entry>? entries, string key)

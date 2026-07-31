@@ -35,6 +35,16 @@
   --shadow-device: 0 1px 3px #1f23281f, 0 16px 40px #1f232833;
   --scrim: #ffffffd9;
 
+  /* Referenced by several controls but never defined, so their transitions were dropped as
+     invalid. Theme-independent, so it stays out of the dark overrides. */
+  --motion-fast: 120ms ease;
+
+  /* Measured off the host app's own chrome: its controls carry a noticeably softer corner than
+     Primer's 6px default, and matching it is what stops the canvas reading as a foreign panel.
+     Theme-independent, so these stay out of the dark overrides. */
+  --control-radius: 8px;
+  --control-radius-sm: 6px;
+
   color: var(--fg-default);
   background: var(--canvas-default);
   font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
@@ -225,18 +235,24 @@ summary:focus-visible,
   min-width: 0;
 }
 
+/*
+ * Segmented control: the glyph is a full-height leading segment rather than an inset card, so the
+ * whole thing can match the 28px icon buttons beside it instead of standing 8px taller.
+ */
 .device-selector {
   display: flex;
-  align-items: center;
-  gap: 8px;
+  align-items: stretch;
+  gap: 0;
   width: 100%;
+  height: 28px;
   min-width: 0;
-  padding: 5px 8px;
+  padding: 0;
   border: 1px solid var(--border-default);
-  border-radius: 6px;
+  border-radius: var(--control-radius);
   background: var(--canvas-default);
   cursor: pointer;
   text-align: left;
+  overflow: hidden;
   transition: background 120ms ease, border-color 120ms ease;
 }
 
@@ -251,10 +267,9 @@ summary:focus-visible,
 .selector-glyph {
   display: grid;
   place-items: center;
-  width: 24px;
-  height: 24px;
+  width: 26px;
   flex: 0 0 auto;
-  border-radius: 5px;
+  border-right: 1px solid var(--border-default);
   background: var(--accent-muted);
   color: var(--accent-fg);
 }
@@ -265,6 +280,8 @@ summary:focus-visible,
   gap: 6px;
   min-width: 0;
   flex: 1 1 auto;
+  padding: 0 8px;
+  align-self: center;
 }
 
 .selector-name {
@@ -281,8 +298,17 @@ summary:focus-visible,
   text-overflow: ellipsis;
 }
 
+/* Definite-height flex items do not stretch, so they land at the top of a stretch row. */
+#selector-dot {
+  align-self: center;
+  margin-right: 8px;
+}
+
 .selector-chevron {
   color: var(--fg-muted);
+  flex: 0 0 auto;
+  align-self: center;
+  margin-right: 8px;
   transition: transform 120ms ease;
 }
 
@@ -299,6 +325,8 @@ summary:focus-visible,
 
 /* ------------------------------------------------------------- popover --- */
 
+/* No inner padding: rows run edge to edge so their hover and selected states read as list lines
+   rather than as cards floating inside the menu. Fixed children re-add the inset themselves. */
 .device-popover {
   position: absolute;
   z-index: 40;
@@ -307,49 +335,43 @@ summary:focus-visible,
   right: 0;
   max-height: min(60dvh, 420px);
   overflow-y: auto;
-  padding: 6px;
+  padding: 0 0 4px;
   border: 1px solid var(--border-default);
   border-radius: 8px;
   background: var(--canvas-default);
   box-shadow: var(--shadow-popover);
 }
 
-.popover-head {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  padding: 4px 6px 6px;
-  color: var(--fg-muted);
-  font-size: 11px;
-  font-weight: 600;
-  letter-spacing: 0.04em;
-  text-transform: uppercase;
-}
-
+/* Plain number, not a pill: the count now sits on the tinted group band, and in light mode the old
+   pill fill was the same token as that band. */
 .count {
-  display: inline-grid;
-  place-items: center;
-  min-width: 18px;
-  height: 18px;
-  padding: 0 5px;
-  border-radius: 9px;
-  background: var(--control-default);
   color: var(--fg-muted);
   font-size: 11px;
+  font-variant-numeric: tabular-nums;
   letter-spacing: 0;
 }
 
 .device-list {
   display: grid;
-  gap: 2px;
+  gap: 0;
 }
 
+/*
+ * A tinted band, and sticky so the group a row belongs to stays on screen while scrolling a long
+ * emulator list. The background is what makes sticky viable -- a transparent header would smear
+ * rows underneath it.
+ */
 .device-group {
+  position: sticky;
+  top: 0;
+  z-index: 1;
   display: flex;
   align-items: center;
   justify-content: space-between;
   gap: 8px;
-  padding: 8px 8px 4px;
+  padding: 5px 10px;
+  border-bottom: 1px solid var(--border-muted, var(--border-default));
+  background: var(--canvas-subtle);
   color: var(--fg-muted);
   font-size: 11px;
   font-weight: 600;
@@ -358,9 +380,7 @@ summary:focus-visible,
 }
 
 .device-group:not(:first-child) {
-  margin-top: 4px;
   border-top: 1px solid var(--border-muted, var(--border-default));
-  padding-top: 10px;
 }
 
 .segmented {
@@ -368,7 +388,7 @@ summary:focus-visible,
   gap: 2px;
   padding: 2px;
   border: 1px solid var(--border-default);
-  border-radius: 7px;
+  border-radius: calc(var(--control-radius) + 1px);
   background: var(--canvas-subtle);
 }
 
@@ -381,7 +401,7 @@ summary:focus-visible,
   min-height: 30px;
   padding: 0 10px;
   border: 1px solid transparent;
-  border-radius: 5px;
+  border-radius: var(--control-radius-sm);
   background: none;
   color: var(--fg-muted);
   font: inherit;
@@ -402,14 +422,19 @@ summary:focus-visible,
   font-weight: 600;
 }
 
+/*
+ * Full-bleed list lines, not inset cards. The row spans the popover edge to edge so hover and
+ * selection read as a highlighted line, and the two-line copy stays because the OS version and
+ * power state are what distinguish a dozen similarly named emulators.
+ */
 .device-card {
   display: flex;
   align-items: center;
   gap: 8px;
   width: 100%;
-  padding: 7px 8px;
-  border: 1px solid transparent;
-  border-radius: 6px;
+  padding: 5px 10px;
+  border: 0;
+  border-radius: 0;
   background: none;
   cursor: pointer;
   text-align: left;
@@ -420,24 +445,19 @@ summary:focus-visible,
 }
 
 .device-card.selected {
-  border-color: var(--border-default);
   background: var(--accent-muted);
 }
 
 .device-glyph {
   display: grid;
   place-items: center;
-  width: 26px;
-  height: 26px;
+  width: 20px;
+  height: 20px;
   flex: 0 0 auto;
-  border-radius: 6px;
-  border: 1px solid var(--border-default);
-  background: var(--canvas-subtle);
   color: var(--fg-muted);
 }
 
 .device-card.booted .device-glyph {
-  border-color: var(--success-fg);
   color: var(--success-fg);
 }
 
@@ -449,6 +469,7 @@ summary:focus-visible,
 }
 
 .device-name {
+  min-width: 0;
   font-weight: 600;
   white-space: nowrap;
   overflow: hidden;
@@ -456,8 +477,9 @@ summary:focus-visible,
 }
 
 .device-detail {
+  min-width: 0;
   color: var(--fg-muted);
-  font-size: 12px;
+  font-size: 11px;
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -497,11 +519,13 @@ summary:focus-visible,
   background: var(--danger-fg);
 }
 
+/* Re-adds the inset the popover no longer provides, so the warning still reads as a boxed callout
+   among the full-bleed rows. */
 .diagnostics {
-  margin: 0 0 6px;
+  margin: 6px 6px 4px;
   padding: 7px 9px;
   border: 1px solid var(--attention-fg);
-  border-radius: 6px;
+  border-radius: var(--control-radius-sm);
   background: var(--canvas-subtle);
   color: var(--attention-fg);
   font-size: 12px;
@@ -516,7 +540,7 @@ summary:focus-visible,
   gap: 6px;
   padding: 5px 12px;
   border: 1px solid var(--border-default);
-  border-radius: 6px;
+  border-radius: var(--control-radius);
   background: var(--control-default);
   font-weight: 500;
   cursor: pointer;
@@ -566,7 +590,7 @@ summary:focus-visible,
   height: 28px;
   padding: 0;
   border: 1px solid var(--border-default);
-  border-radius: 6px;
+  border-radius: var(--control-radius);
   background: var(--control-default);
   cursor: pointer;
   color: var(--fg-muted);
@@ -594,32 +618,43 @@ summary:focus-visible,
   color: #ffffff;
 }
 
-/* -------------------------------------------------------------- toolbar --- */
+/* ------------------------------------------------- floating tool pills --- */
 
-.toolbar {
+/*
+ * Overlays the top of the stage instead of taking a toolbar row. Anchored to the stage's padding
+ * box, so these inset values must track .stage's padding to stay flush with the status pill below.
+ */
+.float-bar {
+  position: absolute;
+  z-index: 10;
+  top: var(--stage-pad-top);
+  left: var(--stage-pad-x);
+  right: var(--stage-pad-x);
   display: flex;
-  align-items: center;
+  align-items: flex-start;
+  justify-content: space-between;
   gap: 8px;
-  padding: 8px;
-  border-bottom: 1px solid var(--border-muted);
+  pointer-events: none;
 }
 
 /* Segmented group: adjacent buttons share a single divider, like the GitHub
    app's run/stop/overflow cluster. */
-.tool-group {
+.tool-pill {
   display: inline-flex;
   align-items: center;
   border: 1px solid var(--border-default);
-  border-radius: 6px;
+  border-radius: 999px;
   background: var(--control-default);
+  box-shadow: var(--shadow-popover);
   overflow: hidden;
+  pointer-events: auto;
 }
 
 .tool-button {
   display: inline-grid;
   place-items: center;
-  width: 30px;
-  height: 26px;
+  width: 32px;
+  height: 28px;
   padding: 0;
   border: 0;
   border-left: 1px solid var(--border-default);
@@ -652,8 +687,45 @@ summary:focus-visible,
   color: var(--danger-fg);
 }
 
-.toolbar-spacer {
-  flex: 1 1 auto;
+/* --------------------------------------------------------- nav buttons --- */
+
+/* Hardware keys, under the screen where they live on the device itself. */
+.nav-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  padding: 3px;
+  border: 1px solid var(--border-default);
+  border-radius: 999px;
+  background: var(--control-default);
+}
+
+.nav-button {
+  display: inline-grid;
+  place-items: center;
+  width: 34px;
+  height: 26px;
+  padding: 0;
+  border: 0;
+  border-radius: 999px;
+  background: none;
+  color: var(--fg-muted);
+  cursor: pointer;
+  transition: background 120ms ease, color 120ms ease;
+}
+
+.nav-button:hover:not(:disabled) {
+  background: var(--control-hover);
+  color: var(--fg-default);
+}
+
+.nav-button:active:not(:disabled) {
+  background: var(--control-active);
+}
+
+.nav-button:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
 }
 
 /* ------------------------------------------------------------ workspace --- */
@@ -665,40 +737,52 @@ summary:focus-visible,
   overflow: hidden;
 }
 
+/* The stage is the only row now that the drawers have become dialogs, so it takes the full height. */
 .device-view {
   display: grid;
-  grid-template-rows: auto minmax(0, 1fr) auto;
+  grid-template-rows: minmax(0, 1fr);
   min-height: 0;
   height: 100%;
 }
 
 .stage {
+  --stage-pad-x: 14px;
+  --stage-pad-top: 14px;
+  position: relative;
   display: grid;
-  grid-template-rows: minmax(0, 1fr) auto;
+  grid-template-rows: minmax(0, 1fr);
+  grid-auto-rows: auto;
   gap: 10px;
   justify-items: center;
   align-content: center;
   min-height: 0;
-  padding: 14px 14px 10px;
+  padding: var(--stage-pad-top) var(--stage-pad-x) 10px;
 }
 
 /* Dedicated 1fr row so the fit calculation has a container whose height is the
-   space actually available to the device, excluding the status pill. */
+   space actually available to the device, excluding the status pill. The top padding is
+   written by fitDeviceScreen() and only exceeds 0 when the frame would run into a tool pill. */
 .stage-viewport {
   display: grid;
   place-items: center;
   width: 100%;
   min-height: 0;
+  padding-top: var(--stage-top-reserve, 0px);
 }
 
+/*
+ * Every rounded layer keys off one radius the backend measured from the real panel, so a squared-off
+ * iPhone SE and a 62pt iPhone 16 Pro Max both crop correctly instead of sharing a guessed 16px.
+ */
 .device-frame {
+  --screen-radius: 16px;
   position: relative;
   display: grid;
   max-width: 100%;
   max-height: 100%;
   padding: 6px;
   border: 1px solid var(--border-default);
-  border-radius: 22px;
+  border-radius: calc(var(--screen-radius) + 6px);
   background: var(--canvas-inset);
   box-shadow: var(--shadow-device);
   transition: border-color 120ms ease;
@@ -708,11 +792,74 @@ summary:focus-visible,
   border-color: var(--accent-emphasis);
 }
 
+/*
+ * The sleep/wake key, hung off the right edge like the hardware one. Growing right and upward on
+ * hover is what marks it as pressable -- at rest it reads as part of the frame, which is the point.
+ * The reach is capped at the stage's narrowest horizontal padding so it is never clipped.
+ */
+.side-button {
+  position: absolute;
+  top: 19%;
+  left: 100%;
+  width: 8px;
+  height: 62px;
+  padding: 0;
+  border: 0;
+  background: none;
+  cursor: pointer;
+}
+
+/* Sits 1px back so it overlaps the frame border and reads as welded on rather than floating. */
+.side-button::before {
+  content: "";
+  position: absolute;
+  left: -1px;
+  bottom: 8px;
+  width: 5px;
+  height: 46px;
+  border: 1px solid var(--border-default);
+  border-left: 0;
+  border-radius: 0 4px 4px 0;
+  background: var(--canvas-inset);
+  transition:
+    width var(--motion-fast),
+    height var(--motion-fast),
+    background var(--motion-fast),
+    box-shadow var(--motion-fast);
+}
+
+.side-button:hover:not(:disabled)::before,
+.side-button:focus-visible::before {
+  width: 8px;
+  height: 56px;
+  background: var(--control-hover);
+  box-shadow: 2px 0 8px #1f232833;
+}
+
+.side-button:active:not(:disabled)::before {
+  width: 7px;
+  background: var(--control-active);
+}
+
+.side-button:focus-visible {
+  outline: 2px solid var(--focus);
+  outline-offset: 1px;
+  border-radius: 4px;
+}
+
+.side-button:disabled {
+  cursor: not-allowed;
+}
+
+.side-button:disabled::before {
+  opacity: 0.4;
+}
+
 #device-screen {
   display: block;
   max-width: 100%;
   max-height: 100%;
-  border-radius: 16px;
+  border-radius: var(--screen-radius);
   background: #000000;
   cursor: crosshair;
   touch-action: none;
@@ -721,13 +868,63 @@ summary:focus-visible,
 .stream-overlay {
   position: absolute;
   inset: 6px;
-  display: grid;
-  place-items: center;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
   padding: 12px;
-  border-radius: 16px;
+  border-radius: var(--screen-radius);
   background: var(--scrim);
   color: var(--fg-muted);
   text-align: center;
+}
+
+/* Busy states get a ring; terminal ones ("powered off", an error) are text only, so the spinner is
+   opt-in rather than something every caller has to remember to hide. */
+.stream-overlay-spinner {
+  display: none;
+  width: 26px;
+  height: 26px;
+  border: 2px solid color-mix(in srgb, var(--fg-muted) 25%, transparent);
+  border-top-color: var(--accent-fg);
+  border-radius: 50%;
+  animation: stream-overlay-spin 720ms linear infinite;
+}
+
+.stream-overlay[data-busy="true"] .stream-overlay-spinner {
+  display: block;
+}
+
+.stream-overlay-text {
+  font-size: 13px;
+  letter-spacing: 0.01em;
+}
+
+/* Busy labels are written without punctuation and get the ellipsis here, so every waiting state reads
+   the same. The spinner carries the motion: animating the dots would shift a centred label. */
+.stream-overlay[data-busy="true"] .stream-overlay-text::after {
+  content: "\2026";
+}
+
+@keyframes stream-overlay-spin {
+  to { transform: rotate(1turn); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .stream-overlay-spinner {
+    animation-duration: 2.4s;
+  }
+}
+
+/* Apple masks its displays with a squircle, not an arc. Progressive enhancement: engines without
+   corner-shape keep the plain rounded corner above. */
+@supports (corner-shape: squircle) {
+  .device-frame[data-corner-curve="continuous"],
+  .device-frame[data-corner-curve="continuous"] #device-screen,
+  .device-frame[data-corner-curve="continuous"] .stream-overlay {
+    corner-shape: squircle;
+  }
 }
 
 .input-indicator {
@@ -781,7 +978,7 @@ summary:focus-visible,
   content: "";
   position: absolute;
   inset: 6px;
-  border-radius: 16px;
+  border-radius: var(--screen-radius);
   box-shadow:
     inset 0 0 0 1px color-mix(in srgb, var(--automation-accent) 55%, transparent),
     inset 0 0 26px 4px color-mix(in srgb, var(--automation-accent) 34%, transparent);
@@ -891,15 +1088,24 @@ summary:focus-visible,
 .status-pill {
   display: inline-flex;
   align-items: center;
-  gap: 8px;
   max-width: 100%;
-  padding: 4px 10px;
+  padding: 4px 6px 4px 10px;
   border: 1px solid var(--border-default);
   border-radius: 999px;
   background: var(--canvas-subtle);
   color: var(--fg-muted);
   font-size: 12px;
   white-space: nowrap;
+}
+
+/* Spacing lives on the children rather than a container gap: the collapsed detail panel is a
+   zero-width grid item, and a gap would leave a visible hole beside the chip. */
+.status-pill > * + * {
+  margin-left: 8px;
+}
+
+.status-pill > .link-details {
+  margin-left: 0;
 }
 
 .pill-item {
@@ -909,6 +1115,10 @@ summary:focus-visible,
   min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
+}
+
+.pill-status {
+  flex: 0 1 auto;
 }
 
 .pill-divider {
@@ -923,54 +1133,105 @@ summary:focus-visible,
   font-variant-numeric: tabular-nums;
 }
 
-/* -------------------------------------------------------------- drawers --- */
+/*
+ * The four stream readouts reduce to one traffic light. Bars are lit by health rather than by an
+ * exact frame rate, because the precise number is noise once the stream is simply working.
+ */
+.link-chip {
+  display: inline-grid;
+  place-items: center;
+  flex: 0 0 auto;
+  width: 24px;
+  height: 20px;
+  padding: 0;
+  border: 0;
+  border-radius: 6px;
+  background: none;
+  cursor: pointer;
+  transition: background var(--motion-fast);
+}
 
-.drawers {
+.link-chip:hover {
+  background: var(--control-hover);
+}
+
+.link-bars {
+  width: 13px;
+  height: 10px;
+  fill: var(--fg-subtle);
+  stroke: none;
+}
+
+.link-chip[data-health="good"] .link-bar {
+  fill: var(--success-fg);
+}
+
+.link-chip[data-health="fair"] .link-bar:nth-child(-n + 2) {
+  fill: var(--attention-fg);
+}
+
+.link-chip[data-health="poor"] .link-bar:first-child {
+  fill: var(--danger-fg);
+}
+
+/*
+ * Animating to an intrinsic width: a single-column grid transitions between 0fr and 1fr, and the
+ * inner track clips its own content while the column resolves.
+ */
+.link-details {
   display: grid;
-  gap: 1px;
-  max-height: 45dvh;
-  overflow-y: auto;
-  border-top: 1px solid var(--border-default);
-  background: var(--border-muted);
+  grid-template-columns: 0fr;
+  opacity: 0;
+  transition: grid-template-columns 180ms ease, opacity 140ms ease;
 }
 
-.drawer {
-  background: var(--canvas-default);
-}
-
-.drawer > summary {
+.link-details-inner {
   display: flex;
   align-items: center;
-  gap: 6px;
-  padding: 8px 12px;
+  gap: 8px;
+  min-width: 0;
+  overflow: hidden;
+}
+
+/* Padding is not shrinkable, so padding here would leave the collapsed panel 8px wide and put a
+   dead gap beside the chip. A zero-width first child pushes the same distance using the flex gap,
+   and it lives inside the clipped box so it vanishes with everything else. */
+.link-details-inner::before {
+  content: "";
+  flex: 0 0 0;
+}
+
+.status-pill.is-expanded .link-details {
+  grid-template-columns: 1fr;
+  opacity: 1;
+}
+
+.pill-button {
+  display: inline-grid;
+  place-items: center;
+  flex: 0 0 auto;
+  width: 22px;
+  height: 22px;
+  padding: 0;
+  border: 0;
+  border-radius: 999px;
+  background: none;
   color: var(--fg-muted);
-  font-weight: 500;
   cursor: pointer;
-  list-style: none;
+  transition: background var(--motion-fast), color var(--motion-fast);
 }
 
-.drawer > summary::-webkit-details-marker {
-  display: none;
-}
-
-.drawer > summary:hover {
+.pill-button:hover:not(:disabled) {
   background: var(--control-hover);
   color: var(--fg-default);
 }
 
-.drawer > summary .icon {
-  transition: transform 120ms ease;
+.pill-button:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
 }
 
-.drawer[open] > summary .icon {
-  transform: rotate(90deg);
-}
-
-.drawer-body {
-  display: grid;
-  gap: 12px;
-  padding: 4px 12px 12px;
-}
+/* --------------------------------------------------------------- fields --- */
 
 .field-grid {
   display: grid;
@@ -1001,12 +1262,12 @@ input {
   min-width: 0;
   padding: 5px 8px;
   border: 1px solid var(--border-default);
-  border-radius: 6px;
+  border-radius: var(--control-radius);
   background: var(--canvas-default);
   color: var(--fg-default);
 }
 
-/* Read-only fields reuse the control box so the drawer reads as one grid, but
+/* Read-only fields reuse the control box so the dialog reads as one grid, but
    sit back visually because they report state rather than accept input. */
 input[readonly] {
   background: var(--canvas-subtle);
@@ -1045,7 +1306,7 @@ input[readonly].field-degraded {
   padding: 0;
   transform: translateY(-50%);
   border: 0;
-  border-radius: 5px;
+  border-radius: var(--control-radius-sm);
   background: transparent;
   color: var(--fg-muted);
   cursor: pointer;
@@ -1062,20 +1323,10 @@ input[readonly].field-degraded {
   cursor: not-allowed;
 }
 
-.drawer.danger-drawer > summary {
-  color: var(--danger-fg);
-}
-
 .danger-actions {
   display: flex;
   flex-wrap: wrap;
   gap: 8px;
-}
-
-.drawer-note {
-  margin: 0;
-  color: var(--fg-muted);
-  font-size: 12px;
 }
 
 .theme-toggle {
@@ -1083,7 +1334,7 @@ input[readonly].field-degraded {
   align-items: center;
   justify-self: start;
   border: 1px solid var(--border-default);
-  border-radius: 6px;
+  border-radius: var(--control-radius);
   overflow: hidden;
 }
 
@@ -1210,7 +1461,7 @@ dialog form {
   flex: 0 0 auto;
   padding: 0;
   border: 0;
-  border-radius: 6px;
+  border-radius: var(--control-radius-sm);
   background: none;
   color: var(--fg-muted);
   cursor: pointer;
@@ -1254,7 +1505,9 @@ dialog form {
   }
 
   .stage {
-    padding: 10px 8px 8px;
+    --stage-pad-x: 8px;
+    --stage-pad-top: 10px;
+    padding-bottom: 8px;
   }
 }
 

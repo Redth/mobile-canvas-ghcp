@@ -161,4 +161,27 @@ public sealed class EmulatorDiscoveryParserTests
 			EmulatorDiscoveryParser.ParseWmDensity("Physical density: 480\nOverride density: 320"));
 		Assert.Null(EmulatorDiscoveryParser.ParseWmDensity("Physical density: unknown"));
 	}
+
+	/// <summary>
+	/// The panel radius drives how the canvas crops the video feed, and dumpsys is the only place
+	/// that reports it, so the shape of that block is pinned here.
+	/// </summary>
+	[Fact]
+	public void ParseRoundedCornerRadius_TakesTheLargestCorner()
+	{
+		const string output = """
+			  mDisplayInfo=DisplayInfo{"Built-in Screen", displayId 0, FLAG_TRUSTED, real 1080 x 2400
+			    roundedCorners RoundedCorners{[RoundedCorner{position=TopLeft, radius=28, center=Point(28, 28)}, RoundedCorner{position=TopRight, radius=28, center=Point(1052, 28)}, RoundedCorner{position=BottomRight, radius=34, center=Point(1052, 2372)}, RoundedCorner{position=BottomLeft, radius=28, center=Point(28, 2372)}]}
+			    density 2.625
+			""";
+
+		Assert.Equal(34, EmulatorDiscoveryParser.ParseRoundedCornerRadius(output));
+	}
+
+	[Fact]
+	public void ParseRoundedCornerRadius_IsNullWhenTheDisplayIsSquare()
+	{
+		Assert.Null(EmulatorDiscoveryParser.ParseRoundedCornerRadius("real 1080 x 2400, density 420"));
+		Assert.Null(EmulatorDiscoveryParser.ParseRoundedCornerRadius("roundedCorners RoundedCorners{[]}"));
+	}
 }

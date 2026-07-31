@@ -11,6 +11,17 @@ public static class DevicePlatforms
 	public const string Android = "android";
 }
 
+/// <summary>
+/// Label for the canvas tab. Fixed at open: there is no RPC to retitle a live panel, and setting
+/// document.title in the page does not reach the tab either. A platform-specific title would go
+/// stale the moment the user switched devices, so the tab stays neutral and the canvas itself
+/// shows which device is selected.
+/// </summary>
+public static class CanvasTitles
+{
+	public const string Panel = "Mobile";
+}
+
 public static class DeviceStates
 {
 	public const string Booted = "booted";
@@ -49,6 +60,24 @@ public sealed record DisplayGeometry
 	public double PointHeight { get; init; }
 	public double Scale { get; init; }
 	public string Orientation { get; init; } = "portrait";
+
+	/// <summary>
+	/// Radius of the physical display's rounded corners, in points, or <c>null</c> when the platform
+	/// did not report one. Zero is a meaningful answer: it means the panel really is square-cornered.
+	/// </summary>
+	public double? CornerRadius { get; init; }
+
+	/// <summary>
+	/// How that radius is drawn: <see cref="DisplayCornerCurves.Continuous"/> for Apple's squircle,
+	/// <see cref="DisplayCornerCurves.Circular"/> for a plain circular arc.
+	/// </summary>
+	public string CornerCurve { get; init; } = DisplayCornerCurves.Circular;
+}
+
+public static class DisplayCornerCurves
+{
+	public const string Circular = "circular";
+	public const string Continuous = "continuous";
 }
 
 public sealed record DeviceTarget
@@ -210,6 +239,14 @@ public sealed record AutomationEvent
 
 	/// <summary>Human-readable detail for the status pill, such as a button name or typed text.</summary>
 	public string? Detail { get; init; }
+
+	/// <summary>
+	/// Canvas panel the caller was acting on behalf of, when it identified one. Events are broadcast
+	/// to every connected canvas, so a panel uses this to tell "an agent is driving me" apart from
+	/// "an agent is driving the panel next door".
+	/// </summary>
+	public string? SessionId { get; init; }
+	public string? InstanceId { get; init; }
 }
 
 public static class AutomationEventKinds
@@ -223,6 +260,13 @@ public static class AutomationEventKinds
 	public const string Button = "button";
 	public const string Rotate = "rotate";
 	public const string Screenshot = "screenshot";
+
+	/// <summary>
+	/// The device a canvas is pointed at changed. Selection lives on the host so that agents and the
+	/// panel agree on "the current device"; without this notice the panel would keep showing whatever
+	/// it last chose while the agent worked somewhere else.
+	/// </summary>
+	public const string Selection = "selection";
 }
 
 public sealed record StreamOptions

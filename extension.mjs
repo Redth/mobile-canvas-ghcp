@@ -213,6 +213,7 @@ const canvas = createCanvas({
         "input", "tap", ctx.input.deviceId,
         "--x", String(ctx.input.x), "--y", String(ctx.input.y),
         "--duration", String(ctx.input.duration || 0),
+        ...contextArgs(ctx),
       ]),
     },
     {
@@ -233,6 +234,7 @@ const canvas = createCanvas({
         "input", "tap", ctx.input.deviceId,
         "--x", String(ctx.input.x), "--y", String(ctx.input.y),
         "--duration", String(ctx.input.duration || 1),
+        ...contextArgs(ctx),
       ]),
     },
     {
@@ -255,6 +257,7 @@ const canvas = createCanvas({
         "--start-x", String(ctx.input.startX), "--start-y", String(ctx.input.startY),
         "--end-x", String(ctx.input.endX), "--end-y", String(ctx.input.endY),
         "--duration", String(ctx.input.duration || 0.35),
+        ...contextArgs(ctx),
       ]),
     },
     {
@@ -269,7 +272,7 @@ const canvas = createCanvas({
         required: ["deviceId", "text"],
       },
       handler: (ctx) =>
-        runCli(["input", "type", ctx.input.deviceId, "--text", ctx.input.text]),
+        runCli(["input", "type", ctx.input.deviceId, "--text", ctx.input.text, ...contextArgs(ctx)]),
     },
     {
       name: "press_button",
@@ -290,7 +293,7 @@ const canvas = createCanvas({
         required: ["deviceId", "button"],
       },
       handler: (ctx) =>
-        runCli(["input", "button", ctx.input.deviceId, "--button", ctx.input.button]),
+        runCli(["input", "button", ctx.input.deviceId, "--button", ctx.input.button, ...contextArgs(ctx)]),
     },
     {
       name: "press_key",
@@ -305,7 +308,7 @@ const canvas = createCanvas({
         required: ["deviceId", "keyCode"],
       },
       handler: (ctx) =>
-        runCli(["input", "key", ctx.input.deviceId, "--code", String(ctx.input.keyCode)]),
+        runCli(["input", "key", ctx.input.deviceId, "--code", String(ctx.input.keyCode), ...contextArgs(ctx)]),
     },
     {
       name: "rotate_device",
@@ -322,7 +325,11 @@ const canvas = createCanvas({
         required: ["deviceId", "orientation"],
       },
       handler: (ctx) =>
-        runCli(["input", "rotate", ctx.input.deviceId, "--orientation", ctx.input.orientation]),
+        runCli([
+          "input", "rotate", ctx.input.deviceId,
+          "--orientation", ctx.input.orientation,
+          ...contextArgs(ctx),
+        ]),
     },
     {
       name: "take_screenshot",
@@ -338,6 +345,7 @@ const canvas = createCanvas({
       handler: (ctx) => runCli([
         "screenshot", ctx.input.deviceId,
         ...(ctx.input.output ? ["--output", ctx.input.output] : []),
+        ...contextArgs(ctx),
       ]),
     },
     {
@@ -388,7 +396,7 @@ const canvas = createCanvas({
       ]);
     }
     return {
-      title: result.title || "Mobile Device",
+      title: result.title || "Mobile",
       url: result.url,
       status: "Connected to local Mobile Canvas host",
     };
@@ -397,5 +405,11 @@ const canvas = createCanvas({
     await runCli(["canvas", "close", ...contextArgs(ctx)]);
   },
 });
+
+// The icon is a declaration field that has to be an extension-relative PNG path, but
+// createCanvas builds its declaration from a fixed field list that drops anything else, so it
+// has to be assigned here. This names the window when a canvas is opened natively; the docked
+// tab in the desktop app draws its own glyph from the canvas type and ignores this.
+canvas.declaration.icon = "assets/icon.png";
 
 await joinSession({ canvases: [canvas] });

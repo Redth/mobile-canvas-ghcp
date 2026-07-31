@@ -32,6 +32,7 @@ internal static class DeviceApi
 		MapSelection(app);
 		MapLifecycle(app);
 		MapInput(app);
+		MapUi(app);
 		MapMedia(app);
 	}
 
@@ -189,6 +190,7 @@ internal static class DeviceApi
 				return new CanvasOpenResult
 				{
 					Url = $"http://127.0.0.1:{context.Request.Host.Port}/#{fragment}",
+					Title = CanvasTitles.Panel,
 				};
 			});
 
@@ -244,11 +246,17 @@ internal static class DeviceApi
 				devices.GetSelectionAsync(RequireCanvasContext(context), cancellationToken));
 		app.MapPost(
 			"/api/v1/selection",
-			(SelectDeviceRequest request, HttpContext context, DeviceService devices, CancellationToken cancellationToken) =>
-				devices.SelectAsync(
-					RequireCanvasContext(context),
-					request.DeviceId,
-					cancellationToken));
+			async (SelectDeviceRequest request, HttpContext context, DeviceService devices, CancellationToken cancellationToken) =>
+			{
+				var key = RequireCanvasContext(context);
+				var device = await devices
+					.SelectAsync(key, request.DeviceId, cancellationToken)
+					.ConfigureAwait(false);
+				// Announced even when the panel asked for it: the echo costs one ignored message and it
+				// keeps every other view of the same canvas honest.
+				PublishSelection(context, key, device.Id);
+				return device;
+			});
 	}
 
 	private static void MapLifecycle(WebApplication app)
@@ -319,18 +327,22 @@ internal static class DeviceApi
 			"/api/v1/devices/{deviceId}/input/tap",
 			async (string deviceId, TapRequest request, DeviceService devices, HttpContext context, CancellationToken cancellationToken) =>
 			{
-				PublishAutomation(context, new AutomationEvent
-				{
-					// A long press is a tap with a dwell, so classify it here rather than making the
-					// canvas infer intent from a duration threshold it would have to keep in sync.
-					Kind = request.Duration >= LongPressSeconds
-						? AutomationEventKinds.LongPress
-						: AutomationEventKinds.Tap,
-					DeviceId = deviceId,
-					X = request.X,
-					Y = request.Y,
-					Duration = request.Duration,
-				});
+				await PublishAutomationAsync(
+					context,
+					new AutomationEvent
+					{
+						// A long press is a tap with a dwell, so classify it here rather than making the
+						// canvas infer intent from a duration threshold it would have to keep in sync.
+						Kind = request.Duration >= LongPressSeconds
+							? AutomationEventKinds.LongPress
+							: AutomationEventKinds.Tap,
+						DeviceId = deviceId,
+						X = request.X,
+						Y = request.Y,
+						Duration = request.Duration,
+					},
+					devices,
+					cancellationToken).ConfigureAwait(false);
 				await devices.TapAsync(deviceId, request, cancellationToken).ConfigureAwait(false);
 				return Results.NoContent();
 			});
@@ -338,14 +350,18 @@ internal static class DeviceApi
 			"/api/v1/devices/{deviceId}/input/touch",
 			async (string deviceId, TouchRequest request, DeviceService devices, HttpContext context, CancellationToken cancellationToken) =>
 			{
-				PublishAutomation(context, new AutomationEvent
-				{
-					Kind = AutomationEventKinds.Touch,
-					DeviceId = deviceId,
-					X = request.X,
-					Y = request.Y,
-					Detail = request.Phase,
-				});
+				await PublishAutomationAsync(
+					context,
+					new AutomationEvent
+					{
+						Kind = AutomationEventKinds.Touch,
+						DeviceId = deviceId,
+						X = request.X,
+						Y = request.Y,
+						Detail = request.Phase,
+					},
+					devices,
+					cancellationToken).ConfigureAwait(false);
 				await devices.TouchAsync(deviceId, request, cancellationToken).ConfigureAwait(false);
 				return Results.NoContent();
 			});
@@ -353,16 +369,20 @@ internal static class DeviceApi
 			"/api/v1/devices/{deviceId}/input/swipe",
 			async (string deviceId, SwipeRequest request, DeviceService devices, HttpContext context, CancellationToken cancellationToken) =>
 			{
-				PublishAutomation(context, new AutomationEvent
-				{
-					Kind = AutomationEventKinds.Swipe,
-					DeviceId = deviceId,
-					X = request.StartX,
-					Y = request.StartY,
-					EndX = request.EndX,
-					EndY = request.EndY,
-					Duration = request.Duration,
-				});
+				await PublishAutomationAsync(
+					context,
+					new AutomationEvent
+					{
+						Kind = AutomationEventKinds.Swipe,
+						DeviceId = deviceId,
+						X = request.StartX,
+						Y = request.StartY,
+						EndX = request.EndX,
+						EndY = request.EndY,
+						Duration = request.Duration,
+					},
+					devices,
+					cancellationToken).ConfigureAwait(false);
 				await devices.SwipeAsync(deviceId, request, cancellationToken).ConfigureAwait(false);
 				return Results.NoContent();
 			});
@@ -370,12 +390,16 @@ internal static class DeviceApi
 			"/api/v1/devices/{deviceId}/input/text",
 			async (string deviceId, TextInputRequest request, DeviceService devices, HttpContext context, CancellationToken cancellationToken) =>
 			{
-				PublishAutomation(context, new AutomationEvent
-				{
-					Kind = AutomationEventKinds.Text,
-					DeviceId = deviceId,
-					Detail = request.Text,
-				});
+				await PublishAutomationAsync(
+					context,
+					new AutomationEvent
+					{
+						Kind = AutomationEventKinds.Text,
+						DeviceId = deviceId,
+						Detail = request.Text,
+					},
+					devices,
+					cancellationToken).ConfigureAwait(false);
 				await devices.TypeTextAsync(deviceId, request.Text, cancellationToken).ConfigureAwait(false);
 				return Results.NoContent();
 			});
@@ -383,12 +407,16 @@ internal static class DeviceApi
 			"/api/v1/devices/{deviceId}/input/key",
 			async (string deviceId, KeyInputRequest request, DeviceService devices, HttpContext context, CancellationToken cancellationToken) =>
 			{
-				PublishAutomation(context, new AutomationEvent
-				{
-					Kind = AutomationEventKinds.Key,
-					DeviceId = deviceId,
-					Detail = request.KeyCode.ToString(CultureInfo.InvariantCulture),
-				});
+				await PublishAutomationAsync(
+					context,
+					new AutomationEvent
+					{
+						Kind = AutomationEventKinds.Key,
+						DeviceId = deviceId,
+						Detail = request.KeyCode.ToString(CultureInfo.InvariantCulture),
+					},
+					devices,
+					cancellationToken).ConfigureAwait(false);
 				await devices.PressKeyAsync(deviceId, request.KeyCode, cancellationToken).ConfigureAwait(false);
 				return Results.NoContent();
 			});
@@ -396,12 +424,16 @@ internal static class DeviceApi
 			"/api/v1/devices/{deviceId}/input/button",
 			async (string deviceId, ButtonInputRequest request, DeviceService devices, HttpContext context, CancellationToken cancellationToken) =>
 			{
-				PublishAutomation(context, new AutomationEvent
-				{
-					Kind = AutomationEventKinds.Button,
-					DeviceId = deviceId,
-					Detail = request.Button,
-				});
+				await PublishAutomationAsync(
+					context,
+					new AutomationEvent
+					{
+						Kind = AutomationEventKinds.Button,
+						DeviceId = deviceId,
+						Detail = request.Button,
+					},
+					devices,
+					cancellationToken).ConfigureAwait(false);
 				await devices.PressButtonAsync(deviceId, request.Button, cancellationToken).ConfigureAwait(false);
 				return Results.NoContent();
 			});
@@ -409,12 +441,16 @@ internal static class DeviceApi
 			"/api/v1/devices/{deviceId}/input/rotate",
 			async (string deviceId, RotateRequest request, DeviceService devices, HttpContext context, CancellationToken cancellationToken) =>
 			{
-				PublishAutomation(context, new AutomationEvent
-				{
-					Kind = AutomationEventKinds.Rotate,
-					DeviceId = deviceId,
-					Detail = request.Orientation,
-				});
+				await PublishAutomationAsync(
+					context,
+					new AutomationEvent
+					{
+						Kind = AutomationEventKinds.Rotate,
+						DeviceId = deviceId,
+						Detail = request.Orientation,
+					},
+					devices,
+					cancellationToken).ConfigureAwait(false);
 				await devices.RotateAsync(deviceId, request.Orientation, cancellationToken).ConfigureAwait(false);
 				return Results.NoContent();
 			});
@@ -427,11 +463,79 @@ internal static class DeviceApi
 	/// Announces input that arrived on the control token, which means an agent, the CLI, or the
 	/// canvas extension issued it. Canvas requests authenticate with a session cookie and are
 	/// deliberately skipped, so a person tapping the panel never summons the remote-control cursor.
+	///
+	/// When the caller named a canvas, the target device also becomes that canvas's selection. Agents
+	/// address devices by ID rather than by whatever the panel happens to be showing, and a panel that
+	/// stayed behind would render a cursor over the wrong screen.
 	/// </summary>
-	private static void PublishAutomation(HttpContext context, AutomationEvent activity)
+	private static async Task PublishAutomationAsync(
+		HttpContext context,
+		AutomationEvent activity,
+		DeviceService devices,
+		CancellationToken cancellationToken)
 	{
 		if (!context.Items.ContainsKey(ControlAuthItem)) return;
-		context.RequestServices.GetRequiredService<AutomationActivityHub>().Publish(activity);
+		var key = TryGetCanvasContext(context);
+		if (key is null)
+		{
+			Hub(context).Publish(activity);
+			return;
+		}
+
+		// Selection first: the panel then has the right device on screen before the gesture lands.
+		if (!string.IsNullOrEmpty(activity.DeviceId) && devices.GetSelectedId(key) != activity.DeviceId)
+		{
+			await devices.SelectAsync(key, activity.DeviceId, cancellationToken).ConfigureAwait(false);
+			PublishSelection(context, key, activity.DeviceId);
+		}
+
+		Hub(context).Publish(activity with { SessionId = key.SessionId, InstanceId = key.InstanceId });
+	}
+
+	private static void PublishSelection(HttpContext context, CanvasContextKey key, string deviceId) =>
+		Hub(context).Publish(new AutomationEvent
+		{
+			Kind = AutomationEventKinds.Selection,
+			DeviceId = deviceId,
+			SessionId = key.SessionId,
+			InstanceId = key.InstanceId,
+		});
+
+	private static AutomationActivityHub Hub(HttpContext context) =>
+		context.RequestServices.GetRequiredService<AutomationActivityHub>();
+
+	private static void MapUi(WebApplication app)
+	{
+		app.MapGet(
+			"/api/v1/devices/{deviceId}/ui",
+			(string deviceId, bool? raw, DeviceService devices, CancellationToken cancellationToken) =>
+				devices.GetUiSnapshotAsync(deviceId, raw ?? false, cancellationToken));
+		app.MapPost(
+			"/api/v1/devices/{deviceId}/ui/find",
+			(string deviceId, UiQuery query, DeviceService devices, CancellationToken cancellationToken) =>
+				devices.FindUiElementsAsync(deviceId, query, cancellationToken));
+		app.MapPost(
+			"/api/v1/devices/{deviceId}/ui/tap",
+			async (string deviceId, UiQuery query, DeviceService devices, HttpContext context, CancellationToken cancellationToken) =>
+			{
+				var result = await devices.TapUiElementAsync(deviceId, query, cancellationToken)
+					.ConfigureAwait(false);
+				// Announced after the fact because the coordinates are not known until the element is
+				// found, and the canvas animates a real point rather than the query that produced it.
+				await PublishAutomationAsync(
+					context,
+					new AutomationEvent
+					{
+						Kind = AutomationEventKinds.Tap,
+						DeviceId = deviceId,
+						X = result.Match?.CenterX ?? 0,
+						Y = result.Match?.CenterY ?? 0,
+						Detail = result.Match?.Element.Label,
+					},
+					devices,
+					cancellationToken).ConfigureAwait(false);
+				return result;
+			});
 	}
 
 	private static void MapMedia(WebApplication app)
@@ -442,11 +546,15 @@ internal static class DeviceApi
 			{
 				// Agents usually alternate act/observe, so a screenshot counts as activity. Without
 				// this the overlay would flicker off during the observe half of every loop.
-				PublishAutomation(context, new AutomationEvent
-				{
-					Kind = AutomationEventKinds.Screenshot,
-					DeviceId = deviceId,
-				});
+				await PublishAutomationAsync(
+					context,
+					new AutomationEvent
+					{
+						Kind = AutomationEventKinds.Screenshot,
+						DeviceId = deviceId,
+					},
+					devices,
+					cancellationToken).ConfigureAwait(false);
 				var bytes = await devices.ScreenshotAsync(deviceId, cancellationToken).ConfigureAwait(false);
 				return Results.File(bytes, "image/png");
 			});
@@ -581,9 +689,11 @@ internal static class DeviceApi
 		CancellationToken cancellationToken)
 	{
 		var key = TryGetCanvasContext(context);
-		return key is null
-			? target
-			: await devices.SelectAsync(key, target.Id, cancellationToken).ConfigureAwait(false);
+		if (key is null)
+			return target;
+		var device = await devices.SelectAsync(key, target.Id, cancellationToken).ConfigureAwait(false);
+		PublishSelection(context, key, device.Id);
+		return device;
 	}
 
 	private static void RequireControl(HttpContext context)

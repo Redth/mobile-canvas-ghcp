@@ -21,6 +21,11 @@ install -m 600 "${REPO_ROOT}/package.json" "${DESTINATION}/package.json"
 mkdir -p "${DESTINATION}/lib"
 install -m 600 "${REPO_ROOT}/lib/runtime.mjs" "${DESTINATION}/lib/runtime.mjs"
 
+# The canvas tab icon is read from disk by the host, so it has to travel with the
+# extension rather than being embedded in the binary like the web assets are.
+mkdir -p "${DESTINATION}/assets"
+install -m 600 "${REPO_ROOT}/assets/icon.png" "${DESTINATION}/assets/icon.png"
+
 # A locally built binary wins so a contributor testing a change does not have to
 # re-bundle first. Otherwise the checked-in runtimes/ bundle is copied and the
 # resolver extracts the right architecture on first use.
