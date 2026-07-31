@@ -17,7 +17,7 @@ import {
   writeFileSync,
 } from "node:fs";
 import { gzipSync } from "node:zlib";
-import { dirname, join } from "node:path";
+import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
 const packageRoot = dirname(dirname(fileURLToPath(import.meta.url)));
@@ -54,7 +54,7 @@ if (!rid) {
 const platformKey = PLATFORM_KEYS[rid];
 if (!platformKey) throw new Error(`unsupported rid: ${rid}`);
 
-const sourceDir = join(packageRoot, args.from ?? ".build/bin");
+const sourceDir = resolve(packageRoot, args.from ?? ".build/bin");
 const suffix = rid.startsWith("win-") ? ".exe" : "";
 const executable = `mobile-canvas${suffix}`;
 

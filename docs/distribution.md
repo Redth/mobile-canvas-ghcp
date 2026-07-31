@@ -75,6 +75,18 @@ Measured: **56 ms** on a cold start, **0 ms** once extracted.
   by our own process, Gatekeeper does not flag them.
 - Node has `zlib` built in, so this adds no dependency.
 
+### What the size actually costs
+
+All six runtimes are 62 MB compressed, and every one ships to every user because
+a plugin install is a plain git clone. Only the matching runtime is ever
+extracted, so a Windows user unpacks 29 MB and never touches the other five.
+
+The real cost is history, not checkout size. Git keeps every version of a binary
+forever and these do not delta-compress, so each release adds roughly another
+62 MB permanently. That is affordable for occasional releases and is not
+affordable for per-commit binary updates -- only refresh `runtimes/` when cutting
+a release, never as part of ordinary development.
+
 ### Why the cache is content-addressed
 
 The directory name embeds the executable's own SHA-256. A rebuilt binary
