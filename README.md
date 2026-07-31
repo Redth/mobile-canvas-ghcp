@@ -56,8 +56,19 @@ drops video from ~50 FPS to ~3 FPS.
 ```
 
 This registers both the canvas extension and the MCP server, and ships the
-executable itself, so nothing else needs installing. See
+executable itself, so nothing else needs installing -- no build step, no
+download, and no Apple developer certificate. See
 [How the executable ships](docs/distribution.md).
+
+| Platform | iOS Simulator | Android emulator | Video |
+|---|---|---|---|
+| macOS | yes | yes | H.264 |
+| Windows | no | yes | screenshot polling |
+| Linux | no | yes | screenshot polling |
+
+iOS control requires `simctl` and `idb`, so it is macOS-only. Android works
+everywhere; hardware H.264 encoding currently runs through a macOS helper, so
+elsewhere the canvas falls back to screenshot polling.
 
 ### From source
 

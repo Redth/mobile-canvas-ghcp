@@ -4,17 +4,24 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
 
+# Do NOT name these OS/ARCH. Under Git Bash `OS` is already an exported
+# environment variable (`Windows_NT`), and bash keeps the export attribute when
+# you assign to an already-exported name. Overwriting it leaks into `dotnet`,
+# where MSBuild derives the host OS from `'$(OS)' == 'Windows_NT'`; the host
+# then resolves to linux while the target is win, and ILCompiler fails the
+# publish with "Cross-OS native compilation is not supported" on a Windows
+# machine building a Windows binary.
 case "$(uname -m)" in
-  arm64|aarch64) ARCH="arm64" ;;
-  *)             ARCH="x64" ;;
+  arm64|aarch64) HOST_ARCH="arm64" ;;
+  *)             HOST_ARCH="x64" ;;
 esac
 case "$(uname -s)" in
-  Darwin)          OS="osx" ;;
-  Linux)           OS="linux" ;;
-  MINGW*|MSYS*|CYGWIN*) OS="win" ;;
-  *)               OS="osx" ;;
+  Darwin)               HOST_OS="osx" ;;
+  Linux)                HOST_OS="linux" ;;
+  MINGW*|MSYS*|CYGWIN*) HOST_OS="win" ;;
+  *)                    HOST_OS="osx" ;;
 esac
-DEFAULT_RID="${OS}-${ARCH}"
+DEFAULT_RID="${HOST_OS}-${HOST_ARCH}"
 RID="${1:-${DEFAULT_RID}}"
 
 # Each architecture publishes to its own directory so a release matrix can build

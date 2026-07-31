@@ -109,13 +109,85 @@ and then `spawn`s with `stdio: "inherit"` — the transport is the real file
 descriptors, so the shim cannot corrupt a message. Diagnostics go to stderr,
 because stdout is the JSON-RPC channel.
 
+## Code signing, Gatekeeper, and permissions
+
+**No Developer ID certificate, provisioning profile, or notarization is
+required.** That is a consequence of the packaging, not an oversight, so it is
+worth recording why.
+
+The binaries are **adhoc, linker-signed**, which is what the Native AOT linker
+emits:
+
+```
+CodeDirectory v=20400 flags=0x20002(adhoc,linker-signed)
+Signature=adhoc
+TeamIdentifier=not set
+```
+
+Apple Silicon refuses to execute an *unsigned* Mach-O at all, so the adhoc
+signature is mandatory — but it is also sufficient, because **Gatekeeper only
+assesses files carrying `com.apple.quarantine`**. Notarization is checked at
+that same gate. No quarantine, no assessment, no notarization requirement.
+
+Both halves of that were tested rather than assumed:
+
+| | `spctl` | Result |
+|---|---|---|
+| Binary with quarantine set | rejected | `Killed: 9`, exit 137 |
+| Same binary, extracted from the bundle | rejected | runs, exit 0 |
+
+`spctl` rejects both — neither is notarized — yet only the quarantined one is
+killed. **This is exactly why the binaries ship gzipped.** Extraction writes a
+new file from our own process, and quarantine does not propagate through that,
+so the executable is clean even when every shipped archive is quarantined. That
+was verified by setting a Safari-style quarantine attribute on the archives and
+confirming the extracted binaries carried none and ran.
+
+The Copilot plugin installer does not currently quarantine anything, but a user
+downloading a source ZIP would be, and that is an install path we do not
+control. Shipping raw binaries would hand those users a `SIGKILL`.
+
+### Screen Recording and Accessibility
+
+The Swift helper uses ScreenCaptureKit, which needs Screen Recording, and it
+reads window geometry, which needs Accessibility. Neither grant attaches to our
+binary: macOS attributes TCC to the **responsible process**, meaning the
+application that spawned it.
+
+That matters because the extraction cache is content-addressed, so every rebuild
+lands at a new path with a new cdhash. If TCC keyed on our binary, permissions
+would reset on every update. It does not — a copy of the helper at a path that
+had never been granted anything, and a re-signed copy with a different cdhash,
+both reported `screenRecordingGranted: true`.
+
+So a user grants Screen Recording once, to the app hosting the canvas, and
+updates never disturb it. Where a grant is missing, `mobile-screencap doctor`
+reports it and the iOS path degrades to idb rather than failing.
+
 ## Supported platforms
 
-Only `osx-arm64` and `osx-x64` are shipped today. This is a capability limit,
-not a packaging one: iOS control needs `simctl` and `idb`, and **both** platforms
-encode H.264 through the VideoToolbox helper, so Android video is currently
-macOS-only too. Adding a platform means solving portable encoding first; the
-manifest and resolver already handle any number of entries.
+Native AOT **cannot cross-compile between operating systems** -- the compiler
+refuses with "Cross-OS native compilation is not supported" -- so each OS needs
+its own runner. Architectures *within* one OS do cross-compile, which is why one
+macOS machine produces both `osx-` slices.
+
+| Platform | iOS Simulator | Android emulator | Video |
+|---|---|---|---|
+| macOS | full | full | H.264 via VideoToolbox |
+| Windows | unavailable | full | PNG polling |
+| Linux | unavailable | full | PNG polling |
+
+iOS needs `simctl` and `idb`, so it is macOS-only and always will be.
+
+Android is fully functional everywhere -- `AndroidSdkLocator` already resolves
+`.exe`, `.bat` and Windows SDK layouts -- but H.264 encoding goes through the
+macOS VideoToolbox helper. Where that is absent the backend reports
+`liveStream: false` and the canvas falls back to screenshot polling, so video
+degrades instead of breaking. Device listing, lifecycle, tap/swipe/type and
+screenshots are unaffected.
+
+Making Windows and Linux video first-class means adding a portable encoder --
+Media Foundation and VA-API being the natural counterparts to VideoToolbox.
 
 ## Verifying a build
 
