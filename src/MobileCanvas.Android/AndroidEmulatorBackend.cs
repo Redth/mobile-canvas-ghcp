@@ -1,3 +1,4 @@
+using System.Collections.Concurrent;
 using System.Diagnostics;
 using System.Globalization;
 using System.Text.RegularExpressions;
@@ -38,6 +39,13 @@ public sealed partial class AndroidEmulatorBackend : IDeviceBackend, IAsyncDispo
 	// this also keeps a gesture pinned to one emulator instance while it is in flight.
 	private readonly SemaphoreSlim _cacheGate = new(1, 1);
 	private readonly Dictionary<string, CachedInstance> _instanceCache = new(StringComparer.OrdinalIgnoreCase);
+
+	/// <summary>
+	/// The last number dialled on each emulator, because the device stops reporting it once a call is
+	/// answered and the emulator console needs it to name that call again.
+	/// </summary>
+	private readonly ConcurrentDictionary<string, string> _dialledNumbers =
+		new(StringComparer.OrdinalIgnoreCase);
 	private static readonly TimeSpan InstanceCacheTtl = TimeSpan.FromSeconds(3);
 
 	private readonly Lock _geometryLock = new();
@@ -2115,6 +2123,439 @@ public sealed partial class AndroidEmulatorBackend : IDeviceBackend, IAsyncDispo
 					? error.Split('\n')[^1].Trim()
 					: $"adb exited with code {result.ExitCode}."));
 		}
+	}
+
+	#endregion
+
+	#region Interrupts
+
+	public Task SendPushNotificationAsync(
+		string deviceId,
+		PushNotificationRequest request,
+		CancellationToken cancellationToken = default) =>
+		throw new DeviceCapabilityException(
+			"The Android emulator cannot deliver a push notification. There is no console verb for "
+			+ "it, and `cmd notification` only manages listeners and Do Not Disturb -- it cannot post. "
+			+ "Reaching an app this way means sending a real FCM message to it.");
+
+	public async Task SendSmsAsync(
+		string deviceId,
+		SmsRequest request,
+		CancellationToken cancellationToken = default)
+	{
+		var serial = await RequireSerialAsync(deviceId, cancellationToken).ConfigureAwait(false);
+
+		if (string.IsNullOrWhiteSpace(request.From))
+			throw new DeviceCapabilityException("A text message needs a sender.");
+
+		await RequireConsoleAsync(
+			serial,
+			["sms", "send", request.From, request.Body],
+			$"send a message from {request.From}",
+			cancellationToken).ConfigureAwait(false);
+	}
+
+	public async Task<CallStateResult> GetCallsAsync(
+		string deviceId,
+		CancellationToken cancellationToken = default)
+	{
+		var serial = await RequireSerialAsync(deviceId, cancellationToken).ConfigureAwait(false);
+		return await ReadCallsAsync(deviceId, serial, cancellationToken).ConfigureAwait(false);
+	}
+
+	public async Task<CallStateResult> ChangeCallAsync(
+		string deviceId,
+		CallRequest request,
+		CancellationToken cancellationToken = default)
+	{
+		var serial = await RequireSerialAsync(deviceId, cancellationToken).ConfigureAwait(false);
+		var action = NormalizeCallAction(request.Action);
+		var number = request.Number?.Trim();
+
+		if (action == CallActions.Place && string.IsNullOrEmpty(number))
+			throw new DeviceCapabilityException("Placing a call needs a number to call from.");
+
+		// `gsm accept|hold|cancel` name the call by number. Where the caller did not give one, the
+		// call already in progress is the only one it could mean.
+		if (string.IsNullOrEmpty(number))
+		{
+			var current = await ReadCallsAsync(deviceId, serial, cancellationToken).ConfigureAwait(false);
+			number = current.Calls.Count switch
+			{
+				0 => throw new DeviceCapabilityException(
+					$"There is no call to {action}. Place one first."),
+				1 => current.Calls[0].Number,
+				_ => throw new DeviceCapabilityException(
+					$"There is more than one call, so '{action}' needs a number to say which."),
+			};
+
+			// Nothing could unmask it: the registry clears the incoming number the moment a call is
+			// answered, so an answered call placed before this process started has no readable number
+			// anywhere. Say that rather than passing a masked number the console will reject.
+			if (number.Contains('*'))
+			{
+				throw new DeviceCapabilityException(
+					$"The device reports this call's number only as '{number}', which the emulator "
+					+ $"console will not accept. Pass the number that was dialled to '{action}' it.");
+			}
+		}
+
+		var verb = action == CallActions.Place ? "call" : action;
+
+		await RequireConsoleAsync(
+			serial,
+			["gsm", verb, number],
+			$"{action} a call with {number}",
+			cancellationToken).ConfigureAwait(false);
+
+		// The registry clears the incoming number the moment a call is answered, so remembering the
+		// number that was dialled is the only way a later accept or cancel can name the same call.
+		if (action == CallActions.Cancel)
+			_dialledNumbers.TryRemove(serial, out _);
+		else
+			_dialledNumbers[serial] = number;
+
+		// telecom lags the console: a call appears a moment after `gsm call`, and stays RINGING for a
+		// moment after `gsm accept`. Reading straight back reports the state before the change.
+		return await WaitForCallStateAsync(deviceId, serial, action, cancellationToken)
+			.ConfigureAwait(false);
+	}
+
+	/// <summary>
+	/// Reads calls back until telecom agrees with the action that was just taken, or time runs out.
+	/// </summary>
+	/// <remarks>
+	/// Returning the last reading rather than raising on a timeout keeps this honest: the caller sees
+	/// what telecom actually says instead of an outcome inferred from the console having accepted the
+	/// command. Hold is not waited on -- the console's own help says it changes an *outbound* call,
+	/// and an inbound one stays ACTIVE, so there is no state to wait for.
+	/// </remarks>
+	private async Task<CallStateResult> WaitForCallStateAsync(
+		string deviceId,
+		string serial,
+		string action,
+		CancellationToken cancellationToken)
+	{
+		var expected = action switch
+		{
+			CallActions.Place => "RINGING",
+			CallActions.Accept => "ACTIVE",
+			_ => null,
+		};
+
+		var deadline = DateTimeOffset.UtcNow + TimeSpan.FromSeconds(5);
+		var state = await ReadCallsAsync(deviceId, serial, cancellationToken).ConfigureAwait(false);
+
+		while (!Settled(state, action, expected) && DateTimeOffset.UtcNow < deadline)
+		{
+			await Task.Delay(TimeSpan.FromMilliseconds(250), cancellationToken).ConfigureAwait(false);
+			state = await ReadCallsAsync(deviceId, serial, cancellationToken).ConfigureAwait(false);
+		}
+
+		return state;
+
+		// With a single call up -- the case the emulator console is built around, since `gsm call`
+		// takes one number -- any call in the expected state is that call. With several up this can
+		// settle on the wrong one, so the state returned is only ever what telecom reported, never a
+		// claim that the requested change is the reason for it.
+		static bool Settled(CallStateResult state, string action, string? expected) =>
+			action == CallActions.Cancel
+				? state.Calls.Count == 0
+				: expected is null
+					|| state.Calls.Any(call =>
+						string.Equals(call.State, expected, StringComparison.OrdinalIgnoreCase));
+	}
+
+	private async Task<CallStateResult> ReadCallsAsync(
+		string deviceId,
+		string serial,
+		CancellationToken cancellationToken)
+	{
+		// A failed dump must not read as "no calls". RunAdbAsync collapses every failure to null, and
+		// an empty parse would then look like a confirmed hang-up, so this needs the exit code.
+		var arguments = new[] { "shell", "dumpsys", "telecom" };
+		var result = await RunAdbResultAsync(serial, arguments, cancellationToken).ConfigureAwait(false);
+
+		if (result.ExitCode != 0)
+			throw new ProcessExecutionException(_locator.Adb!, arguments, result);
+
+		var dump = result.StandardOutput;
+		var calls = TelecomCallParser.Parse(dump);
+		if (calls.Count == 0)
+		{
+			// The read succeeded and reported nothing, so any number remembered from an earlier call
+			// is stale -- including one ended outside this tool. Dropping it here keeps a later call
+			// from being labelled with it: telecom shows only the last two digits, so a stale number
+			// sharing those two would otherwise be substituted onto someone else's call.
+			_dialledNumbers.TryRemove(serial, out _);
+		}
+		else
+		{
+			// telecom masks the number, which is no use to anyone -- not to a person reading it, and
+			// not to `gsm accept`, which rejects it outright. The registry has the real digits while a
+			// call is ringing and clears them once it is answered, so the number this process dialled
+			// stands in after that.
+			var registry = await RunAdbAsync(
+				serial,
+				["shell", "dumpsys", "telephony.registry"],
+				cancellationToken).ConfigureAwait(false);
+
+			// The remembered number is only a safe stand-in while it is unambiguous which call it
+			// belongs to. With more than one call up, the two visible digits cannot say which, so it
+			// is left masked rather than risk labelling the wrong call.
+			var remembered = calls.Count == 1
+				? _dialledNumbers.GetValueOrDefault(serial)
+				: null;
+
+			var unmasked = TelecomCallParser.ReadIncomingNumber(registry) ?? remembered;
+
+			calls = TelecomCallParser.Unmask(calls, unmasked);
+		}
+
+		return new CallStateResult
+		{
+			DeviceId = deviceId,
+			Platform = DevicePlatforms.Android,
+			Calls = calls,
+		};
+	}
+
+	public async Task<BiometricResult> SendBiometricAsync(
+		string deviceId,
+		BiometricRequest request,
+		CancellationToken cancellationToken = default)
+	{
+		var serial = await RequireSerialAsync(deviceId, cancellationToken).ConfigureAwait(false);
+		var action = NormalizeBiometricAction(request.Action);
+
+		// The sensor authenticates whichever enrolled finger it is handed, so a rejection is not a
+		// separate command -- it is presenting a finger that was never enrolled. The console takes any
+		// non-negative id, so one far above anything an enrollment would assign reads as "not you".
+		var finger = action == BiometricActions.Match
+			? request.FingerId ?? 1
+			: UnenrolledFingerId;
+
+		if (finger < 0)
+			throw new DeviceCapabilityException("A finger ID cannot be negative.");
+
+		await RequireConsoleAsync(
+			serial,
+			["finger", "touch", finger.ToString(CultureInfo.InvariantCulture)],
+			$"present finger {finger}",
+			cancellationToken).ConfigureAwait(false);
+
+		// Leaving the finger on the sensor makes the next scan a no-op, so it is always lifted.
+		await RequireConsoleAsync(
+			serial,
+			["finger", "remove"],
+			"lift the finger off the sensor",
+			cancellationToken).ConfigureAwait(false);
+
+		return new BiometricResult
+		{
+			DeviceId = deviceId,
+			Platform = DevicePlatforms.Android,
+			Action = action,
+			Confirmed = true,
+		};
+	}
+
+	public Task<ClipboardResult> GetClipboardAsync(
+		string deviceId,
+		CancellationToken cancellationToken = default) =>
+		throw new DeviceCapabilityException(ClipboardUnsupported);
+
+	public Task<ClipboardResult> SetClipboardAsync(
+		string deviceId,
+		string text,
+		CancellationToken cancellationToken = default) =>
+		throw new DeviceCapabilityException(ClipboardUnsupported);
+
+	public async Task<MediaResult> AddMediaAsync(
+		string deviceId,
+		MediaRequest request,
+		CancellationToken cancellationToken = default)
+	{
+		var serial = await RequireSerialAsync(deviceId, cancellationToken).ConfigureAwait(false);
+		var paths = RequireMediaPaths(request);
+
+		// Two files can share a basename -- from different folders in one request, or with something
+		// already in the library -- and pushing both to the same destination would silently keep only
+		// the last. One listing is enough to pick names that collide with neither.
+		var taken = await ReadPictureNamesAsync(serial, cancellationToken).ConfigureAwait(false);
+		var targets = new Dictionary<string, string>(StringComparer.Ordinal);
+
+		foreach (var path in paths)
+		{
+			var name = UniqueMediaName(Path.GetFileName(path), taken);
+			taken.Add(name);
+			targets[path] = $"{PicturesDirectory}/{name}";
+		}
+
+		foreach (var (path, target) in targets)
+		{
+			var push = await RunAdbResultAsync(serial, ["push", path, target], cancellationToken)
+				.ConfigureAwait(false);
+
+			if (push.ExitCode != 0)
+			{
+				throw new DeviceCapabilityException(
+					$"Could not copy '{Path.GetFileName(path)}' to the device: "
+					+ $"{push.StandardError.Trim()}");
+			}
+
+			// Copying the file is not enough: the gallery and every photo picker read MediaStore, and
+			// nothing indexes a file that arrived over adb until something asks.
+			await RunAdbAsync(
+				serial,
+				[
+					"shell", "am", "broadcast",
+					"-a", "android.intent.action.MEDIA_SCANNER_SCAN_FILE",
+					"-d", $"file://{target}",
+				],
+				cancellationToken).ConfigureAwait(false);
+		}
+
+		// The scan broadcast reports "Broadcast completed: result=0" whether or not anything was
+		// indexed, so only MediaStore itself can say what actually reached the library.
+		var indexed = await ReadIndexedPicturesAsync(serial, cancellationToken).ConfigureAwait(false);
+
+		return new MediaResult
+		{
+			DeviceId = deviceId,
+			Platform = DevicePlatforms.Android,
+			Added = [.. paths.Where(path => indexed.Contains(targets[path]))],
+		};
+	}
+
+	/// <summary>
+	/// Where pushed media lands. MediaStore records the canonical path rather than the
+	/// <c>/sdcard</c> symlink, so matching a row means using this form.
+	/// </summary>
+	private const string PicturesDirectory = "/storage/emulated/0/Pictures";
+
+	private async Task<HashSet<string>> ReadPictureNamesAsync(
+		string serial,
+		CancellationToken cancellationToken)
+	{
+		var listing = await RunAdbAsync(
+			serial,
+			["shell", "ls", "-1", PicturesDirectory],
+			cancellationToken).ConfigureAwait(false);
+
+		// A simulator with no Pictures folder yet lists nothing, which is simply an empty library.
+		return listing is null
+			? new HashSet<string>(StringComparer.Ordinal)
+			: [.. listing
+				.Split('\n', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)];
+	}
+
+	private async Task<HashSet<string>> ReadIndexedPicturesAsync(
+		string serial,
+		CancellationToken cancellationToken)
+	{
+		var rows = await RunAdbAsync(
+			serial,
+			[
+				"shell", "content", "query",
+				"--uri", "content://media/external/images/media",
+				"--projection", "_data",
+				"--where", $"\"_data LIKE '{PicturesDirectory}/%'\"",
+			],
+			cancellationToken).ConfigureAwait(false);
+
+		return rows is null
+			? new HashSet<string>(StringComparer.Ordinal)
+			: [.. ReadQueriedPaths(rows)];
+	}
+
+	/// <summary>
+	/// Pulls the paths out of <c>content query</c> output, whose rows look like
+	/// <c>Row: 0 _data=/storage/emulated/0/Pictures/photo.png</c>.
+	/// </summary>
+	internal static IEnumerable<string> ReadQueriedPaths(string rows)
+	{
+		foreach (var line in rows.Split('\n', StringSplitOptions.RemoveEmptyEntries))
+		{
+			var marker = line.IndexOf("_data=", StringComparison.Ordinal);
+			if (marker < 0)
+				continue;
+
+			var value = line[(marker + "_data=".Length)..].Trim();
+			if (value.Length > 0)
+				yield return value;
+		}
+	}
+
+	/// <summary>
+	/// Picks a file name no existing entry already uses, keeping the original where it is free.
+	/// </summary>
+	internal static string UniqueMediaName(string name, IReadOnlySet<string> taken)
+	{
+		if (!taken.Contains(name))
+			return name;
+
+		var stem = Path.GetFileNameWithoutExtension(name);
+		var extension = Path.GetExtension(name);
+
+		for (var suffix = 1; ; suffix++)
+		{
+			var candidate = $"{stem}-{suffix}{extension}";
+			if (!taken.Contains(candidate))
+				return candidate;
+		}
+	}
+
+	/// <summary>
+	/// An ID no enrollment hands out, used to present a finger the sensor will not recognise.
+	/// </summary>
+	private const int UnenrolledFingerId = 999;
+
+	private const string ClipboardUnsupported =
+		"The Android emulator cannot read or write the clipboard from outside. `cmd clipboard` "
+		+ "answers 'No shell command implementation.' and still exits 0, and the binder service needs "
+		+ "a hand-marshalled ClipData that changes between releases. Set text through the UI instead.";
+
+	internal static string NormalizeCallAction(string action)
+	{
+		var normalized = action.Trim().ToLowerInvariant();
+		if (!CallActions.All.Contains(normalized))
+		{
+			throw new DeviceCapabilityException(
+				$"Unknown call action '{action}'. Use one of: {string.Join(", ", CallActions.All)}.");
+		}
+
+		return normalized;
+	}
+
+	internal static string NormalizeBiometricAction(string action)
+	{
+		var normalized = action.Trim().ToLowerInvariant();
+		if (!BiometricActions.All.Contains(normalized))
+		{
+			throw new DeviceCapabilityException(
+				$"Unknown biometric action '{action}'. Use one of: {string.Join(", ", BiometricActions.All)}.");
+		}
+
+		return normalized;
+	}
+
+	internal static IReadOnlyList<string> RequireMediaPaths(MediaRequest request)
+	{
+		if (request.HostPaths.Count == 0)
+			throw new DeviceCapabilityException("No media files were given.");
+
+		var resolved = new List<string>(request.HostPaths.Count);
+		foreach (var path in request.HostPaths)
+		{
+			var full = Path.GetFullPath(path);
+			if (!File.Exists(full))
+				throw new DeviceCapabilityException($"'{path}' does not exist on this machine.");
+
+			resolved.Add(full);
+		}
+
+		return resolved;
 	}
 
 	#endregion

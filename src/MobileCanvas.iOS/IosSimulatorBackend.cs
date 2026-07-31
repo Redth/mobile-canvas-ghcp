@@ -1568,6 +1568,262 @@ public sealed class IosSimulatorBackend : IDeviceBackend, IAsyncDisposable
 
 	#endregion
 
+	#region Interrupts
+
+	public async Task SendPushNotificationAsync(
+		string deviceId,
+		PushNotificationRequest request,
+		CancellationToken cancellationToken = default)
+	{
+		var device = await RequireBootedAsync(deviceId, cancellationToken).ConfigureAwait(false);
+
+		// `simctl push` answers "Notification sent to 'com.example.nope'" and exits 0 for an app that
+		// was never installed, so without this the usual typo reads back as a delivered notification
+		// the app chose to ignore.
+		await RequireInstalledAsync(device.NativeId, request.BundleId, cancellationToken)
+			.ConfigureAwait(false);
+
+		// Being installed is not enough: iOS drops a push for an app that has never been granted
+		// notification authorization, and `simctl push` reports success anyway. Verified by pushing
+		// the same payload to a registered app and an unregistered one -- a banner appeared for one
+		// and nothing at all for the other, and both said "Notification sent".
+		await RequireNotificationsRegisteredAsync(device.NativeId, request.BundleId, cancellationToken)
+			.ConfigureAwait(false);
+
+		// Reading the payload from stdin keeps it out of a temp file, which matters because a payload
+		// is often a fixture someone is iterating on.
+		var result = await _processRunner.RunAsync(
+			new ProcessRequest(
+				"xcrun",
+				["simctl", "push", device.NativeId, request.BundleId, "-"],
+				StandardInput: request.Payload),
+			cancellationToken).ConfigureAwait(false);
+
+		if (result.ExitCode != 0 || result.StandardError.Trim().Length > 0)
+		{
+			throw new DeviceCapabilityException(
+				$"Could not push to '{request.BundleId}': "
+				+ (result.StandardError.Trim() is { Length: > 0 } error
+					? error.Split('\n').Last(line => line.Trim().Length > 0).Trim()
+					: $"simctl exited with code {result.ExitCode}."));
+		}
+	}
+
+	/// <summary>
+	/// Fails when an app has never been granted notification authorization, because iOS silently
+	/// drops a push to such an app while <c>simctl push</c> still reports it sent.
+	/// </summary>
+	/// <remarks>
+	/// BulletinBoard keeps a section per app that has registered for notifications, so an app absent
+	/// from that list cannot receive one. There is no way to grant the authorization from outside --
+	/// <c>simctl privacy grant notifications</c> answers "Operation not permitted" -- so the only fix
+	/// is to launch the app and let it ask, which is what the message says.
+	/// </remarks>
+	private async Task RequireNotificationsRegisteredAsync(
+		string udid,
+		string bundleId,
+		CancellationToken cancellationToken)
+	{
+		var sections = Path.Combine(
+			SimulatorDataRoot(udid), "Library", "BulletinBoard", "VersionedSectionInfo.plist");
+
+		// A simulator that has never shown a notification has no file at all. Treat that as unknown
+		// rather than as "not registered": refusing to push on a missing file would turn a check that
+		// prevents a silent failure into one that causes a loud one.
+		if (!File.Exists(sections))
+			return;
+
+		var read = await _processRunner.RunAsync(
+			new ProcessRequest("plutil", ["-convert", "xml1", "-o", "-", sections]),
+			cancellationToken).ConfigureAwait(false);
+
+		if (read.ExitCode != 0)
+			return;
+
+		// Bundle ids are dictionary keys in the converted plist, so match the whole element. A plain
+		// substring test would let "com.foo" match a section belonging to "com.foo.beta" and wave
+		// through a push that iOS then drops.
+		if (read.StandardOutput.Contains($"<key>{bundleId}</key>", StringComparison.Ordinal))
+			return;
+
+		throw new DeviceCapabilityException(
+			$"'{bundleId}' has never asked for notification permission, so iOS will drop this push "
+			+ "without showing anything -- simctl reports success either way. Launch the app and let "
+			+ "it request notification authorization first. This cannot be granted from outside: "
+			+ "`simctl privacy grant notifications` answers 'Operation not permitted'.");
+	}
+
+	public Task SendSmsAsync(
+		string deviceId,
+		SmsRequest request,
+		CancellationToken cancellationToken = default) =>
+		throw new DeviceCapabilityException(
+			"The iOS simulator has no way to deliver a text message. Messages arriving over the "
+			+ "network are an Android emulator capability only.");
+
+	public Task<CallStateResult> GetCallsAsync(
+		string deviceId,
+		CancellationToken cancellationToken = default) =>
+		throw new DeviceCapabilityException(
+			"The iOS simulator has no telephony stack, so it has no calls to report.");
+
+	public Task<CallStateResult> ChangeCallAsync(
+		string deviceId,
+		CallRequest request,
+		CancellationToken cancellationToken = default) =>
+		throw new DeviceCapabilityException(
+			"The iOS simulator has no telephony stack, so it cannot ring. Simulated calls are an "
+			+ "Android emulator capability only.");
+
+	public async Task<BiometricResult> SendBiometricAsync(
+		string deviceId,
+		BiometricRequest request,
+		CancellationToken cancellationToken = default)
+	{
+		var device = await RequireBootedAsync(deviceId, cancellationToken).ConfigureAwait(false);
+		var action = NormalizeBiometricAction(request.Action);
+		var suffix = action == BiometricActions.Match ? "match" : "nomatch";
+
+		// Which sensor a simulator has depends on the device it models, and posting to the one it
+		// does not have is a no-op -- so posting both is more durable than a device-name heuristic
+		// that would need revisiting every time Apple ships new hardware.
+		foreach (var sensor in new[] { "pearl", "fingerTouch" })
+		{
+			await _processRunner.RunAsync(
+				new ProcessRequest(
+					"xcrun",
+					["simctl", "spawn", device.NativeId, "notifyutil", "-p",
+						$"com.apple.BiometricKit_Sim.{sensor}.{suffix}"]),
+				cancellationToken).ConfigureAwait(false);
+		}
+
+		// notifyutil exits 0 for a key nobody is listening on -- and for a key that does not exist at
+		// all -- so there is nothing here to check the scan against.
+		return new BiometricResult
+		{
+			DeviceId = device.Id,
+			Platform = DevicePlatforms.Ios,
+			Action = action,
+			Confirmed = false,
+		};
+	}
+
+	public async Task<ClipboardResult> GetClipboardAsync(
+		string deviceId,
+		CancellationToken cancellationToken = default)
+	{
+		var device = await RequireBootedAsync(deviceId, cancellationToken).ConfigureAwait(false);
+		var result = await RunAsync(["pbpaste", device.NativeId], cancellationToken)
+			.ConfigureAwait(false);
+
+		if (result.ExitCode != 0)
+		{
+			throw new DeviceCapabilityException(
+				$"Could not read the pasteboard: {result.StandardError.Trim()}");
+		}
+
+		return new ClipboardResult
+		{
+			DeviceId = device.Id,
+			Platform = DevicePlatforms.Ios,
+			Text = result.StandardOutput,
+		};
+	}
+
+	public async Task<ClipboardResult> SetClipboardAsync(
+		string deviceId,
+		string text,
+		CancellationToken cancellationToken = default)
+	{
+		var device = await RequireBootedAsync(deviceId, cancellationToken).ConfigureAwait(false);
+
+		var result = await _processRunner.RunAsync(
+			new ProcessRequest("xcrun", ["simctl", "pbcopy", device.NativeId], StandardInput: text),
+			cancellationToken).ConfigureAwait(false);
+
+		if (result.ExitCode != 0)
+		{
+			throw new DeviceCapabilityException(
+				$"Could not write the pasteboard: {result.StandardError.Trim()}");
+		}
+
+		return await GetClipboardAsync(deviceId, cancellationToken).ConfigureAwait(false);
+	}
+
+	public async Task<MediaResult> AddMediaAsync(
+		string deviceId,
+		MediaRequest request,
+		CancellationToken cancellationToken = default)
+	{
+		var device = await RequireBootedAsync(deviceId, cancellationToken).ConfigureAwait(false);
+		var paths = RequireMediaPaths(request);
+
+		// `simctl addmedia` does not report a missing file -- it dies on an uncaught exception, which
+		// surfaces as a signal rather than an error anyone can read.
+		await RunMediaAsync(device, paths, cancellationToken).ConfigureAwait(false);
+
+		return new MediaResult
+		{
+			DeviceId = device.Id,
+			Platform = DevicePlatforms.Ios,
+			Added = paths,
+		};
+	}
+
+	private async Task RunMediaAsync(
+		DeviceTarget device,
+		IReadOnlyList<string> paths,
+		CancellationToken cancellationToken)
+	{
+		var result = await RunAsync(["addmedia", device.NativeId, .. paths], cancellationToken)
+			.ConfigureAwait(false);
+
+		if (result.ExitCode == 0)
+			return;
+
+		// The per-file complaint ("File type unsupported") is on stdout; stderr only says that
+		// several errors happened and to look elsewhere.
+		var detail = result.StandardOutput
+			.Split('\n')
+			.Select(line => line.Trim())
+			.FirstOrDefault(line => line.StartsWith("Failed to import", StringComparison.Ordinal));
+
+		throw new DeviceCapabilityException(
+			$"Could not add media: {detail ?? result.StandardError.Trim()}");
+	}
+
+	internal static string NormalizeBiometricAction(string action)
+	{
+		var normalized = action.Trim().ToLowerInvariant();
+		if (!BiometricActions.All.Contains(normalized))
+		{
+			throw new DeviceCapabilityException(
+				$"Unknown biometric action '{action}'. Use one of: {string.Join(", ", BiometricActions.All)}.");
+		}
+
+		return normalized;
+	}
+
+	internal static IReadOnlyList<string> RequireMediaPaths(MediaRequest request)
+	{
+		if (request.HostPaths.Count == 0)
+			throw new DeviceCapabilityException("No media files were given.");
+
+		var resolved = new List<string>(request.HostPaths.Count);
+		foreach (var path in request.HostPaths)
+		{
+			var full = Path.GetFullPath(path);
+			if (!File.Exists(full))
+				throw new DeviceCapabilityException($"'{path}' does not exist on this machine.");
+
+			resolved.Add(full);
+		}
+
+		return resolved;
+	}
+
+	#endregion
+
 	public async ValueTask DisposeAsync()
 	{
 		await _recordings.DisposeAsync().ConfigureAwait(false);
