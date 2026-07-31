@@ -4,7 +4,12 @@ View, create, boot, and **interact with** local iOS Simulators and Android
 emulators from inside a GitHub Copilot canvas — and give your agent the same
 controls through MCP.
 
-![The Mobile Canvas panel showing a live iOS Simulator](assets/preview.png)
+<table>
+  <tr>
+    <td width="50%"><img src="assets/ios.png" alt="The Mobile Canvas panel showing a live iOS Simulator"></td>
+    <td width="50%"><img src="assets/android.png" alt="The Mobile Canvas panel showing a live Android emulator"></td>
+  </tr>
+</table>
 
 Live H.264 video at ~58 FPS (iOS) and ~50 FPS (Android), with real tap, drag,
 scroll, and keyboard input. Everything runs locally on loopback; nothing is
@@ -34,6 +39,13 @@ uploaded anywhere.
 - When an agent drives the device, the canvas shows an accent-coloured glow and
   an animated cursor so a human watching can tell automation from their own
   input.
+
+<table>
+  <tr>
+    <td width="50%"><img src="assets/agent-ios.png" alt="An agent tapping an iOS Simulator, with the canvas showing an accent glow and cursor"></td>
+    <td width="50%"><img src="assets/agent-android.png" alt="An agent tapping an Android emulator, with the canvas showing an accent glow and cursor"></td>
+  </tr>
+</table>
 
 ## Requirements
 
