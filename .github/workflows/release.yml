@@ -47,6 +47,13 @@ jobs:
         with:
           global-json-file: global.json
 
+      # The binary bakes its version in at compile time, so this has to happen
+      # before the build rather than alongside the bundling.
+      - name: Stamp version
+        if: inputs.version != ''
+        shell: bash
+        run: node scripts/stamp-version.mjs "${{ inputs.version }}"
+
       - name: Build
         shell: bash
         run: ./scripts/build.sh "${{ matrix.rid }}"
@@ -78,15 +85,7 @@ jobs:
 
       - name: Stamp version
         if: inputs.version != ''
-        run: |
-          node -e '
-            const fs = require("fs");
-            const pkg = JSON.parse(fs.readFileSync("package.json", "utf8"));
-            pkg.version = process.env.VERSION;
-            fs.writeFileSync("package.json", JSON.stringify(pkg, null, 2) + "\n");
-          '
-        env:
-          VERSION: ${{ inputs.version }}
+        run: node scripts/stamp-version.mjs "${{ inputs.version }}"
 
       # bundle.mjs merges into the existing manifest, so bundling each downloaded
       # architecture in turn produces one manifest covering all of them.
