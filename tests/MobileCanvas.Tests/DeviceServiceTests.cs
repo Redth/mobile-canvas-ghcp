@@ -77,6 +77,105 @@ public sealed class DeviceServiceTests
 		Assert.Contains("explicit confirmation", exception.Message);
 	}
 
+	[Fact]
+	public async Task ListApps_HidesSystemAppsUnlessAsked()
+	{
+		var service = new DeviceService([new FakeBackend()]);
+
+		var user = await service.ListAppsAsync(FakeBackend.Device.Id, new AppQuery());
+		var all = await service.ListAppsAsync(FakeBackend.Device.Id, new AppQuery { IncludeSystem = true });
+
+		Assert.Equal(2, user.Total);
+		Assert.All(user.Apps, app => Assert.Equal(AppKinds.User, app.Kind));
+		Assert.Equal(3, all.Total);
+	}
+
+	[Fact]
+	public async Task ListApps_MatchesNameAndBundleIdCaseInsensitively()
+	{
+		var service = new DeviceService([new FakeBackend()]);
+
+		var byName = await service.ListAppsAsync(FakeBackend.Device.Id, new AppQuery { Text = "notes" });
+		var byBundle = await service.ListAppsAsync(FakeBackend.Device.Id, new AppQuery { Text = "example.timer" });
+
+		Assert.Equal("com.example.notes", Assert.Single(byName.Apps).BundleId);
+		Assert.Equal("com.example.timer", Assert.Single(byBundle.Apps).BundleId);
+	}
+
+	[Fact]
+	public async Task ListApps_ReportsTotalBeyondTheLimit()
+	{
+		var service = new DeviceService([new FakeBackend()]);
+
+		var result = await service.ListAppsAsync(
+			FakeBackend.Device.Id,
+			new AppQuery { IncludeSystem = true, Limit = 1 });
+
+		// A caller that sees one result needs to know two more were hidden, or it will believe the
+		// filter was more precise than it was.
+		Assert.Single(result.Apps);
+		Assert.Equal(3, result.Total);
+	}
+
+	[Fact]
+	public async Task Uninstall_RequiresConfirmation()
+	{
+		var backend = new FakeBackend();
+		var service = new DeviceService([backend]);
+
+		var exception = await Assert.ThrowsAsync<InvalidOperationException>(
+			() => service.UninstallAppAsync(FakeBackend.Device.Id, "com.example.notes", confirm: false));
+
+		Assert.Contains("explicit confirmation", exception.Message);
+		Assert.Null(backend.LastUninstalledBundleId);
+	}
+
+	[Fact]
+	public async Task Launch_RejectsAnEmptyBundleId()
+	{
+		var service = new DeviceService([new FakeBackend()]);
+
+		await Assert.ThrowsAsync<ArgumentException>(
+			() => service.LaunchAppAsync(FakeBackend.Device.Id, new AppLaunchRequest { BundleId = "  " }));
+	}
+
+	[Fact]
+	public async Task Install_RejectsAPathThatDoesNotExist()
+	{
+		var service = new DeviceService([new FakeBackend()]);
+		var missing = Path.Combine(Path.GetTempPath(), $"mobile-canvas-missing-{Guid.NewGuid():N}.apk");
+
+		// Caught here so the error names the path the caller passed, rather than surfacing whatever the
+		// platform installer says about a file it never found.
+		var exception = await Assert.ThrowsAsync<FileNotFoundException>(
+			() => service.InstallAppAsync(FakeBackend.Device.Id, new AppInstallRequest { Path = missing }));
+
+		Assert.Contains(missing, exception.Message);
+	}
+
+	[Fact]
+	public async Task Install_PassesAnAbsolutePathToTheBackend()
+	{
+		var backend = new FakeBackend();
+		var service = new DeviceService([backend]);
+		var file = Path.Combine(Path.GetTempPath(), $"mobile-canvas-{Guid.NewGuid():N}.apk");
+		await File.WriteAllTextAsync(file, "not really an apk");
+
+		try
+		{
+			// A relative path is resolved against the host's working directory, which is not the
+			// directory the caller was in by the time it reaches a platform tool.
+			var relative = Path.GetRelativePath(Directory.GetCurrentDirectory(), file);
+			await service.InstallAppAsync(FakeBackend.Device.Id, new AppInstallRequest { Path = relative });
+
+			Assert.Equal(file, backend.LastInstalledPath);
+		}
+		finally
+		{
+			File.Delete(file);
+		}
+	}
+
 	private sealed class FakeBackend : IDeviceBackend
 	{
 		public static DeviceTarget Device { get; } = new()
@@ -132,6 +231,43 @@ public sealed class DeviceServiceTests
 			Task.CompletedTask;
 		public Task<byte[]> ScreenshotAsync(string deviceId, CancellationToken cancellationToken = default) =>
 			Task.FromResult(Array.Empty<byte>());
+
+		public InstalledApp[] Apps { get; set; } =
+		[
+			new() { BundleId = "com.example.notes", Name = "Notes", Kind = AppKinds.User },
+			new() { BundleId = "com.example.timer", Name = "Timer", Kind = AppKinds.User },
+			new() { BundleId = "com.apple.Preferences", Name = "Settings", Kind = AppKinds.System },
+		];
+
+		public string? LastLaunchedBundleId { get; private set; }
+		public string? LastUninstalledBundleId { get; private set; }
+		public string? LastInstalledPath { get; private set; }
+
+		public Task<InstalledApp[]> ListAppsAsync(string deviceId, bool includeSystem, CancellationToken cancellationToken = default) =>
+			Task.FromResult(includeSystem ? Apps : [.. Apps.Where(app => app.Kind == AppKinds.User)]);
+		public Task<AppOperationResult> LaunchAppAsync(string deviceId, AppLaunchRequest request, CancellationToken cancellationToken = default)
+		{
+			LastLaunchedBundleId = request.BundleId;
+			return Task.FromResult(new AppOperationResult
+			{
+				DeviceId = deviceId,
+				BundleId = request.BundleId,
+				Operation = AppOperations.Launch,
+				ProcessId = 4242,
+			});
+		}
+		public Task<AppOperationResult> TerminateAppAsync(string deviceId, string bundleId, CancellationToken cancellationToken = default) =>
+			Task.FromResult(new AppOperationResult { DeviceId = deviceId, BundleId = bundleId, Operation = AppOperations.Terminate });
+		public Task<AppOperationResult> InstallAppAsync(string deviceId, AppInstallRequest request, CancellationToken cancellationToken = default)
+		{
+			LastInstalledPath = request.Path;
+			return Task.FromResult(new AppOperationResult { DeviceId = deviceId, Operation = AppOperations.Install, Detail = request.Path });
+		}
+		public Task<AppOperationResult> UninstallAppAsync(string deviceId, string bundleId, CancellationToken cancellationToken = default)
+		{
+			LastUninstalledBundleId = bundleId;
+			return Task.FromResult(new AppOperationResult { DeviceId = deviceId, BundleId = bundleId, Operation = AppOperations.Uninstall });
+		}
 		public Task<ILiveVideoSession> OpenVideoStreamAsync(string deviceId, StreamOptions options, CancellationToken cancellationToken = default) =>
 			throw new NotSupportedException();
 		public Task<RecordingStatus> StartRecordingAsync(string deviceId, RecordingStartRequest request, CancellationToken cancellationToken = default) =>

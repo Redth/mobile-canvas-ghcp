@@ -33,6 +33,18 @@ public interface IDeviceBackend
 	/// </summary>
 	Task<UiSnapshot> GetUiSnapshotAsync(string deviceId, bool includeRaw, CancellationToken cancellationToken = default);
 
+	/// <summary>
+	/// Lists installed apps. <paramref name="includeSystem"/> is passed down rather than filtered by
+	/// the caller because skipping the platform's built-in apps saves a whole query on Android, where
+	/// they outnumber a developer's own apps many times over.
+	/// </summary>
+	Task<InstalledApp[]> ListAppsAsync(string deviceId, bool includeSystem, CancellationToken cancellationToken = default);
+
+	Task<AppOperationResult> LaunchAppAsync(string deviceId, AppLaunchRequest request, CancellationToken cancellationToken = default);
+	Task<AppOperationResult> TerminateAppAsync(string deviceId, string bundleId, CancellationToken cancellationToken = default);
+	Task<AppOperationResult> InstallAppAsync(string deviceId, AppInstallRequest request, CancellationToken cancellationToken = default);
+	Task<AppOperationResult> UninstallAppAsync(string deviceId, string bundleId, CancellationToken cancellationToken = default);
+
 	Task<ILiveVideoSession> OpenVideoStreamAsync(string deviceId, StreamOptions options, CancellationToken cancellationToken = default);
 	Task<RecordingStatus> StartRecordingAsync(string deviceId, RecordingStartRequest request, CancellationToken cancellationToken = default);
 	Task<RecordingStatus> StopRecordingAsync(string deviceId, CancellationToken cancellationToken = default);

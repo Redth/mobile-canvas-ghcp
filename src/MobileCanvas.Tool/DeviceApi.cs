@@ -33,6 +33,7 @@ internal static class DeviceApi
 		MapLifecycle(app);
 		MapInput(app);
 		MapUi(app);
+		MapApps(app);
 		MapMedia(app);
 	}
 
@@ -536,6 +537,33 @@ internal static class DeviceApi
 					cancellationToken).ConfigureAwait(false);
 				return result;
 			});
+	}
+
+	private static void MapApps(WebApplication app)
+	{
+		app.MapGet(
+			"/api/v1/devices/{deviceId}/apps",
+			(string deviceId, string? text, bool? system, int? limit, DeviceService devices, CancellationToken cancellationToken) =>
+				devices.ListAppsAsync(
+					deviceId,
+					new AppQuery { Text = text, IncludeSystem = system ?? false, Limit = limit ?? 100 },
+					cancellationToken));
+		app.MapPost(
+			"/api/v1/devices/{deviceId}/apps/launch",
+			(string deviceId, AppLaunchRequest request, DeviceService devices, CancellationToken cancellationToken) =>
+				devices.LaunchAppAsync(deviceId, request, cancellationToken));
+		app.MapPost(
+			"/api/v1/devices/{deviceId}/apps/{bundleId}/terminate",
+			(string deviceId, string bundleId, DeviceService devices, CancellationToken cancellationToken) =>
+				devices.TerminateAppAsync(deviceId, bundleId, cancellationToken));
+		app.MapPost(
+			"/api/v1/devices/{deviceId}/apps/install",
+			(string deviceId, AppInstallRequest request, DeviceService devices, CancellationToken cancellationToken) =>
+				devices.InstallAppAsync(deviceId, request, cancellationToken));
+		app.MapPost(
+			"/api/v1/devices/{deviceId}/apps/{bundleId}/uninstall",
+			(string deviceId, string bundleId, bool? confirm, DeviceService devices, CancellationToken cancellationToken) =>
+				devices.UninstallAppAsync(deviceId, bundleId, confirm ?? false, cancellationToken));
 	}
 
 	private static void MapMedia(WebApplication app)

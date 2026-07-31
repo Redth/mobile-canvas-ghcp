@@ -114,6 +114,36 @@ internal static class DeviceCli
 				UiQueryFrom(options),
 				options.Context(),
 				cancellationToken).ConfigureAwait(false),
+			("app", "list") => await Client.ListAppsAsync(
+				options.RequiredPosition(0, "device ID"),
+				new AppQuery
+				{
+					Text = options.Value("text"),
+					IncludeSystem = options.Flag("system"),
+					Limit = options.Int("limit", 100),
+				},
+				cancellationToken).ConfigureAwait(false),
+			("app", "launch") => await Client.LaunchAppAsync(
+				options.RequiredPosition(0, "device ID"),
+				new AppLaunchRequest
+				{
+					BundleId = options.Required("bundle"),
+					Relaunch = options.Flag("relaunch"),
+				},
+				cancellationToken).ConfigureAwait(false),
+			("app", "terminate") => await Client.TerminateAppAsync(
+				options.RequiredPosition(0, "device ID"),
+				options.Required("bundle"),
+				cancellationToken).ConfigureAwait(false),
+			("app", "install") => await Client.InstallAppAsync(
+				options.RequiredPosition(0, "device ID"),
+				new AppInstallRequest { Path = options.Required("path") },
+				cancellationToken).ConfigureAwait(false),
+			("app", "uninstall") => await Client.UninstallAppAsync(
+				options.RequiredPosition(0, "device ID"),
+				options.Required("bundle"),
+				options.Flag("confirm"),
+				cancellationToken).ConfigureAwait(false),
 			("screenshot", _) => await ScreenshotAsync(
 				action,
 				new CliArguments(args.Skip(1)),
@@ -411,6 +441,11 @@ internal static class DeviceCli
 		  mobile-canvas ui dump <id> [--raw] [--json]
 		  mobile-canvas ui find <id> [--text <s>] [--id <s>] [--role <s>] [--exact] [--limit <n>]
 		  mobile-canvas ui tap <id> [--text <s>] [--id <s>] [--role <s>] [--exact]
+		  mobile-canvas app list <id> [--text <s>] [--system] [--limit <n>] [--json]
+		  mobile-canvas app launch <id> --bundle <bundle-id> [--relaunch]
+		  mobile-canvas app terminate <id> --bundle <bundle-id>
+		  mobile-canvas app install <id> --path <app-or-apk>
+		  mobile-canvas app uninstall <id> --bundle <bundle-id> --confirm
 		  mobile-canvas screenshot <id> [--output <path>] [--json]
 		  mobile-canvas recording start|stop|status <id>
 		  mobile-canvas mcp
@@ -428,13 +463,18 @@ internal static class DeviceCli
 		Prefer `ui find`/`ui tap` over screenshot-and-guess: they read the live accessibility tree,
 		so a tap lands on the element rather than on a coordinate that a layout change invalidates.
 		`ui dump --raw` returns the untouched platform payload when the normalized tree is not enough.
+
+		Use `app launch` rather than hunting for an icon on the home screen: it does not depend on
+		which page the icon is on, or on the app having one. `app list` hides the platform's built-in
+		apps unless `--system` is passed, because they outnumber a developer's own many times over.
+		`app uninstall` deletes the app's data with it, so it requires `--confirm`.
 		""";
 }
 
 internal sealed class CliArguments
 {
 	private static readonly HashSet<string> FlagNames =
-		["json", "no-json", "confirm", "schema", "wait"];
+		["json", "no-json", "confirm", "schema", "wait", "raw", "system", "relaunch"];
 	private readonly Dictionary<string, string?> _options =
 		new(StringComparer.OrdinalIgnoreCase);
 	private readonly List<string> _positions = [];

@@ -832,6 +832,226 @@ public sealed partial class AndroidEmulatorBackend : IDeviceBackend, IAsyncDispo
 
 	#endregion
 
+	#region Apps
+
+	public async Task<InstalledApp[]> ListAppsAsync(
+		string deviceId,
+		bool includeSystem,
+		CancellationToken cancellationToken = default)
+	{
+		var serial = await RequireSerialAsync(deviceId, cancellationToken).ConfigureAwait(false);
+
+		// Running state is one call for the whole list, and it is what tells a caller whether to launch
+		// an app or just bring it forward.
+		var running = PackageListParser.ParseRunning(
+			await RunAdbAsync(serial, ["shell", "ps", "-A", "-o", "PID,NAME"], cancellationToken)
+				.ConfigureAwait(false));
+
+		var user = PackageListParser.Parse(
+			await RunAdbAsync(serial, ["shell", "pm", "list", "packages", "-3", "-f", "--show-versioncode"], cancellationToken)
+				.ConfigureAwait(false)
+				?? throw new DeviceCapabilityException(
+					$"Could not list packages on '{serial}'. Check that adb is available and the emulator is responding."),
+			AppKinds.User,
+			running);
+
+		if (!includeSystem)
+			return user;
+
+		var system = PackageListParser.Parse(
+			await RunAdbAsync(serial, ["shell", "pm", "list", "packages", "-s", "-f", "--show-versioncode"], cancellationToken)
+				.ConfigureAwait(false),
+			AppKinds.System,
+			running);
+
+		return [.. user, .. system];
+	}
+
+	public async Task<AppOperationResult> LaunchAppAsync(
+		string deviceId,
+		AppLaunchRequest request,
+		CancellationToken cancellationToken = default)
+	{
+		var serial = await RequireSerialAsync(deviceId, cancellationToken).ConfigureAwait(false);
+
+		if (request.Relaunch)
+		{
+			await RunAdbAsync(serial, ["shell", "am", "force-stop", request.BundleId], cancellationToken)
+				.ConfigureAwait(false);
+		}
+
+		// Android has no "launch this package" verb; it needs the launcher activity, which the package
+		// manager can resolve. Asking it beats hardcoding a guess like ".MainActivity", and beats
+		// monkey, which types synthetic events at whatever it finds.
+		var resolved = PackageListParser.ParseResolvedActivity(
+			await RunAdbAsync(serial, ["shell", "cmd", "package", "resolve-activity", "--brief", request.BundleId], cancellationToken)
+				.ConfigureAwait(false))
+			?? throw new DeviceCapabilityException(
+				$"'{request.BundleId}' has no launchable activity on '{serial}'. It may not be installed, "
+				+ "or it may be a service or plug-in with no launcher entry.");
+
+		var arguments = new List<string> { "shell", "am", "start", "-W", "-n", resolved };
+		foreach (var argument in request.Arguments)
+		{
+			arguments.Add("-e");
+			arguments.Add("arg");
+			arguments.Add(QuoteForDeviceShell(argument));
+		}
+
+		var output = await RunAdbAsync(serial, [.. arguments], cancellationToken).ConfigureAwait(false);
+		EnsureActivityStarted(output, request.BundleId);
+
+		// The process only exists once the activity is up, so the PID is read back rather than reported
+		// by am, which says nothing about what it started.
+		var running = PackageListParser.ParseRunning(
+			await RunAdbAsync(serial, ["shell", "ps", "-A", "-o", "PID,NAME"], cancellationToken)
+				.ConfigureAwait(false));
+
+		return new AppOperationResult
+		{
+			DeviceId = deviceId,
+			BundleId = request.BundleId,
+			Operation = AppOperations.Launch,
+			ProcessId = running.TryGetValue(request.BundleId, out var pid) ? pid : null,
+			Detail = resolved,
+		};
+	}
+
+	public async Task<AppOperationResult> TerminateAppAsync(
+		string deviceId,
+		string bundleId,
+		CancellationToken cancellationToken = default)
+	{
+		var serial = await RequireSerialAsync(deviceId, cancellationToken).ConfigureAwait(false);
+		_ = await RunAdbAsync(serial, ["shell", "am", "force-stop", bundleId], cancellationToken)
+			.ConfigureAwait(false)
+			?? throw new DeviceCapabilityException($"Could not stop '{bundleId}' on '{serial}'.");
+
+		return new AppOperationResult
+		{
+			DeviceId = deviceId,
+			BundleId = bundleId,
+			Operation = AppOperations.Terminate,
+		};
+	}
+
+	public async Task<AppOperationResult> InstallAppAsync(
+		string deviceId,
+		AppInstallRequest request,
+		CancellationToken cancellationToken = default)
+	{
+		var serial = await RequireSerialAsync(deviceId, cancellationToken).ConfigureAwait(false);
+
+		// adb never says what it installed, so the package set is sampled either side of the install and
+		// the newcomer is the answer. Without this an agent can install an app and then have nothing to
+		// pass to launch. A reinstall adds no package, so the answer is then legitimately unknown.
+		var before = await ListPackageNamesAsync(serial, cancellationToken).ConfigureAwait(false);
+
+		var result = await RunAdbResultAsync(serial, ["install", "-r", request.Path], cancellationToken)
+			.ConfigureAwait(false);
+
+		EnsurePackageManagerSucceeded("install", request.Path, result);
+
+		var after = await ListPackageNamesAsync(serial, cancellationToken).ConfigureAwait(false);
+
+		return new AppOperationResult
+		{
+			DeviceId = deviceId,
+			BundleId = after.Except(before).SingleOrDefault(),
+			Operation = AppOperations.Install,
+			Detail = request.Path,
+		};
+	}
+
+	/// <summary>
+	/// Every third-party package name installed on the device.
+	/// </summary>
+	private async Task<IReadOnlyList<string>> ListPackageNamesAsync(
+		string serial,
+		CancellationToken cancellationToken)
+	{
+		var output = await RunAdbAsync(serial, ["shell", "pm", "list", "packages", "-3"], cancellationToken)
+			.ConfigureAwait(false);
+
+		return PackageListParser.ParseNames(output);
+	}
+
+	public async Task<AppOperationResult> UninstallAppAsync(
+		string deviceId,
+		string bundleId,
+		CancellationToken cancellationToken = default)
+	{
+		var serial = await RequireSerialAsync(deviceId, cancellationToken).ConfigureAwait(false);
+
+		// pm answers a missing package with DELETE_FAILED_INTERNAL_ERROR, which reads like the device
+		// broke rather than like the app was never there. Checking first buys a plain answer, and one
+		// that matches what the iOS backend says.
+		var installed = await RunAdbAsync(serial, ["shell", "pm", "path", bundleId], cancellationToken)
+			.ConfigureAwait(false);
+
+		if (string.IsNullOrWhiteSpace(installed) || !installed.Contains("package:", StringComparison.Ordinal))
+			throw new DeviceCapabilityException(
+				$"'{bundleId}' is not installed on '{serial}', so there is nothing to uninstall.");
+
+		var result = await RunAdbResultAsync(serial, ["uninstall", bundleId], cancellationToken)
+			.ConfigureAwait(false);
+
+		EnsurePackageManagerSucceeded("uninstall", bundleId, result);
+
+		return new AppOperationResult
+		{
+			DeviceId = deviceId,
+			BundleId = bundleId,
+			Operation = AppOperations.Uninstall,
+		};
+	}
+
+	/// <summary>
+	/// Fails when <c>am start -W</c> reported anything other than a completed launch.
+	/// </summary>
+	/// <remarks>
+	/// am writes its failures to stdout and still exits zero, so a caller that trusts the exit code
+	/// believes it launched an app that never started. <c>-W</c> also makes the call mean what it says:
+	/// without it am returns as soon as the intent is dispatched, so the next call -- typically a
+	/// screen dump -- races a process that does not exist yet.
+	/// </remarks>
+	private static void EnsureActivityStarted(string? output, string bundleId)
+	{
+		if (output is null)
+			throw new DeviceCapabilityException($"Could not start '{bundleId}'.");
+
+		if (PackageListParser.FindLaunchFailure(output) is { } failure)
+			throw new DeviceCapabilityException($"Could not start '{bundleId}': {failure}");
+	}
+
+	/// <summary>
+	/// Fails when the package manager reported a failure.
+	/// </summary>
+	/// <remarks>
+	/// <c>adb install</c> and <c>adb uninstall</c> print "Failure [REASON]" and exit zero, so the
+	/// output is the only reliable signal. The bracketed reason is the useful part -- it names the
+	/// difference between a downgrade, a signature mismatch, and a missing package.
+	/// </remarks>
+	private static void EnsurePackageManagerSucceeded(string operation, string subject, ProcessResult result)
+	{
+		var output = (result.StandardOutput + '\n' + result.StandardError).Trim();
+
+		if (result.ExitCode == 0 && output.Contains("Success", StringComparison.OrdinalIgnoreCase))
+			return;
+
+		var detail = output.Split('\n')
+			.Select(line => line.Trim())
+			.FirstOrDefault(line =>
+				line.StartsWith("Failure", StringComparison.OrdinalIgnoreCase)
+				|| line.StartsWith("Error", StringComparison.OrdinalIgnoreCase)
+				|| line.StartsWith("adb:", StringComparison.OrdinalIgnoreCase));
+
+		throw new DeviceCapabilityException(
+			$"Could not {operation} '{subject}': {detail ?? (output.Length == 0 ? $"adb exited with code {result.ExitCode}." : output)}");
+	}
+
+	#endregion
+
 	#region Geometry
 
 	public async Task<DisplayGeometry> GetDisplayAsync(
@@ -1103,6 +1323,28 @@ public sealed partial class AndroidEmulatorBackend : IDeviceBackend, IAsyncDispo
 			.ConfigureAwait(false);
 
 		return result.ExitCode == 0 ? result.StandardOutput : null;
+	}
+
+	/// <summary>
+	/// Runs adb and returns the whole result, including exit code and stderr.
+	/// </summary>
+	/// <remarks>
+	/// <see cref="RunAdbAsync"/> collapses any failure to null, which is fine for a probe but loses the
+	/// reason. Package operations fail for specific, actionable reasons -- a signature mismatch, a
+	/// downgrade, a missing package -- so they need the text adb actually printed.
+	/// </remarks>
+	internal async Task<ProcessResult> RunAdbResultAsync(
+		string serial,
+		string[] arguments,
+		CancellationToken cancellationToken)
+	{
+		if (_locator.Adb is null)
+			throw new DeviceCapabilityException(
+				"adb was not found. Install Android platform-tools or set ANDROID_HOME.");
+
+		return await _processRunner
+			.RunAsync(new ProcessRequest(_locator.Adb, ["-s", serial, .. arguments]), cancellationToken)
+			.ConfigureAwait(false);
 	}
 
 	/// <summary>

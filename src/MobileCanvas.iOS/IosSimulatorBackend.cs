@@ -498,6 +498,196 @@ public sealed class IosSimulatorBackend : IDeviceBackend, IAsyncDisposable
 		};
 	}
 
+	#region Apps
+
+	public async Task<InstalledApp[]> ListAppsAsync(
+		string deviceId,
+		bool includeSystem,
+		CancellationToken cancellationToken = default)
+	{
+		var device = await RequireBootedAsync(deviceId, cancellationToken).ConfigureAwait(false);
+		var json = await ListAppsJsonAsync(device.NativeId, cancellationToken).ConfigureAwait(false);
+
+		// Running state is one extra call for the whole list, so it is always included: knowing an app
+		// is already up is what tells a caller whether to launch it or just bring it forward.
+		var running = SimctlAppParser.ParseRunning(
+			await TryListRunningAsync(device.NativeId, cancellationToken).ConfigureAwait(false));
+
+		var apps = SimctlAppParser.Parse(json, running);
+		return includeSystem ? apps : [.. apps.Where(app => app.Kind == AppKinds.User)];
+	}
+
+	public async Task<AppOperationResult> LaunchAppAsync(
+		string deviceId,
+		AppLaunchRequest request,
+		CancellationToken cancellationToken = default)
+	{
+		var device = await RequireBootedAsync(deviceId, cancellationToken).ConfigureAwait(false);
+
+		if (request.Relaunch)
+		{
+			// A terminate for an app that is not running exits non-zero, which is not a failure of the
+			// relaunch the caller asked for, so its result is deliberately ignored.
+			await RunAsync(["terminate", device.NativeId, request.BundleId], cancellationToken)
+				.ConfigureAwait(false);
+		}
+
+		var arguments = new List<string> { "launch", device.NativeId, request.BundleId };
+		arguments.AddRange(request.Arguments);
+
+		var result = await RunAsync(arguments, cancellationToken).ConfigureAwait(false);
+		if (result.ExitCode != 0)
+			throw new DeviceCapabilityException(DescribeAppFailure("launch", request.BundleId, result));
+
+		return new AppOperationResult
+		{
+			DeviceId = deviceId,
+			BundleId = request.BundleId,
+			Operation = AppOperations.Launch,
+			ProcessId = SimctlAppParser.ParseLaunchedPid(result.StandardOutput),
+		};
+	}
+
+	public async Task<AppOperationResult> TerminateAppAsync(
+		string deviceId,
+		string bundleId,
+		CancellationToken cancellationToken = default)
+	{
+		var device = await RequireBootedAsync(deviceId, cancellationToken).ConfigureAwait(false);
+		var result = await RunAsync(["terminate", device.NativeId, bundleId], cancellationToken)
+			.ConfigureAwait(false);
+
+		if (result.ExitCode != 0)
+			throw new DeviceCapabilityException(DescribeAppFailure("terminate", bundleId, result));
+
+		return new AppOperationResult
+		{
+			DeviceId = deviceId,
+			BundleId = bundleId,
+			Operation = AppOperations.Terminate,
+		};
+	}
+
+	public async Task<AppOperationResult> InstallAppAsync(
+		string deviceId,
+		AppInstallRequest request,
+		CancellationToken cancellationToken = default)
+	{
+		var device = await RequireBootedAsync(deviceId, cancellationToken).ConfigureAwait(false);
+		var result = await RunAsync(["install", device.NativeId, request.Path], cancellationToken)
+			.ConfigureAwait(false);
+
+		if (result.ExitCode != 0)
+			throw new DeviceCapabilityException(DescribeAppFailure("install", request.Path, result));
+
+		// simctl says nothing about what it installed, so the bundle ID is read back from the app's own
+		// Info.plist. A caller that just installed something needs its identifier to launch it.
+		var bundleId = await TryReadBundleIdAsync(request.Path, cancellationToken).ConfigureAwait(false);
+
+		return new AppOperationResult
+		{
+			DeviceId = deviceId,
+			BundleId = bundleId ?? "",
+			Operation = AppOperations.Install,
+			Detail = request.Path,
+		};
+	}
+
+	public async Task<AppOperationResult> UninstallAppAsync(
+		string deviceId,
+		string bundleId,
+		CancellationToken cancellationToken = default)
+	{
+		var device = await RequireBootedAsync(deviceId, cancellationToken).ConfigureAwait(false);
+
+		// simctl uninstall succeeds silently for an app that was never installed, so a mistyped bundle
+		// ID would read as a completed uninstall. Android reports that case, and a caller should not
+		// have to know which platform it is talking to, so the app is confirmed present first.
+		var container = await RunAsync(["get_app_container", device.NativeId, bundleId], cancellationToken)
+			.ConfigureAwait(false);
+
+		if (container.ExitCode != 0)
+			throw new DeviceCapabilityException(
+				$"'{bundleId}' is not installed on '{device.NativeId}', so there is nothing to uninstall.");
+
+		var result = await RunAsync(["uninstall", device.NativeId, bundleId], cancellationToken)
+			.ConfigureAwait(false);
+
+		if (result.ExitCode != 0)
+			throw new DeviceCapabilityException(DescribeAppFailure("uninstall", bundleId, result));
+
+		return new AppOperationResult
+		{
+			DeviceId = deviceId,
+			BundleId = bundleId,
+			Operation = AppOperations.Uninstall,
+		};
+	}
+
+	/// <summary>
+	/// Runs <c>simctl listapps</c> and converts its property list to JSON with <c>plutil</c>.
+	/// </summary>
+	private async Task<string> ListAppsJsonAsync(string udid, CancellationToken cancellationToken)
+	{
+		var listed = await RunAsync(["listapps", udid], cancellationToken).ConfigureAwait(false);
+		EnsureSuccess("xcrun", ["simctl", "listapps", udid], listed);
+
+		var converted = await _processRunner.RunAsync(
+			new ProcessRequest("plutil", ["-convert", "json", "-o", "-", "-"], StandardInput: listed.StandardOutput),
+			cancellationToken).ConfigureAwait(false);
+
+		if (converted.ExitCode != 0)
+			throw new DeviceCapabilityException(
+				$"Could not read the app list from simulator '{udid}': plutil rejected simctl's output "
+				+ $"({converted.StandardError.Trim()}).");
+
+		return converted.StandardOutput;
+	}
+
+	/// <summary>
+	/// Lists running jobs, tolerating failure: an app list is still useful without running state, so a
+	/// simulator that will not answer should degrade rather than fail the whole call.
+	/// </summary>
+	private async Task<string?> TryListRunningAsync(string udid, CancellationToken cancellationToken)
+	{
+		try
+		{
+			var result = await _processRunner.RunAsync(
+				new ProcessRequest("xcrun", ["simctl", "spawn", udid, "launchctl", "list"]),
+				cancellationToken).ConfigureAwait(false);
+			return result.ExitCode == 0 ? result.StandardOutput : null;
+		}
+		catch (Exception exception) when (exception is not OperationCanceledException)
+		{
+			return null;
+		}
+	}
+
+	private async Task<string?> TryReadBundleIdAsync(string appPath, CancellationToken cancellationToken)
+	{
+		var plist = Path.Combine(appPath, "Info.plist");
+		if (!File.Exists(plist))
+			return null;
+
+		var result = await _processRunner.RunAsync(
+			new ProcessRequest("plutil", ["-extract", "CFBundleIdentifier", "raw", "-o", "-", plist]),
+			cancellationToken).ConfigureAwait(false);
+
+		return result.ExitCode == 0 ? result.StandardOutput.Trim() : null;
+	}
+
+	private static string DescribeAppFailure(string operation, string subject, ProcessResult result)
+	{
+		var detail = string.IsNullOrWhiteSpace(result.StandardError)
+			? result.StandardOutput.Trim()
+			: result.StandardError.Trim();
+
+		return $"Could not {operation} '{subject}': "
+			+ (detail.Length == 0 ? $"simctl exited with code {result.ExitCode}." : detail);
+	}
+
+	#endregion
+
 	public async ValueTask DisposeAsync()
 	{
 		await _recordings.DisposeAsync().ConfigureAwait(false);

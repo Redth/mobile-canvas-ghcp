@@ -346,6 +346,75 @@ public sealed class DeviceHostClient
 			.ConfigureAwait(false);
 	}
 
+	public async Task<AppListResult> ListAppsAsync(
+		string deviceId,
+		AppQuery query,
+		CancellationToken cancellationToken = default)
+	{
+		var path = $"/api/v1/devices/{Escape(deviceId)}/apps"
+			+ $"?system={(query.IncludeSystem ? "true" : "false")}&limit={query.Limit}"
+			+ (string.IsNullOrWhiteSpace(query.Text) ? "" : $"&text={Uri.EscapeDataString(query.Text)}");
+
+		var response = await SendAsync(HttpMethod.Get, path, cancellationToken).ConfigureAwait(false);
+		return await ReadAsync(response, DeviceJsonContext.Default.AppListResult, cancellationToken)
+			.ConfigureAwait(false);
+	}
+
+	public async Task<AppOperationResult> LaunchAppAsync(
+		string deviceId,
+		AppLaunchRequest request,
+		CancellationToken cancellationToken = default)
+	{
+		var response = await SendAsync(
+			HttpMethod.Post,
+			$"/api/v1/devices/{Escape(deviceId)}/apps/launch",
+			JsonContent.Create(request, DeviceJsonContext.Default.AppLaunchRequest),
+			cancellationToken).ConfigureAwait(false);
+		return await ReadAsync(response, DeviceJsonContext.Default.AppOperationResult, cancellationToken)
+			.ConfigureAwait(false);
+	}
+
+	public async Task<AppOperationResult> TerminateAppAsync(
+		string deviceId,
+		string bundleId,
+		CancellationToken cancellationToken = default)
+	{
+		var response = await SendAsync(
+			HttpMethod.Post,
+			$"/api/v1/devices/{Escape(deviceId)}/apps/{Escape(bundleId)}/terminate",
+			cancellationToken).ConfigureAwait(false);
+		return await ReadAsync(response, DeviceJsonContext.Default.AppOperationResult, cancellationToken)
+			.ConfigureAwait(false);
+	}
+
+	public async Task<AppOperationResult> InstallAppAsync(
+		string deviceId,
+		AppInstallRequest request,
+		CancellationToken cancellationToken = default)
+	{
+		var response = await SendAsync(
+			HttpMethod.Post,
+			$"/api/v1/devices/{Escape(deviceId)}/apps/install",
+			JsonContent.Create(request, DeviceJsonContext.Default.AppInstallRequest),
+			cancellationToken).ConfigureAwait(false);
+		return await ReadAsync(response, DeviceJsonContext.Default.AppOperationResult, cancellationToken)
+			.ConfigureAwait(false);
+	}
+
+	public async Task<AppOperationResult> UninstallAppAsync(
+		string deviceId,
+		string bundleId,
+		bool confirm,
+		CancellationToken cancellationToken = default)
+	{
+		var response = await SendAsync(
+			HttpMethod.Post,
+			$"/api/v1/devices/{Escape(deviceId)}/apps/{Escape(bundleId)}/uninstall?confirm={(confirm ? "true" : "false")}",
+			cancellationToken).ConfigureAwait(false);
+		return await ReadAsync(response, DeviceJsonContext.Default.AppOperationResult, cancellationToken)
+			.ConfigureAwait(false);
+	}
+
 	public async Task<byte[]> ScreenshotAsync(
 		string deviceId,
 		CanvasContextKey? context = null,

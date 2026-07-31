@@ -242,6 +242,91 @@ public sealed class DeviceService(IEnumerable<IDeviceBackend> backends)
 		return new UiTapResult { DeviceId = deviceId, Match = match, Total = found.Total };
 	}
 
+	/// <summary>
+	/// Lists installed apps, applying the text and limit filters here so both platforms search the
+	/// same way and a backend only has to answer "what is installed".
+	/// </summary>
+	public async Task<AppListResult> ListAppsAsync(
+		string deviceId,
+		AppQuery query,
+		CancellationToken cancellationToken = default)
+	{
+		var apps = await GetBackend(deviceId)
+			.ListAppsAsync(deviceId, query.IncludeSystem, cancellationToken)
+			.ConfigureAwait(false);
+
+		var matched = apps.Where(app => Matches(app, query.Text))
+			.OrderBy(app => app.Kind == AppKinds.System)
+			.ThenBy(app => app.Name ?? app.BundleId, StringComparer.OrdinalIgnoreCase)
+			.ToArray();
+
+		return new AppListResult
+		{
+			DeviceId = deviceId,
+			Platform = DeviceIdentity.GetPlatform(deviceId),
+			Total = matched.Length,
+			Apps = [.. matched.Take(Math.Max(1, query.Limit))],
+		};
+	}
+
+	public Task<AppOperationResult> LaunchAppAsync(
+		string deviceId,
+		AppLaunchRequest request,
+		CancellationToken cancellationToken = default) =>
+		GetBackend(deviceId).LaunchAppAsync(
+			deviceId,
+			request with { BundleId = RequireBundleId(request.BundleId) },
+			cancellationToken);
+
+	public Task<AppOperationResult> TerminateAppAsync(
+		string deviceId,
+		string bundleId,
+		CancellationToken cancellationToken = default) =>
+		GetBackend(deviceId).TerminateAppAsync(deviceId, RequireBundleId(bundleId), cancellationToken);
+
+	public Task<AppOperationResult> InstallAppAsync(
+		string deviceId,
+		AppInstallRequest request,
+		CancellationToken cancellationToken = default)
+	{
+		if (string.IsNullOrWhiteSpace(request.Path))
+			throw new ArgumentException("An app path is required to install.", nameof(request));
+
+		// Checked here rather than left to the platform tool, whose own message for a missing file is
+		// buried in installer output and does not name the path the caller actually passed.
+		var path = System.IO.Path.GetFullPath(request.Path);
+		if (!File.Exists(path) && !Directory.Exists(path))
+			throw new FileNotFoundException($"No app bundle or package exists at '{path}'.", path);
+
+		return GetBackend(deviceId).InstallAppAsync(deviceId, request with { Path = path }, cancellationToken);
+	}
+
+	public Task<AppOperationResult> UninstallAppAsync(
+		string deviceId,
+		string bundleId,
+		bool confirm,
+		CancellationToken cancellationToken = default)
+	{
+		RequireConfirmation("uninstall", confirm);
+		return GetBackend(deviceId).UninstallAppAsync(deviceId, RequireBundleId(bundleId), cancellationToken);
+	}
+
+	private static bool Matches(InstalledApp app, string? text)
+	{
+		if (string.IsNullOrWhiteSpace(text))
+			return true;
+
+		return app.BundleId.Contains(text, StringComparison.OrdinalIgnoreCase)
+			|| (app.Name?.Contains(text, StringComparison.OrdinalIgnoreCase) ?? false);
+	}
+
+	private static string RequireBundleId(string bundleId) =>
+		string.IsNullOrWhiteSpace(bundleId)
+			? throw new ArgumentException(
+				"A bundle ID (iOS) or package name (Android) is required.",
+				nameof(bundleId))
+			: bundleId.Trim();
+
 	private static string Describe(UiQuery query)
 	{
 		var terms = new List<string>();
