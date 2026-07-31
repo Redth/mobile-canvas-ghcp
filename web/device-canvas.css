@@ -35,6 +35,10 @@
   --shadow-device: 0 1px 3px #1f23281f, 0 16px 40px #1f232833;
   --scrim: #ffffffd9;
 
+  /* Referenced by several controls but never defined, so their transitions were dropped as
+     invalid. Theme-independent, so it stays out of the dark overrides. */
+  --motion-fast: 120ms ease;
+
   color: var(--fg-default);
   background: var(--canvas-default);
   font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
@@ -727,9 +731,10 @@ summary:focus-visible,
   overflow: hidden;
 }
 
+/* The stage is the only row now that the drawers have become dialogs, so it takes the full height. */
 .device-view {
   display: grid;
-  grid-template-rows: minmax(0, 1fr) auto;
+  grid-template-rows: minmax(0, 1fr);
   min-height: 0;
   height: 100%;
 }
@@ -779,6 +784,69 @@ summary:focus-visible,
 
 .device-frame.is-interacting {
   border-color: var(--accent-emphasis);
+}
+
+/*
+ * The sleep/wake key, hung off the right edge like the hardware one. Growing right and upward on
+ * hover is what marks it as pressable -- at rest it reads as part of the frame, which is the point.
+ * The reach is capped at the stage's narrowest horizontal padding so it is never clipped.
+ */
+.side-button {
+  position: absolute;
+  top: 19%;
+  left: 100%;
+  width: 8px;
+  height: 62px;
+  padding: 0;
+  border: 0;
+  background: none;
+  cursor: pointer;
+}
+
+/* Sits 1px back so it overlaps the frame border and reads as welded on rather than floating. */
+.side-button::before {
+  content: "";
+  position: absolute;
+  left: -1px;
+  bottom: 8px;
+  width: 5px;
+  height: 46px;
+  border: 1px solid var(--border-default);
+  border-left: 0;
+  border-radius: 0 4px 4px 0;
+  background: var(--canvas-inset);
+  transition:
+    width var(--motion-fast),
+    height var(--motion-fast),
+    background var(--motion-fast),
+    box-shadow var(--motion-fast);
+}
+
+.side-button:hover:not(:disabled)::before,
+.side-button:focus-visible::before {
+  width: 8px;
+  height: 56px;
+  background: var(--control-hover);
+  box-shadow: 2px 0 8px #1f232833;
+}
+
+.side-button:active:not(:disabled)::before {
+  width: 7px;
+  background: var(--control-active);
+}
+
+.side-button:focus-visible {
+  outline: 2px solid var(--focus);
+  outline-offset: 1px;
+  border-radius: 4px;
+}
+
+.side-button:disabled {
+  cursor: not-allowed;
+}
+
+.side-button:disabled::before {
+  opacity: 0.4;
 }
 
 #device-screen {
@@ -974,15 +1042,24 @@ summary:focus-visible,
 .status-pill {
   display: inline-flex;
   align-items: center;
-  gap: 8px;
   max-width: 100%;
-  padding: 4px 10px;
+  padding: 4px 6px 4px 10px;
   border: 1px solid var(--border-default);
   border-radius: 999px;
   background: var(--canvas-subtle);
   color: var(--fg-muted);
   font-size: 12px;
   white-space: nowrap;
+}
+
+/* Spacing lives on the children rather than a container gap: the collapsed detail panel is a
+   zero-width grid item, and a gap would leave a visible hole beside the chip. */
+.status-pill > * + * {
+  margin-left: 8px;
+}
+
+.status-pill > .link-details {
+  margin-left: 0;
 }
 
 .pill-item {
@@ -992,6 +1069,10 @@ summary:focus-visible,
   min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
+}
+
+.pill-status {
+  flex: 0 1 auto;
 }
 
 .pill-divider {
@@ -1006,54 +1087,105 @@ summary:focus-visible,
   font-variant-numeric: tabular-nums;
 }
 
-/* -------------------------------------------------------------- drawers --- */
+/*
+ * The four stream readouts reduce to one traffic light. Bars are lit by health rather than by an
+ * exact frame rate, because the precise number is noise once the stream is simply working.
+ */
+.link-chip {
+  display: inline-grid;
+  place-items: center;
+  flex: 0 0 auto;
+  width: 24px;
+  height: 20px;
+  padding: 0;
+  border: 0;
+  border-radius: 6px;
+  background: none;
+  cursor: pointer;
+  transition: background var(--motion-fast);
+}
 
-.drawers {
+.link-chip:hover {
+  background: var(--control-hover);
+}
+
+.link-bars {
+  width: 13px;
+  height: 10px;
+  fill: var(--fg-subtle);
+  stroke: none;
+}
+
+.link-chip[data-health="good"] .link-bar {
+  fill: var(--success-fg);
+}
+
+.link-chip[data-health="fair"] .link-bar:nth-child(-n + 2) {
+  fill: var(--attention-fg);
+}
+
+.link-chip[data-health="poor"] .link-bar:first-child {
+  fill: var(--danger-fg);
+}
+
+/*
+ * Animating to an intrinsic width: a single-column grid transitions between 0fr and 1fr, and the
+ * inner track clips its own content while the column resolves.
+ */
+.link-details {
   display: grid;
-  gap: 1px;
-  max-height: 45dvh;
-  overflow-y: auto;
-  border-top: 1px solid var(--border-default);
-  background: var(--border-muted);
+  grid-template-columns: 0fr;
+  opacity: 0;
+  transition: grid-template-columns 180ms ease, opacity 140ms ease;
 }
 
-.drawer {
-  background: var(--canvas-default);
-}
-
-.drawer > summary {
+.link-details-inner {
   display: flex;
   align-items: center;
-  gap: 6px;
-  padding: 8px 12px;
+  gap: 8px;
+  min-width: 0;
+  overflow: hidden;
+}
+
+/* Padding is not shrinkable, so padding here would leave the collapsed panel 8px wide and put a
+   dead gap beside the chip. A zero-width first child pushes the same distance using the flex gap,
+   and it lives inside the clipped box so it vanishes with everything else. */
+.link-details-inner::before {
+  content: "";
+  flex: 0 0 0;
+}
+
+.status-pill.is-expanded .link-details {
+  grid-template-columns: 1fr;
+  opacity: 1;
+}
+
+.pill-button {
+  display: inline-grid;
+  place-items: center;
+  flex: 0 0 auto;
+  width: 22px;
+  height: 22px;
+  padding: 0;
+  border: 0;
+  border-radius: 999px;
+  background: none;
   color: var(--fg-muted);
-  font-weight: 500;
   cursor: pointer;
-  list-style: none;
+  transition: background var(--motion-fast), color var(--motion-fast);
 }
 
-.drawer > summary::-webkit-details-marker {
-  display: none;
-}
-
-.drawer > summary:hover {
+.pill-button:hover:not(:disabled) {
   background: var(--control-hover);
   color: var(--fg-default);
 }
 
-.drawer > summary .icon {
-  transition: transform 120ms ease;
+.pill-button:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
 }
 
-.drawer[open] > summary .icon {
-  transform: rotate(90deg);
-}
-
-.drawer-body {
-  display: grid;
-  gap: 12px;
-  padding: 4px 12px 12px;
-}
+/* --------------------------------------------------------------- fields --- */
 
 .field-grid {
   display: grid;
@@ -1089,7 +1221,7 @@ input {
   color: var(--fg-default);
 }
 
-/* Read-only fields reuse the control box so the drawer reads as one grid, but
+/* Read-only fields reuse the control box so the dialog reads as one grid, but
    sit back visually because they report state rather than accept input. */
 input[readonly] {
   background: var(--canvas-subtle);
@@ -1145,20 +1277,10 @@ input[readonly].field-degraded {
   cursor: not-allowed;
 }
 
-.drawer.danger-drawer > summary {
-  color: var(--danger-fg);
-}
-
 .danger-actions {
   display: flex;
   flex-wrap: wrap;
   gap: 8px;
-}
-
-.drawer-note {
-  margin: 0;
-  color: var(--fg-muted);
-  font-size: 12px;
 }
 
 .theme-toggle {

@@ -33,9 +33,6 @@
     <symbol id="icon-chevron-down" viewBox="0 0 16 16">
       <path d="m4 6.25 4 4 4-4"></path>
     </symbol>
-    <symbol id="icon-chevron-right" viewBox="0 0 16 16">
-      <path d="m6.25 4 4 4-4 4"></path>
-    </symbol>
     <symbol id="icon-home" viewBox="0 0 16 16">
       <path d="m2.25 7.25 5.75-5 5.75 5v6.25h-4v-4h-3.5v4h-4z"></path>
     </symbol>
@@ -44,10 +41,6 @@
     </symbol>
     <symbol id="icon-apps" viewBox="0 0 16 16">
       <rect x="3" y="3" width="10" height="10" rx="2"></rect>
-    </symbol>
-    <symbol id="icon-lock" viewBox="0 0 16 16">
-      <rect x="3.25" y="7" width="9.5" height="7" rx="1.75"></rect>
-      <path d="M5.5 7V5a2.5 2.5 0 0 1 5 0v2"></path>
     </symbol>
     <symbol id="icon-play" viewBox="0 0 16 16">
       <path d="M4.25 2.5 13 8l-8.75 5.5z"></path>
@@ -70,9 +63,23 @@
       <path d="M8.75 2.25h5v5M13.5 2.5 7.25 8.75"></path>
       <path d="M6.5 3.75H2.75v9.5h9.5V9.5"></path>
     </symbol>
+    <!--
+      Detach is "this panel leaves, the device keeps running", so the standard sign-out glyph reads
+      better than a broken chain link, which at 16px was mostly noise.
+    -->
     <symbol id="icon-detach" viewBox="0 0 16 16">
-      <path d="M6.25 4.25 3.5 1.5M3.5 4.25V1.5h2.75M9.75 11.75l2.75 2.75m0-2.75v2.75H9.75"></path>
-      <path d="m6.25 9.75-1 1a2.47 2.47 0 0 1-3.5-3.5l2-2a2.47 2.47 0 0 1 3.5 0M9.75 6.25l1-1a2.47 2.47 0 1 1 3.5 3.5l-2 2a2.47 2.47 0 0 1-3.5 0"></path>
+      <path d="M8.75 2.75h-6v10.5h6"></path>
+      <path d="M14 8H6.5M11.25 5.25 14 8l-2.75 2.75"></path>
+    </symbol>
+    <!-- Drawn on a 24 grid, so the stroke is widened to land on the same visual weight at 16px. -->
+    <symbol id="icon-settings" viewBox="0 0 24 24" stroke-width="2.2">
+      <path d="M12.22 2h-.44a2 2 0 0 0-2 2v.18a2 2 0 0 1-1 1.73l-.43.25a2 2 0 0 1-2 0l-.15-.08a2 2 0 0 0-2.73.73l-.22.38a2 2 0 0 0 .73 2.73l.15.1a2 2 0 0 1 1 1.72v.51a2 2 0 0 1-1 1.74l-.15.09a2 2 0 0 0-.73 2.73l.22.38a2 2 0 0 0 2.73.73l.15-.08a2 2 0 0 1 2 0l.43.25a2 2 0 0 1 1 1.73V20a2 2 0 0 0 2 2h.44a2 2 0 0 0 2-2v-.18a2 2 0 0 1 1-1.73l.43-.25a2 2 0 0 1 2 0l.15.08a2 2 0 0 0 2.73-.73l.22-.39a2 2 0 0 0-.73-2.73l-.15-.08a2 2 0 0 1-1-1.74v-.5a2 2 0 0 1 1-1.74l.15-.09a2 2 0 0 0 .73-2.73l-.22-.38a2 2 0 0 0-2.73-.73l-.15.08a2 2 0 0 1-2 0l-.43-.25a2 2 0 0 1-1-1.73V4a2 2 0 0 0-2-2z"></path>
+      <circle cx="12" cy="12" r="3"></circle>
+    </symbol>
+    <symbol id="icon-database" viewBox="0 0 16 16">
+      <ellipse cx="8" cy="3.6" rx="5.25" ry="2.1"></ellipse>
+      <path d="M2.75 3.6v8.8c0 1.16 2.35 2.1 5.25 2.1s5.25-.94 5.25-2.1V3.6"></path>
+      <path d="M2.75 8c0 1.16 2.35 2.1 5.25 2.1s5.25-.94 5.25-2.1"></path>
     </symbol>
     <symbol id="icon-copy" viewBox="0 0 16 16">
       <rect x="5.25" y="5.25" width="8.5" height="8.5" rx="1.5"></rect>
@@ -161,6 +168,9 @@
               <button class="tool-button" data-action="reveal" type="button" aria-label="Reveal in Simulator.app" title="Reveal in Simulator.app">
                 <svg class="icon" aria-hidden="true"><use href="#icon-external"></use></svg>
               </button>
+              <button class="tool-button" data-action="data" type="button" aria-label="Device data" title="Device data">
+                <svg class="icon" aria-hidden="true"><use href="#icon-database"></use></svg>
+              </button>
               <button class="tool-button" data-action="detach" type="button" aria-label="Detach canvas" title="Detach canvas">
                 <svg class="icon" aria-hidden="true"><use href="#icon-detach"></use></svg>
               </button>
@@ -186,6 +196,13 @@
                   <path d="M5.4 2 18.4 13.35c.78.68.33 1.96-.68 2.07l-5.22.63a1.2 1.2 0 0 0-.88.63l-2.4 4.6c-.45.86-1.75.58-1.82-.4L5.4 2z" />
                 </svg>
               </div>
+              <!--
+                The sleep/wake key, hung off the right edge where it sits on the hardware. Purely
+                decorative chrome would be a lie, so this is the real Lock button.
+              -->
+              <button id="side-button" class="side-button" data-action="lock" type="button" aria-label="Press Lock" title="Lock">
+                <span class="side-button-cap" aria-hidden="true"></span>
+              </button>
             </div>
             <p id="automation-live" class="visually-hidden" role="status" aria-live="polite"></p>
           </div>
@@ -201,105 +218,61 @@
             <button class="nav-button" data-action="apps" data-platform="android" type="button" aria-label="Press Recents" title="Recent apps">
               <svg class="icon" aria-hidden="true"><use href="#icon-apps"></use></svg>
             </button>
-            <button class="nav-button" data-action="lock" type="button" aria-label="Press Lock" title="Lock">
-              <svg class="icon" aria-hidden="true"><use href="#icon-lock"></use></svg>
+          </div>
+
+          <div class="status-pill">
+            <span class="pill-item pill-status">
+              <span id="input-state-dot" class="status-dot ready" aria-hidden="true"></span>
+              <span id="input-status" aria-live="polite">Input ready</span>
+            </span>
+
+            <span class="pill-divider" aria-hidden="true"></span>
+
+            <!--
+              Latency, frame rate, encode size and transport reduce to one traffic-light chip. The
+              exact numbers are noise nearly all of the time, and the room reads better spent on the
+              last action; the chip expands them back inline on demand.
+            -->
+            <button id="link-chip" class="link-chip" type="button" data-health="poor"
+                    aria-expanded="false" aria-controls="link-details">
+              <svg class="link-bars" viewBox="0 0 13 10" aria-hidden="true">
+                <rect class="link-bar" x="0" y="6" width="3" height="4" rx="1.1"></rect>
+                <rect class="link-bar" x="5" y="3" width="3" height="7" rx="1.1"></rect>
+                <rect class="link-bar" x="10" y="0" width="3" height="10" rx="1.1"></rect>
+              </svg>
+            </button>
+
+            <div id="link-details" class="link-details" aria-hidden="true">
+              <div class="link-details-inner">
+                <span id="input-latency-wrap" class="pill-item hidden">
+                  <span class="pill-divider" aria-hidden="true"></span>
+                  <span id="input-latency" class="pill-value"></span>
+                </span>
+                <span class="pill-item">
+                  <span class="pill-divider" aria-hidden="true"></span>
+                  <span id="actual-fps" class="pill-value">0 FPS</span>
+                </span>
+                <span class="pill-item">
+                  <span class="pill-divider" aria-hidden="true"></span>
+                  <span id="encode-size" class="pill-value">—</span>
+                </span>
+                <span class="pill-item">
+                  <span class="pill-divider" aria-hidden="true"></span>
+                  <span id="stream-mode">idle</span>
+                </span>
+              </div>
+            </div>
+
+            <span class="pill-divider" aria-hidden="true"></span>
+
+            <button id="settings-button" class="pill-button" data-action="settings" type="button"
+                    aria-label="Stream settings" title="Stream settings">
+              <svg class="icon" aria-hidden="true"><use href="#icon-settings"></use></svg>
             </button>
           </div>
-
-          <div class="status-pill" aria-live="polite">
-            <span class="pill-item">
-              <span id="input-state-dot" class="status-dot ready" aria-hidden="true"></span>
-              <span id="input-status">Input ready</span>
-            </span>
-            <span id="input-latency-wrap" class="pill-item hidden">
-              <span class="pill-divider" aria-hidden="true"></span>
-              <span id="input-latency" class="pill-value"></span>
-            </span>
-            <span class="pill-item">
-              <span class="pill-divider" aria-hidden="true"></span>
-              <span id="actual-fps" class="pill-value">0 FPS</span>
-            </span>
-            <span class="pill-item">
-              <span class="pill-divider" aria-hidden="true"></span>
-              <span id="encode-size" class="pill-value">—</span>
-            </span>
-            <span class="pill-item">
-              <span class="pill-divider" aria-hidden="true"></span>
-              <span id="stream-mode">idle</span>
-            </span>
-          </div>
         </div>
+      </section>
 
-        <div class="drawers">
-          <details id="settings-drawer" class="drawer">
-            <summary>
-              <svg class="icon" aria-hidden="true"><use href="#icon-chevron-right"></use></svg>
-              Stream settings
-            </summary>
-            <div class="drawer-body">
-              <div class="field-grid">
-                <label>
-                  <span>Frame rate</span>
-                  <select id="fps-select">
-                    <option value="15">15 FPS</option>
-                    <option value="30">30 FPS</option>
-                    <option value="60" selected>60 FPS</option>
-                  </select>
-                </label>
-                <label>
-                  <span>Source scale</span>
-                  <select id="scale-select">
-                    <option value="auto" selected>Auto</option>
-                    <option value="0.25">25%</option>
-                    <option value="0.5">50%</option>
-                    <option value="0.75">75%</option>
-                    <option value="1">100%</option>
-                  </select>
-                </label>
-                <label>
-                  <span>Geometry</span>
-                  <input id="geometry" type="text" value="—" readonly tabindex="-1" />
-                </label>
-                <label>
-                  <span>Capture</span>
-                  <input id="capture-source" type="text" value="—" readonly tabindex="-1" />
-                </label>
-                <label class="field-wide">
-                  <span id="udid-label">Device ID</span>
-                  <span class="input-action-wrap">
-                    <input id="udid" type="text" value="—" readonly spellcheck="false" />
-                    <button id="copy-udid" class="input-action" type="button" aria-label="Copy device ID" title="Copy device ID">
-                      <svg class="icon" aria-hidden="true"><use href="#icon-copy"></use></svg>
-                    </button>
-                  </span>
-                </label>
-              </div>
-
-              <div class="dialog-field">
-                <span>Appearance</span>
-                <div class="theme-toggle" role="group" aria-label="Canvas appearance">
-                  <button type="button" data-theme-choice="auto" aria-pressed="true">Auto</button>
-                  <button type="button" data-theme-choice="light" aria-pressed="false">Light</button>
-                  <button type="button" data-theme-choice="dark" aria-pressed="false">Dark</button>
-                </div>
-              </div>
-            </div>
-          </details>
-
-          <details class="drawer danger-drawer">
-            <summary>
-              <svg class="icon" aria-hidden="true"><use href="#icon-chevron-right"></use></svg>
-              Device data
-            </summary>
-            <div class="drawer-body">
-              <p class="drawer-note">These actions cannot be undone.</p>
-              <div class="danger-actions">
-                <button id="erase-button" class="button danger" type="button">Erase content</button>
-                <button id="delete-button" class="button danger" type="button">Delete device</button>
-              </div>
-            </div>
-          </details>
-        </div>
       </section>
 
       <section id="detached-state" class="empty-state hidden">
@@ -343,6 +316,96 @@
       <div class="dialog-actions">
         <button id="create-cancel" class="button" type="button">Cancel</button>
         <button id="create-submit" class="button primary" type="submit">Create device</button>
+      </div>
+    </form>
+  </dialog>
+
+  <dialog id="settings-dialog">
+    <form method="dialog">
+      <div class="dialog-heading">
+        <div>
+          <span class="dialog-kicker">Live view</span>
+          <h2>Stream settings</h2>
+          <p>Frame rate and source scale restart the stream as soon as they change.</p>
+        </div>
+        <button class="close-button" value="close" aria-label="Close" type="submit">
+          <svg class="icon" aria-hidden="true"><use href="#icon-close"></use></svg>
+        </button>
+      </div>
+
+      <div class="field-grid">
+        <label>
+          <span>Frame rate</span>
+          <select id="fps-select">
+            <option value="15">15 FPS</option>
+            <option value="30">30 FPS</option>
+            <option value="60" selected>60 FPS</option>
+          </select>
+        </label>
+        <label>
+          <span>Source scale</span>
+          <select id="scale-select">
+            <option value="auto" selected>Auto</option>
+            <option value="0.25">25%</option>
+            <option value="0.5">50%</option>
+            <option value="0.75">75%</option>
+            <option value="1">100%</option>
+          </select>
+        </label>
+        <label>
+          <span>Geometry</span>
+          <input id="geometry" type="text" value="—" readonly tabindex="-1" />
+        </label>
+        <label>
+          <span>Capture</span>
+          <input id="capture-source" type="text" value="—" readonly tabindex="-1" />
+        </label>
+        <label class="field-wide">
+          <span id="udid-label">Device ID</span>
+          <span class="input-action-wrap">
+            <input id="udid" type="text" value="—" readonly spellcheck="false" />
+            <button id="copy-udid" class="input-action" type="button" aria-label="Copy device ID" title="Copy device ID">
+              <svg class="icon" aria-hidden="true"><use href="#icon-copy"></use></svg>
+            </button>
+          </span>
+        </label>
+      </div>
+
+      <div class="dialog-field">
+        <span>Appearance</span>
+        <div class="theme-toggle" role="group" aria-label="Canvas appearance">
+          <button type="button" data-theme-choice="auto" aria-pressed="true">Auto</button>
+          <button type="button" data-theme-choice="light" aria-pressed="false">Light</button>
+          <button type="button" data-theme-choice="dark" aria-pressed="false">Dark</button>
+        </div>
+      </div>
+
+      <div class="dialog-actions">
+        <button class="button primary" value="close" type="submit">Done</button>
+      </div>
+    </form>
+  </dialog>
+
+  <dialog id="data-dialog">
+    <form method="dialog">
+      <div class="dialog-heading">
+        <div>
+          <span class="dialog-kicker danger-text">Device data</span>
+          <h2>Erase or delete</h2>
+          <p>Both actions ask for confirmation first, and neither can be undone.</p>
+        </div>
+        <button class="close-button" value="close" aria-label="Close" type="submit">
+          <svg class="icon" aria-hidden="true"><use href="#icon-close"></use></svg>
+        </button>
+      </div>
+
+      <div class="danger-actions">
+        <button id="erase-button" class="button danger" type="button">Erase content</button>
+        <button id="delete-button" class="button danger" type="button">Delete device</button>
+      </div>
+
+      <div class="dialog-actions">
+        <button class="button" value="close" type="submit">Close</button>
       </div>
     </form>
   </dialog>

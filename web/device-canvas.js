@@ -51,6 +51,11 @@ const elements = {
   inputLatency: document.querySelector("#input-latency"),
   inputLatencyWrap: document.querySelector("#input-latency-wrap"),
   inputStateDot: document.querySelector("#input-state-dot"),
+  statusPill: document.querySelector(".status-pill"),
+  linkChip: document.querySelector("#link-chip"),
+  linkDetails: document.querySelector("#link-details"),
+  settingsDialog: document.querySelector("#settings-dialog"),
+  dataDialog: document.querySelector("#data-dialog"),
 };
 
 const state = {
@@ -62,6 +67,8 @@ const state = {
   pngTimer: null,
   frameCounter: 0,
   frameClock: performance.now(),
+  parser: null,
+  framePainted: false,
   pointer: null,
   wheel: null,
   wheelTimer: null,
@@ -73,6 +80,9 @@ const state = {
   scaleTimer: null,
   canvasContext: null,
   createPlatform: null,
+  streamMode: "idle",
+  actualFps: 0,
+  linkExpanded: false,
 };
 
 async function api(path, options = {}) {
@@ -289,6 +299,9 @@ async function selectDevice(device, persist) {
   // A cursor left over from the previous device would point at coordinates that no longer mean
   // anything, so drop the overlay whenever the selection changes.
   endAutomation();
+  // The canvas keeps its last painted frame, so without this the previous device's screen shows
+  // through under the "Starting live view..." overlay as though it belonged to the new one.
+  clearScreen();
   elements.empty.classList.add("hidden");
   elements.detached.classList.add("hidden");
   elements.view.classList.remove("hidden");
@@ -312,8 +325,8 @@ async function selectDevice(device, persist) {
     state.display = null;
     elements.overlay.textContent = `${capitalize(platformInfo(state.selected?.platform).noun)} is powered off`;
     elements.overlay.classList.remove("hidden");
-    elements.mode.textContent = "offline";
-    elements.actualFps.textContent = "0 FPS";
+    setStreamMode("offline");
+    setActualFps(0);
     setInputStatus("ready", `Boot the ${platformInfo(state.selected?.platform).noun} to interact`);
   }
 }
@@ -326,8 +339,8 @@ function showEmptySelection() {
   elements.view.classList.add("hidden");
   elements.detached.classList.add("hidden");
   elements.empty.classList.remove("hidden");
-  elements.mode.textContent = "idle";
-  elements.actualFps.textContent = "0 FPS";
+  setStreamMode("idle");
+  setActualFps(0);
   elements.geometry.value = "—";
   applyCaptureSource(null);
   elements.udid.value = "—";
@@ -407,6 +420,9 @@ function updateControlAvailability() {
 }
 
 const MAX_SCREEN_WIDTH = 480;
+// How far the hardware side button reaches past the frame's right edge at its hover size. Kept at
+// or under the stage's narrowest horizontal padding so the button is never clipped.
+const SIDE_BUTTON_REACH = 8;
 const AUTO_SCALE_MIN = 0.35;
 const AUTO_SCALE_MAX = 1;
 const AUTO_SCALE_STEP = 0.05;
@@ -442,6 +458,7 @@ function renderEncodeSize() {
   const source = state.display?.pixelWidth;
   if (!scale || !source) {
     elements.encodeSize.textContent = "—";
+    renderLinkHealth();
     return;
   }
 
@@ -449,6 +466,78 @@ function renderEncodeSize() {
   const height = Math.round(state.display.pixelHeight * scale);
   elements.encodeSize.textContent = `${width}x${height}`;
   elements.encodeSize.title = `Encoding at ${Math.round(scale * 100)}% of the ${state.display.pixelWidth}x${state.display.pixelHeight} framebuffer`;
+  renderLinkHealth();
+}
+
+/*
+ * Latency, frame rate, encode size and transport collapse into one traffic light. H.264 delivering
+ * frames is green, the PNG fallback or a half-starved stream is amber, and anything not delivering
+ * is red. The numbers stay one click away rather than permanently occupying the pill.
+ */
+const LINK_HEALTH = {
+  "H.264": "good",
+  PNG: "fair",
+  connecting: "fair",
+  idle: "poor",
+  offline: "poor",
+};
+
+const LINK_HEALTH_LABEL = { good: "healthy", fair: "degraded", poor: "not streaming" };
+
+/** Below half the requested rate the stream is visibly stuttering, which is worth flagging amber. */
+const STARVED_FPS_RATIO = 0.5;
+const IDLE_NAL_FLUSH_MS = 120;
+
+function setStreamMode(mode) {
+  state.streamMode = mode;
+  elements.mode.textContent = mode;
+  renderLinkHealth();
+}
+
+function setActualFps(fps) {
+  state.actualFps = fps;
+  elements.actualFps.textContent = `${fps.toFixed(1)} FPS`;
+  renderLinkHealth();
+}
+
+function renderLinkHealth() {
+  const chip = elements.linkChip;
+  if (!chip) return;
+
+  let health = LINK_HEALTH[state.streamMode] || "poor";
+  const target = Number(elements.fps.value) || 0;
+  // The Android emulator only sends a frame when the screen changes, so an idle stream sitting at
+  // zero is perfectly healthy and the frame rate cannot stand in for liveness. What green has to
+  // mean is that a picture actually arrived; the rate only demotes a stream that is visibly
+  // struggling to keep up while frames are genuinely flowing.
+  if (health === "good" &&
+      (!state.framePainted || (target > 0 && state.actualFps > 0 &&
+        state.actualFps < target * STARVED_FPS_RATIO))) {
+    health = "fair";
+  }
+  chip.dataset.health = health;
+
+  const summary = [
+    state.streamMode,
+    state.actualFps > 0 ? `${state.actualFps.toFixed(0)} FPS` : null,
+    elements.encodeSize.textContent !== "—" ? elements.encodeSize.textContent : null,
+  ].filter(Boolean).join(" · ");
+
+  chip.title = `Live view ${LINK_HEALTH_LABEL[health]} — ${summary}`;
+  chip.setAttribute(
+    "aria-label",
+    `${state.linkExpanded ? "Hide" : "Show"} stream details. Live view ${LINK_HEALTH_LABEL[health]}, ${summary}.`,
+  );
+}
+
+function setLinkExpanded(expanded) {
+  state.linkExpanded = expanded;
+  elements.statusPill.classList.toggle("is-expanded", expanded);
+  elements.linkChip.setAttribute("aria-expanded", String(expanded));
+  // The collapsed panel is only clipped to zero width, so it stays in the accessibility tree
+  // without this and screen readers would read four values that are not on screen.
+  elements.linkDetails.setAttribute("aria-hidden", String(!expanded));
+  renderLinkHealth();
 }
 
 /**
@@ -528,9 +617,10 @@ function pillReserve(frameWidth, frameHeight, stage) {
   const stageRect = stage.getBoundingClientRect();
   const pillBottom = Math.max(...pills.map((pill) => pill.getBoundingClientRect().bottom));
 
-  // Where the frame would land if it were centred in the unreserved viewport.
+  // Where the frame would land if it were centred in the unreserved viewport. The side button hangs
+  // off the right edge, so the right pill has to clear that too rather than just the frame.
   const frameLeft = stageRect.left + (stageRect.width - frameWidth) / 2;
-  const frameRight = frameLeft + frameWidth;
+  const frameRight = frameLeft + frameWidth + SIDE_BUTTON_REACH;
   const frameTop = stageRect.top + (stageRect.height - frameHeight) / 2;
   if (frameTop >= pillBottom + gap) return 0;
 
@@ -564,7 +654,7 @@ function startStream() {
 
   elements.overlay.textContent = "Starting live view...";
   elements.overlay.classList.remove("hidden");
-  elements.mode.textContent = "connecting";
+  setStreamMode("connecting");
   state.frameClock = performance.now();
 
   if (!("VideoDecoder" in window) || !state.selected.capabilities.liveStream) {
@@ -584,6 +674,7 @@ function startStream() {
   state.socket = socket;
   socket.binaryType = "arraybuffer";
   const parser = new AnnexBDecoder();
+  state.parser = parser;
 
   socket.addEventListener("message", (event) => {
     if (state.socket !== socket) return;
@@ -596,14 +687,14 @@ function startStream() {
         fitDeviceScreen();
         renderEncodeSize();
       }
-      elements.mode.textContent = "H.264";
+      setStreamMode("H.264");
       applyCaptureSource(descriptor);
       return;
     }
     parser.push(new Uint8Array(event.data));
   });
   socket.addEventListener("open", () => {
-    if (state.socket === socket) elements.mode.textContent = "H.264";
+    if (state.socket === socket) setStreamMode("H.264");
   });
   socket.addEventListener("error", () => {
     if (state.socket === socket) startPngFallback("PNG");
@@ -616,6 +707,11 @@ function startStream() {
 }
 
 function stopStream() {
+  // The parser holds a pending flush timer that would otherwise fire into a closed decoder.
+  if (state.parser) {
+    state.parser.dispose();
+    state.parser = null;
+  }
   if (state.socket) {
     const socket = state.socket;
     state.socket = null;
@@ -630,9 +726,10 @@ function stopStream() {
     state.pngTimer = null;
   }
   state.frameCounter = 0;
+  state.framePainted = false;
   state.activeScale = null;
   clearTimeout(state.scaleTimer);
-  elements.actualFps.textContent = "0 FPS";
+  setActualFps(0);
   renderEncodeSize();
 }
 
@@ -642,16 +739,66 @@ class AnnexBDecoder {
     this.prefix = [];
     this.timestamp = 0;
     this.codec = "avc1.64001f";
+    this.idleTimer = null;
+    this.draining = false;
   }
 
   push(bytes) {
     this.buffer = concatBytes([this.buffer, bytes]);
     const starts = findStartCodes(this.buffer);
-    if (starts.length < 2) return;
-    for (let index = 0; index < starts.length - 1; index++) {
-      this.handleNal(this.buffer.slice(starts[index], starts[index + 1]));
+    if (starts.length >= 2) {
+      for (let index = 0; index < starts.length - 1; index++) {
+        this.handleNal(this.buffer.slice(starts[index], starts[index + 1]));
+      }
+      this.buffer = this.buffer.slice(starts.at(-1));
     }
-    this.buffer = this.buffer.slice(starts.at(-1));
+    this.armIdleFlush();
+  }
+
+  /**
+   * Nothing about a paused stream is visible without this.
+   *
+   * A NAL unit ends where the next one begins, so the trailing slice always has to wait for more
+   * bytes to prove it is complete, and a decoder configured for correct B-frame reordering holds
+   * its output back until more input arrives. Both are fine at 60 FPS. The Android emulator only
+   * emits a frame when the screen changes, so a static screen sends one keyframe and stops: the
+   * IDR sits in this buffer, and even once decoded the picture sits in the decoder's reorder queue.
+   * A gap in the stream is the only available signal that the producer is done, so it drains both.
+   * On a moving picture the timer is rearmed long before it can fire.
+   */
+  armIdleFlush() {
+    clearTimeout(this.idleTimer);
+    this.idleTimer = setTimeout(() => this.flush(), IDLE_NAL_FLUSH_MS);
+  }
+
+  flush() {
+    clearTimeout(this.idleTimer);
+    this.idleTimer = null;
+    // Anything shorter than a start code plus a header byte cannot be decoded, and re-buffering it
+    // is harmless because the next push concatenates onto it.
+    if (this.buffer.length >= 5) {
+      const nal = this.buffer;
+      this.buffer = new Uint8Array();
+      this.handleNal(nal);
+    }
+    this.drainDecoder();
+  }
+
+  drainDecoder() {
+    const decoder = state.decoder;
+    if (this.draining || !decoder || decoder.state !== "configured") return;
+    this.draining = true;
+    // flush() rejects with AbortError when the decoder is reset or closed mid-drain, which happens
+    // routinely when the stream restarts, so a rejection here is not worth surfacing.
+    decoder.flush()
+      .catch(() => {})
+      .finally(() => { this.draining = false; });
+  }
+
+  dispose() {
+    clearTimeout(this.idleTimer);
+    this.idleTimer = null;
+    this.buffer = new Uint8Array();
   }
 
   handleNal(nal) {
@@ -704,6 +851,12 @@ class AnnexBDecoder {
   }
 }
 
+function clearScreen() {
+  elements.canvas.width = 300;
+  elements.canvas.height = 150;
+  state.canvasContext = null;
+}
+
 function drawVideoFrame(frame) {
   // H.264 codes in 16-pixel macroblocks, so a frame whose real size is not a multiple of 16 carries
   // padding that the visible rectangle excludes. The short drawImage overload leaves that crop up to
@@ -738,6 +891,10 @@ function drawVideoFrame(frame) {
   );
   frame.close();
   elements.overlay.classList.add("hidden");
+  if (!state.framePainted) {
+    state.framePainted = true;
+    renderLinkHealth();
+  }
   countFrame();
 }
 
@@ -783,7 +940,7 @@ function startPngFallback(label) {
   }
   if (state.pngTimer) return;
 
-  elements.mode.textContent = label;
+  setStreamMode(label);
   const capture = async () => {
     state.pngTimer = null;
     try {
@@ -817,7 +974,7 @@ function countFrame() {
   if (now - state.frameClock < 1000) return;
 
   const fps = state.frameCounter * 1000 / (now - state.frameClock);
-  elements.actualFps.textContent = `${fps.toFixed(1)} FPS`;
+  setActualFps(fps);
   state.frameCounter = 0;
   state.frameClock = now;
 }
@@ -1357,6 +1514,9 @@ document.querySelector("#create-cancel").addEventListener("click", () => element
 elements.fps.addEventListener("change", startStream);
 elements.scale.addEventListener("change", startStream);
 
+elements.linkChip.addEventListener("click", () => setLinkExpanded(!state.linkExpanded));
+setLinkExpanded(false);
+
 /*
  * The canvas provider protocol exposes no theme hint, so "auto" defers to the
  * host webview's prefers-color-scheme. The explicit choices are the escape hatch
@@ -1436,6 +1596,12 @@ for (const button of document.querySelectorAll("[data-action]")) {
       case "detach":
         await detach();
         break;
+      case "settings":
+        elements.settingsDialog.showModal();
+        break;
+      case "data":
+        elements.dataDialog.showModal();
+        break;
       default:
         throw new Error(`Unknown action '${button.dataset.action}'.`);
     }
@@ -1467,13 +1633,17 @@ elements.createForm.addEventListener("submit", (event) => {
 });
 
 document.querySelector("#erase-button").addEventListener("click", async (event) => {
+  const trigger = event.currentTarget;
+  // Stacking a second modal on the data dialog would leave the destructive sheet visible behind the
+  // confirmation, so hand the top layer over first.
+  elements.dataDialog.close();
   if (!await requestConfirmation({
     title: `Erase ${state.selected.name}?`,
     message: `All content and settings on this ${selectedNoun()} will be permanently removed.`,
     action: `Erase ${selectedNoun()}`,
   })) return;
 
-  runBusy(event.currentTarget, async () => {
+  runBusy(trigger, async () => {
     const response = await api(`/api/v1/devices/${encodeURIComponent(state.selected.id)}/erase`, {
       method: "POST",
       body: JSON.stringify({ confirm: true }),
@@ -1485,14 +1655,16 @@ document.querySelector("#erase-button").addEventListener("click", async (event) 
 });
 
 document.querySelector("#delete-button").addEventListener("click", async (event) => {
+  const trigger = event.currentTarget;
   const noun = selectedNoun();
+  elements.dataDialog.close();
   if (!await requestConfirmation({
     title: `Delete ${state.selected.name}?`,
     message: `The ${selectedNoun()} and all of its data will be permanently deleted.`,
     action: `Delete ${selectedNoun()}`,
   })) return;
 
-  runBusy(event.currentTarget, async () => {
+  runBusy(trigger, async () => {
     await api(`/api/v1/devices/${encodeURIComponent(state.selected.id)}`, {
       method: "DELETE",
       body: JSON.stringify({ confirm: true }),
