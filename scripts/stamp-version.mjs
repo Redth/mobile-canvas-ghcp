@@ -33,13 +33,23 @@ writeFileSync(pkgPath, JSON.stringify(pkg, null, 2) + "\n");
 
 const propsPath = join(root, "Directory.Build.props");
 const before = readFileSync(propsPath, "utf8");
-const after = before
-  .replace(/<VersionPrefix>[^<]*<\/VersionPrefix>/, `<VersionPrefix>${prefix}</VersionPrefix>`)
-  .replace(/<VersionSuffix>[^<]*<\/VersionSuffix>/, `<VersionSuffix>${suffix}</VersionSuffix>`);
-if (after === before) {
-  console.error(`Directory.Build.props has no version to replace`);
-  process.exit(1);
+// Match on the elements rather than on whether the text changed: re-stamping the
+// version that is already there is a legitimate no-op, and the failure worth
+// catching is a renamed or missing element, which would otherwise ship the wrong
+// version silently.
+const prefixPattern = /<VersionPrefix>[^<]*<\/VersionPrefix>/;
+const suffixPattern = /<VersionSuffix>[^<]*<\/VersionSuffix>/;
+for (const [name, pattern] of [["VersionPrefix", prefixPattern], ["VersionSuffix", suffixPattern]]) {
+  if (!pattern.test(before)) {
+    console.error(`Directory.Build.props has no <${name}> to replace`);
+    process.exit(1);
+  }
 }
-writeFileSync(propsPath, after);
+writeFileSync(
+  propsPath,
+  before
+    .replace(prefixPattern, `<VersionPrefix>${prefix}</VersionPrefix>`)
+    .replace(suffixPattern, `<VersionSuffix>${suffix}</VersionSuffix>`),
+);
 
 console.log(`stamped ${version} into package.json and Directory.Build.props`);
