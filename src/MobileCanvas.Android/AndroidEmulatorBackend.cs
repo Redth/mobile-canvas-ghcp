@@ -832,6 +832,430 @@ public sealed partial class AndroidEmulatorBackend : IDeviceBackend, IAsyncDispo
 
 	#endregion
 
+	#region Apps
+
+	public async Task<InstalledApp[]> ListAppsAsync(
+		string deviceId,
+		bool includeSystem,
+		CancellationToken cancellationToken = default)
+	{
+		var serial = await RequireSerialAsync(deviceId, cancellationToken).ConfigureAwait(false);
+
+		// Running state is one call for the whole list, and it is what tells a caller whether to launch
+		// an app or just bring it forward.
+		var running = PackageListParser.ParseRunning(
+			await RunAdbAsync(serial, ["shell", "ps", "-A", "-o", "PID,NAME"], cancellationToken)
+				.ConfigureAwait(false));
+
+		var user = PackageListParser.Parse(
+			await RunAdbAsync(serial, ["shell", "pm", "list", "packages", "-3", "-f", "--show-versioncode"], cancellationToken)
+				.ConfigureAwait(false)
+				?? throw new DeviceCapabilityException(
+					$"Could not list packages on '{serial}'. Check that adb is available and the emulator is responding."),
+			AppKinds.User,
+			running);
+
+		if (!includeSystem)
+			return user;
+
+		var system = PackageListParser.Parse(
+			await RunAdbAsync(serial, ["shell", "pm", "list", "packages", "-s", "-f", "--show-versioncode"], cancellationToken)
+				.ConfigureAwait(false),
+			AppKinds.System,
+			running);
+
+		return [.. user, .. system];
+	}
+
+	public async Task<AppOperationResult> LaunchAppAsync(
+		string deviceId,
+		AppLaunchRequest request,
+		CancellationToken cancellationToken = default)
+	{
+		var serial = await RequireSerialAsync(deviceId, cancellationToken).ConfigureAwait(false);
+
+		if (request.Relaunch)
+		{
+			await RunAdbAsync(serial, ["shell", "am", "force-stop", request.BundleId], cancellationToken)
+				.ConfigureAwait(false);
+		}
+
+		// Android has no "launch this package" verb; it needs the launcher activity, which the package
+		// manager can resolve. Asking it beats hardcoding a guess like ".MainActivity", and beats
+		// monkey, which types synthetic events at whatever it finds.
+		var resolved = PackageListParser.ParseResolvedActivity(
+			await RunAdbAsync(serial, ["shell", "cmd", "package", "resolve-activity", "--brief", request.BundleId], cancellationToken)
+				.ConfigureAwait(false))
+			?? throw new DeviceCapabilityException(
+				$"'{request.BundleId}' has no launchable activity on '{serial}'. It may not be installed, "
+				+ "or it may be a service or plug-in with no launcher entry.");
+
+		var arguments = new List<string> { "shell", "am", "start", "-W", "-n", resolved };
+		foreach (var argument in request.Arguments)
+		{
+			arguments.Add("-e");
+			arguments.Add("arg");
+			arguments.Add(QuoteForDeviceShell(argument));
+		}
+
+		var output = await RunAdbAsync(serial, [.. arguments], cancellationToken).ConfigureAwait(false);
+		EnsureActivityStarted(output, request.BundleId);
+
+		// The process only exists once the activity is up, so the PID is read back rather than reported
+		// by am, which says nothing about what it started.
+		var running = PackageListParser.ParseRunning(
+			await RunAdbAsync(serial, ["shell", "ps", "-A", "-o", "PID,NAME"], cancellationToken)
+				.ConfigureAwait(false));
+
+		return new AppOperationResult
+		{
+			DeviceId = deviceId,
+			BundleId = request.BundleId,
+			Operation = AppOperations.Launch,
+			ProcessId = running.TryGetValue(request.BundleId, out var pid) ? pid : null,
+			Detail = resolved,
+		};
+	}
+
+	public async Task<AppOperationResult> TerminateAppAsync(
+		string deviceId,
+		string bundleId,
+		CancellationToken cancellationToken = default)
+	{
+		var serial = await RequireSerialAsync(deviceId, cancellationToken).ConfigureAwait(false);
+		_ = await RunAdbAsync(serial, ["shell", "am", "force-stop", bundleId], cancellationToken)
+			.ConfigureAwait(false)
+			?? throw new DeviceCapabilityException($"Could not stop '{bundleId}' on '{serial}'.");
+
+		return new AppOperationResult
+		{
+			DeviceId = deviceId,
+			BundleId = bundleId,
+			Operation = AppOperations.Terminate,
+		};
+	}
+
+	public async Task<AppOperationResult> InstallAppAsync(
+		string deviceId,
+		AppInstallRequest request,
+		CancellationToken cancellationToken = default)
+	{
+		var serial = await RequireSerialAsync(deviceId, cancellationToken).ConfigureAwait(false);
+
+		// adb never says what it installed, so the package set is sampled either side of the install and
+		// the newcomer is the answer. Without this an agent can install an app and then have nothing to
+		// pass to launch. A reinstall adds no package, so the answer is then legitimately unknown.
+		var before = await ListPackageNamesAsync(serial, cancellationToken).ConfigureAwait(false);
+
+		var result = await RunAdbResultAsync(serial, ["install", "-r", request.Path], cancellationToken)
+			.ConfigureAwait(false);
+
+		EnsurePackageManagerSucceeded("install", request.Path, result);
+
+		var after = await ListPackageNamesAsync(serial, cancellationToken).ConfigureAwait(false);
+
+		return new AppOperationResult
+		{
+			DeviceId = deviceId,
+			BundleId = after.Except(before).SingleOrDefault(),
+			Operation = AppOperations.Install,
+			Detail = request.Path,
+		};
+	}
+
+	/// <summary>
+	/// Every third-party package name installed on the device.
+	/// </summary>
+	private async Task<IReadOnlyList<string>> ListPackageNamesAsync(
+		string serial,
+		CancellationToken cancellationToken)
+	{
+		var output = await RunAdbAsync(serial, ["shell", "pm", "list", "packages", "-3"], cancellationToken)
+			.ConfigureAwait(false);
+
+		return PackageListParser.ParseNames(output);
+	}
+
+	public async Task<AppOperationResult> UninstallAppAsync(
+		string deviceId,
+		string bundleId,
+		CancellationToken cancellationToken = default)
+	{
+		var serial = await RequireSerialAsync(deviceId, cancellationToken).ConfigureAwait(false);
+
+		// pm answers a missing package with DELETE_FAILED_INTERNAL_ERROR, which reads like the device
+		// broke rather than like the app was never there. Checking first buys a plain answer, and one
+		// that matches what the iOS backend says.
+		var installed = await RunAdbAsync(serial, ["shell", "pm", "path", bundleId], cancellationToken)
+			.ConfigureAwait(false);
+
+		if (string.IsNullOrWhiteSpace(installed) || !installed.Contains("package:", StringComparison.Ordinal))
+			throw new DeviceCapabilityException(
+				$"'{bundleId}' is not installed on '{serial}', so there is nothing to uninstall.");
+
+		var result = await RunAdbResultAsync(serial, ["uninstall", bundleId], cancellationToken)
+			.ConfigureAwait(false);
+
+		EnsurePackageManagerSucceeded("uninstall", bundleId, result);
+
+		return new AppOperationResult
+		{
+			DeviceId = deviceId,
+			BundleId = bundleId,
+			Operation = AppOperations.Uninstall,
+		};
+	}
+
+	/// <summary>
+	/// Fails when <c>am start -W</c> reported anything other than a completed launch.
+	/// </summary>
+	/// <remarks>
+	/// am writes its failures to stdout and still exits zero, so a caller that trusts the exit code
+	/// believes it launched an app that never started. <c>-W</c> also makes the call mean what it says:
+	/// without it am returns as soon as the intent is dispatched, so the next call -- typically a
+	/// screen dump -- races a process that does not exist yet.
+	/// </remarks>
+	private static void EnsureActivityStarted(string? output, string bundleId)
+	{
+		if (output is null)
+			throw new DeviceCapabilityException($"Could not start '{bundleId}'.");
+
+		if (PackageListParser.FindLaunchFailure(output) is { } failure)
+			throw new DeviceCapabilityException($"Could not start '{bundleId}': {failure}");
+	}
+
+	/// <summary>
+	/// Fails when the package manager reported a failure.
+	/// </summary>
+	/// <remarks>
+	/// <c>adb install</c> and <c>adb uninstall</c> print "Failure [REASON]" and exit zero, so the
+	/// output is the only reliable signal. The bracketed reason is the useful part -- it names the
+	/// difference between a downgrade, a signature mismatch, and a missing package.
+	/// </remarks>
+	private static void EnsurePackageManagerSucceeded(string operation, string subject, ProcessResult result)
+	{
+		var output = (result.StandardOutput + '\n' + result.StandardError).Trim();
+
+		if (result.ExitCode == 0 && output.Contains("Success", StringComparison.OrdinalIgnoreCase))
+			return;
+
+		var detail = output.Split('\n')
+			.Select(line => line.Trim())
+			.FirstOrDefault(line =>
+				line.StartsWith("Failure", StringComparison.OrdinalIgnoreCase)
+				|| line.StartsWith("Error", StringComparison.OrdinalIgnoreCase)
+				|| line.StartsWith("adb:", StringComparison.OrdinalIgnoreCase));
+
+		throw new DeviceCapabilityException(
+			$"Could not {operation} '{subject}': {detail ?? (output.Length == 0 ? $"adb exited with code {result.ExitCode}." : output)}");
+	}
+
+	#endregion
+
+	#region Diagnostics
+
+	public async Task<LogEntry[]> ReadLogAsync(
+		string deviceId,
+		LogQuery query,
+		CancellationToken cancellationToken = default)
+	{
+		var serial = await RequireSerialAsync(deviceId, cancellationToken).ConfigureAwait(false);
+
+		var arguments = new List<string> { "logcat", "-d", "-v", "threadtime" };
+
+		if (await ResolveSinceAsync(serial, query.Since, cancellationToken).ConfigureAwait(false) is { } since)
+		{
+			arguments.Add("-T");
+			arguments.Add(since);
+		}
+
+		if (!string.IsNullOrWhiteSpace(query.BundleId))
+		{
+			var pid = await ResolvePidAsync(serial, query.BundleId, cancellationToken).ConfigureAwait(false);
+
+			// A package with no process has written nothing this session. Saying so beats returning the
+			// whole device log, which is what an unfiltered logcat would do.
+			if (pid is null)
+				return [];
+
+			arguments.Add($"--pid={pid}");
+		}
+
+		var priority = LogcatParser.ToPriority(query.MinimumLevel);
+		if (priority != 'V')
+			arguments.Add($"*:{priority}");
+
+		var output = await RunAdbAsync(serial, [.. arguments], cancellationToken).ConfigureAwait(false)
+			?? throw new DeviceCapabilityException(
+				$"Could not read the log from '{serial}'. Check that adb is available and the emulator is responding.");
+
+		return LogcatParser.Parse(output);
+	}
+
+	public async Task<CrashReport[]> ListCrashesAsync(
+		string deviceId,
+		CancellationToken cancellationToken = default)
+	{
+		var serial = await RequireSerialAsync(deviceId, cancellationToken).ConfigureAwait(false);
+
+		var output = await RunAdbAsync(serial, ["shell", "dumpsys", "dropbox"], cancellationToken)
+			.ConfigureAwait(false);
+
+		var reports = LogcatParser.ParseDropbox(output);
+		await AttributeCrashesAsync(serial, reports, cancellationToken).ConfigureAwait(false);
+		return reports;
+	}
+
+	/// <summary>
+	/// Fills in the app each crash belongs to, which dropbox's listing does not say.
+	/// </summary>
+	/// <remarks>
+	/// Without this every ANR reads as "data_app_anr" and nothing else, so a list of five is five
+	/// identical rows and a search by package matches nothing at all -- silently, which is worse than
+	/// failing. The package only appears inside the report body, and reading the whole box in one call
+	/// would transfer megabytes (its bodies run to ~25KB each), so the newest window is enriched with
+	/// individual prints, measured at ~55ms apiece. Older entries keep a null bundle ID rather than
+	/// being dropped, so the total a caller sees stays honest.
+	/// </remarks>
+	private async Task AttributeCrashesAsync(
+		string serial,
+		CrashReport[] reports,
+		CancellationToken cancellationToken)
+	{
+		var window = Math.Min(reports.Length, AttributedCrashWindow);
+		if (window == 0)
+			return;
+
+		using var limiter = new SemaphoreSlim(4);
+		await Task.WhenAll(Enumerable.Range(0, window).Select(async index =>
+		{
+			await limiter.WaitAsync(cancellationToken).ConfigureAwait(false);
+			try
+			{
+				var package = await FindCrashPackageAsync(serial, reports[index].Id, cancellationToken)
+					.ConfigureAwait(false);
+
+				if (package is not null)
+					reports[index] = reports[index] with { Name = package, BundleId = package };
+			}
+			finally
+			{
+				limiter.Release();
+			}
+		})).ConfigureAwait(false);
+	}
+
+	private async Task<string?> FindCrashPackageAsync(
+		string serial,
+		string crashId,
+		CancellationToken cancellationToken)
+	{
+		var separator = crashId.LastIndexOf('|');
+		if (separator < 0)
+			return null;
+
+		var output = await RunAdbAsync(
+			serial,
+			["shell", "dumpsys", "dropbox", "--print", QuoteForDeviceShell(crashId[..separator])],
+			cancellationToken).ConfigureAwait(false);
+
+		return LogcatParser.FindDropboxPackage(output);
+	}
+
+	/// <summary>
+	/// How many of the newest crashes are looked up by app. Bounds a listing's cost to about a second
+	/// on a device whose drop box has filled up.
+	/// </summary>
+	private const int AttributedCrashWindow = 25;
+
+	public async Task<CrashDetailResult> GetCrashAsync(
+		string deviceId,
+		string crashId,
+		CancellationToken cancellationToken = default)
+	{
+		var serial = await RequireSerialAsync(deviceId, cancellationToken).ConfigureAwait(false);
+
+		// The ID is "<timestamp>|<tag>", the pair dropbox needs to single out one entry.
+		var separator = crashId.LastIndexOf('|');
+		if (separator < 0)
+			throw new DeviceCapabilityException(
+				$"'{crashId}' is not a crash ID. List crashes first to see the available IDs.");
+
+		var timestamp = crashId[..separator];
+		var tag = crashId[(separator + 1)..];
+
+		// dumpsys takes only a timestamp -- there is no tag argument, despite the listing printing one.
+		var output = await RunAdbAsync(
+			serial,
+			["shell", "dumpsys", "dropbox", "--print", QuoteForDeviceShell(timestamp)],
+			cancellationToken).ConfigureAwait(false);
+
+		var content = LogcatParser.ExtractDropboxEntry(output)
+			?? throw new DeviceCapabilityException(
+				$"No crash report '{crashId}' exists on '{serial}'. Dropbox drops old entries, so it may have aged out.");
+
+		var package = LogcatParser.FindDropboxPackage(content);
+
+		return new CrashDetailResult
+		{
+			DeviceId = deviceId,
+			Report = new CrashReport
+			{
+				Id = crashId,
+				// Named the same way the listing names it, so the two views agree.
+				Name = package ?? tag,
+				Timestamp = timestamp,
+				Kind = LogcatParser.DescribeTag(tag),
+				BundleId = package,
+			},
+			Content = content,
+		};
+	}
+
+	/// <summary>
+	/// Formats a start time for <c>logcat -T</c>, computed on the device.
+	/// </summary>
+	/// <remarks>
+	/// logcat compares against the device's own clock, so the window has to be worked out there. An
+	/// emulator usually tracks the host, but "usually" is the part that produces an empty log at three
+	/// in the morning. Returns null when the device will not answer, which reads as "no time filter"
+	/// rather than as a filter that silently excludes everything.
+	/// </remarks>
+	private async Task<string?> ResolveSinceAsync(
+		string serial,
+		TimeSpan since,
+		CancellationToken cancellationToken)
+	{
+		var seconds = (long)Math.Max(1, Math.Round(since.TotalSeconds));
+
+		var output = await RunAdbAsync(
+			serial,
+			["shell", $"date -d @$(( $(date +%s) - {seconds} )) +'%m-%d %H:%M:%S.000'"],
+			cancellationToken).ConfigureAwait(false);
+
+		var stamp = output?.Trim();
+		return string.IsNullOrEmpty(stamp) || stamp.Contains("not found", StringComparison.OrdinalIgnoreCase)
+			? null
+			: stamp;
+	}
+
+	private async Task<int?> ResolvePidAsync(
+		string serial,
+		string bundleId,
+		CancellationToken cancellationToken)
+	{
+		var output = await RunAdbAsync(
+			serial,
+			["shell", "pidof", QuoteForDeviceShell(bundleId)],
+			cancellationToken).ConfigureAwait(false);
+
+		// pidof lists every process for the package; the first is the main one.
+		var first = output?.Trim().Split(' ', StringSplitOptions.RemoveEmptyEntries).FirstOrDefault();
+		return int.TryParse(first, out var pid) ? pid : null;
+	}
+
+	#endregion
+
 	#region Geometry
 
 	public async Task<DisplayGeometry> GetDisplayAsync(
@@ -1106,6 +1530,28 @@ public sealed partial class AndroidEmulatorBackend : IDeviceBackend, IAsyncDispo
 	}
 
 	/// <summary>
+	/// Runs adb and returns the whole result, including exit code and stderr.
+	/// </summary>
+	/// <remarks>
+	/// <see cref="RunAdbAsync"/> collapses any failure to null, which is fine for a probe but loses the
+	/// reason. Package operations fail for specific, actionable reasons -- a signature mismatch, a
+	/// downgrade, a missing package -- so they need the text adb actually printed.
+	/// </remarks>
+	internal async Task<ProcessResult> RunAdbResultAsync(
+		string serial,
+		string[] arguments,
+		CancellationToken cancellationToken)
+	{
+		if (_locator.Adb is null)
+			throw new DeviceCapabilityException(
+				"adb was not found. Install Android platform-tools or set ANDROID_HOME.");
+
+		return await _processRunner
+			.RunAsync(new ProcessRequest(_locator.Adb, ["-s", serial, .. arguments]), cancellationToken)
+			.ConfigureAwait(false);
+	}
+
+	/// <summary>
 	/// Runs adb and returns raw stdout bytes. <see cref="IProcessRunner"/> decodes stdout as text,
 	/// which would corrupt a PNG, so binary output needs its own path.
 	/// </summary>
@@ -1142,6 +1588,899 @@ public sealed partial class AndroidEmulatorBackend : IDeviceBackend, IAsyncDispo
 		await drainErrors.ConfigureAwait(false);
 
 		return process.ExitCode == 0 ? buffer.ToArray() : [];
+	}
+
+	#endregion
+
+	#region Permissions and settings
+
+	/// <summary>
+	/// Maps the names that mean the same thing on both platforms onto Android's own.
+	/// </summary>
+	/// <remarks>
+	/// Several are one-to-many because Android splits what iOS treats as a single decision: location
+	/// into fine and coarse, contacts and calendar into read and write, photos into images and video.
+	/// A change fans out across the whole set so that asking for "location" produces the state a user
+	/// would recognise, rather than half of it.
+	/// </remarks>
+	private static readonly Dictionary<string, string[]> AndroidPermissions = new(StringComparer.OrdinalIgnoreCase)
+	{
+		[DevicePermissions.Camera] = ["android.permission.CAMERA"],
+		[DevicePermissions.Microphone] = ["android.permission.RECORD_AUDIO"],
+		[DevicePermissions.Location] =
+			["android.permission.ACCESS_FINE_LOCATION", "android.permission.ACCESS_COARSE_LOCATION"],
+		[DevicePermissions.LocationAlways] = ["android.permission.ACCESS_BACKGROUND_LOCATION"],
+		[DevicePermissions.Contacts] =
+			["android.permission.READ_CONTACTS", "android.permission.WRITE_CONTACTS"],
+		[DevicePermissions.Calendar] =
+			["android.permission.READ_CALENDAR", "android.permission.WRITE_CALENDAR"],
+		[DevicePermissions.Photos] =
+			["android.permission.READ_MEDIA_IMAGES", "android.permission.READ_MEDIA_VIDEO"],
+		[DevicePermissions.PhotosAdd] = ["android.permission.READ_MEDIA_VISUAL_USER_SELECTED"],
+		[DevicePermissions.MediaLibrary] = ["android.permission.READ_MEDIA_AUDIO"],
+		[DevicePermissions.Motion] = ["android.permission.ACTIVITY_RECOGNITION"],
+		[DevicePermissions.Notifications] = ["android.permission.POST_NOTIFICATIONS"],
+	};
+
+	public async Task<PermissionListResult> ListPermissionsAsync(
+		string deviceId,
+		string bundleId,
+		CancellationToken cancellationToken = default)
+	{
+		var serial = await RequireSerialAsync(deviceId, cancellationToken).ConfigureAwait(false);
+		var granted = await ReadPermissionStateAsync(serial, bundleId, deviceId, cancellationToken)
+			.ConfigureAwait(false);
+
+		// Reported by Android's own name, because that is what the manifest and the error messages
+		// use, with the canonical name attached where there is one.
+		var canonical = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+		foreach (var (name, platformNames) in AndroidPermissions)
+		{
+			foreach (var platformName in platformNames)
+				canonical[platformName] = name;
+		}
+
+		var permissions = granted
+			.Select(entry => new DevicePermission
+			{
+				Name = canonical.GetValueOrDefault(entry.Key, entry.Key),
+				PlatformName = entry.Key,
+				Granted = entry.Value,
+			})
+			.OrderBy(permission => permission.PlatformName, StringComparer.Ordinal)
+			.ToArray();
+
+		return new PermissionListResult
+		{
+			DeviceId = deviceId,
+			Platform = DevicePlatforms.Android,
+			BundleId = bundleId,
+			Permissions = permissions,
+			Total = permissions.Length,
+		};
+	}
+
+	public async Task<PermissionChangeResult> ChangePermissionAsync(
+		string deviceId,
+		PermissionChangeRequest request,
+		CancellationToken cancellationToken = default)
+	{
+		var serial = await RequireSerialAsync(deviceId, cancellationToken).ConfigureAwait(false);
+
+		var targets = AndroidPermissions.TryGetValue(request.Permission, out var mapped)
+			? mapped
+			: [request.Permission];
+
+		// A reset makes the app ask again, which is what 'revoke' already does here: Android has no
+		// third state, so the two collapse.
+		var verb = request.Action == PermissionActions.Grant ? "grant" : "revoke";
+
+		foreach (var target in targets)
+		{
+			var result = await RunAdbResultAsync(
+				serial,
+				["shell", "pm", verb, request.BundleId, target],
+				cancellationToken).ConfigureAwait(false);
+
+			var complaint = FindPermissionFailure(result);
+			if (complaint is not null)
+				throw new DeviceCapabilityException(
+					$"Could not {verb} '{target}' for '{request.BundleId}' on '{deviceId}': {complaint}");
+		}
+
+		// pm grant exits zero and prints nothing when the app never declared the permission, so the
+		// only way to know whether anything happened is to look afterwards.
+		var granted = await ReadPermissionStateAsync(serial, request.BundleId, deviceId, cancellationToken)
+			.ConfigureAwait(false);
+
+		var touched = targets
+			.Select(target => new DevicePermission
+			{
+				Name = request.Permission,
+				PlatformName = target,
+				Granted = granted.TryGetValue(target, out var value) ? value : null,
+			})
+			.ToArray();
+
+		if (touched.All(permission => permission.Granted is null))
+			throw new DeviceCapabilityException(
+				$"'{request.BundleId}' does not declare {string.Join(" or ", targets)}, so there is "
+				+ "nothing to change. Add it to the manifest and reinstall.");
+
+		return new PermissionChangeResult
+		{
+			DeviceId = deviceId,
+			BundleId = request.BundleId,
+			Permission = request.Permission,
+			Action = request.Action,
+			Permissions = touched,
+		};
+	}
+
+	private async Task<Dictionary<string, bool>> ReadPermissionStateAsync(
+		string serial,
+		string bundleId,
+		string deviceId,
+		CancellationToken cancellationToken)
+	{
+		var result = await RunAdbResultAsync(
+			serial,
+			["shell", "dumpsys", "package", QuoteForDeviceShell(bundleId)],
+			cancellationToken).ConfigureAwait(false);
+
+		// dumpsys answers an unknown package with a short report rather than an error, so the absence
+		// of the package header is what says the bundle ID is wrong.
+		if (!result.StandardOutput.Contains($"Package [{bundleId}]", StringComparison.Ordinal))
+			throw new DeviceCapabilityException(
+				$"'{bundleId}' is not installed on '{deviceId}'. Check the package with `app list`.");
+
+		return PermissionParser.ParseRuntimePermissions(result.StandardOutput);
+	}
+
+	/// <summary>
+	/// Reduces a pm failure to its first useful line.
+	/// </summary>
+	/// <remarks>
+	/// An unknown permission comes back as a twenty-line Java stack trace whose only informative part
+	/// is the exception line, and an unknown package as "Error: package not found". Neither is worth
+	/// handing to a reader whole.
+	/// </remarks>
+	private static string? FindPermissionFailure(ProcessResult result)
+	{
+		foreach (var line in $"{result.StandardError}\n{result.StandardOutput}".Split('\n'))
+		{
+			var text = line.Trim();
+			if (text.StartsWith("java.", StringComparison.Ordinal))
+				return text;
+			if (text.StartsWith("Error:", StringComparison.OrdinalIgnoreCase)
+				|| text.StartsWith("Failure", StringComparison.OrdinalIgnoreCase))
+			{
+				return text;
+			}
+		}
+
+		return result.ExitCode == 0 ? null : $"pm exited with code {result.ExitCode}";
+	}
+
+	public async Task<DeviceSettings> GetSettingsAsync(
+		string deviceId,
+		CancellationToken cancellationToken = default)
+	{
+		var serial = await RequireSerialAsync(deviceId, cancellationToken).ConfigureAwait(false);
+
+		var night = await RunAdbAsync(serial, ["shell", "cmd", "uimode", "night"], cancellationToken)
+			.ConfigureAwait(false);
+		var scale = await RunAdbAsync(
+			serial,
+			["shell", "settings", "get", "system", "font_scale"],
+			cancellationToken).ConfigureAwait(false);
+		var contrast = await RunAdbAsync(
+			serial,
+			["shell", "settings", "get", "secure", "high_text_contrast_enabled"],
+			cancellationToken).ConfigureAwait(false);
+
+		return new DeviceSettings
+		{
+			DeviceId = deviceId,
+			Platform = DevicePlatforms.Android,
+			Appearance = ParseNightMode(night),
+			FontScale = ParseSetting(scale) is { } text && double.TryParse(text, out var value) ? value : null,
+			IncreaseContrast = ParseSetting(contrast) switch
+			{
+				"1" => true,
+				"0" => false,
+				_ => null,
+			},
+		};
+	}
+
+	public async Task<DeviceSettings> UpdateSettingsAsync(
+		string deviceId,
+		DeviceSettingsRequest request,
+		CancellationToken cancellationToken = default)
+	{
+		var serial = await RequireSerialAsync(deviceId, cancellationToken).ConfigureAwait(false);
+
+		if (request.Appearance is { } appearance)
+		{
+			await RequireSettingAsync(
+				serial,
+				["shell", "cmd", "uimode", "night", appearance == DeviceAppearances.Dark ? "yes" : "no"],
+				cancellationToken).ConfigureAwait(false);
+		}
+
+		if (request.FontScale is { } scale)
+		{
+			await RequireSettingAsync(
+				serial,
+				["shell", "settings", "put", "system", "font_scale", scale.ToString("0.0###", CultureInfo.InvariantCulture)],
+				cancellationToken).ConfigureAwait(false);
+		}
+
+		if (request.IncreaseContrast is { } contrast)
+		{
+			await RequireSettingAsync(
+				serial,
+				["shell", "settings", "put", "secure", "high_text_contrast_enabled", contrast ? "1" : "0"],
+				cancellationToken).ConfigureAwait(false);
+		}
+
+		if (request.ContentSize is not null)
+			throw new DeviceCapabilityException(
+				"Android sizes text by scale rather than by named category. Use a font scale instead, "
+				+ "for example 1.3.");
+
+		return await GetSettingsAsync(deviceId, cancellationToken).ConfigureAwait(false);
+	}
+
+	private async Task RequireSettingAsync(string serial, string[] arguments, CancellationToken cancellationToken)
+	{
+		var result = await RunAdbResultAsync(serial, arguments, cancellationToken).ConfigureAwait(false);
+		if (FindPermissionFailure(result) is { } failure)
+			throw new DeviceCapabilityException($"Could not apply the setting: {failure}");
+	}
+
+	/// <summary>Reads the answer to <c>cmd uimode night</c>, which is "Night mode: yes".</summary>
+	private static string? ParseNightMode(string? output)
+	{
+		var value = output?.Trim();
+		if (value is null || !value.StartsWith("Night mode:", StringComparison.OrdinalIgnoreCase))
+			return null;
+
+		return value["Night mode:".Length..].Trim().ToLowerInvariant() switch
+		{
+			"yes" => DeviceAppearances.Dark,
+			"no" => DeviceAppearances.Light,
+
+			// 'auto' and 'custom' follow the clock, so neither names the appearance in force.
+			_ => null,
+		};
+	}
+
+	/// <summary>Reads a settings value, where an unset key answers with the literal "null".</summary>
+	private static string? ParseSetting(string? output)
+	{
+		var value = output?.Trim();
+		return value is null or "" or "null" ? null : value;
+	}
+
+	#endregion
+
+	#region Hardware simulation
+
+	public async Task<HardwareState> GetHardwareStateAsync(
+		string deviceId,
+		CancellationToken cancellationToken = default)
+	{
+		var serial = await RequireSerialAsync(deviceId, cancellationToken).ConfigureAwait(false);
+		return await ReadHardwareStateAsync(deviceId, serial, cancellationToken).ConfigureAwait(false);
+	}
+
+	public async Task SetLocationAsync(
+		string deviceId,
+		DeviceLocationRequest request,
+		CancellationToken cancellationToken = default)
+	{
+		var serial = await RequireSerialAsync(deviceId, cancellationToken).ConfigureAwait(false);
+
+		// The console takes longitude first, which is the reverse of every other API here and of how
+		// a coordinate is written. Getting it backwards puts the device in the wrong hemisphere
+		// without any error, so the order is fixed here rather than left to a caller.
+		var longitude = request.Longitude.ToString(CultureInfo.InvariantCulture);
+		var latitude = request.Latitude.ToString(CultureInfo.InvariantCulture);
+
+		await RequireConsoleAsync(
+			serial,
+			["geo", "fix", longitude, latitude],
+			$"set the location to {latitude},{longitude}",
+			cancellationToken).ConfigureAwait(false);
+	}
+
+	public async Task ClearLocationAsync(string deviceId, CancellationToken cancellationToken = default)
+	{
+		await RequireSerialAsync(deviceId, cancellationToken).ConfigureAwait(false);
+
+		// There is no console command to stop simulating; the emulator keeps the last fix until it
+		// restarts. Saying so is better than sending 0,0, which is a real place off Africa that an
+		// app would treat as a fix rather than as the absence of one.
+		throw new DeviceCapabilityException(
+			"An emulator cannot be returned to a real position: it has no GPS of its own, and the "
+			+ "console has no clear command. Set a location instead, or cold boot the emulator.");
+	}
+
+	public async Task<HardwareState> SetBatteryAsync(
+		string deviceId,
+		BatteryRequest request,
+		CancellationToken cancellationToken = default)
+	{
+		var serial = await RequireSerialAsync(deviceId, cancellationToken).ConfigureAwait(false);
+
+		if (request.Level is { } level)
+		{
+			await RequireConsoleAsync(
+				serial,
+				["power", "capacity", level.ToString(CultureInfo.InvariantCulture)],
+				$"set the battery to {level}%",
+				cancellationToken).ConfigureAwait(false);
+		}
+
+		if (request.State is { } state)
+		{
+			// Charging is two facts on Android -- whether a charger is attached, and what the battery
+			// says it is doing -- and an app can read either. Setting only one leaves the device
+			// claiming to charge with nothing plugged in.
+			await RequireConsoleAsync(
+				serial,
+				["power", "ac", state is BatteryStates.Discharging ? "off" : "on"],
+				"set the charger state",
+				cancellationToken).ConfigureAwait(false);
+
+			await RequireConsoleAsync(
+				serial,
+				["power", "status", state is BatteryStates.Full ? "full" : state],
+				$"set the battery status to {state}",
+				cancellationToken).ConfigureAwait(false);
+		}
+
+		return await ReadHardwareStateAsync(deviceId, serial, cancellationToken).ConfigureAwait(false);
+	}
+
+	public async Task<HardwareState> SetNetworkAsync(
+		string deviceId,
+		NetworkRequest request,
+		CancellationToken cancellationToken = default)
+	{
+		var serial = await RequireSerialAsync(deviceId, cancellationToken).ConfigureAwait(false);
+
+		if (request.Profile is { } profile)
+		{
+			await RequireConsoleAsync(
+				serial,
+				["network", "speed", profile],
+				$"set the network speed to '{profile}'",
+				cancellationToken).ConfigureAwait(false);
+		}
+
+		if (request.LatencyMs is { } latency)
+		{
+			// The console takes a range, and a single number sets both ends of it.
+			await RequireConsoleAsync(
+				serial,
+				["network", "delay", latency.ToString(CultureInfo.InvariantCulture)],
+				$"set the network latency to {latency}ms",
+				cancellationToken).ConfigureAwait(false);
+		}
+
+		return await ReadHardwareStateAsync(deviceId, serial, cancellationToken).ConfigureAwait(false);
+	}
+
+	private async Task<HardwareState> ReadHardwareStateAsync(
+		string deviceId,
+		string serial,
+		CancellationToken cancellationToken)
+	{
+		var power = await RunAdbAsync(serial, ["emu", "power", "display"], cancellationToken)
+			.ConfigureAwait(false);
+		var network = await RunAdbAsync(serial, ["emu", "network", "status"], cancellationToken)
+			.ConfigureAwait(false);
+
+		var (level, state) = ParsePowerDisplay(power);
+		var (download, upload, latency) = ParseNetworkStatus(network);
+
+		return new HardwareState
+		{
+			DeviceId = deviceId,
+			Platform = DevicePlatforms.Android,
+			BatteryLevel = level,
+			BatteryState = state,
+			DownloadBitsPerSecond = download,
+			UploadBitsPerSecond = upload,
+			LatencyMs = latency,
+			Unreadable = ["location, which the console can set but never read"],
+		};
+	}
+
+	/// <summary>
+	/// Reads battery level and charging state out of <c>emu power display</c>.
+	/// </summary>
+	internal static (int? Level, string? State) ParsePowerDisplay(string? output)
+	{
+		if (string.IsNullOrWhiteSpace(output))
+			return (null, null);
+
+		int? level = null;
+		string? state = null;
+
+		foreach (var line in output.Split('\n'))
+		{
+			var trimmed = line.Trim();
+			if (trimmed.StartsWith("capacity:", StringComparison.OrdinalIgnoreCase)
+				&& int.TryParse(trimmed[9..].Trim(), out var capacity))
+			{
+				level = capacity;
+			}
+			else if (trimmed.StartsWith("status:", StringComparison.OrdinalIgnoreCase))
+			{
+				state = trimmed[7..].Trim().ToLowerInvariant() switch
+				{
+					"charging" => BatteryStates.Charging,
+					"discharging" or "not-charging" => BatteryStates.Discharging,
+					"full" => BatteryStates.Full,
+					// 'unknown' is a real value the console accepts, and it is not one of the three.
+					_ => null,
+				};
+			}
+		}
+
+		return (level, state);
+	}
+
+	/// <summary>
+	/// Reads simulated speeds and latency out of <c>emu network status</c>.
+	/// </summary>
+	internal static (long? Download, long? Upload, int? Latency) ParseNetworkStatus(string? output)
+	{
+		if (string.IsNullOrWhiteSpace(output))
+			return (null, null, null);
+
+		long? download = null;
+		long? upload = null;
+		int? latency = null;
+
+		foreach (var line in output.Split('\n'))
+		{
+			var trimmed = line.Trim();
+
+			// The console reports an unthrottled connection as 0 bits/s, which is not a speed of zero
+			// but the absence of a limit. Reporting it as 0 would read as an offline device.
+			if (trimmed.StartsWith("download speed:", StringComparison.OrdinalIgnoreCase))
+				download = ParseBitsPerSecond(trimmed);
+			else if (trimmed.StartsWith("upload speed:", StringComparison.OrdinalIgnoreCase))
+				upload = ParseBitsPerSecond(trimmed);
+			else if (trimmed.StartsWith("maximum latency:", StringComparison.OrdinalIgnoreCase))
+			{
+				var match = Regex.Match(trimmed, @"(\d+)\s*ms");
+				if (match.Success && int.TryParse(match.Groups[1].Value, out var value) && value > 0)
+					latency = value;
+			}
+		}
+
+		return (download, upload, latency);
+	}
+
+	private static long? ParseBitsPerSecond(string line)
+	{
+		var match = Regex.Match(line, @"(\d+)\s*bits/s");
+		return match.Success
+			&& long.TryParse(match.Groups[1].Value, out var value)
+			&& value > 0
+			? value
+			: null;
+	}
+
+	/// <summary>
+	/// Runs an emulator console command and raises when it fails.
+	/// </summary>
+	/// <remarks>
+	/// The console answers every command with a last line of <c>OK</c> or <c>KO: reason</c> and exits
+	/// zero either way -- the same trap as uiautomator and <c>run-as</c>, but with a signal worth
+	/// having: the reason is the console's own words.
+	/// </remarks>
+	private async Task RequireConsoleAsync(
+		string serial,
+		string[] command,
+		string attempt,
+		CancellationToken cancellationToken)
+	{
+		var result = await RunAdbResultAsync(serial, ["emu", .. command], cancellationToken)
+			.ConfigureAwait(false);
+
+		var output = $"{result.StandardOutput}\n{result.StandardError}";
+		var failure = output
+			.Split('\n')
+			.Select(line => line.Trim())
+			.FirstOrDefault(line => line.StartsWith("KO", StringComparison.Ordinal));
+
+		if (failure is not null)
+		{
+			throw new DeviceCapabilityException(
+				$"Could not {attempt}: {failure.TrimStart('K', 'O', ':', ' ')}");
+		}
+
+		if (result.ExitCode != 0)
+		{
+			throw new DeviceCapabilityException(
+				$"Could not {attempt}: "
+				+ (result.StandardError.Trim() is { Length: > 0 } error
+					? error.Split('\n')[^1].Trim()
+					: $"adb exited with code {result.ExitCode}."));
+		}
+	}
+
+	#endregion
+
+	#region Files
+
+	/// <summary>
+	/// Lists a directory on the device, or inside one app's data container.
+	/// </summary>
+	/// <remarks>
+	/// An app's own files are the ones worth reading, and nothing but the app can reach them, so a
+	/// bundle ID routes every command through <c>run-as</c>. That only works for a debuggable build --
+	/// which is what a developer is looking at -- and says so plainly when it does not.
+	/// </remarks>
+	public async Task<FileListResult> ListFilesAsync(
+		string deviceId,
+		FileQuery query,
+		CancellationToken cancellationToken = default)
+	{
+		var serial = await RequireSerialAsync(deviceId, cancellationToken).ConfigureAwait(false);
+		var path = NormalizeDevicePath(query.Path, query.BundleId);
+
+		// -A drops "." and ".."; -l gives the size and date; -L follows the symlinks Android uses for
+		// several of an app's own directories.
+		var result = await RunAppShellAsync(
+			serial,
+			query.BundleId,
+			["ls", "-lAL", QuoteForDeviceShell(path)],
+			cancellationToken).ConfigureAwait(false);
+
+		// ls writes "No such file or directory" and exits non-zero, but run-as writes its own refusal
+		// and exits zero, so both have to be looked at rather than just the code.
+		var failure = FindShellFailure(result);
+		if (failure is not null)
+			throw new DeviceCapabilityException(DescribeFileFailure(failure, path, query.BundleId, deviceId));
+
+		var files = LsParser.Parse(result.StandardOutput, path);
+
+		return new FileListResult
+		{
+			DeviceId = deviceId,
+			Platform = DevicePlatforms.Android,
+			Path = path,
+			Total = files.Length,
+			Files = [.. files.OrderByDescending(file => file.IsDirectory).ThenBy(file => file.Name, StringComparer.OrdinalIgnoreCase)],
+		};
+	}
+
+	/// <summary>
+	/// Copies a file off the device.
+	/// </summary>
+	/// <remarks>
+	/// An app-scoped pull cannot use <c>adb pull</c> at all: it reads as the shell user, which is
+	/// refused on <c>/data/data</c>, and <c>run-as</c> cannot stage a copy anywhere adb can reach
+	/// either -- <c>/data/local/tmp</c> rejects its writes. Both were measured rather than assumed. So
+	/// the bytes come back over <c>exec-out</c>, which unlike <c>adb shell</c> allocates no pty and
+	/// leaves them untouched.
+	/// </remarks>
+	public async Task<FileTransferResult> PullFileAsync(
+		string deviceId,
+		FileTransferRequest request,
+		CancellationToken cancellationToken = default)
+	{
+		var serial = await RequireSerialAsync(deviceId, cancellationToken).ConfigureAwait(false);
+		var path = NormalizeDevicePath(request.DevicePath, request.BundleId);
+
+		var expected = await RequireFileSizeAsync(serial, request.BundleId, path, deviceId, cancellationToken)
+			.ConfigureAwait(false);
+
+		var destination = PrepareDestination(request.HostPath, PathFileName(path));
+
+		// No quoting: exec-out hands the arguments to execvp rather than to a shell, so a quote would
+		// arrive as part of the file name instead of being stripped off it.
+		string[] arguments = string.IsNullOrWhiteSpace(request.BundleId)
+			? ["exec-out", "cat", path]
+			: ["exec-out", "run-as", request.BundleId, "cat", path];
+
+		var size = await RunAdbToFileAsync(serial, arguments, destination, cancellationToken)
+			.ConfigureAwait(false);
+
+		if (size != expected)
+		{
+			File.Delete(destination);
+			throw new DeviceCapabilityException(
+				$"Reading '{path}' from '{deviceId}' returned {size} bytes where the device reports "
+				+ $"{expected}, so the copy is incomplete and was discarded.");
+		}
+
+		return new FileTransferResult
+		{
+			DeviceId = deviceId,
+			DevicePath = path,
+			HostPath = destination,
+			Size = size,
+			Operation = FileOperations.Pull,
+		};
+	}
+
+	/// <summary>
+	/// Copies a file onto the device.
+	/// </summary>
+	/// <remarks>
+	/// An app-scoped push goes by way of <c>/data/local/tmp</c>: adb can write there and
+	/// <c>run-as</c> can read from it, which is the one direction that works. The staged copy is
+	/// removed afterwards so a fixture is not left where another app could read it.
+	/// </remarks>
+	public async Task<FileTransferResult> PushFileAsync(
+		string deviceId,
+		FileTransferRequest request,
+		CancellationToken cancellationToken = default)
+	{
+		var serial = await RequireSerialAsync(deviceId, cancellationToken).ConfigureAwait(false);
+		var path = NormalizeDevicePath(request.DevicePath, request.BundleId);
+		var size = new FileInfo(request.HostPath).Length;
+
+		if (string.IsNullOrWhiteSpace(request.BundleId))
+		{
+			var push = await RunAdbResultAsync(serial, ["push", request.HostPath, path], cancellationToken)
+				.ConfigureAwait(false);
+
+			if (push.ExitCode != 0)
+				throw new DeviceCapabilityException(
+					$"Could not push to '{path}' on '{deviceId}': {Explain(push)}");
+		}
+		else
+		{
+			await PushThroughStagingAsync(serial, request.BundleId, request.HostPath, path, deviceId, cancellationToken)
+				.ConfigureAwait(false);
+		}
+
+		return new FileTransferResult
+		{
+			DeviceId = deviceId,
+			DevicePath = path,
+			HostPath = request.HostPath,
+			Size = size,
+			Operation = FileOperations.Push,
+		};
+	}
+
+	private async Task PushThroughStagingAsync(
+		string serial,
+		string bundleId,
+		string hostPath,
+		string devicePath,
+		string deviceId,
+		CancellationToken cancellationToken)
+	{
+		var staged = $"/data/local/tmp/mobile-canvas-{Guid.NewGuid():N}";
+
+		var push = await RunAdbResultAsync(serial, ["push", hostPath, staged], cancellationToken)
+			.ConfigureAwait(false);
+
+		if (push.ExitCode != 0)
+			throw new DeviceCapabilityException(
+				$"Could not stage the file on '{deviceId}': {Explain(push)}");
+
+		try
+		{
+			var copy = await RunAdbResultAsync(
+				serial,
+				["shell", "run-as", bundleId, "cp", staged, QuoteForDeviceShell(devicePath)],
+				cancellationToken).ConfigureAwait(false);
+
+			var failure = FindShellFailure(copy);
+			if (failure is not null)
+				throw new DeviceCapabilityException(
+					DescribeFileFailure(failure, devicePath, bundleId, deviceId));
+		}
+		finally
+		{
+			// Not left behind: /data/local/tmp is readable by anything with shell access.
+			await RunAdbAsync(serial, ["shell", "rm", "-f", staged], cancellationToken).ConfigureAwait(false);
+		}
+	}
+
+	/// <summary>
+	/// Reports the size of a device file, and refuses anything that is not one.
+	/// </summary>
+	/// <remarks>
+	/// The size is the point: <c>adb exec-out</c> reports neither a non-zero exit code nor stderr when
+	/// the command under it fails, so a pull has no way to tell a truncated read from a whole one
+	/// except by knowing up front how many bytes to expect.
+	/// </remarks>
+	private async Task<long> RequireFileSizeAsync(
+		string serial,
+		string? bundleId,
+		string path,
+		string deviceId,
+		CancellationToken cancellationToken)
+	{
+		var probe = await RunAppShellAsync(
+			serial,
+			bundleId,
+			["ls", "-ld", QuoteForDeviceShell(path)],
+			cancellationToken).ConfigureAwait(false);
+
+		var failure = FindShellFailure(probe);
+		if (failure is not null)
+			throw new DeviceCapabilityException(DescribeFileFailure(failure, path, bundleId, deviceId));
+
+		if (LsParser.Parse(probe.StandardOutput, "").FirstOrDefault() is not { } entry)
+			throw new DeviceCapabilityException(
+				$"Could not read '{path}' on '{deviceId}': {probe.StandardOutput.Trim()}");
+
+		if (entry.IsDirectory)
+			throw new DeviceCapabilityException($"'{path}' is a directory, not a file.");
+
+		return entry.Size;
+	}
+
+	private Task<ProcessResult> RunAppShellAsync(
+		string serial,
+		string? bundleId,
+		string[] command,
+		CancellationToken cancellationToken) =>
+		RunAdbResultAsync(
+			serial,
+			string.IsNullOrWhiteSpace(bundleId)
+				? ["shell", .. command]
+				: ["shell", "run-as", bundleId, .. command],
+			cancellationToken);
+
+	/// <summary>
+	/// Finds the line explaining a device-shell failure, or null when there was none.
+	/// </summary>
+	/// <remarks>
+	/// <c>run-as</c> refuses an unknown or release-signed package by printing to stdout and exiting
+	/// zero, so an exit code alone reports success for a command that did nothing -- the same trap as
+	/// uiautomator, <c>am start</c> and <c>adb install</c>.
+	/// </remarks>
+	private static string? FindShellFailure(ProcessResult result)
+	{
+		if (result.StandardError.Trim() is { Length: > 0 } error)
+			return error.Split('\n')[0].Trim();
+
+		foreach (var line in result.StandardOutput.Split('\n'))
+		{
+			var text = line.Trim();
+			if (text.StartsWith("run-as:", StringComparison.Ordinal)
+				|| text.Contains("Permission denied", StringComparison.OrdinalIgnoreCase)
+				|| text.Contains("No such file or directory", StringComparison.OrdinalIgnoreCase))
+			{
+				return text;
+			}
+		}
+
+		return result.ExitCode == 0 ? null : $"the command exited with code {result.ExitCode}";
+	}
+
+	/// <summary>
+	/// Turns a device-shell refusal into something that says what to do about it.
+	/// </summary>
+	private static string DescribeFileFailure(string failure, string path, string? bundleId, string deviceId)
+	{
+		if (failure.Contains("not debuggable", StringComparison.OrdinalIgnoreCase)
+			|| failure.Contains("package not an application", StringComparison.OrdinalIgnoreCase)
+			|| failure.Contains("unknown package", StringComparison.OrdinalIgnoreCase))
+		{
+			return $"'{bundleId}' is not a debuggable build on '{deviceId}', so its files cannot be "
+				+ $"reached. Install a debug build, or use a path under /sdcard instead. ({failure})";
+		}
+
+		return $"Could not read '{path}' on '{deviceId}': {failure}";
+	}
+
+	private static string Explain(ProcessResult result) =>
+		result.StandardError.Trim() is { Length: > 0 } error
+			? error
+			: result.StandardOutput.Trim() is { Length: > 0 } output
+				? output
+				: $"adb exited with code {result.ExitCode}.";
+
+	/// <summary>
+	/// Reads an app-relative path as relative and a device path as absolute.
+	/// </summary>
+	private static string NormalizeDevicePath(string path, string? bundleId)
+	{
+		var trimmed = path.Trim();
+
+		if (string.IsNullOrWhiteSpace(bundleId))
+			return trimmed.Length == 0 ? "/" : trimmed;
+
+		// run-as starts in the app's data directory, so a relative path already means the right thing
+		// and a leading slash would escape to the device root.
+		var relative = trimmed.TrimStart('/');
+		return relative.Length == 0 ? "." : relative;
+	}
+
+	private static string PathFileName(string path)
+	{
+		var slash = path.TrimEnd('/').LastIndexOf('/');
+		var name = slash < 0 ? path : path[(slash + 1)..];
+		return name.Trim('/') is { Length: > 0 } trimmed ? trimmed : "file";
+	}
+
+	/// <summary>
+	/// Works out where a pull should land, creating the parent directory if it is missing.
+	/// </summary>
+	private static string PrepareDestination(string hostPath, string fileName)
+	{
+		var destination = Directory.Exists(hostPath) ? Path.Combine(hostPath, fileName) : hostPath;
+
+		var parent = Path.GetDirectoryName(destination);
+		if (!string.IsNullOrEmpty(parent))
+			Directory.CreateDirectory(parent);
+
+		return destination;
+	}
+
+	/// <summary>
+	/// Runs adb and streams stdout straight to a file, so nothing decodes the bytes on the way.
+	/// </summary>
+	/// <remarks>
+	/// Unlike <see cref="RunAdbBinaryAsync"/> this reports a failure rather than returning nothing: a
+	/// zero-length result is a legitimate answer for a file, so it cannot double as an error. These
+	/// guards are still not enough on their own -- <c>exec-out</c> exits zero and writes the failing
+	/// command's own complaint to stdout -- so the caller checks the byte count as well.
+	/// </remarks>
+	private async Task<long> RunAdbToFileAsync(
+		string serial,
+		string[] arguments,
+		string destination,
+		CancellationToken cancellationToken)
+	{
+		if (_locator.Adb is null)
+			throw new DeviceCapabilityException(
+				"adb was not found. Install Android platform-tools or set ANDROID_HOME.");
+
+		var startInfo = new ProcessStartInfo(_locator.Adb)
+		{
+			UseShellExecute = false,
+			CreateNoWindow = true,
+			RedirectStandardOutput = true,
+			RedirectStandardError = true,
+		};
+
+		startInfo.ArgumentList.Add("-s");
+		startInfo.ArgumentList.Add(serial);
+		foreach (var argument in arguments)
+			startInfo.ArgumentList.Add(argument);
+
+		using var process = Process.Start(startInfo)
+			?? throw new InvalidOperationException($"Failed to start '{_locator.Adb}'.");
+
+		long written;
+		var drainErrors = process.StandardError.ReadToEndAsync(cancellationToken);
+
+		await using (var file = File.Create(destination))
+		{
+			await process.StandardOutput.BaseStream.CopyToAsync(file, cancellationToken).ConfigureAwait(false);
+			written = file.Length;
+		}
+
+		await process.WaitForExitAsync(cancellationToken).ConfigureAwait(false);
+		var errors = await drainErrors.ConfigureAwait(false);
+
+		if (process.ExitCode != 0 || errors.Trim() is { Length: > 0 })
+		{
+			File.Delete(destination);
+			throw new DeviceCapabilityException(
+				$"Could not read the file from the device: "
+				+ (errors.Trim() is { Length: > 0 } text ? text : $"adb exited with code {process.ExitCode}."));
+		}
+
+		return written;
 	}
 
 	#endregion

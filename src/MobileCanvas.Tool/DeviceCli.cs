@@ -114,6 +114,139 @@ internal static class DeviceCli
 				UiQueryFrom(options),
 				options.Context(),
 				cancellationToken).ConfigureAwait(false),
+			("app", "list") => await Client.ListAppsAsync(
+				options.RequiredPosition(0, "device ID"),
+				new AppQuery
+				{
+					Text = options.Value("text"),
+					IncludeSystem = options.Flag("system"),
+					Limit = options.Int("limit", 100),
+				},
+				cancellationToken).ConfigureAwait(false),
+			("app", "launch") => await Client.LaunchAppAsync(
+				options.RequiredPosition(0, "device ID"),
+				new AppLaunchRequest
+				{
+					BundleId = options.Required("bundle"),
+					Relaunch = options.Flag("relaunch"),
+				},
+				cancellationToken).ConfigureAwait(false),
+			("app", "terminate") => await Client.TerminateAppAsync(
+				options.RequiredPosition(0, "device ID"),
+				options.Required("bundle"),
+				cancellationToken).ConfigureAwait(false),
+			("app", "install") => await Client.InstallAppAsync(
+				options.RequiredPosition(0, "device ID"),
+				new AppInstallRequest { Path = options.Required("path") },
+				cancellationToken).ConfigureAwait(false),
+			("app", "uninstall") => await Client.UninstallAppAsync(
+				options.RequiredPosition(0, "device ID"),
+				options.Required("bundle"),
+				options.Flag("confirm"),
+				cancellationToken).ConfigureAwait(false),
+			("log", _) => await Client.ReadLogAsync(
+				BareVerbOptions(args).RequiredPosition(0, "device ID"),
+				new LogQuery
+				{
+					BundleId = options.Value("bundle"),
+					MinimumLevel = options.Value("level"),
+					Text = options.Value("text"),
+					Since = TimeSpan.FromSeconds(options.Int("seconds", 300)),
+					Limit = options.Int("limit", 200),
+				},
+				cancellationToken).ConfigureAwait(false),
+			("crashes", "list") => await Client.ListCrashesAsync(
+				options.RequiredPosition(0, "device ID"),
+				new CrashQuery { Text = options.Value("text"), Limit = options.Int("limit", 25) },
+				cancellationToken).ConfigureAwait(false),
+			("crashes", "show") => await Client.GetCrashAsync(
+				options.RequiredPosition(0, "device ID"),
+				options.Required("id"),
+				cancellationToken).ConfigureAwait(false),
+			("file", "list") => await Client.ListFilesAsync(
+				options.RequiredPosition(0, "device ID"),
+				new FileQuery { BundleId = options.Value("bundle"), Path = options.Value("path") ?? "" },
+				cancellationToken).ConfigureAwait(false),
+			("file", "pull") => await Client.PullFileAsync(
+				options.RequiredPosition(0, "device ID"),
+				new FileTransferRequest
+				{
+					BundleId = options.Value("bundle"),
+					DevicePath = options.Required("path"),
+					HostPath = options.Required("output"),
+				},
+				cancellationToken).ConfigureAwait(false),
+			("file", "push") => await Client.PushFileAsync(
+				options.RequiredPosition(0, "device ID"),
+				new FileTransferRequest
+				{
+					BundleId = options.Value("bundle"),
+					DevicePath = options.Required("path"),
+					HostPath = options.Required("input"),
+				},
+				cancellationToken).ConfigureAwait(false),
+			("permission", "list") => await Client.ListPermissionsAsync(
+				options.RequiredPosition(0, "device ID"),
+				options.Required("bundle"),
+				cancellationToken).ConfigureAwait(false),
+			("permission", "grant" or "revoke" or "reset") => await Client.ChangePermissionAsync(
+				options.RequiredPosition(0, "device ID"),
+				new PermissionChangeRequest
+				{
+					BundleId = options.Required("bundle"),
+					Permission = options.RequiredPosition(1, "permission"),
+					Action = action,
+				},
+				cancellationToken).ConfigureAwait(false),
+			("settings", "get") => await Client.GetSettingsAsync(
+				options.RequiredPosition(0, "device ID"),
+				cancellationToken).ConfigureAwait(false),
+			("settings", "set") => await Client.UpdateSettingsAsync(
+				options.RequiredPosition(0, "device ID"),
+				new DeviceSettingsRequest
+				{
+					Appearance = options.Value("appearance"),
+					FontScale = options.Value("font-scale") is { } scale
+						? double.Parse(scale, CultureInfo.InvariantCulture)
+						: null,
+					ContentSize = options.Value("content-size"),
+					IncreaseContrast = options.Value("contrast") is { } contrast
+						? bool.Parse(contrast)
+						: null,
+				},
+				cancellationToken).ConfigureAwait(false),
+			("hardware", "get") => await Client.GetHardwareStateAsync(
+				options.RequiredPosition(0, "device ID"),
+				cancellationToken).ConfigureAwait(false),
+			("location", "set") => await Client.SetLocationAsync(
+				options.RequiredPosition(0, "device ID"),
+				new DeviceLocationRequest
+				{
+					Latitude = double.Parse(options.Required("latitude"), CultureInfo.InvariantCulture),
+					Longitude = double.Parse(options.Required("longitude"), CultureInfo.InvariantCulture),
+				},
+				cancellationToken).ConfigureAwait(false),
+			("location", "clear") => await Client.ClearLocationAsync(
+				options.RequiredPosition(0, "device ID"),
+				cancellationToken).ConfigureAwait(false),
+			("battery", "set") => await Client.SetBatteryAsync(
+				options.RequiredPosition(0, "device ID"),
+				new BatteryRequest
+				{
+					Level = options.Value("level") is { } level ? int.Parse(level, CultureInfo.InvariantCulture) : null,
+					State = options.Value("state"),
+				},
+				cancellationToken).ConfigureAwait(false),
+			("network", "set") => await Client.SetNetworkAsync(
+				options.RequiredPosition(0, "device ID"),
+				new NetworkRequest
+				{
+					Profile = options.Value("profile"),
+					LatencyMs = options.Value("latency") is { } latency
+						? int.Parse(latency, CultureInfo.InvariantCulture)
+						: null,
+				},
+				cancellationToken).ConfigureAwait(false),
 			("screenshot", _) => await ScreenshotAsync(
 				action,
 				new CliArguments(args.Skip(1)),
@@ -390,6 +523,13 @@ internal static class DeviceCli
 		}
 	}
 
+	/// <summary>
+	/// Parses options for a verb that takes a device ID where others take a sub-action, so its first
+	/// positional argument sits one place earlier than usual.
+	/// </summary>
+	private static CliArguments BareVerbOptions(string[] args) =>
+		new(args.Skip(Math.Min(1, args.Length)));
+
 	private const string HelpText = """
 		Mobile Canvas - discover and control local mobile virtual devices
 
@@ -411,6 +551,28 @@ internal static class DeviceCli
 		  mobile-canvas ui dump <id> [--raw] [--json]
 		  mobile-canvas ui find <id> [--text <s>] [--id <s>] [--role <s>] [--exact] [--limit <n>]
 		  mobile-canvas ui tap <id> [--text <s>] [--id <s>] [--role <s>] [--exact]
+		  mobile-canvas app list <id> [--text <s>] [--system] [--limit <n>] [--json]
+		  mobile-canvas app launch <id> --bundle <bundle-id> [--relaunch]
+		  mobile-canvas app terminate <id> --bundle <bundle-id>
+		  mobile-canvas app install <id> --path <app-or-apk>
+		  mobile-canvas app uninstall <id> --bundle <bundle-id> --confirm
+		  mobile-canvas log <id> [--bundle <bundle-id>] [--level <name>] [--text <s>]
+		                         [--seconds <n>] [--limit <n>] [--json]
+		  mobile-canvas crashes list <id> [--text <s>] [--limit <n>] [--json]
+		  mobile-canvas crashes show <id> --id <crash-id> [--json]
+		  mobile-canvas file list <id> [--bundle <bundle-id>] [--path <p>] [--json]
+		  mobile-canvas file pull <id> [--bundle <bundle-id>] --path <p> --output <host-path>
+		  mobile-canvas file push <id> [--bundle <bundle-id>] --path <p> --input <host-path>
+		  mobile-canvas permission list <id> --bundle <bundle-id> [--json]
+		  mobile-canvas permission grant|revoke|reset <id> <permission> --bundle <bundle-id>
+		  mobile-canvas settings get <id> [--json]
+		  mobile-canvas settings set <id> [--appearance light|dark] [--font-scale <n>]
+		                                  [--content-size <c>] [--contrast true|false]
+		  mobile-canvas hardware get <id> [--json]
+		  mobile-canvas location set <id> --latitude <lat> --longitude <lon>
+		  mobile-canvas location clear <id>
+		  mobile-canvas battery set <id> [--level 0-100] [--state charging|discharging|full]
+		  mobile-canvas network set <id> [--profile <p>] [--latency <ms>]
 		  mobile-canvas screenshot <id> [--output <path>] [--json]
 		  mobile-canvas recording start|stop|status <id>
 		  mobile-canvas mcp
@@ -428,13 +590,49 @@ internal static class DeviceCli
 		Prefer `ui find`/`ui tap` over screenshot-and-guess: they read the live accessibility tree,
 		so a tap lands on the element rather than on a coordinate that a layout change invalidates.
 		`ui dump --raw` returns the untouched platform payload when the normalized tree is not enough.
+
+		Use `app launch` rather than hunting for an icon on the home screen: it does not depend on
+		which page the icon is on, or on the app having one. `app list` hides the platform's built-in
+		apps unless `--system` is passed, because they outnumber a developer's own many times over.
+		`app uninstall` deletes the app's data with it, so it requires `--confirm`.
+
+		`log` is bounded on purpose: an idle device writes tens of thousands of lines a minute, so it
+		defaults to the last five minutes and the newest 200 entries. Narrow it with `--bundle` to one
+		app and `--level error` to the lines that matter; both filter on the device rather than after
+		the fact. Levels are verbose, debug, info, warning, error and fatal -- Apple's log has no
+		warning rung, so asking iOS for it yields errors and faults.
+
+		`crashes list` finds crashes the device recorded after the fact, including ones that happened
+		while nothing was watching. Pass an ID from that list to `crashes show` for the full report.
+
+		`file` addresses two places. With `--bundle` the path is relative to that app's data container,
+		which is where the database and the files it wrote actually live; without it the path is an
+		absolute device path. Prefer `--bundle`: on Android nothing but the app can read those files, and
+		on iOS the container is a directory named after a GUID that changes when the app is reinstalled.
+		Android app access needs a debuggable build, and says so when the build is not one.
+
+		`permission` takes names that work on both platforms -- camera, microphone, location,
+		contacts, calendar, photos, notifications -- as well as a platform's own name. One name can
+		cover several Android permissions, so the result lists everything the change actually touched,
+		read back from the device rather than assumed: both platforms accept changes they then decline
+		to make.
+
+		`settings` covers the two things worth flipping mid-test: dark mode, and the text size that
+		breaks a layout. iOS names text sizes (`--content-size large`) where Android scales them
+		(`--font-scale 1.3`), and each says so if given the other.
+
+		`location`, `battery` and `network` simulate hardware, and the platforms differ enough that
+		each says what it cannot do rather than pretending. Neither can read a location back, so a fix
+		is confirmed only by asking the app. An emulator cannot be returned to a real position at all.
+		A simulator has no network of its own to slow down -- `network set` there only changes what the
+		status bar draws, and the result says so.
 		""";
 }
 
 internal sealed class CliArguments
 {
 	private static readonly HashSet<string> FlagNames =
-		["json", "no-json", "confirm", "schema", "wait"];
+		["json", "no-json", "confirm", "schema", "wait", "raw", "system", "relaunch"];
 	private readonly Dictionary<string, string?> _options =
 		new(StringComparer.OrdinalIgnoreCase);
 	private readonly List<string> _positions = [];

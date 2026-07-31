@@ -33,6 +33,11 @@ internal static class DeviceApi
 		MapLifecycle(app);
 		MapInput(app);
 		MapUi(app);
+		MapApps(app);
+		MapDiagnostics(app);
+		MapFiles(app);
+		MapSettings(app);
+		MapHardware(app);
 		MapMedia(app);
 	}
 
@@ -536,6 +541,140 @@ internal static class DeviceApi
 					cancellationToken).ConfigureAwait(false);
 				return result;
 			});
+	}
+
+	private static void MapApps(WebApplication app)
+	{
+		app.MapGet(
+			"/api/v1/devices/{deviceId}/apps",
+			(string deviceId, string? text, bool? system, int? limit, DeviceService devices, CancellationToken cancellationToken) =>
+				devices.ListAppsAsync(
+					deviceId,
+					new AppQuery { Text = text, IncludeSystem = system ?? false, Limit = limit ?? 100 },
+					cancellationToken));
+		app.MapPost(
+			"/api/v1/devices/{deviceId}/apps/launch",
+			(string deviceId, AppLaunchRequest request, DeviceService devices, CancellationToken cancellationToken) =>
+				devices.LaunchAppAsync(deviceId, request, cancellationToken));
+		app.MapPost(
+			"/api/v1/devices/{deviceId}/apps/{bundleId}/terminate",
+			(string deviceId, string bundleId, DeviceService devices, CancellationToken cancellationToken) =>
+				devices.TerminateAppAsync(deviceId, bundleId, cancellationToken));
+		app.MapPost(
+			"/api/v1/devices/{deviceId}/apps/install",
+			(string deviceId, AppInstallRequest request, DeviceService devices, CancellationToken cancellationToken) =>
+				devices.InstallAppAsync(deviceId, request, cancellationToken));
+		app.MapPost(
+			"/api/v1/devices/{deviceId}/apps/{bundleId}/uninstall",
+			(string deviceId, string bundleId, bool? confirm, DeviceService devices, CancellationToken cancellationToken) =>
+				devices.UninstallAppAsync(deviceId, bundleId, confirm ?? false, cancellationToken));
+	}
+
+	private static void MapDiagnostics(WebApplication app)
+	{
+		app.MapGet(
+			"/api/v1/devices/{deviceId}/log",
+			(string deviceId, string? bundleId, string? level, string? text, int? seconds, int? limit,
+				DeviceService devices, CancellationToken cancellationToken) =>
+				devices.ReadLogAsync(
+					deviceId,
+					new LogQuery
+					{
+						BundleId = bundleId,
+						MinimumLevel = level,
+						Text = text,
+						Since = TimeSpan.FromSeconds(seconds ?? 300),
+						Limit = limit ?? 200,
+					},
+					cancellationToken));
+		app.MapGet(
+			"/api/v1/devices/{deviceId}/crashes",
+			(string deviceId, string? text, int? limit, DeviceService devices, CancellationToken cancellationToken) =>
+				devices.ListCrashesAsync(
+					deviceId,
+					new CrashQuery { Text = text, Limit = limit ?? 25 },
+					cancellationToken));
+		app.MapGet(
+			"/api/v1/devices/{deviceId}/crashes/{crashId}",
+			(string deviceId, string crashId, DeviceService devices, CancellationToken cancellationToken) =>
+				devices.GetCrashAsync(deviceId, crashId, cancellationToken));
+	}
+
+	private static void MapFiles(WebApplication app)
+	{
+		app.MapGet(
+			"/api/v1/devices/{deviceId}/files",
+			(string deviceId, string? bundleId, string? path,
+				DeviceService devices, CancellationToken cancellationToken) =>
+				devices.ListFilesAsync(
+					deviceId,
+					new FileQuery { BundleId = bundleId, Path = path ?? "" },
+					cancellationToken));
+		app.MapPost(
+			"/api/v1/devices/{deviceId}/files/pull",
+			(string deviceId, FileTransferRequest request,
+				DeviceService devices, CancellationToken cancellationToken) =>
+				devices.PullFileAsync(deviceId, request, cancellationToken));
+		app.MapPost(
+			"/api/v1/devices/{deviceId}/files/push",
+			(string deviceId, FileTransferRequest request,
+				DeviceService devices, CancellationToken cancellationToken) =>
+				devices.PushFileAsync(deviceId, request, cancellationToken));
+	}
+
+	private static void MapSettings(WebApplication app)
+	{
+		app.MapGet(
+			"/api/v1/devices/{deviceId}/permissions",
+			(string deviceId, string bundleId, DeviceService devices, CancellationToken cancellationToken) =>
+				devices.ListPermissionsAsync(deviceId, bundleId, cancellationToken));
+		app.MapPost(
+			"/api/v1/devices/{deviceId}/permissions",
+			(string deviceId, PermissionChangeRequest request,
+				DeviceService devices, CancellationToken cancellationToken) =>
+				devices.ChangePermissionAsync(deviceId, request, cancellationToken));
+		app.MapGet(
+			"/api/v1/devices/{deviceId}/settings",
+			(string deviceId, DeviceService devices, CancellationToken cancellationToken) =>
+				devices.GetSettingsAsync(deviceId, cancellationToken));
+		app.MapPost(
+			"/api/v1/devices/{deviceId}/settings",
+			(string deviceId, DeviceSettingsRequest request,
+				DeviceService devices, CancellationToken cancellationToken) =>
+				devices.UpdateSettingsAsync(deviceId, request, cancellationToken));
+	}
+
+	private static void MapHardware(WebApplication app)
+	{
+		app.MapGet(
+			"/api/v1/devices/{deviceId}/hardware",
+			(string deviceId, DeviceService devices, CancellationToken cancellationToken) =>
+				devices.GetHardwareStateAsync(deviceId, cancellationToken));
+		app.MapPost(
+			"/api/v1/devices/{deviceId}/hardware/location",
+			async (string deviceId, DeviceLocationRequest request,
+				DeviceService devices, CancellationToken cancellationToken) =>
+			{
+				await devices.SetLocationAsync(deviceId, request, cancellationToken);
+				return Results.Ok(new OperationResult { Operation = "location-set" });
+			});
+		app.MapDelete(
+			"/api/v1/devices/{deviceId}/hardware/location",
+			async (string deviceId, DeviceService devices, CancellationToken cancellationToken) =>
+			{
+				await devices.ClearLocationAsync(deviceId, cancellationToken);
+				return Results.Ok(new OperationResult { Operation = "location-clear" });
+			});
+		app.MapPost(
+			"/api/v1/devices/{deviceId}/hardware/battery",
+			(string deviceId, BatteryRequest request,
+				DeviceService devices, CancellationToken cancellationToken) =>
+				devices.SetBatteryAsync(deviceId, request, cancellationToken));
+		app.MapPost(
+			"/api/v1/devices/{deviceId}/hardware/network",
+			(string deviceId, NetworkRequest request,
+				DeviceService devices, CancellationToken cancellationToken) =>
+				devices.SetNetworkAsync(deviceId, request, cancellationToken));
 	}
 
 	private static void MapMedia(WebApplication app)

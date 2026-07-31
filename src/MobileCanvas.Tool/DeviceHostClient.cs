@@ -346,6 +346,278 @@ public sealed class DeviceHostClient
 			.ConfigureAwait(false);
 	}
 
+	public async Task<AppListResult> ListAppsAsync(
+		string deviceId,
+		AppQuery query,
+		CancellationToken cancellationToken = default)
+	{
+		var path = $"/api/v1/devices/{Escape(deviceId)}/apps"
+			+ $"?system={(query.IncludeSystem ? "true" : "false")}&limit={query.Limit}"
+			+ (string.IsNullOrWhiteSpace(query.Text) ? "" : $"&text={Uri.EscapeDataString(query.Text)}");
+
+		var response = await SendAsync(HttpMethod.Get, path, cancellationToken).ConfigureAwait(false);
+		return await ReadAsync(response, DeviceJsonContext.Default.AppListResult, cancellationToken)
+			.ConfigureAwait(false);
+	}
+
+	public async Task<AppOperationResult> LaunchAppAsync(
+		string deviceId,
+		AppLaunchRequest request,
+		CancellationToken cancellationToken = default)
+	{
+		var response = await SendAsync(
+			HttpMethod.Post,
+			$"/api/v1/devices/{Escape(deviceId)}/apps/launch",
+			JsonContent.Create(request, DeviceJsonContext.Default.AppLaunchRequest),
+			cancellationToken).ConfigureAwait(false);
+		return await ReadAsync(response, DeviceJsonContext.Default.AppOperationResult, cancellationToken)
+			.ConfigureAwait(false);
+	}
+
+	public async Task<AppOperationResult> TerminateAppAsync(
+		string deviceId,
+		string bundleId,
+		CancellationToken cancellationToken = default)
+	{
+		var response = await SendAsync(
+			HttpMethod.Post,
+			$"/api/v1/devices/{Escape(deviceId)}/apps/{Escape(bundleId)}/terminate",
+			cancellationToken).ConfigureAwait(false);
+		return await ReadAsync(response, DeviceJsonContext.Default.AppOperationResult, cancellationToken)
+			.ConfigureAwait(false);
+	}
+
+	public async Task<AppOperationResult> InstallAppAsync(
+		string deviceId,
+		AppInstallRequest request,
+		CancellationToken cancellationToken = default)
+	{
+		var response = await SendAsync(
+			HttpMethod.Post,
+			$"/api/v1/devices/{Escape(deviceId)}/apps/install",
+			JsonContent.Create(request, DeviceJsonContext.Default.AppInstallRequest),
+			cancellationToken).ConfigureAwait(false);
+		return await ReadAsync(response, DeviceJsonContext.Default.AppOperationResult, cancellationToken)
+			.ConfigureAwait(false);
+	}
+
+	public async Task<AppOperationResult> UninstallAppAsync(
+		string deviceId,
+		string bundleId,
+		bool confirm,
+		CancellationToken cancellationToken = default)
+	{
+		var response = await SendAsync(
+			HttpMethod.Post,
+			$"/api/v1/devices/{Escape(deviceId)}/apps/{Escape(bundleId)}/uninstall?confirm={(confirm ? "true" : "false")}",
+			cancellationToken).ConfigureAwait(false);
+		return await ReadAsync(response, DeviceJsonContext.Default.AppOperationResult, cancellationToken)
+			.ConfigureAwait(false);
+	}
+
+	public async Task<LogResult> ReadLogAsync(
+		string deviceId,
+		LogQuery query,
+		CancellationToken cancellationToken = default)
+	{
+		var path = $"/api/v1/devices/{Escape(deviceId)}/log"
+			+ $"?seconds={(int)Math.Max(1, Math.Round(query.Since.TotalSeconds))}&limit={query.Limit}"
+			+ (string.IsNullOrWhiteSpace(query.BundleId) ? "" : $"&bundleId={Uri.EscapeDataString(query.BundleId)}")
+			+ (string.IsNullOrWhiteSpace(query.MinimumLevel) ? "" : $"&level={Uri.EscapeDataString(query.MinimumLevel)}")
+			+ (string.IsNullOrWhiteSpace(query.Text) ? "" : $"&text={Uri.EscapeDataString(query.Text)}");
+
+		var response = await SendAsync(HttpMethod.Get, path, cancellationToken).ConfigureAwait(false);
+		return await ReadAsync(response, DeviceJsonContext.Default.LogResult, cancellationToken)
+			.ConfigureAwait(false);
+	}
+
+	public async Task<CrashListResult> ListCrashesAsync(
+		string deviceId,
+		CrashQuery query,
+		CancellationToken cancellationToken = default)
+	{
+		var path = $"/api/v1/devices/{Escape(deviceId)}/crashes?limit={query.Limit}"
+			+ (string.IsNullOrWhiteSpace(query.Text) ? "" : $"&text={Uri.EscapeDataString(query.Text)}");
+
+		var response = await SendAsync(HttpMethod.Get, path, cancellationToken).ConfigureAwait(false);
+		return await ReadAsync(response, DeviceJsonContext.Default.CrashListResult, cancellationToken)
+			.ConfigureAwait(false);
+	}
+
+	public async Task<CrashDetailResult> GetCrashAsync(
+		string deviceId,
+		string crashId,
+		CancellationToken cancellationToken = default)
+	{
+		var response = await SendAsync(
+			HttpMethod.Get,
+			$"/api/v1/devices/{Escape(deviceId)}/crashes/{Escape(crashId)}",
+			cancellationToken).ConfigureAwait(false);
+		return await ReadAsync(response, DeviceJsonContext.Default.CrashDetailResult, cancellationToken)
+			.ConfigureAwait(false);
+	}
+
+	public async Task<FileListResult> ListFilesAsync(
+		string deviceId,
+		FileQuery query,
+		CancellationToken cancellationToken = default)
+	{
+		var path = $"/api/v1/devices/{Escape(deviceId)}/files"
+			+ $"?path={Uri.EscapeDataString(query.Path)}"
+			+ (string.IsNullOrWhiteSpace(query.BundleId) ? "" : $"&bundleId={Uri.EscapeDataString(query.BundleId)}");
+
+		var response = await SendAsync(HttpMethod.Get, path, cancellationToken).ConfigureAwait(false);
+		return await ReadAsync(response, DeviceJsonContext.Default.FileListResult, cancellationToken)
+			.ConfigureAwait(false);
+	}
+
+	public async Task<FileTransferResult> PullFileAsync(
+		string deviceId,
+		FileTransferRequest request,
+		CancellationToken cancellationToken = default)
+	{
+		var response = await SendAsync(
+			HttpMethod.Post,
+			$"/api/v1/devices/{Escape(deviceId)}/files/pull",
+			JsonContent.Create(request, DeviceJsonContext.Default.FileTransferRequest),
+			cancellationToken).ConfigureAwait(false);
+		return await ReadAsync(response, DeviceJsonContext.Default.FileTransferResult, cancellationToken)
+			.ConfigureAwait(false);
+	}
+
+	public async Task<FileTransferResult> PushFileAsync(
+		string deviceId,
+		FileTransferRequest request,
+		CancellationToken cancellationToken = default)
+	{
+		var response = await SendAsync(
+			HttpMethod.Post,
+			$"/api/v1/devices/{Escape(deviceId)}/files/push",
+			JsonContent.Create(request, DeviceJsonContext.Default.FileTransferRequest),
+			cancellationToken).ConfigureAwait(false);
+		return await ReadAsync(response, DeviceJsonContext.Default.FileTransferResult, cancellationToken)
+			.ConfigureAwait(false);
+	}
+
+	public async Task<PermissionListResult> ListPermissionsAsync(
+		string deviceId,
+		string bundleId,
+		CancellationToken cancellationToken = default)
+	{
+		var response = await SendAsync(
+			HttpMethod.Get,
+			$"/api/v1/devices/{Escape(deviceId)}/permissions?bundleId={Uri.EscapeDataString(bundleId)}",
+			cancellationToken).ConfigureAwait(false);
+		return await ReadAsync(response, DeviceJsonContext.Default.PermissionListResult, cancellationToken)
+			.ConfigureAwait(false);
+	}
+
+	public async Task<PermissionChangeResult> ChangePermissionAsync(
+		string deviceId,
+		PermissionChangeRequest request,
+		CancellationToken cancellationToken = default)
+	{
+		var response = await SendAsync(
+			HttpMethod.Post,
+			$"/api/v1/devices/{Escape(deviceId)}/permissions",
+			JsonContent.Create(request, DeviceJsonContext.Default.PermissionChangeRequest),
+			cancellationToken).ConfigureAwait(false);
+		return await ReadAsync(response, DeviceJsonContext.Default.PermissionChangeResult, cancellationToken)
+			.ConfigureAwait(false);
+	}
+
+	public async Task<DeviceSettings> GetSettingsAsync(
+		string deviceId,
+		CancellationToken cancellationToken = default)
+	{
+		var response = await SendAsync(
+			HttpMethod.Get,
+			$"/api/v1/devices/{Escape(deviceId)}/settings",
+			cancellationToken).ConfigureAwait(false);
+		return await ReadAsync(response, DeviceJsonContext.Default.DeviceSettings, cancellationToken)
+			.ConfigureAwait(false);
+	}
+
+	public async Task<DeviceSettings> UpdateSettingsAsync(
+		string deviceId,
+		DeviceSettingsRequest request,
+		CancellationToken cancellationToken = default)
+	{
+		var response = await SendAsync(
+			HttpMethod.Post,
+			$"/api/v1/devices/{Escape(deviceId)}/settings",
+			JsonContent.Create(request, DeviceJsonContext.Default.DeviceSettingsRequest),
+			cancellationToken).ConfigureAwait(false);
+		return await ReadAsync(response, DeviceJsonContext.Default.DeviceSettings, cancellationToken)
+			.ConfigureAwait(false);
+	}
+
+	public async Task<HardwareState> GetHardwareStateAsync(
+		string deviceId,
+		CancellationToken cancellationToken = default)
+	{
+		var response = await SendAsync(
+			HttpMethod.Get,
+			$"/api/v1/devices/{Escape(deviceId)}/hardware",
+			cancellationToken).ConfigureAwait(false);
+		return await ReadAsync(response, DeviceJsonContext.Default.HardwareState, cancellationToken)
+			.ConfigureAwait(false);
+	}
+
+	public async Task<OperationResult> SetLocationAsync(
+		string deviceId,
+		DeviceLocationRequest request,
+		CancellationToken cancellationToken = default)
+	{
+		var response = await SendAsync(
+			HttpMethod.Post,
+			$"/api/v1/devices/{Escape(deviceId)}/hardware/location",
+			JsonContent.Create(request, DeviceJsonContext.Default.DeviceLocationRequest),
+			cancellationToken).ConfigureAwait(false);
+		return await ReadAsync(response, DeviceJsonContext.Default.OperationResult, cancellationToken)
+			.ConfigureAwait(false);
+	}
+
+	public async Task<OperationResult> ClearLocationAsync(
+		string deviceId,
+		CancellationToken cancellationToken = default)
+	{
+		var response = await SendAsync(
+			HttpMethod.Delete,
+			$"/api/v1/devices/{Escape(deviceId)}/hardware/location",
+			cancellationToken).ConfigureAwait(false);
+		return await ReadAsync(response, DeviceJsonContext.Default.OperationResult, cancellationToken)
+			.ConfigureAwait(false);
+	}
+
+	public async Task<HardwareState> SetBatteryAsync(
+		string deviceId,
+		BatteryRequest request,
+		CancellationToken cancellationToken = default)
+	{
+		var response = await SendAsync(
+			HttpMethod.Post,
+			$"/api/v1/devices/{Escape(deviceId)}/hardware/battery",
+			JsonContent.Create(request, DeviceJsonContext.Default.BatteryRequest),
+			cancellationToken).ConfigureAwait(false);
+		return await ReadAsync(response, DeviceJsonContext.Default.HardwareState, cancellationToken)
+			.ConfigureAwait(false);
+	}
+
+	public async Task<HardwareState> SetNetworkAsync(
+		string deviceId,
+		NetworkRequest request,
+		CancellationToken cancellationToken = default)
+	{
+		var response = await SendAsync(
+			HttpMethod.Post,
+			$"/api/v1/devices/{Escape(deviceId)}/hardware/network",
+			JsonContent.Create(request, DeviceJsonContext.Default.NetworkRequest),
+			cancellationToken).ConfigureAwait(false);
+		return await ReadAsync(response, DeviceJsonContext.Default.HardwareState, cancellationToken)
+			.ConfigureAwait(false);
+	}
+
 	public async Task<byte[]> ScreenshotAsync(
 		string deviceId,
 		CanvasContextKey? context = null,
