@@ -621,6 +621,97 @@ public sealed class DeviceService(IEnumerable<IDeviceBackend> backends)
 			cancellationToken);
 	}
 
+	public Task SendPushNotificationAsync(
+		string deviceId,
+		PushNotificationRequest request,
+		CancellationToken cancellationToken = default)
+	{
+		if (string.IsNullOrWhiteSpace(request.Payload))
+			throw new ArgumentException("A push notification needs a payload.", nameof(request));
+
+		// The platform rejects a payload without an `aps` key, but only after the app has been
+		// resolved, so catching it here keeps the complaint about the thing that is actually wrong.
+		if (!request.Payload.Contains("\"aps\"", StringComparison.Ordinal))
+			throw new ArgumentException(
+				"A push payload must contain an 'aps' key, for example "
+				+ """{"aps":{"alert":{"title":"Hello","body":"World"}}}.""",
+				nameof(request));
+
+		return GetBackend(deviceId).SendPushNotificationAsync(
+			deviceId,
+			request with { BundleId = RequireBundleId(request.BundleId) },
+			cancellationToken);
+	}
+
+	public Task SendSmsAsync(
+		string deviceId,
+		SmsRequest request,
+		CancellationToken cancellationToken = default)
+	{
+		if (string.IsNullOrWhiteSpace(request.From))
+			throw new ArgumentException("A text message needs a sender.", nameof(request));
+
+		if (string.IsNullOrEmpty(request.Body))
+			throw new ArgumentException("A text message needs a body.", nameof(request));
+
+		return GetBackend(deviceId).SendSmsAsync(
+			deviceId,
+			request with { From = request.From.Trim() },
+			cancellationToken);
+	}
+
+	public Task<CallStateResult> GetCallsAsync(
+		string deviceId,
+		CancellationToken cancellationToken = default) =>
+		GetBackend(deviceId).GetCallsAsync(deviceId, cancellationToken);
+
+	public Task<CallStateResult> ChangeCallAsync(
+		string deviceId,
+		CallRequest request,
+		CancellationToken cancellationToken = default)
+	{
+		if (string.IsNullOrWhiteSpace(request.Action))
+			throw new ArgumentException("A call action is required.", nameof(request));
+
+		return GetBackend(deviceId).ChangeCallAsync(
+			deviceId,
+			request with { Number = request.Number?.Trim() },
+			cancellationToken);
+	}
+
+	public Task<BiometricResult> SendBiometricAsync(
+		string deviceId,
+		BiometricRequest request,
+		CancellationToken cancellationToken = default)
+	{
+		if (string.IsNullOrWhiteSpace(request.Action))
+			throw new ArgumentException("A biometric action is required.", nameof(request));
+
+		return GetBackend(deviceId).SendBiometricAsync(deviceId, request, cancellationToken);
+	}
+
+	public Task<ClipboardResult> GetClipboardAsync(
+		string deviceId,
+		CancellationToken cancellationToken = default) =>
+		GetBackend(deviceId).GetClipboardAsync(deviceId, cancellationToken);
+
+	public Task<ClipboardResult> SetClipboardAsync(
+		string deviceId,
+		string text,
+		CancellationToken cancellationToken = default) =>
+		GetBackend(deviceId).SetClipboardAsync(deviceId, text ?? "", cancellationToken);
+
+	public Task<MediaResult> AddMediaAsync(
+		string deviceId,
+		MediaRequest request,
+		CancellationToken cancellationToken = default)
+	{
+		if (request.HostPaths.Count == 0)
+			throw new ArgumentException("Name at least one file to add.", nameof(request));
+
+		return GetBackend(deviceId).AddMediaAsync(deviceId, request, cancellationToken);
+	}
+
 	private static string RequireBundleId(string bundleId) =>
 		string.IsNullOrWhiteSpace(bundleId)
 			? throw new ArgumentException(

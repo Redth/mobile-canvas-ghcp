@@ -618,6 +618,116 @@ public sealed class DeviceHostClient
 			.ConfigureAwait(false);
 	}
 
+	public async Task<OperationResult> SendPushNotificationAsync(
+		string deviceId,
+		PushNotificationRequest request,
+		CancellationToken cancellationToken = default)
+	{
+		var response = await SendAsync(
+			HttpMethod.Post,
+			$"/api/v1/devices/{Escape(deviceId)}/notifications",
+			JsonContent.Create(request, DeviceJsonContext.Default.PushNotificationRequest),
+			cancellationToken).ConfigureAwait(false);
+		return await ReadAsync(response, DeviceJsonContext.Default.OperationResult, cancellationToken)
+			.ConfigureAwait(false);
+	}
+
+	public async Task<OperationResult> SendSmsAsync(
+		string deviceId,
+		SmsRequest request,
+		CancellationToken cancellationToken = default)
+	{
+		var response = await SendAsync(
+			HttpMethod.Post,
+			$"/api/v1/devices/{Escape(deviceId)}/sms",
+			JsonContent.Create(request, DeviceJsonContext.Default.SmsRequest),
+			cancellationToken).ConfigureAwait(false);
+		return await ReadAsync(response, DeviceJsonContext.Default.OperationResult, cancellationToken)
+			.ConfigureAwait(false);
+	}
+
+	public async Task<CallStateResult> GetCallsAsync(
+		string deviceId,
+		CancellationToken cancellationToken = default)
+	{
+		var response = await SendAsync(
+			HttpMethod.Get,
+			$"/api/v1/devices/{Escape(deviceId)}/calls",
+			cancellationToken).ConfigureAwait(false);
+		return await ReadAsync(response, DeviceJsonContext.Default.CallStateResult, cancellationToken)
+			.ConfigureAwait(false);
+	}
+
+	public async Task<CallStateResult> ChangeCallAsync(
+		string deviceId,
+		CallRequest request,
+		CancellationToken cancellationToken = default)
+	{
+		var response = await SendAsync(
+			HttpMethod.Post,
+			$"/api/v1/devices/{Escape(deviceId)}/calls",
+			JsonContent.Create(request, DeviceJsonContext.Default.CallRequest),
+			cancellationToken).ConfigureAwait(false);
+		return await ReadAsync(response, DeviceJsonContext.Default.CallStateResult, cancellationToken)
+			.ConfigureAwait(false);
+	}
+
+	public async Task<BiometricResult> SendBiometricAsync(
+		string deviceId,
+		BiometricRequest request,
+		CancellationToken cancellationToken = default)
+	{
+		var response = await SendAsync(
+			HttpMethod.Post,
+			$"/api/v1/devices/{Escape(deviceId)}/biometric",
+			JsonContent.Create(request, DeviceJsonContext.Default.BiometricRequest),
+			cancellationToken).ConfigureAwait(false);
+		return await ReadAsync(response, DeviceJsonContext.Default.BiometricResult, cancellationToken)
+			.ConfigureAwait(false);
+	}
+
+	public async Task<ClipboardResult> GetClipboardAsync(
+		string deviceId,
+		CancellationToken cancellationToken = default)
+	{
+		var response = await SendAsync(
+			HttpMethod.Get,
+			$"/api/v1/devices/{Escape(deviceId)}/clipboard",
+			cancellationToken).ConfigureAwait(false);
+		return await ReadAsync(response, DeviceJsonContext.Default.ClipboardResult, cancellationToken)
+			.ConfigureAwait(false);
+	}
+
+	public async Task<ClipboardResult> SetClipboardAsync(
+		string deviceId,
+		string text,
+		CancellationToken cancellationToken = default)
+	{
+		var response = await SendAsync(
+			HttpMethod.Post,
+			$"/api/v1/devices/{Escape(deviceId)}/clipboard",
+			JsonContent.Create(
+				new ClipboardRequest { Text = text },
+				DeviceJsonContext.Default.ClipboardRequest),
+			cancellationToken).ConfigureAwait(false);
+		return await ReadAsync(response, DeviceJsonContext.Default.ClipboardResult, cancellationToken)
+			.ConfigureAwait(false);
+	}
+
+	public async Task<MediaResult> AddMediaAsync(
+		string deviceId,
+		MediaRequest request,
+		CancellationToken cancellationToken = default)
+	{
+		var response = await SendAsync(
+			HttpMethod.Post,
+			$"/api/v1/devices/{Escape(deviceId)}/media",
+			JsonContent.Create(request, DeviceJsonContext.Default.MediaRequest),
+			cancellationToken).ConfigureAwait(false);
+		return await ReadAsync(response, DeviceJsonContext.Default.MediaResult, cancellationToken)
+			.ConfigureAwait(false);
+	}
+
 	public async Task<byte[]> ScreenshotAsync(
 		string deviceId,
 		CanvasContextKey? context = null,

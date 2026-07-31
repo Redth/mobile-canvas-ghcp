@@ -99,6 +99,32 @@ public interface IDeviceBackend
 	/// <summary>Simulates network conditions, then reads back what took.</summary>
 	Task<HardwareState> SetNetworkAsync(string deviceId, NetworkRequest request, CancellationToken cancellationToken = default);
 
+	/// <summary>
+	/// Delivers a simulated remote push notification to one app.
+	/// </summary>
+	Task SendPushNotificationAsync(string deviceId, PushNotificationRequest request, CancellationToken cancellationToken = default);
+
+	/// <summary>Delivers an inbound text message.</summary>
+	Task SendSmsAsync(string deviceId, SmsRequest request, CancellationToken cancellationToken = default);
+
+	/// <summary>Reads the calls the device's telephony stack currently knows about.</summary>
+	Task<CallStateResult> GetCallsAsync(string deviceId, CancellationToken cancellationToken = default);
+
+	/// <summary>Places or changes a call, then reads the call list back.</summary>
+	Task<CallStateResult> ChangeCallAsync(string deviceId, CallRequest request, CancellationToken cancellationToken = default);
+
+	/// <summary>Presents a simulated fingerprint or face scan.</summary>
+	Task<BiometricResult> SendBiometricAsync(string deviceId, BiometricRequest request, CancellationToken cancellationToken = default);
+
+	/// <summary>Reads the device pasteboard.</summary>
+	Task<ClipboardResult> GetClipboardAsync(string deviceId, CancellationToken cancellationToken = default);
+
+	/// <summary>Writes the device pasteboard, then reads it back.</summary>
+	Task<ClipboardResult> SetClipboardAsync(string deviceId, string text, CancellationToken cancellationToken = default);
+
+	/// <summary>Adds photos or videos from this machine to the device's library.</summary>
+	Task<MediaResult> AddMediaAsync(string deviceId, MediaRequest request, CancellationToken cancellationToken = default);
+
 	Task<ILiveVideoSession> OpenVideoStreamAsync(string deviceId, StreamOptions options, CancellationToken cancellationToken = default);
 	Task<RecordingStatus> StartRecordingAsync(string deviceId, RecordingStartRequest request, CancellationToken cancellationToken = default);
 	Task<RecordingStatus> StopRecordingAsync(string deviceId, CancellationToken cancellationToken = default);

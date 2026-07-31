@@ -38,6 +38,7 @@ internal static class DeviceApi
 		MapFiles(app);
 		MapSettings(app);
 		MapHardware(app);
+		MapInterrupts(app);
 		MapMedia(app);
 	}
 
@@ -675,6 +676,54 @@ internal static class DeviceApi
 			(string deviceId, NetworkRequest request,
 				DeviceService devices, CancellationToken cancellationToken) =>
 				devices.SetNetworkAsync(deviceId, request, cancellationToken));
+	}
+
+	private static void MapInterrupts(WebApplication app)
+	{
+		app.MapPost(
+			"/api/v1/devices/{deviceId}/notifications",
+			async (string deviceId, PushNotificationRequest request,
+				DeviceService devices, CancellationToken cancellationToken) =>
+			{
+				await devices.SendPushNotificationAsync(deviceId, request, cancellationToken);
+				return Results.Ok(new OperationResult { Operation = "notification-push" });
+			});
+		app.MapPost(
+			"/api/v1/devices/{deviceId}/sms",
+			async (string deviceId, SmsRequest request,
+				DeviceService devices, CancellationToken cancellationToken) =>
+			{
+				await devices.SendSmsAsync(deviceId, request, cancellationToken);
+				return Results.Ok(new OperationResult { Operation = "sms-send" });
+			});
+		app.MapGet(
+			"/api/v1/devices/{deviceId}/calls",
+			(string deviceId, DeviceService devices, CancellationToken cancellationToken) =>
+				devices.GetCallsAsync(deviceId, cancellationToken));
+		app.MapPost(
+			"/api/v1/devices/{deviceId}/calls",
+			(string deviceId, CallRequest request,
+				DeviceService devices, CancellationToken cancellationToken) =>
+				devices.ChangeCallAsync(deviceId, request, cancellationToken));
+		app.MapPost(
+			"/api/v1/devices/{deviceId}/biometric",
+			(string deviceId, BiometricRequest request,
+				DeviceService devices, CancellationToken cancellationToken) =>
+				devices.SendBiometricAsync(deviceId, request, cancellationToken));
+		app.MapGet(
+			"/api/v1/devices/{deviceId}/clipboard",
+			(string deviceId, DeviceService devices, CancellationToken cancellationToken) =>
+				devices.GetClipboardAsync(deviceId, cancellationToken));
+		app.MapPost(
+			"/api/v1/devices/{deviceId}/clipboard",
+			(string deviceId, ClipboardRequest request,
+				DeviceService devices, CancellationToken cancellationToken) =>
+				devices.SetClipboardAsync(deviceId, request.Text, cancellationToken));
+		app.MapPost(
+			"/api/v1/devices/{deviceId}/media",
+			(string deviceId, MediaRequest request,
+				DeviceService devices, CancellationToken cancellationToken) =>
+				devices.AddMediaAsync(deviceId, request, cancellationToken));
 	}
 
 	private static void MapMedia(WebApplication app)

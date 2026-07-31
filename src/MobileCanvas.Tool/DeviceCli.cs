@@ -247,6 +247,52 @@ internal static class DeviceCli
 						: null,
 				},
 				cancellationToken).ConfigureAwait(false),
+			("notification", "push") => await Client.SendPushNotificationAsync(
+				options.RequiredPosition(0, "device ID"),
+				new PushNotificationRequest
+				{
+					BundleId = options.Required("bundle"),
+					Payload = ReadPayload(options),
+				},
+				cancellationToken).ConfigureAwait(false),
+			("sms", "send") => await Client.SendSmsAsync(
+				options.RequiredPosition(0, "device ID"),
+				new SmsRequest
+				{
+					From = options.Required("from"),
+					Body = options.Required("body"),
+				},
+				cancellationToken).ConfigureAwait(false),
+			("call", "list") => await Client.GetCallsAsync(
+				options.RequiredPosition(0, "device ID"),
+				cancellationToken).ConfigureAwait(false),
+			("call", "place" or "accept" or "hold" or "cancel" or _) => await Client.ChangeCallAsync(
+				options.RequiredPosition(0, "device ID"),
+				new CallRequest { Action = action, Number = options.Value("number") },
+				cancellationToken).ConfigureAwait(false),
+			("biometric", _) => await Client.SendBiometricAsync(
+				options.RequiredPosition(0, "device ID"),
+				new BiometricRequest
+				{
+					Action = action,
+					FingerId = options.Value("finger") is { } finger
+						? int.Parse(finger, CultureInfo.InvariantCulture)
+						: null,
+				},
+				cancellationToken).ConfigureAwait(false),
+			("clipboard", "get") => await Client.GetClipboardAsync(
+				options.RequiredPosition(0, "device ID"),
+				cancellationToken).ConfigureAwait(false),
+			("clipboard", "set") => await Client.SetClipboardAsync(
+				options.RequiredPosition(0, "device ID"),
+				options.Required("text"),
+				cancellationToken).ConfigureAwait(false),
+			("media", "add") => await Client.AddMediaAsync(
+				options.RequiredPosition(0, "device ID"),
+				// The host daemon is long-lived and was very likely started from a different folder,
+				// so a relative path has to be resolved here, against the caller's directory.
+				new MediaRequest { HostPaths = [.. options.Values("path").Select(Path.GetFullPath)] },
+				cancellationToken).ConfigureAwait(false),
 			("screenshot", _) => await ScreenshotAsync(
 				action,
 				new CliArguments(args.Skip(1)),
@@ -418,6 +464,23 @@ internal static class DeviceCli
 		Limit = options.Int("limit", 20),
 	};
 
+	/// <summary>
+	/// Reads a push payload, which is JSON that is awkward to pass on a command line -- so
+	/// <c>@path</c> reads it from a file instead, the way curl does.
+	/// </summary>
+	private static string ReadPayload(CliArguments options)
+	{
+		var payload = options.Required("payload");
+		if (!payload.StartsWith('@'))
+		{
+			return payload;
+		}
+		var path = Path.GetFullPath(payload[1..]);
+		return File.Exists(path)
+			? File.ReadAllText(path)
+			: throw new FileNotFoundException($"No payload file at {path}.", path);
+	}
+
 	private static async Task<MediaArtifact> ScreenshotAsync(
 		string firstArgument,
 		CliArguments options,
@@ -573,6 +636,13 @@ internal static class DeviceCli
 		  mobile-canvas location clear <id>
 		  mobile-canvas battery set <id> [--level 0-100] [--state charging|discharging|full]
 		  mobile-canvas network set <id> [--profile <p>] [--latency <ms>]
+		  mobile-canvas notification push <id> --bundle <bundle-id> --payload <json|@file>
+		  mobile-canvas sms send <id> --from <number> --body <text>
+		  mobile-canvas call list <id> [--json]
+		  mobile-canvas call place|accept|hold|cancel <id> [--number <number>]
+		  mobile-canvas biometric match|nomatch <id> [--finger <n>]
+		  mobile-canvas clipboard get|set <id> [--text <text>]
+		  mobile-canvas media add <id> --path <file> [--path <file> ...]
 		  mobile-canvas screenshot <id> [--output <path>] [--json]
 		  mobile-canvas recording start|stop|status <id>
 		  mobile-canvas mcp
@@ -626,6 +696,21 @@ internal static class DeviceCli
 		is confirmed only by asking the app. An emulator cannot be returned to a real position at all.
 		A simulator has no network of its own to slow down -- `network set` there only changes what the
 		status bar draws, and the result says so.
+
+		`notification`, `sms`, `call`, `biometric`, `clipboard` and `media` cover the events that
+		arrive from outside an app, which are the states apps handle worst. They are the most
+		one-sided part of this tool: push and clipboard are iOS-only, SMS and calls are Android-only,
+		and each says which platform it needs rather than failing obscurely. `media add` is the
+		exception that works on both.
+
+		`biometric nomatch` is the case worth reaching -- a rejected scan is the branch apps most
+		often leave unhandled. On Android the emulator confirms it took the event; on iOS it cannot,
+		because the scan is posted to a bus that reports nothing back, so `confirmed` is false and
+		the outcome has to be read from the app. Either way the device needs a biometric already
+		enrolled.
+
+		`call` reads its state back with the platform's own words (RINGING, ACTIVE), because the
+		emulator's own `gsm list` reports an established call and no call identically.
 		""";
 }
 
@@ -635,6 +720,7 @@ internal sealed class CliArguments
 		["json", "no-json", "confirm", "schema", "wait", "raw", "system", "relaunch"];
 	private readonly Dictionary<string, string?> _options =
 		new(StringComparer.OrdinalIgnoreCase);
+	private readonly List<KeyValuePair<string, string>> _repeated = [];
 	private readonly List<string> _positions = [];
 
 	public CliArguments(IEnumerable<string> arguments)
@@ -653,6 +739,7 @@ internal sealed class CliArguments
 			if (separator >= 0)
 			{
 				_options[option[..separator]] = option[(separator + 1)..];
+				_repeated.Add(new(option[..separator], option[(separator + 1)..]));
 				continue;
 			}
 			if (!FlagNames.Contains(option) &&
@@ -660,6 +747,7 @@ internal sealed class CliArguments
 				!values[index + 1].StartsWith("--", StringComparison.Ordinal))
 			{
 				_options[option] = values[++index];
+				_repeated.Add(new(option, values[index]));
 			}
 			else
 			{
@@ -670,6 +758,15 @@ internal sealed class CliArguments
 
 	public bool Flag(string name) => _options.ContainsKey(name);
 	public string? Value(string name) => _options.GetValueOrDefault(name);
+
+	/// <summary>
+	/// Every value given for a repeatable option, in the order they were written. The single-value
+	/// store keeps only the last one, which would silently drop all but the final <c>--path</c>.
+	/// </summary>
+	public string[] Values(string name) =>
+		[.. _repeated
+			.Where(pair => string.Equals(pair.Key, name, StringComparison.OrdinalIgnoreCase))
+			.Select(pair => pair.Value)];
 
 	public string Required(string name) =>
 		Value(name) is { Length: > 0 } value

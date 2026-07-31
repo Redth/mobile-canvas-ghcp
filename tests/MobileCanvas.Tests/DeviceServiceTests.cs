@@ -764,6 +764,70 @@ public sealed class DeviceServiceTests
 			});
 		}
 
+		public PushNotificationRequest? LastPushNotification { get; private set; }
+		public SmsRequest? LastSms { get; private set; }
+		public CallRequest? LastCall { get; private set; }
+		public BiometricRequest? LastBiometric { get; private set; }
+		public string? LastClipboard { get; private set; }
+		public MediaRequest? LastMedia { get; private set; }
+
+		public Task SendPushNotificationAsync(string deviceId, PushNotificationRequest request, CancellationToken cancellationToken = default)
+		{
+			LastPushNotification = request;
+			return Task.CompletedTask;
+		}
+
+		public Task SendSmsAsync(string deviceId, SmsRequest request, CancellationToken cancellationToken = default)
+		{
+			LastSms = request;
+			return Task.CompletedTask;
+		}
+
+		public Task<CallStateResult> GetCallsAsync(string deviceId, CancellationToken cancellationToken = default) =>
+			Task.FromResult(new CallStateResult { DeviceId = deviceId, Platform = DevicePlatforms.Android });
+
+		public Task<CallStateResult> ChangeCallAsync(string deviceId, CallRequest request, CancellationToken cancellationToken = default)
+		{
+			LastCall = request;
+			return Task.FromResult(new CallStateResult { DeviceId = deviceId, Platform = DevicePlatforms.Android });
+		}
+
+		public Task<BiometricResult> SendBiometricAsync(string deviceId, BiometricRequest request, CancellationToken cancellationToken = default)
+		{
+			LastBiometric = request;
+			return Task.FromResult(new BiometricResult
+			{
+				DeviceId = deviceId,
+				Platform = DevicePlatforms.Ios,
+				Action = request.Action,
+			});
+		}
+
+		public Task<ClipboardResult> GetClipboardAsync(string deviceId, CancellationToken cancellationToken = default) =>
+			Task.FromResult(new ClipboardResult
+			{
+				DeviceId = deviceId,
+				Platform = DevicePlatforms.Ios,
+				Text = LastClipboard ?? "",
+			});
+
+		public Task<ClipboardResult> SetClipboardAsync(string deviceId, string text, CancellationToken cancellationToken = default)
+		{
+			LastClipboard = text;
+			return GetClipboardAsync(deviceId, cancellationToken);
+		}
+
+		public Task<MediaResult> AddMediaAsync(string deviceId, MediaRequest request, CancellationToken cancellationToken = default)
+		{
+			LastMedia = request;
+			return Task.FromResult(new MediaResult
+			{
+				DeviceId = deviceId,
+				Platform = DevicePlatforms.Ios,
+				Added = request.HostPaths,
+			});
+		}
+
 		public Task<ILiveVideoSession> OpenVideoStreamAsync(string deviceId, StreamOptions options, CancellationToken cancellationToken = default) =>
 			throw new NotSupportedException();
 
