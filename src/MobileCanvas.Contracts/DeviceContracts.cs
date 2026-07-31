@@ -11,6 +11,17 @@ public static class DevicePlatforms
 	public const string Android = "android";
 }
 
+/// <summary>
+/// Label for the canvas tab. Fixed at open: there is no RPC to retitle a live panel, and setting
+/// document.title in the page does not reach the tab either. A platform-specific title would go
+/// stale the moment the user switched devices, so the tab stays neutral and the canvas itself
+/// shows which device is selected.
+/// </summary>
+public static class CanvasTitles
+{
+	public const string Panel = "Mobile";
+}
+
 public static class DeviceStates
 {
 	public const string Booted = "booted";

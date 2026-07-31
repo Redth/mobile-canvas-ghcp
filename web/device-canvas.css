@@ -39,6 +39,12 @@
      invalid. Theme-independent, so it stays out of the dark overrides. */
   --motion-fast: 120ms ease;
 
+  /* Measured off the host app's own chrome: its controls carry a noticeably softer corner than
+     Primer's 6px default, and matching it is what stops the canvas reading as a foreign panel.
+     Theme-independent, so these stay out of the dark overrides. */
+  --control-radius: 8px;
+  --control-radius-sm: 6px;
+
   color: var(--fg-default);
   background: var(--canvas-default);
   font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
@@ -242,7 +248,7 @@ summary:focus-visible,
   min-width: 0;
   padding: 0;
   border: 1px solid var(--border-default);
-  border-radius: 6px;
+  border-radius: var(--control-radius);
   background: var(--canvas-default);
   cursor: pointer;
   text-align: left;
@@ -382,7 +388,7 @@ summary:focus-visible,
   gap: 2px;
   padding: 2px;
   border: 1px solid var(--border-default);
-  border-radius: 7px;
+  border-radius: calc(var(--control-radius) + 1px);
   background: var(--canvas-subtle);
 }
 
@@ -395,7 +401,7 @@ summary:focus-visible,
   min-height: 30px;
   padding: 0 10px;
   border: 1px solid transparent;
-  border-radius: 5px;
+  border-radius: var(--control-radius-sm);
   background: none;
   color: var(--fg-muted);
   font: inherit;
@@ -519,7 +525,7 @@ summary:focus-visible,
   margin: 6px 6px 4px;
   padding: 7px 9px;
   border: 1px solid var(--attention-fg);
-  border-radius: 6px;
+  border-radius: var(--control-radius-sm);
   background: var(--canvas-subtle);
   color: var(--attention-fg);
   font-size: 12px;
@@ -534,7 +540,7 @@ summary:focus-visible,
   gap: 6px;
   padding: 5px 12px;
   border: 1px solid var(--border-default);
-  border-radius: 6px;
+  border-radius: var(--control-radius);
   background: var(--control-default);
   font-weight: 500;
   cursor: pointer;
@@ -584,7 +590,7 @@ summary:focus-visible,
   height: 28px;
   padding: 0;
   border: 1px solid var(--border-default);
-  border-radius: 6px;
+  border-radius: var(--control-radius);
   background: var(--control-default);
   cursor: pointer;
   color: var(--fg-muted);
@@ -1256,7 +1262,7 @@ input {
   min-width: 0;
   padding: 5px 8px;
   border: 1px solid var(--border-default);
-  border-radius: 6px;
+  border-radius: var(--control-radius);
   background: var(--canvas-default);
   color: var(--fg-default);
 }
@@ -1300,7 +1306,7 @@ input[readonly].field-degraded {
   padding: 0;
   transform: translateY(-50%);
   border: 0;
-  border-radius: 5px;
+  border-radius: var(--control-radius-sm);
   background: transparent;
   color: var(--fg-muted);
   cursor: pointer;
@@ -1328,7 +1334,7 @@ input[readonly].field-degraded {
   align-items: center;
   justify-self: start;
   border: 1px solid var(--border-default);
-  border-radius: 6px;
+  border-radius: var(--control-radius);
   overflow: hidden;
 }
 
@@ -1455,7 +1461,7 @@ dialog form {
   flex: 0 0 auto;
   padding: 0;
   border: 0;
-  border-radius: 6px;
+  border-radius: var(--control-radius-sm);
   background: none;
   color: var(--fg-muted);
   cursor: pointer;

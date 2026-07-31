@@ -190,6 +190,7 @@ internal static class DeviceApi
 				return new CanvasOpenResult
 				{
 					Url = $"http://127.0.0.1:{context.Request.Host.Port}/#{fragment}",
+					Title = CanvasTitles.Panel,
 				};
 			});
 

@@ -396,7 +396,7 @@ const canvas = createCanvas({
       ]);
     }
     return {
-      title: result.title || "Mobile Device",
+      title: result.title || "Mobile",
       url: result.url,
       status: "Connected to local Mobile Canvas host",
     };
@@ -405,5 +405,10 @@ const canvas = createCanvas({
     await runCli(["canvas", "close", ...contextArgs(ctx)]);
   },
 });
+
+// The host reads `icon` off the wire declaration and resolves it against the extension
+// directory, but `createCanvas` builds the declaration from a fixed field list that omits it,
+// so set it here rather than letting the tab fall back to the generic extension glyph.
+canvas.declaration.icon = "assets/icon.png";
 
 await joinSession({ canvases: [canvas] });
