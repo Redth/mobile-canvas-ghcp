@@ -34,6 +34,7 @@ internal static class DeviceApi
 		MapInput(app);
 		MapUi(app);
 		MapApps(app);
+		MapDiagnostics(app);
 		MapMedia(app);
 	}
 
@@ -564,6 +565,36 @@ internal static class DeviceApi
 			"/api/v1/devices/{deviceId}/apps/{bundleId}/uninstall",
 			(string deviceId, string bundleId, bool? confirm, DeviceService devices, CancellationToken cancellationToken) =>
 				devices.UninstallAppAsync(deviceId, bundleId, confirm ?? false, cancellationToken));
+	}
+
+	private static void MapDiagnostics(WebApplication app)
+	{
+		app.MapGet(
+			"/api/v1/devices/{deviceId}/log",
+			(string deviceId, string? bundleId, string? level, string? text, int? seconds, int? limit,
+				DeviceService devices, CancellationToken cancellationToken) =>
+				devices.ReadLogAsync(
+					deviceId,
+					new LogQuery
+					{
+						BundleId = bundleId,
+						MinimumLevel = level,
+						Text = text,
+						Since = TimeSpan.FromSeconds(seconds ?? 300),
+						Limit = limit ?? 200,
+					},
+					cancellationToken));
+		app.MapGet(
+			"/api/v1/devices/{deviceId}/crashes",
+			(string deviceId, string? text, int? limit, DeviceService devices, CancellationToken cancellationToken) =>
+				devices.ListCrashesAsync(
+					deviceId,
+					new CrashQuery { Text = text, Limit = limit ?? 25 },
+					cancellationToken));
+		app.MapGet(
+			"/api/v1/devices/{deviceId}/crashes/{crashId}",
+			(string deviceId, string crashId, DeviceService devices, CancellationToken cancellationToken) =>
+				devices.GetCrashAsync(deviceId, crashId, cancellationToken));
 	}
 
 	private static void MapMedia(WebApplication app)

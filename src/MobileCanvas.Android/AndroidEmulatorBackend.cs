@@ -1052,6 +1052,210 @@ public sealed partial class AndroidEmulatorBackend : IDeviceBackend, IAsyncDispo
 
 	#endregion
 
+	#region Diagnostics
+
+	public async Task<LogEntry[]> ReadLogAsync(
+		string deviceId,
+		LogQuery query,
+		CancellationToken cancellationToken = default)
+	{
+		var serial = await RequireSerialAsync(deviceId, cancellationToken).ConfigureAwait(false);
+
+		var arguments = new List<string> { "logcat", "-d", "-v", "threadtime" };
+
+		if (await ResolveSinceAsync(serial, query.Since, cancellationToken).ConfigureAwait(false) is { } since)
+		{
+			arguments.Add("-T");
+			arguments.Add(since);
+		}
+
+		if (!string.IsNullOrWhiteSpace(query.BundleId))
+		{
+			var pid = await ResolvePidAsync(serial, query.BundleId, cancellationToken).ConfigureAwait(false);
+
+			// A package with no process has written nothing this session. Saying so beats returning the
+			// whole device log, which is what an unfiltered logcat would do.
+			if (pid is null)
+				return [];
+
+			arguments.Add($"--pid={pid}");
+		}
+
+		var priority = LogcatParser.ToPriority(query.MinimumLevel);
+		if (priority != 'V')
+			arguments.Add($"*:{priority}");
+
+		var output = await RunAdbAsync(serial, [.. arguments], cancellationToken).ConfigureAwait(false)
+			?? throw new DeviceCapabilityException(
+				$"Could not read the log from '{serial}'. Check that adb is available and the emulator is responding.");
+
+		return LogcatParser.Parse(output);
+	}
+
+	public async Task<CrashReport[]> ListCrashesAsync(
+		string deviceId,
+		CancellationToken cancellationToken = default)
+	{
+		var serial = await RequireSerialAsync(deviceId, cancellationToken).ConfigureAwait(false);
+
+		var output = await RunAdbAsync(serial, ["shell", "dumpsys", "dropbox"], cancellationToken)
+			.ConfigureAwait(false);
+
+		var reports = LogcatParser.ParseDropbox(output);
+		await AttributeCrashesAsync(serial, reports, cancellationToken).ConfigureAwait(false);
+		return reports;
+	}
+
+	/// <summary>
+	/// Fills in the app each crash belongs to, which dropbox's listing does not say.
+	/// </summary>
+	/// <remarks>
+	/// Without this every ANR reads as "data_app_anr" and nothing else, so a list of five is five
+	/// identical rows and a search by package matches nothing at all -- silently, which is worse than
+	/// failing. The package only appears inside the report body, and reading the whole box in one call
+	/// would transfer megabytes (its bodies run to ~25KB each), so the newest window is enriched with
+	/// individual prints, measured at ~55ms apiece. Older entries keep a null bundle ID rather than
+	/// being dropped, so the total a caller sees stays honest.
+	/// </remarks>
+	private async Task AttributeCrashesAsync(
+		string serial,
+		CrashReport[] reports,
+		CancellationToken cancellationToken)
+	{
+		var window = Math.Min(reports.Length, AttributedCrashWindow);
+		if (window == 0)
+			return;
+
+		using var limiter = new SemaphoreSlim(4);
+		await Task.WhenAll(Enumerable.Range(0, window).Select(async index =>
+		{
+			await limiter.WaitAsync(cancellationToken).ConfigureAwait(false);
+			try
+			{
+				var package = await FindCrashPackageAsync(serial, reports[index].Id, cancellationToken)
+					.ConfigureAwait(false);
+
+				if (package is not null)
+					reports[index] = reports[index] with { Name = package, BundleId = package };
+			}
+			finally
+			{
+				limiter.Release();
+			}
+		})).ConfigureAwait(false);
+	}
+
+	private async Task<string?> FindCrashPackageAsync(
+		string serial,
+		string crashId,
+		CancellationToken cancellationToken)
+	{
+		var separator = crashId.LastIndexOf('|');
+		if (separator < 0)
+			return null;
+
+		var output = await RunAdbAsync(
+			serial,
+			["shell", "dumpsys", "dropbox", "--print", QuoteForDeviceShell(crashId[..separator])],
+			cancellationToken).ConfigureAwait(false);
+
+		return LogcatParser.FindDropboxPackage(output);
+	}
+
+	/// <summary>
+	/// How many of the newest crashes are looked up by app. Bounds a listing's cost to about a second
+	/// on a device whose drop box has filled up.
+	/// </summary>
+	private const int AttributedCrashWindow = 25;
+
+	public async Task<CrashDetailResult> GetCrashAsync(
+		string deviceId,
+		string crashId,
+		CancellationToken cancellationToken = default)
+	{
+		var serial = await RequireSerialAsync(deviceId, cancellationToken).ConfigureAwait(false);
+
+		// The ID is "<timestamp>|<tag>", the pair dropbox needs to single out one entry.
+		var separator = crashId.LastIndexOf('|');
+		if (separator < 0)
+			throw new DeviceCapabilityException(
+				$"'{crashId}' is not a crash ID. List crashes first to see the available IDs.");
+
+		var timestamp = crashId[..separator];
+		var tag = crashId[(separator + 1)..];
+
+		// dumpsys takes only a timestamp -- there is no tag argument, despite the listing printing one.
+		var output = await RunAdbAsync(
+			serial,
+			["shell", "dumpsys", "dropbox", "--print", QuoteForDeviceShell(timestamp)],
+			cancellationToken).ConfigureAwait(false);
+
+		var content = LogcatParser.ExtractDropboxEntry(output)
+			?? throw new DeviceCapabilityException(
+				$"No crash report '{crashId}' exists on '{serial}'. Dropbox drops old entries, so it may have aged out.");
+
+		var package = LogcatParser.FindDropboxPackage(content);
+
+		return new CrashDetailResult
+		{
+			DeviceId = deviceId,
+			Report = new CrashReport
+			{
+				Id = crashId,
+				// Named the same way the listing names it, so the two views agree.
+				Name = package ?? tag,
+				Timestamp = timestamp,
+				Kind = LogcatParser.DescribeTag(tag),
+				BundleId = package,
+			},
+			Content = content,
+		};
+	}
+
+	/// <summary>
+	/// Formats a start time for <c>logcat -T</c>, computed on the device.
+	/// </summary>
+	/// <remarks>
+	/// logcat compares against the device's own clock, so the window has to be worked out there. An
+	/// emulator usually tracks the host, but "usually" is the part that produces an empty log at three
+	/// in the morning. Returns null when the device will not answer, which reads as "no time filter"
+	/// rather than as a filter that silently excludes everything.
+	/// </remarks>
+	private async Task<string?> ResolveSinceAsync(
+		string serial,
+		TimeSpan since,
+		CancellationToken cancellationToken)
+	{
+		var seconds = (long)Math.Max(1, Math.Round(since.TotalSeconds));
+
+		var output = await RunAdbAsync(
+			serial,
+			["shell", $"date -d @$(( $(date +%s) - {seconds} )) +'%m-%d %H:%M:%S.000'"],
+			cancellationToken).ConfigureAwait(false);
+
+		var stamp = output?.Trim();
+		return string.IsNullOrEmpty(stamp) || stamp.Contains("not found", StringComparison.OrdinalIgnoreCase)
+			? null
+			: stamp;
+	}
+
+	private async Task<int?> ResolvePidAsync(
+		string serial,
+		string bundleId,
+		CancellationToken cancellationToken)
+	{
+		var output = await RunAdbAsync(
+			serial,
+			["shell", "pidof", QuoteForDeviceShell(bundleId)],
+			cancellationToken).ConfigureAwait(false);
+
+		// pidof lists every process for the package; the first is the main one.
+		var first = output?.Trim().Split(' ', StringSplitOptions.RemoveEmptyEntries).FirstOrDefault();
+		return int.TryParse(first, out var pid) ? pid : null;
+	}
+
+	#endregion
+
 	#region Geometry
 
 	public async Task<DisplayGeometry> GetDisplayAsync(

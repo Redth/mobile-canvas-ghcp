@@ -688,6 +688,159 @@ public sealed class IosSimulatorBackend : IDeviceBackend, IAsyncDisposable
 
 	#endregion
 
+	#region Diagnostics
+
+	public async Task<LogEntry[]> ReadLogAsync(
+		string deviceId,
+		LogQuery query,
+		CancellationToken cancellationToken = default)
+	{
+		var device = await RequireBootedAsync(deviceId, cancellationToken).ConfigureAwait(false);
+
+		var predicates = new List<string>();
+
+		if (!string.IsNullOrWhiteSpace(query.BundleId))
+		{
+			var process = await ResolveProcessNameAsync(device.NativeId, query.BundleId, cancellationToken)
+				.ConfigureAwait(false);
+
+			predicates.Add($"process == \"{process}\"");
+		}
+
+		if (OsLogParser.ToPredicate(query.MinimumLevel) is { } level)
+			predicates.Add($"({level})");
+
+		var arguments = new List<string>
+		{
+			"simctl", "spawn", device.NativeId, "log", "show",
+			"--style", "ndjson",
+			"--last", FormatDuration(query.Since),
+		};
+
+		if (predicates.Count > 0)
+		{
+			arguments.Add("--predicate");
+			arguments.Add(string.Join(" AND ", predicates));
+		}
+
+		var result = await _processRunner.RunAsync(
+			new ProcessRequest("xcrun", [.. arguments]),
+			cancellationToken).ConfigureAwait(false);
+
+		if (result.ExitCode != 0)
+			throw new DeviceCapabilityException(
+				$"Could not read the log from simulator '{device.NativeId}': "
+				+ (result.StandardError.Trim() is { Length: > 0 } error ? error : $"log show exited with code {result.ExitCode}."));
+
+		return OsLogParser.Parse(result.StandardOutput);
+	}
+
+	public Task<CrashReport[]> ListCrashesAsync(
+		string deviceId,
+		CancellationToken cancellationToken = default) =>
+		Task.Run(() =>
+		{
+			var directory = CrashReportDirectory;
+			if (!Directory.Exists(directory))
+				return Array.Empty<CrashReport>();
+
+			var reports = new List<(DateTime Written, CrashReport Report)>();
+			foreach (var path in Directory.EnumerateFiles(directory, "*.ips"))
+			{
+				cancellationToken.ThrowIfCancellationRequested();
+
+				var report = TryReadReportHeader(path);
+				if (report is not null)
+					reports.Add((File.GetLastWriteTimeUtc(path), report));
+			}
+
+			return reports
+				.OrderByDescending(entry => entry.Written)
+				.Select(entry => entry.Report)
+				.ToArray();
+		}, cancellationToken);
+
+	public async Task<CrashDetailResult> GetCrashAsync(
+		string deviceId,
+		string crashId,
+		CancellationToken cancellationToken = default)
+	{
+		// The ID is a file name, and it arrives from a caller, so it is resolved and then checked to
+		// still be inside the reports directory. Without that "../../.." reads arbitrary files.
+		var directory = Path.GetFullPath(CrashReportDirectory);
+		var path = Path.GetFullPath(Path.Combine(directory, crashId));
+
+		if (!path.StartsWith(directory + Path.DirectorySeparatorChar, StringComparison.Ordinal) || !File.Exists(path))
+			throw new DeviceCapabilityException(
+				$"No crash report named '{crashId}' exists. List crashes first to see the available IDs.");
+
+		var report = TryReadReportHeader(path)
+			?? throw new DeviceCapabilityException(
+				$"'{crashId}' is not a simulator crash report.");
+
+		var content = await File.ReadAllTextAsync(path, cancellationToken).ConfigureAwait(false);
+
+		return new CrashDetailResult { DeviceId = deviceId, Report = report, Content = content };
+	}
+
+	/// <summary>
+	/// Where the simulator writes crash reports -- alongside the host Mac's own, which is why every
+	/// report is checked for <c>is_simulated</c> before it is reported as a device crash.
+	/// </summary>
+	private static string CrashReportDirectory => Path.Combine(
+		Environment.GetFolderPath(Environment.SpecialFolder.UserProfile),
+		"Library", "Logs", "DiagnosticReports");
+
+	private static CrashReport? TryReadReportHeader(string path)
+	{
+		try
+		{
+			using var reader = new StreamReader(path);
+			return OsLogParser.ParseReportHeader(reader.ReadLine(), Path.GetFileName(path));
+		}
+		catch (IOException)
+		{
+			return null;
+		}
+		catch (UnauthorizedAccessException)
+		{
+			return null;
+		}
+	}
+
+	/// <summary>
+	/// Turns a bundle ID into the process name the unified log records, which is the executable's name
+	/// rather than the identifier.
+	/// </summary>
+	private async Task<string> ResolveProcessNameAsync(
+		string udid,
+		string bundleId,
+		CancellationToken cancellationToken)
+	{
+		var container = await RunAsync(["get_app_container", udid, bundleId], cancellationToken)
+			.ConfigureAwait(false);
+
+		if (container.ExitCode != 0)
+			throw new DeviceCapabilityException(
+				$"'{bundleId}' is not installed on '{udid}', so it has no log output to read.");
+
+		var path = container.StandardOutput.Trim();
+		var name = Path.GetFileNameWithoutExtension(path);
+
+		return string.IsNullOrEmpty(name)
+			? throw new DeviceCapabilityException($"Could not work out the process name for '{bundleId}'.")
+			: name;
+	}
+
+	/// <summary>Formats a window the way <c>log show --last</c> wants it.</summary>
+	private static string FormatDuration(TimeSpan span)
+	{
+		var seconds = (int)Math.Max(1, Math.Round(span.TotalSeconds));
+		return $"{seconds}s";
+	}
+
+	#endregion
+
 	public async ValueTask DisposeAsync()
 	{
 		await _recordings.DisposeAsync().ConfigureAwait(false);

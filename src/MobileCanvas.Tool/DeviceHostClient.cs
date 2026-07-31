@@ -415,6 +415,48 @@ public sealed class DeviceHostClient
 			.ConfigureAwait(false);
 	}
 
+	public async Task<LogResult> ReadLogAsync(
+		string deviceId,
+		LogQuery query,
+		CancellationToken cancellationToken = default)
+	{
+		var path = $"/api/v1/devices/{Escape(deviceId)}/log"
+			+ $"?seconds={(int)Math.Max(1, Math.Round(query.Since.TotalSeconds))}&limit={query.Limit}"
+			+ (string.IsNullOrWhiteSpace(query.BundleId) ? "" : $"&bundleId={Uri.EscapeDataString(query.BundleId)}")
+			+ (string.IsNullOrWhiteSpace(query.MinimumLevel) ? "" : $"&level={Uri.EscapeDataString(query.MinimumLevel)}")
+			+ (string.IsNullOrWhiteSpace(query.Text) ? "" : $"&text={Uri.EscapeDataString(query.Text)}");
+
+		var response = await SendAsync(HttpMethod.Get, path, cancellationToken).ConfigureAwait(false);
+		return await ReadAsync(response, DeviceJsonContext.Default.LogResult, cancellationToken)
+			.ConfigureAwait(false);
+	}
+
+	public async Task<CrashListResult> ListCrashesAsync(
+		string deviceId,
+		CrashQuery query,
+		CancellationToken cancellationToken = default)
+	{
+		var path = $"/api/v1/devices/{Escape(deviceId)}/crashes?limit={query.Limit}"
+			+ (string.IsNullOrWhiteSpace(query.Text) ? "" : $"&text={Uri.EscapeDataString(query.Text)}");
+
+		var response = await SendAsync(HttpMethod.Get, path, cancellationToken).ConfigureAwait(false);
+		return await ReadAsync(response, DeviceJsonContext.Default.CrashListResult, cancellationToken)
+			.ConfigureAwait(false);
+	}
+
+	public async Task<CrashDetailResult> GetCrashAsync(
+		string deviceId,
+		string crashId,
+		CancellationToken cancellationToken = default)
+	{
+		var response = await SendAsync(
+			HttpMethod.Get,
+			$"/api/v1/devices/{Escape(deviceId)}/crashes/{Escape(crashId)}",
+			cancellationToken).ConfigureAwait(false);
+		return await ReadAsync(response, DeviceJsonContext.Default.CrashDetailResult, cancellationToken)
+			.ConfigureAwait(false);
+	}
+
 	public async Task<byte[]> ScreenshotAsync(
 		string deviceId,
 		CanvasContextKey? context = null,

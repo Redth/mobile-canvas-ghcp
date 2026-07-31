@@ -176,6 +176,99 @@ public sealed class DeviceServiceTests
 		}
 	}
 
+	[Fact]
+	public async Task ReadLog_RejectsALevelThatIsNotOne()
+	{
+		var service = new DeviceService([new FakeBackend()]);
+
+		// A misspelled level would otherwise filter nothing and read as "no matching lines", which
+		// looks exactly like a healthy app.
+		var exception = await Assert.ThrowsAsync<ArgumentException>(
+			() => service.ReadLogAsync(FakeBackend.Device.Id, new LogQuery { MinimumLevel = "warn" }));
+
+		Assert.Contains("warning", exception.Message);
+	}
+
+	[Fact]
+	public async Task ReadLog_PassesTheQueryToTheBackend()
+	{
+		var backend = new FakeBackend();
+		var service = new DeviceService([backend]);
+
+		// Level and time window filter on the device, so they have to survive the trip down.
+		await service.ReadLogAsync(
+			FakeBackend.Device.Id,
+			new LogQuery { MinimumLevel = LogLevels.Error, Since = TimeSpan.FromMinutes(2) });
+
+		Assert.Equal(LogLevels.Error, backend.LastLogQuery?.MinimumLevel);
+		Assert.Equal(TimeSpan.FromMinutes(2), backend.LastLogQuery?.Since);
+	}
+
+	[Fact]
+	public async Task ReadLog_FiltersOnMessageText()
+	{
+		var service = new DeviceService([new FakeBackend()]);
+
+		var result = await service.ReadLogAsync(FakeBackend.Device.Id, new LogQuery { Text = "DATABASE" });
+
+		Assert.Equal("database failed", Assert.Single(result.Entries).Message);
+	}
+
+	[Fact]
+	public async Task ReadLog_KeepsTheNewestEntriesWhenOverTheLimit()
+	{
+		var service = new DeviceService([new FakeBackend()]);
+
+		var result = await service.ReadLogAsync(FakeBackend.Device.Id, new LogQuery { Limit = 2 });
+
+		// A log is trimmed from the front: the last thing that happened is the reason to read one.
+		Assert.Equal(["2", "3"], result.Entries.Select(entry => entry.Timestamp));
+		Assert.Equal(3, result.Total);
+	}
+
+	[Fact]
+	public async Task ListCrashes_FiltersOnNameAndBundleId()
+	{
+		var service = new DeviceService([new FakeBackend()]);
+
+		Assert.Equal("c1", Assert.Single((await service.ListCrashesAsync(
+			FakeBackend.Device.Id, new CrashQuery { Text = "notes" })).Crashes).Id);
+		Assert.Equal("c2", Assert.Single((await service.ListCrashesAsync(
+			FakeBackend.Device.Id, new CrashQuery { Text = "Timer" })).Crashes).Id);
+	}
+
+	[Fact]
+	public async Task ListCrashes_ReportsTotalBeyondTheLimit()
+	{
+		var service = new DeviceService([new FakeBackend()]);
+
+		var result = await service.ListCrashesAsync(FakeBackend.Device.Id, new CrashQuery { Limit = 1 });
+
+		Assert.Single(result.Crashes);
+		Assert.Equal(2, result.Total);
+	}
+
+	[Fact]
+	public async Task GetCrash_RejectsAnEmptyId()
+	{
+		var service = new DeviceService([new FakeBackend()]);
+
+		await Assert.ThrowsAsync<ArgumentException>(
+			() => service.GetCrashAsync(FakeBackend.Device.Id, "  "));
+	}
+
+	[Fact]
+	public async Task GetCrash_TrimsTheIdBeforePassingItDown()
+	{
+		var backend = new FakeBackend();
+		var service = new DeviceService([backend]);
+
+		// The ID names a file on iOS, and a padded one would not resolve.
+		await service.GetCrashAsync(FakeBackend.Device.Id, " c1 ");
+
+		Assert.Equal("c1", backend.LastCrashId);
+	}
+
 	private sealed class FakeBackend : IDeviceBackend
 	{
 		public static DeviceTarget Device { get; } = new()
@@ -268,8 +361,43 @@ public sealed class DeviceServiceTests
 			LastUninstalledBundleId = bundleId;
 			return Task.FromResult(new AppOperationResult { DeviceId = deviceId, BundleId = bundleId, Operation = AppOperations.Uninstall });
 		}
+		public LogEntry[] LogEntries { get; set; } =
+		[
+			new() { Timestamp = "1", Level = LogLevels.Debug, Source = "App", Message = "starting up" },
+			new() { Timestamp = "2", Level = LogLevels.Info, Source = "App", Message = "ready" },
+			new() { Timestamp = "3", Level = LogLevels.Error, Source = "App", Message = "database failed" },
+		];
+
+		public CrashReport[] Crashes { get; set; } =
+		[
+			new() { Id = "c1", Name = "Notes", BundleId = "com.example.notes", Timestamp = "1", Kind = "crash" },
+			new() { Id = "c2", Name = "Timer", BundleId = "com.example.timer", Timestamp = "2", Kind = "anr" },
+		];
+
+		public LogQuery? LastLogQuery { get; private set; }
+		public string? LastCrashId { get; private set; }
+
+		public Task<LogEntry[]> ReadLogAsync(string deviceId, LogQuery query, CancellationToken cancellationToken = default)
+		{
+			LastLogQuery = query;
+			return Task.FromResult(LogEntries);
+		}
+		public Task<CrashReport[]> ListCrashesAsync(string deviceId, CancellationToken cancellationToken = default) =>
+			Task.FromResult(Crashes);
+		public Task<CrashDetailResult> GetCrashAsync(string deviceId, string crashId, CancellationToken cancellationToken = default)
+		{
+			LastCrashId = crashId;
+			return Task.FromResult(new CrashDetailResult
+			{
+				DeviceId = deviceId,
+				Report = Crashes.First(crash => crash.Id == crashId),
+				Content = "stack trace",
+			});
+		}
+
 		public Task<ILiveVideoSession> OpenVideoStreamAsync(string deviceId, StreamOptions options, CancellationToken cancellationToken = default) =>
 			throw new NotSupportedException();
+
 		public Task<RecordingStatus> StartRecordingAsync(string deviceId, RecordingStartRequest request, CancellationToken cancellationToken = default) =>
 			Task.FromResult(new RecordingStatus());
 		public Task<RecordingStatus> StopRecordingAsync(string deviceId, CancellationToken cancellationToken = default) =>

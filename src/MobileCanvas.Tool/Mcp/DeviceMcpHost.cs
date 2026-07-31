@@ -50,6 +50,7 @@ internal static class DeviceMcpHost
 			.WithTools<DeviceInteractionTools>(ToolSerializerOptions)
 			.WithTools<DeviceUiTools>(ToolSerializerOptions)
 			.WithTools<DeviceAppTools>(ToolSerializerOptions)
+			.WithTools<DeviceDiagnosticsTools>(ToolSerializerOptions)
 			.WithTools<DeviceMediaTools>(ToolSerializerOptions);
 		await builder.Build().RunAsync(cancellationToken).ConfigureAwait(false);
 	}

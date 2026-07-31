@@ -144,6 +144,25 @@ internal static class DeviceCli
 				options.Required("bundle"),
 				options.Flag("confirm"),
 				cancellationToken).ConfigureAwait(false),
+			("log", _) => await Client.ReadLogAsync(
+				BareVerbOptions(args).RequiredPosition(0, "device ID"),
+				new LogQuery
+				{
+					BundleId = options.Value("bundle"),
+					MinimumLevel = options.Value("level"),
+					Text = options.Value("text"),
+					Since = TimeSpan.FromSeconds(options.Int("seconds", 300)),
+					Limit = options.Int("limit", 200),
+				},
+				cancellationToken).ConfigureAwait(false),
+			("crashes", "list") => await Client.ListCrashesAsync(
+				options.RequiredPosition(0, "device ID"),
+				new CrashQuery { Text = options.Value("text"), Limit = options.Int("limit", 25) },
+				cancellationToken).ConfigureAwait(false),
+			("crashes", "show") => await Client.GetCrashAsync(
+				options.RequiredPosition(0, "device ID"),
+				options.Required("id"),
+				cancellationToken).ConfigureAwait(false),
 			("screenshot", _) => await ScreenshotAsync(
 				action,
 				new CliArguments(args.Skip(1)),
@@ -420,6 +439,13 @@ internal static class DeviceCli
 		}
 	}
 
+	/// <summary>
+	/// Parses options for a verb that takes a device ID where others take a sub-action, so its first
+	/// positional argument sits one place earlier than usual.
+	/// </summary>
+	private static CliArguments BareVerbOptions(string[] args) =>
+		new(args.Skip(Math.Min(1, args.Length)));
+
 	private const string HelpText = """
 		Mobile Canvas - discover and control local mobile virtual devices
 
@@ -446,6 +472,10 @@ internal static class DeviceCli
 		  mobile-canvas app terminate <id> --bundle <bundle-id>
 		  mobile-canvas app install <id> --path <app-or-apk>
 		  mobile-canvas app uninstall <id> --bundle <bundle-id> --confirm
+		  mobile-canvas log <id> [--bundle <bundle-id>] [--level <name>] [--text <s>]
+		                         [--seconds <n>] [--limit <n>] [--json]
+		  mobile-canvas crashes list <id> [--text <s>] [--limit <n>] [--json]
+		  mobile-canvas crashes show <id> --id <crash-id> [--json]
 		  mobile-canvas screenshot <id> [--output <path>] [--json]
 		  mobile-canvas recording start|stop|status <id>
 		  mobile-canvas mcp
@@ -468,6 +498,15 @@ internal static class DeviceCli
 		which page the icon is on, or on the app having one. `app list` hides the platform's built-in
 		apps unless `--system` is passed, because they outnumber a developer's own many times over.
 		`app uninstall` deletes the app's data with it, so it requires `--confirm`.
+
+		`log` is bounded on purpose: an idle device writes tens of thousands of lines a minute, so it
+		defaults to the last five minutes and the newest 200 entries. Narrow it with `--bundle` to one
+		app and `--level error` to the lines that matter; both filter on the device rather than after
+		the fact. Levels are verbose, debug, info, warning, error and fatal -- Apple's log has no
+		warning rung, so asking iOS for it yields errors and faults.
+
+		`crashes list` finds crashes the device recorded after the fact, including ones that happened
+		while nothing was watching. Pass an ID from that list to `crashes show` for the full report.
 		""";
 }
 

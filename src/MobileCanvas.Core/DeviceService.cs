@@ -320,6 +320,83 @@ public sealed class DeviceService(IEnumerable<IDeviceBackend> backends)
 			|| (app.Name?.Contains(text, StringComparison.OrdinalIgnoreCase) ?? false);
 	}
 
+	/// <summary>
+	/// Reads the device log. Text matching and the limit are applied here, so both platforms narrow the
+	/// same way even though each filters differently at the source.
+	/// </summary>
+	public async Task<LogResult> ReadLogAsync(
+		string deviceId,
+		LogQuery query,
+		CancellationToken cancellationToken = default)
+	{
+		if (query.MinimumLevel is { Length: > 0 } level && LogLevels.Rank(level) < 0)
+			throw new ArgumentException(
+				$"'{level}' is not a log level. Use one of: {string.Join(", ", LogLevels.Ordered)}.",
+				nameof(query));
+
+		var entries = await GetBackend(deviceId)
+			.ReadLogAsync(deviceId, query, cancellationToken)
+			.ConfigureAwait(false);
+
+		var matched = string.IsNullOrWhiteSpace(query.Text)
+			? entries
+			: [.. entries.Where(entry => entry.Message.Contains(query.Text, StringComparison.OrdinalIgnoreCase))];
+
+		// The newest lines are the ones worth keeping, so an over-long log is trimmed from the front.
+		var limit = Math.Max(1, query.Limit);
+
+		return new LogResult
+		{
+			DeviceId = deviceId,
+			Platform = DeviceIdentity.GetPlatform(deviceId),
+			Total = matched.Length,
+			Entries = matched.Length <= limit ? matched : [.. matched.Skip(matched.Length - limit)],
+		};
+	}
+
+	/// <summary>
+	/// Lists crash reports, newest first.
+	/// </summary>
+	public async Task<CrashListResult> ListCrashesAsync(
+		string deviceId,
+		CrashQuery query,
+		CancellationToken cancellationToken = default)
+	{
+		var crashes = await GetBackend(deviceId)
+			.ListCrashesAsync(deviceId, cancellationToken)
+			.ConfigureAwait(false);
+
+		var matched = crashes.Where(crash => Matches(crash, query.Text)).ToArray();
+
+		return new CrashListResult
+		{
+			DeviceId = deviceId,
+			Platform = DeviceIdentity.GetPlatform(deviceId),
+			Total = matched.Length,
+			Crashes = [.. matched.Take(Math.Max(1, query.Limit))],
+		};
+	}
+
+	public Task<CrashDetailResult> GetCrashAsync(
+		string deviceId,
+		string crashId,
+		CancellationToken cancellationToken = default)
+	{
+		if (string.IsNullOrWhiteSpace(crashId))
+			throw new ArgumentException("A crash ID is required.", nameof(crashId));
+
+		return GetBackend(deviceId).GetCrashAsync(deviceId, crashId.Trim(), cancellationToken);
+	}
+
+	private static bool Matches(CrashReport crash, string? text)
+	{
+		if (string.IsNullOrWhiteSpace(text))
+			return true;
+
+		return crash.Name.Contains(text, StringComparison.OrdinalIgnoreCase)
+			|| (crash.BundleId?.Contains(text, StringComparison.OrdinalIgnoreCase) ?? false);
+	}
+
 	private static string RequireBundleId(string bundleId) =>
 		string.IsNullOrWhiteSpace(bundleId)
 			? throw new ArgumentException(

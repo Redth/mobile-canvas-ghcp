@@ -45,6 +45,19 @@ public interface IDeviceBackend
 	Task<AppOperationResult> InstallAppAsync(string deviceId, AppInstallRequest request, CancellationToken cancellationToken = default);
 	Task<AppOperationResult> UninstallAppAsync(string deviceId, string bundleId, CancellationToken cancellationToken = default);
 
+	/// <summary>
+	/// Reads the device log. The query is passed down rather than applied afterwards because both
+	/// platforms can filter at the source, and the volume makes that the difference between a bounded
+	/// answer and tens of thousands of lines.
+	/// </summary>
+	Task<LogEntry[]> ReadLogAsync(string deviceId, LogQuery query, CancellationToken cancellationToken = default);
+
+	/// <summary>Lists crash reports the device recorded, newest first.</summary>
+	Task<CrashReport[]> ListCrashesAsync(string deviceId, CancellationToken cancellationToken = default);
+
+	/// <summary>Reads one crash report in full, given an <see cref="CrashReport.Id"/>.</summary>
+	Task<CrashDetailResult> GetCrashAsync(string deviceId, string crashId, CancellationToken cancellationToken = default);
+
 	Task<ILiveVideoSession> OpenVideoStreamAsync(string deviceId, StreamOptions options, CancellationToken cancellationToken = default);
 	Task<RecordingStatus> StartRecordingAsync(string deviceId, RecordingStartRequest request, CancellationToken cancellationToken = default);
 	Task<RecordingStatus> StopRecordingAsync(string deviceId, CancellationToken cancellationToken = default);
