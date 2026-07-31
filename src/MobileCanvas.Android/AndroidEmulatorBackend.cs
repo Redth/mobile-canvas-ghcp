@@ -797,7 +797,15 @@ public sealed partial class AndroidEmulatorBackend : IDeviceBackend, IAsyncDispo
 				$"Could not read the view hierarchy from '{serial}'. uiautomator may be busy or the screen may be off.");
 
 		var display = await GetDisplayAsync(deviceId, cancellationToken).ConfigureAwait(false);
-		var root = UiAutomatorParser.Parse(dump, display.Scale);
+
+		// uiautomator reports its own failures on stdout and still exits zero -- most often
+		// "ERROR: could not get idle state." when something on screen never stops animating. Without
+		// this the parser returns nothing and the snapshot claims an empty screen, so a caller reads a
+		// broken capture as a screen with no elements on it.
+		var root = UiAutomatorParser.Parse(dump, display.Scale)
+			?? throw new DeviceCapabilityException(
+				$"uiautomator could not capture the view hierarchy on '{serial}': {Summarize(dump)} "
+				+ "This usually means something on screen is still animating. Retry, or fall back to a screenshot.");
 
 		return new UiSnapshot
 		{
@@ -807,6 +815,19 @@ public sealed partial class AndroidEmulatorBackend : IDeviceBackend, IAsyncDispo
 			ElementCount = UiTree.Count(root),
 			Raw = includeRaw ? dump : null,
 		};
+	}
+
+	/// <summary>
+	/// Condenses uiautomator's output into one line fit for an error message. The output is short when
+	/// it failed and enormous when it did not, so it is capped rather than trusted.
+	/// </summary>
+	private static string Summarize(string dump)
+	{
+		var text = dump.ReplaceLineEndings(" ").Trim();
+		if (text.Length == 0)
+			return "it produced no output.";
+
+		return text.Length <= 200 ? text : string.Concat(text.AsSpan(0, 200), "...");
 	}
 
 	#endregion
