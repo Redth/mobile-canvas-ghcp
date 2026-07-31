@@ -11,7 +11,7 @@ on:
   workflow_dispatch:
     inputs:
       version:
-        description: Version to stamp into package.json
+        description: Version to stamp into every file that carries one
         required: false
       commit:
         description: Open a PR with the refreshed runtimes
@@ -140,3 +140,6 @@ jobs:
           add-paths: |
             runtimes
             package.json
+            Directory.Build.props
+            .github/plugin/plugin.json
+            .github/plugin/marketplace.json

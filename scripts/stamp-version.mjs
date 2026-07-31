@@ -1,55 +1,132 @@
 #!/usr/bin/env node
-// Writes one version into the two places that carry it: package.json, which is
-// the version the plugin manager shows, and Directory.Build.props, which is what
-// the binary reports from `mobile-canvas --version`. They are separate files and
-// drift apart silently, so a bug report ends up naming a version that never
-// shipped. The release workflow runs this before building rather than only
-// before bundling, because the binary bakes its version in at compile time.
+// Writes one version into every file that carries it. There are four, and they
+// drift apart silently: package.json is the version the plugin manager shows,
+// Directory.Build.props is what the binary reports from `mobile-canvas
+// --version`, and the two files under .github/plugin are what someone browsing
+// the marketplace sees. Drift means a bug report names a version that never
+// shipped -- which had already happened, with the marketplace manifests left a
+// whole release behind at 0.1.0 while the binary shipped 0.1.1.
+//
+// The release workflow runs this before building rather than only before
+// bundling, because the binary bakes its version in at compile time.
+//
+//   stamp-version.mjs 1.2.3    write the version everywhere
+//   stamp-version.mjs --check  verify every file already agrees
 import { readFileSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
-const version = process.argv[2];
-if (!version) {
-  console.error("usage: stamp-version.mjs <version>");
-  process.exit(1);
-}
+const root = join(dirname(fileURLToPath(import.meta.url)), "..");
 
 // NuGet splits a version at the first hyphen: everything before is the numeric
 // prefix, everything after is the prerelease suffix.
-const match = /^(\d+\.\d+\.\d+)(?:-(.+))?$/.exec(version);
-if (!match) {
-  console.error(`not a version: ${version} (expected 1.2.3 or 1.2.3-preview.1)`);
-  process.exit(1);
-}
-const [, prefix, suffix = ""] = match;
+const VERSION = /^(\d+\.\d+\.\d+)(?:-(.+))?$/;
 
-const root = join(dirname(fileURLToPath(import.meta.url)), "..");
+const jsonFile = (relative, select) => ({
+	relative,
+	read: () => select(JSON.parse(readFileSync(join(root, relative), "utf8"))).version,
+	write: (version) => {
+		const path = join(root, relative);
+		const document = JSON.parse(readFileSync(path, "utf8"));
+		select(document).version = version;
+		writeFileSync(path, JSON.stringify(document, null, 2) + "\n");
+	},
+});
 
-const pkgPath = join(root, "package.json");
-const pkg = JSON.parse(readFileSync(pkgPath, "utf8"));
-pkg.version = version;
-writeFileSync(pkgPath, JSON.stringify(pkg, null, 2) + "\n");
+// marketplace.json carries two unrelated versions: metadata.version is the
+// catalogue's own schema version and must not move, while the entry under
+// plugins[] is this plugin's. Only the latter is ours.
+const marketplacePlugin = (document) => {
+	const entry = document.plugins?.find((plugin) => plugin.name === "mobile-canvas");
+	if (!entry) {
+		throw new Error("marketplace.json has no plugins[] entry named mobile-canvas");
+	}
+
+	return entry;
+};
 
 const propsPath = join(root, "Directory.Build.props");
-const before = readFileSync(propsPath, "utf8");
-// Match on the elements rather than on whether the text changed: re-stamping the
-// version that is already there is a legitimate no-op, and the failure worth
-// catching is a renamed or missing element, which would otherwise ship the wrong
-// version silently.
-const prefixPattern = /<VersionPrefix>[^<]*<\/VersionPrefix>/;
-const suffixPattern = /<VersionSuffix>[^<]*<\/VersionSuffix>/;
-for (const [name, pattern] of [["VersionPrefix", prefixPattern], ["VersionSuffix", suffixPattern]]) {
-  if (!pattern.test(before)) {
-    console.error(`Directory.Build.props has no <${name}> to replace`);
-    process.exit(1);
-  }
-}
-writeFileSync(
-  propsPath,
-  before
-    .replace(prefixPattern, `<VersionPrefix>${prefix}</VersionPrefix>`)
-    .replace(suffixPattern, `<VersionSuffix>${suffix}</VersionSuffix>`),
-);
+const propsPatterns = {
+	VersionPrefix: /<VersionPrefix>([^<]*)<\/VersionPrefix>/,
+	VersionSuffix: /<VersionSuffix>([^<]*)<\/VersionSuffix>/,
+};
 
-console.log(`stamped ${version} into package.json and Directory.Build.props`);
+const readProps = (text) => {
+	const found = {};
+	for (const [name, pattern] of Object.entries(propsPatterns)) {
+		const match = pattern.exec(text);
+		// Match on the elements rather than on whether the text changed: re-stamping
+		// the version already there is a legitimate no-op, and the failure worth
+		// catching is a renamed or missing element, which would otherwise ship the
+		// wrong version silently.
+		if (!match) {
+			throw new Error(`Directory.Build.props has no <${name}>`);
+		}
+
+		found[name] = match[1];
+	}
+
+	return found;
+};
+
+const files = [
+	jsonFile("package.json", (document) => document),
+	jsonFile(".github/plugin/plugin.json", (document) => document),
+	jsonFile(".github/plugin/marketplace.json", marketplacePlugin),
+	{
+		relative: "Directory.Build.props",
+		read: () => {
+			const { VersionPrefix, VersionSuffix } = readProps(readFileSync(propsPath, "utf8"));
+			return VersionSuffix ? `${VersionPrefix}-${VersionSuffix}` : VersionPrefix;
+		},
+		write: (version) => {
+			const [, prefix, suffix = ""] = VERSION.exec(version);
+			const before = readFileSync(propsPath, "utf8");
+			readProps(before);
+			writeFileSync(
+				propsPath,
+				before
+					.replace(propsPatterns.VersionPrefix, `<VersionPrefix>${prefix}</VersionPrefix>`)
+					.replace(propsPatterns.VersionSuffix, `<VersionSuffix>${suffix}</VersionSuffix>`),
+			);
+		},
+	},
+];
+
+const fail = (message) => {
+	console.error(message);
+	process.exit(1);
+};
+
+const argument = process.argv[2];
+if (!argument) {
+	fail("usage: stamp-version.mjs <version> | --check");
+}
+
+if (argument === "--check") {
+	const found = files.map((file) => [file.relative, file.read()]);
+	for (const [relative, version] of found) {
+		console.log(`  ${version.padEnd(18)} ${relative}`);
+	}
+
+	const versions = new Set(found.map(([, version]) => version));
+	if (versions.size > 1) {
+		fail(
+			"\nThese files disagree about the version. Run `node scripts/stamp-version.mjs <version>`\n"
+			+ "to write one version into all of them.",
+		);
+	}
+
+	console.log(`\nall ${found.length} agree on ${[...versions][0]}`);
+	process.exit(0);
+}
+
+if (!VERSION.test(argument)) {
+	fail(`not a version: ${argument} (expected 1.2.3 or 1.2.3-preview.1)`);
+}
+
+for (const file of files) {
+	file.write(argument);
+}
+
+console.log(`stamped ${argument} into ${files.map((file) => file.relative).join(", ")}`);
