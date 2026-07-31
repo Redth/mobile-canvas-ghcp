@@ -15,6 +15,39 @@ Live H.264 video at ~58 FPS (iOS) and ~50 FPS (Android), with real tap, drag,
 scroll, and keyboard input. Everything runs locally on loopback; nothing is
 uploaded anywhere.
 
+## Getting started
+
+Install it from inside the GitHub Copilot app. The plugin ships the executable
+itself, so there is no build step, no download, and no Apple developer
+certificate.
+
+**1.** Open **Plugins**, then **Install ▸ Add marketplace**.
+
+![The Plugins dialog with the Install menu open and Add marketplace highlighted](assets/install-1.png)
+
+**2.** Enter `Redth/mobile-canvas-ghcp` and click **Add marketplace**.
+
+![The Add marketplace field filled in with Redth/mobile-canvas-ghcp](assets/install-2.png)
+
+**3.** Find **mobile-canvas** in the list and click **Install**.
+
+![The mobile-canvas plugin listed under the mobile-canvas-ghcp marketplace with an Install button](assets/install-3.png)
+
+That registers the canvas extension and the MCP server together. Reload Copilot,
+then ask it to open the **Mobile Device** canvas — or pick it from the canvas
+menu — and select a booted simulator or emulator.
+
+Prefer the keyboard? The same two steps:
+
+```
+/plugin marketplace add Redth/mobile-canvas-ghcp
+/plugin install mobile-canvas
+```
+
+You still need Xcode for iOS or the Android SDK for Android; see
+[Requirements](#requirements). For how a plugin install ships a native binary,
+see [How the executable ships](docs/distribution.md).
+
 ## What it does
 
 **Device management**
@@ -58,20 +91,6 @@ uploaded anywhere.
 Android emulators must be started with `-gpu host`. A software-rendered AVD
 drops video from ~50 FPS to ~3 FPS.
 
-## Install
-
-### As a Copilot plugin
-
-```
-/plugin marketplace add Redth/mobile-canvas-ghcp
-/plugin install mobile-canvas
-```
-
-This registers both the canvas extension and the MCP server, and ships the
-executable itself, so nothing else needs installing -- no build step, no
-download, and no Apple developer certificate. See
-[How the executable ships](docs/distribution.md).
-
 | Platform | iOS Simulator | Android emulator | Video |
 |---|---|---|---|
 | macOS | yes | yes | H.264 |
@@ -81,6 +100,8 @@ download, and no Apple developer certificate. See
 iOS control requires `simctl` and `idb`, so it is macOS-only. Android works
 everywhere; hardware H.264 encoding currently runs through a macOS helper, so
 elsewhere the canvas falls back to screenshot polling.
+
+## Other ways to install
 
 ### From source
 
