@@ -81,6 +81,24 @@ public interface IDeviceBackend
 	/// <summary>Applies the settings named in the request, leaving the rest alone.</summary>
 	Task<DeviceSettings> UpdateSettingsAsync(string deviceId, DeviceSettingsRequest request, CancellationToken cancellationToken = default);
 
+	/// <summary>Reads what the device will report about its simulated hardware.</summary>
+	Task<HardwareState> GetHardwareStateAsync(string deviceId, CancellationToken cancellationToken = default);
+
+	/// <summary>
+	/// Moves the device to a simulated position. Neither platform can read one back, so this
+	/// returns nothing to check against.
+	/// </summary>
+	Task SetLocationAsync(string deviceId, DeviceLocationRequest request, CancellationToken cancellationToken = default);
+
+	/// <summary>Returns the device to the host's real position.</summary>
+	Task ClearLocationAsync(string deviceId, CancellationToken cancellationToken = default);
+
+	/// <summary>Simulates a battery level or charging state, then reads back what took.</summary>
+	Task<HardwareState> SetBatteryAsync(string deviceId, BatteryRequest request, CancellationToken cancellationToken = default);
+
+	/// <summary>Simulates network conditions, then reads back what took.</summary>
+	Task<HardwareState> SetNetworkAsync(string deviceId, NetworkRequest request, CancellationToken cancellationToken = default);
+
 	Task<ILiveVideoSession> OpenVideoStreamAsync(string deviceId, StreamOptions options, CancellationToken cancellationToken = default);
 	Task<RecordingStatus> StartRecordingAsync(string deviceId, RecordingStartRequest request, CancellationToken cancellationToken = default);
 	Task<RecordingStatus> StopRecordingAsync(string deviceId, CancellationToken cancellationToken = default);

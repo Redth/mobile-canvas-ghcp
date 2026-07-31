@@ -532,6 +532,95 @@ public sealed class DeviceService(IEnumerable<IDeviceBackend> backends)
 			cancellationToken);
 	}
 
+	/// <summary>
+	/// Reads what the device reports about its simulated hardware.
+	/// </summary>
+	public Task<HardwareState> GetHardwareStateAsync(
+		string deviceId,
+		CancellationToken cancellationToken = default) =>
+		GetBackend(deviceId).GetHardwareStateAsync(deviceId, cancellationToken);
+
+	/// <summary>
+	/// Moves the device to a simulated position.
+	/// </summary>
+	public Task SetLocationAsync(
+		string deviceId,
+		DeviceLocationRequest request,
+		CancellationToken cancellationToken = default)
+	{
+		// simctl takes a latitude and longitude that are not numbers without complaint and without
+		// exiting non-zero, so a typo would otherwise look like a fix that was applied.
+		if (request.Latitude is < -90 or > 90 || double.IsNaN(request.Latitude))
+			throw new ArgumentException(
+				$"A latitude of {request.Latitude} is not on Earth; it must be between -90 and 90.",
+				nameof(request));
+
+		if (request.Longitude is < -180 or > 180 || double.IsNaN(request.Longitude))
+			throw new ArgumentException(
+				$"A longitude of {request.Longitude} is not on Earth; it must be between -180 and 180.",
+				nameof(request));
+
+		return GetBackend(deviceId).SetLocationAsync(deviceId, request, cancellationToken);
+	}
+
+	/// <summary>
+	/// Returns the device to the host's real position.
+	/// </summary>
+	public Task ClearLocationAsync(string deviceId, CancellationToken cancellationToken = default) =>
+		GetBackend(deviceId).ClearLocationAsync(deviceId, cancellationToken);
+
+	/// <summary>
+	/// Simulates a battery level or charging state.
+	/// </summary>
+	public Task<HardwareState> SetBatteryAsync(
+		string deviceId,
+		BatteryRequest request,
+		CancellationToken cancellationToken = default)
+	{
+		if (request.Level is null && request.State is null)
+			throw new ArgumentException("Name a battery level or a state to change.", nameof(request));
+
+		if (request.Level is { } level && level is < 0 or > 100)
+			throw new ArgumentOutOfRangeException(
+				nameof(request),
+				level,
+				"A battery level is a percentage, so it must be between 0 and 100.");
+
+		var state = request.State?.Trim().ToLowerInvariant();
+		if (state is not null && !BatteryStates.All.Contains(state))
+			throw new ArgumentException(
+				$"'{request.State}' is not a battery state. Use one of: {string.Join(", ", BatteryStates.All)}.",
+				nameof(request));
+
+		return GetBackend(deviceId).SetBatteryAsync(
+			deviceId,
+			request with { State = state },
+			cancellationToken);
+	}
+
+	/// <summary>
+	/// Simulates network conditions.
+	/// </summary>
+	public Task<HardwareState> SetNetworkAsync(
+		string deviceId,
+		NetworkRequest request,
+		CancellationToken cancellationToken = default)
+	{
+		if (request.Profile is null && request.LatencyMs is null)
+			throw new ArgumentException("Name a network profile or a latency to change.", nameof(request));
+
+		if (request.LatencyMs is { } latency && latency < 0)
+			throw new ArgumentOutOfRangeException(
+				nameof(request),
+				latency,
+				"Latency cannot be negative. Use 0 to remove the delay.");
+
+		return GetBackend(deviceId).SetNetworkAsync(
+			deviceId,
+			request with { Profile = request.Profile?.Trim().ToLowerInvariant() },
+			cancellationToken);
+	}
+
 	private static string RequireBundleId(string bundleId) =>
 		string.IsNullOrWhiteSpace(bundleId)
 			? throw new ArgumentException(

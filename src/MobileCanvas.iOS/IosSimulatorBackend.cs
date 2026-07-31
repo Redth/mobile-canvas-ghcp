@@ -3,6 +3,7 @@ using MobileCanvas.Core;
 using Idb;
 using System.Collections.Concurrent;
 using System.Diagnostics;
+using System.Globalization;
 using System.Text.RegularExpressions;
 
 namespace MobileCanvas.iOS;
@@ -1370,6 +1371,199 @@ public sealed class IosSimulatorBackend : IDeviceBackend, IAsyncDisposable
 				+ (result.StandardError.Trim() is { Length: > 0 } error
 					? error.Split('\n')[^1].Trim()
 					: $"simctl exited with code {result.ExitCode}."));
+	}
+
+	#endregion
+
+	#region Hardware simulation
+
+	public async Task<HardwareState> GetHardwareStateAsync(
+		string deviceId,
+		CancellationToken cancellationToken = default)
+	{
+		var device = await RequireBootedAsync(deviceId, cancellationToken).ConfigureAwait(false);
+		return await ReadHardwareStateAsync(device, cancellationToken).ConfigureAwait(false);
+	}
+
+	public async Task SetLocationAsync(
+		string deviceId,
+		DeviceLocationRequest request,
+		CancellationToken cancellationToken = default)
+	{
+		var device = await RequireBootedAsync(deviceId, cancellationToken).ConfigureAwait(false);
+
+		// simctl formats coordinates with the invariant separator; a host in a comma-decimal locale
+		// would otherwise send "37,7749" and have it read as two arguments.
+		var latitude = request.Latitude.ToString(CultureInfo.InvariantCulture);
+		var longitude = request.Longitude.ToString(CultureInfo.InvariantCulture);
+
+		await RequireSimctlAsync(
+			["location", device.NativeId, "set", $"{latitude},{longitude}"],
+			$"set the location to {latitude},{longitude}",
+			cancellationToken).ConfigureAwait(false);
+	}
+
+	public async Task ClearLocationAsync(string deviceId, CancellationToken cancellationToken = default)
+	{
+		var device = await RequireBootedAsync(deviceId, cancellationToken).ConfigureAwait(false);
+		await RequireSimctlAsync(
+			["location", device.NativeId, "clear"],
+			"clear the simulated location",
+			cancellationToken).ConfigureAwait(false);
+	}
+
+	public async Task<HardwareState> SetBatteryAsync(
+		string deviceId,
+		BatteryRequest request,
+		CancellationToken cancellationToken = default)
+	{
+		var device = await RequireBootedAsync(deviceId, cancellationToken).ConfigureAwait(false);
+
+		// `status_bar override` replaces the whole battery group rather than merging into it: sending
+		// only a state resets the level to 100, and only a level resets the state to discharging. So
+		// whichever half was not asked for is read back and re-sent, or the caller silently loses it.
+		var current = await ReadHardwareStateAsync(device, cancellationToken).ConfigureAwait(false);
+		var level = request.Level ?? current.BatteryLevel;
+		var state = request.State ?? current.BatteryState;
+
+		var arguments = new List<string> { "status_bar", device.NativeId, "override" };
+		if (level is { } percentage)
+		{
+			arguments.Add("--batteryLevel");
+			arguments.Add(percentage.ToString(CultureInfo.InvariantCulture));
+		}
+
+		if (state is not null)
+		{
+			arguments.Add("--batteryState");
+			// simctl calls a full battery 'charged'; the shared vocabulary calls it full, because
+			// Android's own word for the same state is 'full'.
+			arguments.Add(state switch
+			{
+				BatteryStates.Full => "charged",
+				_ => state,
+			});
+		}
+
+		await RequireSimctlAsync(arguments, "change the battery", cancellationToken).ConfigureAwait(false);
+		return await ReadHardwareStateAsync(device, cancellationToken).ConfigureAwait(false);
+	}
+
+	public async Task<HardwareState> SetNetworkAsync(
+		string deviceId,
+		NetworkRequest request,
+		CancellationToken cancellationToken = default)
+	{
+		var device = await RequireBootedAsync(deviceId, cancellationToken).ConfigureAwait(false);
+
+		if (request.LatencyMs is not null)
+		{
+			throw new DeviceCapabilityException(
+				"A simulator shares the host's network stack, so latency cannot be added to it. "
+				+ "Use Network Link Conditioner on the host, or an Android emulator, to test a slow "
+				+ "connection.");
+		}
+
+		var profile = request.Profile
+			?? throw new DeviceCapabilityException("Name a network profile to show.");
+
+		// simctl can only change what the status bar draws. The connection underneath is the host's
+		// either way, so saying this plainly matters: an app tested against '3g' here still has
+		// whatever speed the host has, and code that waits on a slow network will not be exercised.
+		await RequireSimctlAsync(
+			["status_bar", device.NativeId, "override", "--dataNetwork", MapDataNetwork(profile)],
+			$"show '{profile}' in the status bar",
+			cancellationToken).ConfigureAwait(false);
+
+		return await ReadHardwareStateAsync(device, cancellationToken).ConfigureAwait(false);
+	}
+
+	/// <summary>
+	/// Translates a shared profile name into one of simctl's status bar network types.
+	/// </summary>
+	private static string MapDataNetwork(string profile) => profile switch
+	{
+		NetworkProfiles.Gsm or NetworkProfiles.Gprs or NetworkProfiles.Edge => "3g",
+		NetworkProfiles.Umts or NetworkProfiles.Hsdpa => "3g",
+		NetworkProfiles.Lte => "lte",
+		NetworkProfiles.Full => "5g",
+		_ => profile,
+	};
+
+	private async Task<HardwareState> ReadHardwareStateAsync(
+		DeviceTarget device,
+		CancellationToken cancellationToken)
+	{
+		var overrides = await RunAsync(["status_bar", device.NativeId, "list"], cancellationToken)
+			.ConfigureAwait(false);
+
+		var (level, state) = overrides.ExitCode == 0
+			? ParseStatusBarBattery(overrides.StandardOutput)
+			: (null, null);
+
+		return new HardwareState
+		{
+			DeviceId = device.Id,
+			Platform = DevicePlatforms.Ios,
+			BatteryLevel = level,
+			BatteryState = state,
+			NetworkIsIndicatorOnly = true,
+			Unreadable =
+			[
+				// Only overrides are listed: with none set, the status bar shows the simulator's own
+				// values, which simctl will not report. Reporting those as absent would be honest;
+				// reporting them as zero would not.
+				"battery, unless an override is set",
+				"location, which simctl can set but never read",
+				"network conditions, which a simulator does not simulate",
+			],
+		};
+	}
+
+	/// <summary>
+	/// Reads a battery override out of <c>simctl status_bar list</c>.
+	/// </summary>
+	internal static (int? Level, string? State) ParseStatusBarBattery(string output)
+	{
+		var level = Regex.Match(output, @"Battery Level:\s*(\d+)");
+		var state = Regex.Match(output, @"Battery State:\s*(\d+)");
+
+		return (
+			level.Success && int.TryParse(level.Groups[1].Value, out var value) ? value : null,
+			state.Success
+				? state.Groups[1].Value switch
+				{
+					// Measured by setting each state and reading the list back: discharging is 0, not
+					// the 3 that UIDevice.BatteryState uses for the same idea.
+					"0" => BatteryStates.Discharging,
+					"1" => BatteryStates.Charging,
+					"2" => BatteryStates.Full,
+					_ => null,
+				}
+				: null);
+	}
+
+	/// <summary>
+	/// Runs simctl and raises when it fails, which it does while still exiting zero.
+	/// </summary>
+	private async Task RequireSimctlAsync(
+		IReadOnlyList<string> arguments,
+		string attempt,
+		CancellationToken cancellationToken)
+	{
+		var result = await RunAsync(arguments, cancellationToken).ConfigureAwait(false);
+
+		// `status_bar override --batteryLevel 500` prints its complaint to stderr and exits 0, so the
+		// exit code alone would report a rejected change as one that was made.
+		var error = result.StandardError.Trim();
+		if (result.ExitCode == 0 && error.Length == 0)
+			return;
+
+		throw new DeviceCapabilityException(
+			$"Could not {attempt}: "
+			+ (error.Length > 0
+				? error.Split('\n')[^1].Trim()
+				: $"simctl exited with code {result.ExitCode}."));
 	}
 
 	#endregion

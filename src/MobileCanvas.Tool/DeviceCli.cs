@@ -215,6 +215,38 @@ internal static class DeviceCli
 						: null,
 				},
 				cancellationToken).ConfigureAwait(false),
+			("hardware", "get") => await Client.GetHardwareStateAsync(
+				options.RequiredPosition(0, "device ID"),
+				cancellationToken).ConfigureAwait(false),
+			("location", "set") => await Client.SetLocationAsync(
+				options.RequiredPosition(0, "device ID"),
+				new DeviceLocationRequest
+				{
+					Latitude = double.Parse(options.Required("latitude"), CultureInfo.InvariantCulture),
+					Longitude = double.Parse(options.Required("longitude"), CultureInfo.InvariantCulture),
+				},
+				cancellationToken).ConfigureAwait(false),
+			("location", "clear") => await Client.ClearLocationAsync(
+				options.RequiredPosition(0, "device ID"),
+				cancellationToken).ConfigureAwait(false),
+			("battery", "set") => await Client.SetBatteryAsync(
+				options.RequiredPosition(0, "device ID"),
+				new BatteryRequest
+				{
+					Level = options.Value("level") is { } level ? int.Parse(level, CultureInfo.InvariantCulture) : null,
+					State = options.Value("state"),
+				},
+				cancellationToken).ConfigureAwait(false),
+			("network", "set") => await Client.SetNetworkAsync(
+				options.RequiredPosition(0, "device ID"),
+				new NetworkRequest
+				{
+					Profile = options.Value("profile"),
+					LatencyMs = options.Value("latency") is { } latency
+						? int.Parse(latency, CultureInfo.InvariantCulture)
+						: null,
+				},
+				cancellationToken).ConfigureAwait(false),
 			("screenshot", _) => await ScreenshotAsync(
 				action,
 				new CliArguments(args.Skip(1)),
@@ -536,6 +568,11 @@ internal static class DeviceCli
 		  mobile-canvas settings get <id> [--json]
 		  mobile-canvas settings set <id> [--appearance light|dark] [--font-scale <n>]
 		                                  [--content-size <c>] [--contrast true|false]
+		  mobile-canvas hardware get <id> [--json]
+		  mobile-canvas location set <id> --latitude <lat> --longitude <lon>
+		  mobile-canvas location clear <id>
+		  mobile-canvas battery set <id> [--level 0-100] [--state charging|discharging|full]
+		  mobile-canvas network set <id> [--profile <p>] [--latency <ms>]
 		  mobile-canvas screenshot <id> [--output <path>] [--json]
 		  mobile-canvas recording start|stop|status <id>
 		  mobile-canvas mcp
@@ -583,6 +620,12 @@ internal static class DeviceCli
 		`settings` covers the two things worth flipping mid-test: dark mode, and the text size that
 		breaks a layout. iOS names text sizes (`--content-size large`) where Android scales them
 		(`--font-scale 1.3`), and each says so if given the other.
+
+		`location`, `battery` and `network` simulate hardware, and the platforms differ enough that
+		each says what it cannot do rather than pretending. Neither can read a location back, so a fix
+		is confirmed only by asking the app. An emulator cannot be returned to a real position at all.
+		A simulator has no network of its own to slow down -- `network set` there only changes what the
+		status bar draws, and the result says so.
 		""";
 }
 

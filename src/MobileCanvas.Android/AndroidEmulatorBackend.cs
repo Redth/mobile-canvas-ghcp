@@ -1866,6 +1866,259 @@ public sealed partial class AndroidEmulatorBackend : IDeviceBackend, IAsyncDispo
 
 	#endregion
 
+	#region Hardware simulation
+
+	public async Task<HardwareState> GetHardwareStateAsync(
+		string deviceId,
+		CancellationToken cancellationToken = default)
+	{
+		var serial = await RequireSerialAsync(deviceId, cancellationToken).ConfigureAwait(false);
+		return await ReadHardwareStateAsync(deviceId, serial, cancellationToken).ConfigureAwait(false);
+	}
+
+	public async Task SetLocationAsync(
+		string deviceId,
+		DeviceLocationRequest request,
+		CancellationToken cancellationToken = default)
+	{
+		var serial = await RequireSerialAsync(deviceId, cancellationToken).ConfigureAwait(false);
+
+		// The console takes longitude first, which is the reverse of every other API here and of how
+		// a coordinate is written. Getting it backwards puts the device in the wrong hemisphere
+		// without any error, so the order is fixed here rather than left to a caller.
+		var longitude = request.Longitude.ToString(CultureInfo.InvariantCulture);
+		var latitude = request.Latitude.ToString(CultureInfo.InvariantCulture);
+
+		await RequireConsoleAsync(
+			serial,
+			["geo", "fix", longitude, latitude],
+			$"set the location to {latitude},{longitude}",
+			cancellationToken).ConfigureAwait(false);
+	}
+
+	public async Task ClearLocationAsync(string deviceId, CancellationToken cancellationToken = default)
+	{
+		await RequireSerialAsync(deviceId, cancellationToken).ConfigureAwait(false);
+
+		// There is no console command to stop simulating; the emulator keeps the last fix until it
+		// restarts. Saying so is better than sending 0,0, which is a real place off Africa that an
+		// app would treat as a fix rather than as the absence of one.
+		throw new DeviceCapabilityException(
+			"An emulator cannot be returned to a real position: it has no GPS of its own, and the "
+			+ "console has no clear command. Set a location instead, or cold boot the emulator.");
+	}
+
+	public async Task<HardwareState> SetBatteryAsync(
+		string deviceId,
+		BatteryRequest request,
+		CancellationToken cancellationToken = default)
+	{
+		var serial = await RequireSerialAsync(deviceId, cancellationToken).ConfigureAwait(false);
+
+		if (request.Level is { } level)
+		{
+			await RequireConsoleAsync(
+				serial,
+				["power", "capacity", level.ToString(CultureInfo.InvariantCulture)],
+				$"set the battery to {level}%",
+				cancellationToken).ConfigureAwait(false);
+		}
+
+		if (request.State is { } state)
+		{
+			// Charging is two facts on Android -- whether a charger is attached, and what the battery
+			// says it is doing -- and an app can read either. Setting only one leaves the device
+			// claiming to charge with nothing plugged in.
+			await RequireConsoleAsync(
+				serial,
+				["power", "ac", state is BatteryStates.Discharging ? "off" : "on"],
+				"set the charger state",
+				cancellationToken).ConfigureAwait(false);
+
+			await RequireConsoleAsync(
+				serial,
+				["power", "status", state is BatteryStates.Full ? "full" : state],
+				$"set the battery status to {state}",
+				cancellationToken).ConfigureAwait(false);
+		}
+
+		return await ReadHardwareStateAsync(deviceId, serial, cancellationToken).ConfigureAwait(false);
+	}
+
+	public async Task<HardwareState> SetNetworkAsync(
+		string deviceId,
+		NetworkRequest request,
+		CancellationToken cancellationToken = default)
+	{
+		var serial = await RequireSerialAsync(deviceId, cancellationToken).ConfigureAwait(false);
+
+		if (request.Profile is { } profile)
+		{
+			await RequireConsoleAsync(
+				serial,
+				["network", "speed", profile],
+				$"set the network speed to '{profile}'",
+				cancellationToken).ConfigureAwait(false);
+		}
+
+		if (request.LatencyMs is { } latency)
+		{
+			// The console takes a range, and a single number sets both ends of it.
+			await RequireConsoleAsync(
+				serial,
+				["network", "delay", latency.ToString(CultureInfo.InvariantCulture)],
+				$"set the network latency to {latency}ms",
+				cancellationToken).ConfigureAwait(false);
+		}
+
+		return await ReadHardwareStateAsync(deviceId, serial, cancellationToken).ConfigureAwait(false);
+	}
+
+	private async Task<HardwareState> ReadHardwareStateAsync(
+		string deviceId,
+		string serial,
+		CancellationToken cancellationToken)
+	{
+		var power = await RunAdbAsync(serial, ["emu", "power", "display"], cancellationToken)
+			.ConfigureAwait(false);
+		var network = await RunAdbAsync(serial, ["emu", "network", "status"], cancellationToken)
+			.ConfigureAwait(false);
+
+		var (level, state) = ParsePowerDisplay(power);
+		var (download, upload, latency) = ParseNetworkStatus(network);
+
+		return new HardwareState
+		{
+			DeviceId = deviceId,
+			Platform = DevicePlatforms.Android,
+			BatteryLevel = level,
+			BatteryState = state,
+			DownloadBitsPerSecond = download,
+			UploadBitsPerSecond = upload,
+			LatencyMs = latency,
+			Unreadable = ["location, which the console can set but never read"],
+		};
+	}
+
+	/// <summary>
+	/// Reads battery level and charging state out of <c>emu power display</c>.
+	/// </summary>
+	internal static (int? Level, string? State) ParsePowerDisplay(string? output)
+	{
+		if (string.IsNullOrWhiteSpace(output))
+			return (null, null);
+
+		int? level = null;
+		string? state = null;
+
+		foreach (var line in output.Split('\n'))
+		{
+			var trimmed = line.Trim();
+			if (trimmed.StartsWith("capacity:", StringComparison.OrdinalIgnoreCase)
+				&& int.TryParse(trimmed[9..].Trim(), out var capacity))
+			{
+				level = capacity;
+			}
+			else if (trimmed.StartsWith("status:", StringComparison.OrdinalIgnoreCase))
+			{
+				state = trimmed[7..].Trim().ToLowerInvariant() switch
+				{
+					"charging" => BatteryStates.Charging,
+					"discharging" or "not-charging" => BatteryStates.Discharging,
+					"full" => BatteryStates.Full,
+					// 'unknown' is a real value the console accepts, and it is not one of the three.
+					_ => null,
+				};
+			}
+		}
+
+		return (level, state);
+	}
+
+	/// <summary>
+	/// Reads simulated speeds and latency out of <c>emu network status</c>.
+	/// </summary>
+	internal static (long? Download, long? Upload, int? Latency) ParseNetworkStatus(string? output)
+	{
+		if (string.IsNullOrWhiteSpace(output))
+			return (null, null, null);
+
+		long? download = null;
+		long? upload = null;
+		int? latency = null;
+
+		foreach (var line in output.Split('\n'))
+		{
+			var trimmed = line.Trim();
+
+			// The console reports an unthrottled connection as 0 bits/s, which is not a speed of zero
+			// but the absence of a limit. Reporting it as 0 would read as an offline device.
+			if (trimmed.StartsWith("download speed:", StringComparison.OrdinalIgnoreCase))
+				download = ParseBitsPerSecond(trimmed);
+			else if (trimmed.StartsWith("upload speed:", StringComparison.OrdinalIgnoreCase))
+				upload = ParseBitsPerSecond(trimmed);
+			else if (trimmed.StartsWith("maximum latency:", StringComparison.OrdinalIgnoreCase))
+			{
+				var match = Regex.Match(trimmed, @"(\d+)\s*ms");
+				if (match.Success && int.TryParse(match.Groups[1].Value, out var value) && value > 0)
+					latency = value;
+			}
+		}
+
+		return (download, upload, latency);
+	}
+
+	private static long? ParseBitsPerSecond(string line)
+	{
+		var match = Regex.Match(line, @"(\d+)\s*bits/s");
+		return match.Success
+			&& long.TryParse(match.Groups[1].Value, out var value)
+			&& value > 0
+			? value
+			: null;
+	}
+
+	/// <summary>
+	/// Runs an emulator console command and raises when it fails.
+	/// </summary>
+	/// <remarks>
+	/// The console answers every command with a last line of <c>OK</c> or <c>KO: reason</c> and exits
+	/// zero either way -- the same trap as uiautomator and <c>run-as</c>, but with a signal worth
+	/// having: the reason is the console's own words.
+	/// </remarks>
+	private async Task RequireConsoleAsync(
+		string serial,
+		string[] command,
+		string attempt,
+		CancellationToken cancellationToken)
+	{
+		var result = await RunAdbResultAsync(serial, ["emu", .. command], cancellationToken)
+			.ConfigureAwait(false);
+
+		var output = $"{result.StandardOutput}\n{result.StandardError}";
+		var failure = output
+			.Split('\n')
+			.Select(line => line.Trim())
+			.FirstOrDefault(line => line.StartsWith("KO", StringComparison.Ordinal));
+
+		if (failure is not null)
+		{
+			throw new DeviceCapabilityException(
+				$"Could not {attempt}: {failure.TrimStart('K', 'O', ':', ' ')}");
+		}
+
+		if (result.ExitCode != 0)
+		{
+			throw new DeviceCapabilityException(
+				$"Could not {attempt}: "
+				+ (result.StandardError.Trim() is { Length: > 0 } error
+					? error.Split('\n')[^1].Trim()
+					: $"adb exited with code {result.ExitCode}."));
+		}
+	}
+
+	#endregion
+
 	#region Files
 
 	/// <summary>

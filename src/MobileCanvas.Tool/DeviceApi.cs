@@ -37,6 +37,7 @@ internal static class DeviceApi
 		MapDiagnostics(app);
 		MapFiles(app);
 		MapSettings(app);
+		MapHardware(app);
 		MapMedia(app);
 	}
 
@@ -641,6 +642,39 @@ internal static class DeviceApi
 			(string deviceId, DeviceSettingsRequest request,
 				DeviceService devices, CancellationToken cancellationToken) =>
 				devices.UpdateSettingsAsync(deviceId, request, cancellationToken));
+	}
+
+	private static void MapHardware(WebApplication app)
+	{
+		app.MapGet(
+			"/api/v1/devices/{deviceId}/hardware",
+			(string deviceId, DeviceService devices, CancellationToken cancellationToken) =>
+				devices.GetHardwareStateAsync(deviceId, cancellationToken));
+		app.MapPost(
+			"/api/v1/devices/{deviceId}/hardware/location",
+			async (string deviceId, DeviceLocationRequest request,
+				DeviceService devices, CancellationToken cancellationToken) =>
+			{
+				await devices.SetLocationAsync(deviceId, request, cancellationToken);
+				return Results.Ok(new OperationResult { Operation = "location-set" });
+			});
+		app.MapDelete(
+			"/api/v1/devices/{deviceId}/hardware/location",
+			async (string deviceId, DeviceService devices, CancellationToken cancellationToken) =>
+			{
+				await devices.ClearLocationAsync(deviceId, cancellationToken);
+				return Results.Ok(new OperationResult { Operation = "location-clear" });
+			});
+		app.MapPost(
+			"/api/v1/devices/{deviceId}/hardware/battery",
+			(string deviceId, BatteryRequest request,
+				DeviceService devices, CancellationToken cancellationToken) =>
+				devices.SetBatteryAsync(deviceId, request, cancellationToken));
+		app.MapPost(
+			"/api/v1/devices/{deviceId}/hardware/network",
+			(string deviceId, NetworkRequest request,
+				DeviceService devices, CancellationToken cancellationToken) =>
+				devices.SetNetworkAsync(deviceId, request, cancellationToken));
 	}
 
 	private static void MapMedia(WebApplication app)

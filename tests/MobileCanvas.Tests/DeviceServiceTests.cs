@@ -479,6 +479,96 @@ public sealed class DeviceServiceTests
 			new DeviceSettingsRequest()));
 	}
 
+	[Theory]
+	[InlineData(91, 0)]
+	[InlineData(-91, 0)]
+	[InlineData(0, 181)]
+	[InlineData(0, -181)]
+	[InlineData(double.NaN, 0)]
+	public async Task SetLocation_RejectsACoordinateThatIsNotOnEarth(double latitude, double longitude)
+	{
+		var service = new DeviceService([new FakeBackend()]);
+
+		// simctl takes coordinates that are not even numbers without complaint and exits zero, so a
+		// typo would otherwise look like a fix that was applied.
+		await Assert.ThrowsAsync<ArgumentException>(() => service.SetLocationAsync(
+			FakeBackend.Device.Id,
+			new DeviceLocationRequest { Latitude = latitude, Longitude = longitude }));
+	}
+
+	[Fact]
+	public async Task SetLocation_AcceptsTheEdgesOfTheRange()
+	{
+		var backend = new FakeBackend();
+		var service = new DeviceService([backend]);
+
+		await service.SetLocationAsync(
+			FakeBackend.Device.Id,
+			new DeviceLocationRequest { Latitude = -90, Longitude = 180 });
+
+		Assert.Equal(-90, backend.LastLocation?.Latitude);
+		Assert.Equal(180, backend.LastLocation?.Longitude);
+	}
+
+	[Theory]
+	[InlineData(-1)]
+	[InlineData(101)]
+	public async Task SetBattery_RejectsALevelThatIsNotAPercentage(int level)
+	{
+		var service = new DeviceService([new FakeBackend()]);
+
+		await Assert.ThrowsAsync<ArgumentOutOfRangeException>(() => service.SetBatteryAsync(
+			FakeBackend.Device.Id,
+			new BatteryRequest { Level = level }));
+	}
+
+	[Fact]
+	public async Task SetBattery_RejectsAStateNeitherPlatformHas()
+	{
+		var service = new DeviceService([new FakeBackend()]);
+
+		var error = await Assert.ThrowsAsync<ArgumentException>(() => service.SetBatteryAsync(
+			FakeBackend.Device.Id,
+			new BatteryRequest { State = "charged" }));
+
+		// 'charged' is simctl's own word, and the shared vocabulary uses Android's. The message has to
+		// name the alternatives, because the platform tool would accept one of them and not the other.
+		Assert.Contains(BatteryStates.Full, error.Message, StringComparison.Ordinal);
+	}
+
+	[Fact]
+	public async Task SetBattery_RejectsARequestThatChangesNothing()
+	{
+		var service = new DeviceService([new FakeBackend()]);
+
+		// `status_bar override` with no flags is an error simctl reports on stderr while exiting zero.
+		await Assert.ThrowsAsync<ArgumentException>(() => service.SetBatteryAsync(
+			FakeBackend.Device.Id,
+			new BatteryRequest()));
+	}
+
+	[Fact]
+	public async Task SetNetwork_RejectsANegativeLatency()
+	{
+		var service = new DeviceService([new FakeBackend()]);
+
+		await Assert.ThrowsAsync<ArgumentOutOfRangeException>(() => service.SetNetworkAsync(
+			FakeBackend.Device.Id,
+			new NetworkRequest { LatencyMs = -1 }));
+	}
+
+	[Fact]
+	public async Task SetNetwork_TreatsZeroLatencyAsARealChange()
+	{
+		var backend = new FakeBackend();
+		var service = new DeviceService([backend]);
+
+		// Zero is how a delay is removed, so it cannot be read as "nothing to do".
+		await service.SetNetworkAsync(FakeBackend.Device.Id, new NetworkRequest { LatencyMs = 0 });
+
+		Assert.Equal(0, backend.LastNetwork?.LatencyMs);
+	}
+
 	private sealed class FakeBackend : IDeviceBackend
 	{
 		public static DeviceTarget Device { get; } = new()
@@ -633,6 +723,45 @@ public sealed class DeviceServiceTests
 		{
 			LastSettingsChange = request;
 			return Task.FromResult(new DeviceSettings { DeviceId = deviceId, Appearance = request.Appearance });
+		}
+
+		public DeviceLocationRequest? LastLocation { get; private set; }
+		public BatteryRequest? LastBattery { get; private set; }
+		public NetworkRequest? LastNetwork { get; private set; }
+		public bool LocationCleared { get; private set; }
+
+		public Task<HardwareState> GetHardwareStateAsync(string deviceId, CancellationToken cancellationToken = default) =>
+			Task.FromResult(new HardwareState { DeviceId = deviceId, Platform = DevicePlatforms.Ios });
+		public Task SetLocationAsync(string deviceId, DeviceLocationRequest request, CancellationToken cancellationToken = default)
+		{
+			LastLocation = request;
+			return Task.CompletedTask;
+		}
+		public Task ClearLocationAsync(string deviceId, CancellationToken cancellationToken = default)
+		{
+			LocationCleared = true;
+			return Task.CompletedTask;
+		}
+		public Task<HardwareState> SetBatteryAsync(string deviceId, BatteryRequest request, CancellationToken cancellationToken = default)
+		{
+			LastBattery = request;
+			return Task.FromResult(new HardwareState
+			{
+				DeviceId = deviceId,
+				Platform = DevicePlatforms.Ios,
+				BatteryLevel = request.Level,
+				BatteryState = request.State,
+			});
+		}
+		public Task<HardwareState> SetNetworkAsync(string deviceId, NetworkRequest request, CancellationToken cancellationToken = default)
+		{
+			LastNetwork = request;
+			return Task.FromResult(new HardwareState
+			{
+				DeviceId = deviceId,
+				Platform = DevicePlatforms.Ios,
+				LatencyMs = request.LatencyMs,
+			});
 		}
 
 		public Task<ILiveVideoSession> OpenVideoStreamAsync(string deviceId, StreamOptions options, CancellationToken cancellationToken = default) =>
