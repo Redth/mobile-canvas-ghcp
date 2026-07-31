@@ -30,16 +30,15 @@ jobs:
       - name: Verify bundled runtimes
         run: node scripts/verify-bundle.mjs
 
-      # Catches runtimes/ drifting behind src/. It compares checksums rather
-      # than bytes because Native AOT output is not bit-reproducible.
+      # Catches runtimes/ drifting behind src/, which would leave a plugin
+      # install running a stale binary. It compares a hash of the source the
+      # bundle was built from rather than rebuilding and diffing the result:
+      # Native AOT is not bit-reproducible, so a rebuild of unchanged source
+      # differs anyway, and a check that fires every time hides real drift.
       - name: Check the bundle matches source
         run: |
           node -e '
             const m = require("./runtimes/manifest.json");
             console.log("bundled:", Object.keys(m.runtimes).join(", "));
           '
-          ./scripts/build.sh osx-arm64
-          node scripts/bundle.mjs --rid osx-arm64 --from .build/bin/osx-arm64
-          if ! git diff --quiet -- runtimes/osx-arm64; then
-            echo "::warning::runtimes/ differs from a fresh build of src/. Run scripts/release.sh and commit."
-          fi
+          node scripts/source-hash.mjs --check
