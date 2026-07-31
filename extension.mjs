@@ -406,9 +406,10 @@ const canvas = createCanvas({
   },
 });
 
-// The host reads `icon` off the wire declaration and resolves it against the extension
-// directory, but `createCanvas` builds the declaration from a fixed field list that omits it,
-// so set it here rather than letting the tab fall back to the generic extension glyph.
+// The icon is a declaration field that has to be an extension-relative PNG path, but
+// createCanvas builds its declaration from a fixed field list that drops anything else, so it
+// has to be assigned here. This names the window when a canvas is opened natively; the docked
+// tab in the desktop app draws its own glyph from the canvas type and ignores this.
 canvas.declaration.icon = "assets/icon.png";
 
 await joinSession({ canvases: [canvas] });
