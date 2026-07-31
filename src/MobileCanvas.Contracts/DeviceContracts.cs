@@ -49,6 +49,24 @@ public sealed record DisplayGeometry
 	public double PointHeight { get; init; }
 	public double Scale { get; init; }
 	public string Orientation { get; init; } = "portrait";
+
+	/// <summary>
+	/// Radius of the physical display's rounded corners, in points, or <c>null</c> when the platform
+	/// did not report one. Zero is a meaningful answer: it means the panel really is square-cornered.
+	/// </summary>
+	public double? CornerRadius { get; init; }
+
+	/// <summary>
+	/// How that radius is drawn: <see cref="DisplayCornerCurves.Continuous"/> for Apple's squircle,
+	/// <see cref="DisplayCornerCurves.Circular"/> for a plain circular arc.
+	/// </summary>
+	public string CornerCurve { get; init; } = DisplayCornerCurves.Circular;
+}
+
+public static class DisplayCornerCurves
+{
+	public const string Circular = "circular";
+	public const string Continuous = "continuous";
 }
 
 public sealed record DeviceTarget

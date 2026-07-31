@@ -836,7 +836,10 @@ public sealed partial class AndroidEmulatorBackend : IDeviceBackend, IAsyncDispo
 				var density = FindHardwareInt(entries, "hw.lcd.density");
 
 				if (width > 0 && height > 0)
-					return Build(width, height, density);
+				{
+					return await WithCornersAsync(Build(width, height, density), instance, cancellationToken)
+						.ConfigureAwait(false);
+				}
 			}
 			catch (RpcException exception)
 			{
@@ -854,7 +857,11 @@ public sealed partial class AndroidEmulatorBackend : IDeviceBackend, IAsyncDispo
 		var densityOutput = await RunAdbAsync(serial, ["shell", "wm", "density"], cancellationToken).ConfigureAwait(false);
 		var parsedDensity = densityOutput is null ? 0 : EmulatorDiscoveryParser.ParseWmDensity(densityOutput) ?? 0;
 
-		return Build(size.Width, size.Height, parsedDensity);
+		return await WithCornersAsync(
+				Build(size.Width, size.Height, parsedDensity),
+				instance,
+				cancellationToken)
+			.ConfigureAwait(false);
 
 		static DisplayGeometry Build(int width, int height, int density)
 		{
@@ -871,6 +878,33 @@ public sealed partial class AndroidEmulatorBackend : IDeviceBackend, IAsyncDispo
 				Orientation = width > height ? "landscape" : "portrait",
 			};
 		}
+	}
+
+	/// <summary>
+	/// Adds the panel's rounded-corner radius, which only the guest OS knows: the emulator hands out
+	/// a square framebuffer and the hardware config carries no corner geometry, so without this the
+	/// canvas would draw sharp corners on a device that has none. A failed lookup leaves the radius
+	/// unknown rather than failing the whole geometry read.
+	/// </summary>
+	private async Task<DisplayGeometry> WithCornersAsync(
+		DisplayGeometry geometry,
+		EmulatorInstance instance,
+		CancellationToken cancellationToken)
+	{
+		if (instance.Serial is not { } serial)
+			return geometry;
+
+		var output = await RunAdbAsync(serial, ["shell", "dumpsys", "display"], cancellationToken)
+			.ConfigureAwait(false);
+		if (output is null || EmulatorDiscoveryParser.ParseRoundedCornerRadius(output) is not { } pixels)
+			return geometry;
+
+		var scale = geometry.Scale > 0 ? geometry.Scale : 1.0;
+		return geometry with
+		{
+			CornerRadius = Math.Round(pixels / scale, 2),
+			CornerCurve = DisplayCornerCurves.Circular,
+		};
 	}
 
 	private static int FindHardwareInt(IEnumerable<Entry>? entries, string key)

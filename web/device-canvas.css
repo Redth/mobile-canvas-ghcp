@@ -225,18 +225,24 @@ summary:focus-visible,
   min-width: 0;
 }
 
+/*
+ * Segmented control: the glyph is a full-height leading segment rather than an inset card, so the
+ * whole thing can match the 28px icon buttons beside it instead of standing 8px taller.
+ */
 .device-selector {
   display: flex;
-  align-items: center;
-  gap: 8px;
+  align-items: stretch;
+  gap: 0;
   width: 100%;
+  height: 28px;
   min-width: 0;
-  padding: 5px 8px;
+  padding: 0;
   border: 1px solid var(--border-default);
   border-radius: 6px;
   background: var(--canvas-default);
   cursor: pointer;
   text-align: left;
+  overflow: hidden;
   transition: background 120ms ease, border-color 120ms ease;
 }
 
@@ -251,10 +257,9 @@ summary:focus-visible,
 .selector-glyph {
   display: grid;
   place-items: center;
-  width: 24px;
-  height: 24px;
+  width: 26px;
   flex: 0 0 auto;
-  border-radius: 5px;
+  border-right: 1px solid var(--border-default);
   background: var(--accent-muted);
   color: var(--accent-fg);
 }
@@ -265,6 +270,8 @@ summary:focus-visible,
   gap: 6px;
   min-width: 0;
   flex: 1 1 auto;
+  padding: 0 8px;
+  align-self: center;
 }
 
 .selector-name {
@@ -283,6 +290,9 @@ summary:focus-visible,
 
 .selector-chevron {
   color: var(--fg-muted);
+  flex: 0 0 auto;
+  align-self: center;
+  margin-right: 8px;
   transition: transform 120ms ease;
 }
 
@@ -594,32 +604,43 @@ summary:focus-visible,
   color: #ffffff;
 }
 
-/* -------------------------------------------------------------- toolbar --- */
+/* ------------------------------------------------- floating tool pills --- */
 
-.toolbar {
+/*
+ * Overlays the top of the stage instead of taking a toolbar row. Anchored to the stage's padding
+ * box, so these inset values must track .stage's padding to stay flush with the status pill below.
+ */
+.float-bar {
+  position: absolute;
+  z-index: 10;
+  top: var(--stage-pad-top);
+  left: var(--stage-pad-x);
+  right: var(--stage-pad-x);
   display: flex;
-  align-items: center;
+  align-items: flex-start;
+  justify-content: space-between;
   gap: 8px;
-  padding: 8px;
-  border-bottom: 1px solid var(--border-muted);
+  pointer-events: none;
 }
 
 /* Segmented group: adjacent buttons share a single divider, like the GitHub
    app's run/stop/overflow cluster. */
-.tool-group {
+.tool-pill {
   display: inline-flex;
   align-items: center;
   border: 1px solid var(--border-default);
-  border-radius: 6px;
+  border-radius: 999px;
   background: var(--control-default);
+  box-shadow: var(--shadow-popover);
   overflow: hidden;
+  pointer-events: auto;
 }
 
 .tool-button {
   display: inline-grid;
   place-items: center;
-  width: 30px;
-  height: 26px;
+  width: 32px;
+  height: 28px;
   padding: 0;
   border: 0;
   border-left: 1px solid var(--border-default);
@@ -652,8 +673,45 @@ summary:focus-visible,
   color: var(--danger-fg);
 }
 
-.toolbar-spacer {
-  flex: 1 1 auto;
+/* --------------------------------------------------------- nav buttons --- */
+
+/* Hardware keys, under the screen where they live on the device itself. */
+.nav-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  padding: 3px;
+  border: 1px solid var(--border-default);
+  border-radius: 999px;
+  background: var(--control-default);
+}
+
+.nav-button {
+  display: inline-grid;
+  place-items: center;
+  width: 34px;
+  height: 26px;
+  padding: 0;
+  border: 0;
+  border-radius: 999px;
+  background: none;
+  color: var(--fg-muted);
+  cursor: pointer;
+  transition: background 120ms ease, color 120ms ease;
+}
+
+.nav-button:hover:not(:disabled) {
+  background: var(--control-hover);
+  color: var(--fg-default);
+}
+
+.nav-button:active:not(:disabled) {
+  background: var(--control-active);
+}
+
+.nav-button:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
 }
 
 /* ------------------------------------------------------------ workspace --- */
@@ -667,38 +725,49 @@ summary:focus-visible,
 
 .device-view {
   display: grid;
-  grid-template-rows: auto minmax(0, 1fr) auto;
+  grid-template-rows: minmax(0, 1fr) auto;
   min-height: 0;
   height: 100%;
 }
 
 .stage {
+  --stage-pad-x: 14px;
+  --stage-pad-top: 14px;
+  position: relative;
   display: grid;
-  grid-template-rows: minmax(0, 1fr) auto;
+  grid-template-rows: minmax(0, 1fr);
+  grid-auto-rows: auto;
   gap: 10px;
   justify-items: center;
   align-content: center;
   min-height: 0;
-  padding: 14px 14px 10px;
+  padding: var(--stage-pad-top) var(--stage-pad-x) 10px;
 }
 
 /* Dedicated 1fr row so the fit calculation has a container whose height is the
-   space actually available to the device, excluding the status pill. */
+   space actually available to the device, excluding the status pill. The top padding is
+   written by fitDeviceScreen() and only exceeds 0 when the frame would run into a tool pill. */
 .stage-viewport {
   display: grid;
   place-items: center;
   width: 100%;
   min-height: 0;
+  padding-top: var(--stage-top-reserve, 0px);
 }
 
+/*
+ * Every rounded layer keys off one radius the backend measured from the real panel, so a squared-off
+ * iPhone SE and a 62pt iPhone 16 Pro Max both crop correctly instead of sharing a guessed 16px.
+ */
 .device-frame {
+  --screen-radius: 16px;
   position: relative;
   display: grid;
   max-width: 100%;
   max-height: 100%;
   padding: 6px;
   border: 1px solid var(--border-default);
-  border-radius: 22px;
+  border-radius: calc(var(--screen-radius) + 6px);
   background: var(--canvas-inset);
   box-shadow: var(--shadow-device);
   transition: border-color 120ms ease;
@@ -712,7 +781,7 @@ summary:focus-visible,
   display: block;
   max-width: 100%;
   max-height: 100%;
-  border-radius: 16px;
+  border-radius: var(--screen-radius);
   background: #000000;
   cursor: crosshair;
   touch-action: none;
@@ -724,10 +793,20 @@ summary:focus-visible,
   display: grid;
   place-items: center;
   padding: 12px;
-  border-radius: 16px;
+  border-radius: var(--screen-radius);
   background: var(--scrim);
   color: var(--fg-muted);
   text-align: center;
+}
+
+/* Apple masks its displays with a squircle, not an arc. Progressive enhancement: engines without
+   corner-shape keep the plain rounded corner above. */
+@supports (corner-shape: squircle) {
+  .device-frame[data-corner-curve="continuous"],
+  .device-frame[data-corner-curve="continuous"] #device-screen,
+  .device-frame[data-corner-curve="continuous"] .stream-overlay {
+    corner-shape: squircle;
+  }
 }
 
 .input-indicator {
@@ -781,7 +860,7 @@ summary:focus-visible,
   content: "";
   position: absolute;
   inset: 6px;
-  border-radius: 16px;
+  border-radius: var(--screen-radius);
   box-shadow:
     inset 0 0 0 1px color-mix(in srgb, var(--automation-accent) 55%, transparent),
     inset 0 0 26px 4px color-mix(in srgb, var(--automation-accent) 34%, transparent);
@@ -1254,7 +1333,9 @@ dialog form {
   }
 
   .stage {
-    padding: 10px 8px 8px;
+    --stage-pad-x: 8px;
+    --stage-pad-top: 10px;
+    padding-bottom: 8px;
   }
 }
 

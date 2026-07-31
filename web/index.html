@@ -39,6 +39,16 @@
     <symbol id="icon-home" viewBox="0 0 16 16">
       <path d="m2.25 7.25 5.75-5 5.75 5v6.25h-4v-4h-3.5v4h-4z"></path>
     </symbol>
+    <symbol id="icon-back" viewBox="0 0 16 16">
+      <path d="M13 8H3.5M7 3.5 2.5 8 7 12.5"></path>
+    </symbol>
+    <symbol id="icon-apps" viewBox="0 0 16 16">
+      <rect x="3" y="3" width="10" height="10" rx="2"></rect>
+    </symbol>
+    <symbol id="icon-lock" viewBox="0 0 16 16">
+      <rect x="3.25" y="7" width="9.5" height="7" rx="1.75"></rect>
+      <path d="M5.5 7V5a2.5 2.5 0 0 1 5 0v2"></path>
+    </symbol>
     <symbol id="icon-play" viewBox="0 0 16 16">
       <path d="M4.25 2.5 13 8l-8.75 5.5z"></path>
     </symbol>
@@ -126,44 +136,41 @@
       </section>
 
       <section id="device-view" class="device-view hidden">
-        <div class="toolbar" role="toolbar" aria-label="Device controls">
-          <div class="tool-group">
-            <button class="tool-button" data-action="boot" type="button" aria-label="Boot device" title="Boot device">
-              <svg class="icon" aria-hidden="true"><use href="#icon-play"></use></svg>
-            </button>
-            <button class="tool-button" data-action="home" type="button" aria-label="Press Home" title="Press Home">
-              <svg class="icon" aria-hidden="true"><use href="#icon-home"></use></svg>
-            </button>
-            <button class="tool-button" data-action="screenshot" type="button" aria-label="Save screenshot" title="Save screenshot">
-              <svg class="icon" aria-hidden="true"><use href="#icon-camera"></use></svg>
-            </button>
-            <button id="record-button" class="tool-button" data-action="record" type="button" aria-label="Start recording" title="Start recording">
-              <svg class="icon" aria-hidden="true"><use href="#icon-record"></use></svg>
-            </button>
-          </div>
-
-          <div class="tool-group">
-            <button class="tool-button" data-action="restart" type="button" aria-label="Restart device" title="Restart device">
-              <svg class="icon" aria-hidden="true"><use href="#icon-restart"></use></svg>
-            </button>
-            <button class="tool-button" data-action="shutdown" type="button" aria-label="Power off device" title="Power off device">
-              <svg class="icon" aria-hidden="true"><use href="#icon-power"></use></svg>
-            </button>
-            <button class="tool-button" data-action="reveal" type="button" aria-label="Reveal in Simulator.app" title="Reveal in Simulator.app">
-              <svg class="icon" aria-hidden="true"><use href="#icon-external"></use></svg>
-            </button>
-          </div>
-
-          <div class="toolbar-spacer"></div>
-
-          <div class="tool-group">
-            <button class="tool-button" data-action="detach" type="button" aria-label="Detach canvas" title="Detach canvas">
-              <svg class="icon" aria-hidden="true"><use href="#icon-detach"></use></svg>
-            </button>
-          </div>
-        </div>
-
         <div class="stage">
+          <!--
+            The two control clusters float over the stage rather than occupying a toolbar row, so a
+            wide canvas can give the vertical space back to the device. fitDeviceScreen() measures
+            them and only pushes the frame down when it would actually collide.
+          -->
+          <div class="float-bar" role="toolbar" aria-label="Device controls">
+            <div class="tool-pill">
+              <button class="tool-button" data-action="boot" type="button" aria-label="Boot device" title="Boot device">
+                <svg class="icon" aria-hidden="true"><use href="#icon-play"></use></svg>
+              </button>
+              <button class="tool-button" data-action="screenshot" type="button" aria-label="Save screenshot" title="Save screenshot">
+                <svg class="icon" aria-hidden="true"><use href="#icon-camera"></use></svg>
+              </button>
+              <button id="record-button" class="tool-button" data-action="record" type="button" aria-label="Start recording" title="Start recording">
+                <svg class="icon" aria-hidden="true"><use href="#icon-record"></use></svg>
+              </button>
+            </div>
+
+            <div class="tool-pill">
+              <button class="tool-button" data-action="restart" type="button" aria-label="Restart device" title="Restart device">
+                <svg class="icon" aria-hidden="true"><use href="#icon-restart"></use></svg>
+              </button>
+              <button class="tool-button" data-action="shutdown" type="button" aria-label="Power off device" title="Power off device">
+                <svg class="icon" aria-hidden="true"><use href="#icon-power"></use></svg>
+              </button>
+              <button class="tool-button" data-action="reveal" type="button" aria-label="Reveal in Simulator.app" title="Reveal in Simulator.app">
+                <svg class="icon" aria-hidden="true"><use href="#icon-external"></use></svg>
+              </button>
+              <button class="tool-button" data-action="detach" type="button" aria-label="Detach canvas" title="Detach canvas">
+                <svg class="icon" aria-hidden="true"><use href="#icon-detach"></use></svg>
+              </button>
+            </div>
+          </div>
+
           <div class="stage-viewport">
             <div id="device-frame" class="device-frame">
               <canvas id="device-screen" tabindex="0" aria-label="Interactive device screen"></canvas>
@@ -182,10 +189,25 @@
                   -->
                   <path d="M5.4 2 18.4 13.35c.78.68.33 1.96-.68 2.07l-5.22.63a1.2 1.2 0 0 0-.88.63l-2.4 4.6c-.45.86-1.75.58-1.82-.4L5.4 2z" />
                 </svg>
-                </svg>
               </div>
             </div>
             <p id="automation-live" class="visually-hidden" role="status" aria-live="polite"></p>
+          </div>
+
+          <!-- Hardware navigation sits under the screen, where it does on the device itself. -->
+          <div id="nav-pill" class="nav-pill" role="toolbar" aria-label="Device navigation">
+            <button class="nav-button" data-action="back" data-platform="android" type="button" aria-label="Press Back" title="Back">
+              <svg class="icon" aria-hidden="true"><use href="#icon-back"></use></svg>
+            </button>
+            <button class="nav-button" data-action="home" type="button" aria-label="Press Home" title="Home">
+              <svg class="icon" aria-hidden="true"><use href="#icon-home"></use></svg>
+            </button>
+            <button class="nav-button" data-action="apps" data-platform="android" type="button" aria-label="Press Recents" title="Recent apps">
+              <svg class="icon" aria-hidden="true"><use href="#icon-apps"></use></svg>
+            </button>
+            <button class="nav-button" data-action="lock" type="button" aria-label="Press Lock" title="Lock">
+              <svg class="icon" aria-hidden="true"><use href="#icon-lock"></use></svg>
+            </button>
           </div>
 
           <div class="status-pill" aria-live="polite">

@@ -13,6 +13,10 @@ const elements = {
   detached: document.querySelector("#detached-state"),
   canvas: document.querySelector("#device-screen"),
   frame: document.querySelector("#device-frame"),
+  stage: document.querySelector(".stage"),
+  stageViewport: document.querySelector(".stage-viewport"),
+  floatBar: document.querySelector(".float-bar"),
+  navPill: document.querySelector("#nav-pill"),
   overlay: document.querySelector("#stream-overlay"),
   fps: document.querySelector("#fps-select"),
   scale: document.querySelector("#scale-select"),
@@ -349,6 +353,9 @@ function showEmptySelection() {
 const ACTION_CAPABILITY = {
   boot: "boot",
   home: "button",
+  back: "button",
+  apps: "button",
+  lock: "button",
   screenshot: "screenshot",
   record: "recording",
   restart: "restart",
@@ -377,12 +384,23 @@ function updateControlAvailability() {
   for (const button of document.querySelectorAll("[data-action]")) {
     const action = button.dataset.action;
     const capability = ACTION_CAPABILITY[action];
-    button.hidden = Boolean(state.selected && capability && capabilities[capability] === false);
+    // Back and Recents are Android hardware keys with no iOS equivalent, so they are gated on the
+    // platform as well as on the backend's capability flags.
+    const wrongPlatform = Boolean(
+      state.selected && button.dataset.platform && button.dataset.platform !== state.selected.platform);
+    button.hidden = wrongPlatform ||
+      Boolean(state.selected && capability && capabilities[capability] === false);
 
-    const needsBooted = ["home", "screenshot", "record", "restart", "shutdown"].includes(action);
+    const needsBooted =
+      ["home", "back", "apps", "lock", "screenshot", "record", "restart", "shutdown"].includes(action);
     button.disabled = !state.selected ||
       (action === "boot" ? booted : needsBooted && !booted);
   }
+
+  // A pill of entirely hidden buttons would still draw its border and eat a grid row.
+  elements.navPill.classList.toggle(
+    "hidden",
+    !Array.from(elements.navPill.querySelectorAll("[data-action]")).some((button) => !button.hidden));
 
   const erase = document.querySelector("#erase-button");
   const remove = document.querySelector("#delete-button");
@@ -459,9 +477,13 @@ function reconcileAutoScale() {
  * A canvas has no intrinsic layout scaling, and percentage max-height cannot resolve against the
  * auto-height frame, so the fit is computed here instead of in CSS. Pointer mapping reads the
  * resulting bounding rect, so it stays correct at every size.
+ *
+ * The tool pills float over the top of the stage, so the frame is fitted twice: once against the
+ * full height, and again with the pills reserved only if the first result would actually run into
+ * them. On a wide canvas the pills sit clear of the frame's sides and the top space is given back.
  */
 function fitDeviceScreen() {
-  const stage = elements.canvas.closest(".stage-viewport");
+  const stage = elements.stageViewport;
   if (!stage) return;
 
   const aspect = state.display?.pointWidth && state.display?.pointHeight
@@ -475,20 +497,73 @@ function fitDeviceScreen() {
   const chromeY = parseFloat(frameStyle.paddingTop) + parseFloat(frameStyle.paddingBottom) +
     parseFloat(frameStyle.borderTopWidth) + parseFloat(frameStyle.borderBottomWidth);
 
-  const availableWidth = stage.clientWidth - chromeX;
-  const availableHeight = stage.clientHeight - chromeY;
-  if (availableWidth <= 0 || availableHeight <= 0) return;
+  // clientHeight excludes neither padding nor the reserve we may have written on a previous pass,
+  // so measure the unreserved height once and drive both passes from it.
+  const fullHeight = stage.clientHeight;
+  const unreserved = measureFit(aspect, stage.clientWidth - chromeX, fullHeight - chromeY);
+  if (!unreserved) return;
 
+  const reserve = pillReserve(unreserved.width + chromeX, unreserved.height + chromeY, stage);
+  const fitted = reserve <= 0
+    ? unreserved
+    : measureFit(aspect, stage.clientWidth - chromeX, fullHeight - reserve - chromeY) || unreserved;
+
+  stage.style.setProperty("--stage-top-reserve", `${reserve}px`);
+  elements.canvas.style.width = `${Math.floor(fitted.width)}px`;
+  elements.canvas.style.height = `${Math.floor(fitted.height)}px`;
+  applyScreenRadius(fitted.width);
+  reconcileAutoScale();
+}
+
+/** Largest width/height with the given aspect that fits the box, capped so phones stay life-sized. */
+function measureFit(aspect, availableWidth, availableHeight) {
+  if (availableWidth <= 0 || availableHeight <= 0) return null;
   let width = Math.min(availableWidth, MAX_SCREEN_WIDTH);
   let height = width / aspect;
   if (height > availableHeight) {
     height = availableHeight;
     width = height * aspect;
   }
+  return { width, height };
+}
 
-  elements.canvas.style.width = `${Math.floor(width)}px`;
-  elements.canvas.style.height = `${Math.floor(height)}px`;
-  reconcileAutoScale();
+/** Vertical space the floating pills need, or 0 when a centred frame of this size clears them. */
+function pillReserve(frameWidth, frameHeight, stage) {
+  const pills = Array.from(elements.floatBar?.querySelectorAll(".tool-pill") || []);
+  if (pills.length === 0) return 0;
+
+  const gap = 8;
+  const stageRect = stage.getBoundingClientRect();
+  const pillBottom = Math.max(...pills.map((pill) => pill.getBoundingClientRect().bottom));
+
+  // Where the frame would land if it were centred in the unreserved viewport.
+  const frameLeft = stageRect.left + (stageRect.width - frameWidth) / 2;
+  const frameRight = frameLeft + frameWidth;
+  const frameTop = stageRect.top + (stageRect.height - frameHeight) / 2;
+  if (frameTop >= pillBottom + gap) return 0;
+
+  const clearsSides = pills.every((pill) => {
+    const rect = pill.getBoundingClientRect();
+    return rect.right + gap <= frameLeft || rect.left - gap >= frameRight;
+  });
+  if (clearsSides) return 0;
+
+  return Math.max(0, Math.ceil(pillBottom + gap - stageRect.top));
+}
+
+/**
+ * Turn the panel's measured corner radius into CSS pixels for the size the screen is drawn at, so
+ * the crop tracks the real hardware instead of a fixed guess. Unknown radii keep the old default.
+ */
+function applyScreenRadius(renderedWidth) {
+  const points = state.display?.cornerRadius;
+  const pointWidth = state.display?.pointWidth;
+  const known = Number.isFinite(points) && points >= 0 && Number.isFinite(pointWidth) && pointWidth > 0;
+
+  elements.frame.style.setProperty(
+    "--screen-radius",
+    known ? `${(points * (renderedWidth / pointWidth)).toFixed(2)}px` : "16px");
+  elements.frame.dataset.cornerCurve = state.display?.cornerCurve || "circular";
 }
 
 function startStream() {
@@ -1329,8 +1404,10 @@ try {
 applyTheme(storedTheme);
 
 if ("ResizeObserver" in window) {
-  const stage = elements.canvas.closest(".stage-viewport");
-  if (stage) new ResizeObserver(() => fitDeviceScreen()).observe(stage);
+  // Observe the border box: fitDeviceScreen() writes padding-top on this element, and a content-box
+  // observation would see that write as a resize and re-enter.
+  const stage = elements.stageViewport;
+  if (stage) new ResizeObserver(() => fitDeviceScreen()).observe(stage, { box: "border-box" });
 } else {
   window.addEventListener("resize", fitDeviceScreen);
 }
@@ -1343,6 +1420,15 @@ for (const button of document.querySelectorAll("[data-action]")) {
         break;
       case "home":
         await sendInput("button", { button: "home" }, "Home");
+        break;
+      case "back":
+        await sendInput("button", { button: "back" }, "Back");
+        break;
+      case "apps":
+        await sendInput("button", { button: "apps" }, "Recents");
+        break;
+      case "lock":
+        await sendInput("button", { button: "lock" }, "Lock");
         break;
       case "screenshot":
         await downloadScreenshot();

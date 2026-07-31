@@ -193,4 +193,56 @@ internal static class EmulatorDiscoveryParser
 
 		return over ?? physical;
 	}
+
+	/// <summary>
+	/// Parses the rounded-corner radius, in physical pixels, out of <c>adb shell dumpsys display</c>.
+	/// </summary>
+	/// <remarks>
+	/// The section reads
+	/// <c>roundedCorners RoundedCorners{[RoundedCorner{position=TopLeft, radius=28, center=Point(28, 28)}, ...]}</c>
+	/// and is the only place the platform states what the panel actually looks like -- the emulator's
+	/// framebuffer is a plain rectangle, and the hardware config carries no corner geometry. The
+	/// built-in display is dumped first, so the first block is the one that describes the screen the
+	/// canvas is showing. Radii are equal on every device seen so far; the largest is taken so an
+	/// asymmetric panel is never cropped too tightly.
+	/// </remarks>
+	public static int? ParseRoundedCornerRadius(string output)
+	{
+		var start = output.IndexOf("RoundedCorners{", StringComparison.Ordinal);
+		if (start < 0)
+			return null;
+
+		var end = output.IndexOf("}]}", start, StringComparison.Ordinal);
+		// A truncated dump would otherwise let the scan run on into unrelated `radius=` values.
+		var block = end >= 0
+			? output[start..(end + 3)]
+			: output[start..Math.Min(output.Length, start + 512)];
+
+		int? largest = null;
+		var cursor = 0;
+		while (true)
+		{
+			var marker = block.IndexOf("radius=", cursor, StringComparison.Ordinal);
+			if (marker < 0)
+				break;
+
+			cursor = marker + "radius=".Length;
+			var digits = cursor;
+			while (digits < block.Length && char.IsAsciiDigit(block[digits]))
+				digits++;
+
+			if (digits > cursor && int.TryParse(
+					block.AsSpan(cursor, digits - cursor),
+					NumberStyles.Integer,
+					CultureInfo.InvariantCulture,
+					out var radius))
+			{
+				largest = largest is { } current ? Math.Max(current, radius) : radius;
+			}
+
+			cursor = digits;
+		}
+
+		return largest;
+	}
 }
