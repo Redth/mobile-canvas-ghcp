@@ -751,9 +751,28 @@ public sealed class DeviceServiceTests
 				Action = request.Action,
 			});
 		}
+		public Task<AppOperationListResult> ListAppOperationsAsync(string deviceId, string bundleId, CancellationToken cancellationToken = default) =>
+			Task.FromResult(new AppOperationListResult { DeviceId = deviceId, BundleId = bundleId });
+		public Task<AppOperationChangeResult> ChangeAppOperationAsync(string deviceId, AppOperationChangeRequest request, CancellationToken cancellationToken = default)
+		{
+			LastAppOperation = request;
+			return Task.FromResult(new AppOperationChangeResult
+			{
+				DeviceId = deviceId,
+				BundleId = request.BundleId,
+				Operation = request.Operation,
+				Mode = request.Mode,
+			});
+		}
+		public Task<PresentationState> GetPresentationAsync(string deviceId, CancellationToken cancellationToken = default) =>
+			Task.FromResult(new PresentationState { DeviceId = deviceId });
+		public Task<PresentationState> SetPresentationAsync(string deviceId, PresentationRequest request, CancellationToken cancellationToken = default)
+		{
+			LastPresentation = request;
+			return Task.FromResult(new PresentationState { DeviceId = deviceId, Enabled = request.Enabled ?? true });
+		}
 		public Task<DeviceSettings> GetSettingsAsync(string deviceId, CancellationToken cancellationToken = default) =>
-			Task.FromResult(new DeviceSettings { DeviceId = deviceId, Appearance = DeviceAppearances.Light });
-		public Task<DeviceSettings> UpdateSettingsAsync(string deviceId, DeviceSettingsRequest request, CancellationToken cancellationToken = default)
+			Task.FromResult(new DeviceSettings { DeviceId = deviceId, Appearance = DeviceAppearances.Light });		public Task<DeviceSettings> UpdateSettingsAsync(string deviceId, DeviceSettingsRequest request, CancellationToken cancellationToken = default)
 		{
 			LastSettingsChange = request;
 			return Task.FromResult(new DeviceSettings { DeviceId = deviceId, Appearance = request.Appearance });
@@ -907,6 +926,10 @@ public sealed class DeviceServiceTests
 		}
 
 		public FileMutationRequest? LastMutation { get; private set; }
+
+		public AppOperationChangeRequest? LastAppOperation { get; private set; }
+
+		public PresentationRequest? LastPresentation { get; private set; }
 
 		public Task<FileMutationResult> DeleteFileAsync(string deviceId, FileMutationRequest request, CancellationToken cancellationToken = default)
 		{

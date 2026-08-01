@@ -554,6 +554,59 @@ public sealed class DeviceHostClient
 			.ConfigureAwait(false);
 	}
 
+	public async Task<AppOperationListResult> ListAppOperationsAsync(
+		string deviceId,
+		string bundleId,
+		CancellationToken cancellationToken = default)
+	{
+		var response = await SendAsync(
+			HttpMethod.Get,
+			$"/api/v1/devices/{Escape(deviceId)}/app-ops?bundleId={Uri.EscapeDataString(bundleId)}",
+			cancellationToken).ConfigureAwait(false);
+		return await ReadAsync(response, DeviceJsonContext.Default.AppOperationListResult, cancellationToken)
+			.ConfigureAwait(false);
+	}
+
+	public async Task<AppOperationChangeResult> ChangeAppOperationAsync(
+		string deviceId,
+		AppOperationChangeRequest request,
+		CancellationToken cancellationToken = default)
+	{
+		var response = await SendAsync(
+			HttpMethod.Post,
+			$"/api/v1/devices/{Escape(deviceId)}/app-ops",
+			JsonContent.Create(request, DeviceJsonContext.Default.AppOperationChangeRequest),
+			cancellationToken).ConfigureAwait(false);
+		return await ReadAsync(response, DeviceJsonContext.Default.AppOperationChangeResult, cancellationToken)
+			.ConfigureAwait(false);
+	}
+
+	public async Task<PresentationState> GetPresentationAsync(
+		string deviceId,
+		CancellationToken cancellationToken = default)
+	{
+		var response = await SendAsync(
+			HttpMethod.Get,
+			$"/api/v1/devices/{Escape(deviceId)}/presentation",
+			cancellationToken).ConfigureAwait(false);
+		return await ReadAsync(response, DeviceJsonContext.Default.PresentationState, cancellationToken)
+			.ConfigureAwait(false);
+	}
+
+	public async Task<PresentationState> SetPresentationAsync(
+		string deviceId,
+		PresentationRequest request,
+		CancellationToken cancellationToken = default)
+	{
+		var response = await SendAsync(
+			HttpMethod.Post,
+			$"/api/v1/devices/{Escape(deviceId)}/presentation",
+			JsonContent.Create(request, DeviceJsonContext.Default.PresentationRequest),
+			cancellationToken).ConfigureAwait(false);
+		return await ReadAsync(response, DeviceJsonContext.Default.PresentationState, cancellationToken)
+			.ConfigureAwait(false);
+	}
+
 	public async Task<DeviceSettings> GetSettingsAsync(
 		string deviceId,
 		CancellationToken cancellationToken = default)

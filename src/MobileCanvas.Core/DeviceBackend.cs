@@ -81,6 +81,21 @@ public interface IDeviceBackend
 	/// </summary>
 	Task<PermissionChangeResult> ChangePermissionAsync(string deviceId, PermissionChangeRequest request, CancellationToken cancellationToken = default);
 
+	/// <summary>Reports the app operations one app is subject to.</summary>
+	Task<AppOperationListResult> ListAppOperationsAsync(string deviceId, string bundleId, CancellationToken cancellationToken = default);
+
+	/// <summary>
+	/// Puts one app operation into a mode, then reads it back -- these tools accept a change they
+	/// then decline to make.
+	/// </summary>
+	Task<AppOperationChangeResult> ChangeAppOperationAsync(string deviceId, AppOperationChangeRequest request, CancellationToken cancellationToken = default);
+
+	/// <summary>Reports whether the status bar is being overridden for presentation, and with what.</summary>
+	Task<PresentationState> GetPresentationAsync(string deviceId, CancellationToken cancellationToken = default);
+
+	/// <summary>Fixes what the status bar shows, then confirms the device took it.</summary>
+	Task<PresentationState> SetPresentationAsync(string deviceId, PresentationRequest request, CancellationToken cancellationToken = default);
+
 	/// <summary>Reads the device's display and accessibility settings.</summary>
 	Task<DeviceSettings> GetSettingsAsync(string deviceId, CancellationToken cancellationToken = default);
 

@@ -1,4 +1,5 @@
 using System.Collections.Concurrent;
+using System.Globalization;
 using MobileCanvas.Contracts;
 
 namespace MobileCanvas.Core;
@@ -517,6 +518,79 @@ public sealed class DeviceService(IEnumerable<IDeviceBackend> backends)
 				Action = action,
 			},
 			cancellationToken);
+	}
+
+	/// <summary>
+	/// Reports the app operations one app is subject to.
+	/// </summary>
+	public Task<AppOperationListResult> ListAppOperationsAsync(
+		string deviceId,
+		string bundleId,
+		CancellationToken cancellationToken = default) =>
+		GetBackend(deviceId).ListAppOperationsAsync(deviceId, RequireBundleId(bundleId), cancellationToken);
+
+	/// <summary>
+	/// Puts one app operation into a mode.
+	/// </summary>
+	public Task<AppOperationChangeResult> ChangeAppOperationAsync(
+		string deviceId,
+		AppOperationChangeRequest request,
+		CancellationToken cancellationToken = default)
+	{
+		if (string.IsNullOrWhiteSpace(request.Operation))
+			throw new ArgumentException("An operation is required, such as SYSTEM_ALERT_WINDOW.", nameof(request));
+
+		var mode = request.Mode.Trim().ToLowerInvariant();
+		if (!AppOperationModes.All.Contains(mode))
+			throw new ArgumentException(
+				$"'{request.Mode}' is not a mode. Use one of: {string.Join(", ", AppOperationModes.All)}.",
+				nameof(request));
+
+		return GetBackend(deviceId).ChangeAppOperationAsync(
+			deviceId,
+			request with
+			{
+				BundleId = RequireBundleId(request.BundleId),
+				// Uppercased because that is how every platform tool prints these back, so a lowercase
+				// request would otherwise fail to match its own read-back.
+				Operation = request.Operation.Trim().ToUpperInvariant(),
+				Mode = mode,
+			},
+			cancellationToken);
+	}
+
+	/// <summary>
+	/// Reports whether the status bar is fixed for presentation, and with what.
+	/// </summary>
+	public Task<PresentationState> GetPresentationAsync(
+		string deviceId,
+		CancellationToken cancellationToken = default) =>
+		GetBackend(deviceId).GetPresentationAsync(deviceId, cancellationToken);
+
+	/// <summary>
+	/// Fixes what the status bar shows so a screenshot is reproducible.
+	/// </summary>
+	public Task<PresentationState> SetPresentationAsync(
+		string deviceId,
+		PresentationRequest request,
+		CancellationToken cancellationToken = default)
+	{
+		if (request.Time is { } time && !PresentationClock.TryParse(time, out _, out _))
+			throw new ArgumentException(
+				$"'{time}' is not a time. Use 24-hour HH:mm, such as 09:41.",
+				nameof(request));
+
+		RequireRange(request.BatteryLevel, 0, 100, "A battery level", nameof(request));
+		RequireRange(request.WifiBars, 0, 4, "Wi-Fi bars", nameof(request));
+		RequireRange(request.CellularBars, 0, 4, "Cellular bars", nameof(request));
+
+		return GetBackend(deviceId).SetPresentationAsync(deviceId, request, cancellationToken);
+	}
+
+	private static void RequireRange(int? value, int low, int high, string label, string parameter)
+	{
+		if (value is { } number && (number < low || number > high))
+			throw new ArgumentException($"{label} runs from {low} to {high}, so {number} is out of range.", parameter);
 	}
 
 	/// <summary>

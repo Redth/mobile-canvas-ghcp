@@ -653,6 +653,24 @@ internal static class DeviceApi
 			(string deviceId, DeviceSettingsRequest request,
 				DeviceService devices, CancellationToken cancellationToken) =>
 				devices.UpdateSettingsAsync(deviceId, request, cancellationToken));
+		app.MapGet(
+			"/api/v1/devices/{deviceId}/app-ops",
+			(string deviceId, string bundleId, DeviceService devices, CancellationToken cancellationToken) =>
+				devices.ListAppOperationsAsync(deviceId, bundleId, cancellationToken));
+		app.MapPost(
+			"/api/v1/devices/{deviceId}/app-ops",
+			(string deviceId, AppOperationChangeRequest request,
+				DeviceService devices, CancellationToken cancellationToken) =>
+				devices.ChangeAppOperationAsync(deviceId, request, cancellationToken));
+		app.MapGet(
+			"/api/v1/devices/{deviceId}/presentation",
+			(string deviceId, DeviceService devices, CancellationToken cancellationToken) =>
+				devices.GetPresentationAsync(deviceId, cancellationToken));
+		app.MapPost(
+			"/api/v1/devices/{deviceId}/presentation",
+			(string deviceId, PresentationRequest request,
+				DeviceService devices, CancellationToken cancellationToken) =>
+				devices.SetPresentationAsync(deviceId, request, cancellationToken));
 	}
 
 	private static void MapHardware(WebApplication app)

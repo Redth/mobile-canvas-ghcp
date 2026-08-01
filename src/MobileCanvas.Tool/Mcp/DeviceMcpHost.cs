@@ -53,6 +53,7 @@ internal static class DeviceMcpHost
 			.WithTools<DeviceDiagnosticsTools>(ToolSerializerOptions)
 			.WithTools<DeviceFileTools>(ToolSerializerOptions)
 			.WithTools<DeviceSettingsTools>(ToolSerializerOptions)
+			.WithTools<DevicePresentationTools>(ToolSerializerOptions)
 			.WithTools<DeviceHardwareTools>(ToolSerializerOptions)
 			.WithTools<DeviceInterruptTools>(ToolSerializerOptions)
 			.WithTools<DeviceMediaTools>(ToolSerializerOptions);
