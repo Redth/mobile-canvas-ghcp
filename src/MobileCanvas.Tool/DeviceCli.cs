@@ -185,6 +185,23 @@ internal static class DeviceCli
 					HostPath = options.Required("input"),
 				},
 				cancellationToken).ConfigureAwait(false),
+			("file", "delete") => await Client.DeleteFileAsync(
+				options.RequiredPosition(0, "device ID"),
+				new FileMutationRequest
+				{
+					BundleId = options.Value("bundle"),
+					Path = options.Required("path"),
+					Recursive = options.Flag("recursive"),
+				},
+				cancellationToken).ConfigureAwait(false),
+			("file", "mkdir") => await Client.CreateDirectoryAsync(
+				options.RequiredPosition(0, "device ID"),
+				new FileMutationRequest
+				{
+					BundleId = options.Value("bundle"),
+					Path = options.Required("path"),
+				},
+				cancellationToken).ConfigureAwait(false),
 			("permission", "list") => await Client.ListPermissionsAsync(
 				options.RequiredPosition(0, "device ID"),
 				options.Required("bundle"),
@@ -198,10 +215,51 @@ internal static class DeviceCli
 					Action = action,
 				},
 				cancellationToken).ConfigureAwait(false),
-			("settings", "get") => await Client.GetSettingsAsync(
+			("app-op", "list") => await Client.ListAppOperationsAsync(
+				options.RequiredPosition(0, "device ID"),
+				options.Required("bundle"),
+				cancellationToken).ConfigureAwait(false),
+			("app-op", "set") => await Client.ChangeAppOperationAsync(
+				options.RequiredPosition(0, "device ID"),
+				new AppOperationChangeRequest
+				{
+					BundleId = options.Required("bundle"),
+					Operation = options.RequiredPosition(1, "operation"),
+					Mode = options.Value("mode") ?? AppOperationModes.Allow,
+				},
+				cancellationToken).ConfigureAwait(false),
+			("presentation", "get") => await Client.GetPresentationAsync(
 				options.RequiredPosition(0, "device ID"),
 				cancellationToken).ConfigureAwait(false),
-			("settings", "set") => await Client.UpdateSettingsAsync(
+			("presentation", "set" or "clear") => await Client.SetPresentationAsync(
+				options.RequiredPosition(0, "device ID"),
+				new PresentationRequest
+				{
+					Enabled = action == "clear" ? false : options.Value("enabled") is { } enabled
+						? bool.Parse(enabled)
+						: true,
+					Time = options.Value("time"),
+					BatteryLevel = options.Value("battery-level") is { } batteryLevel
+						? int.Parse(batteryLevel, CultureInfo.InvariantCulture)
+						: null,
+					BatteryCharging = options.Value("battery-charging") is { } charging
+						? bool.Parse(charging)
+						: null,
+					WifiBars = options.Value("wifi-bars") is { } wifiBars
+						? int.Parse(wifiBars, CultureInfo.InvariantCulture)
+						: null,
+					CellularBars = options.Value("cellular-bars") is { } cellularBars
+						? int.Parse(cellularBars, CultureInfo.InvariantCulture)
+						: null,
+					CarrierName = options.Value("carrier"),
+					HideNotifications = options.Value("hide-notifications") is { } hide
+						? bool.Parse(hide)
+						: null,
+				},
+				cancellationToken).ConfigureAwait(false),
+			("settings", "get") => await Client.GetSettingsAsync(
+				options.RequiredPosition(0, "device ID"),
+				cancellationToken).ConfigureAwait(false),			("settings", "set") => await Client.UpdateSettingsAsync(
 				options.RequiredPosition(0, "device ID"),
 				new DeviceSettingsRequest
 				{
@@ -626,8 +684,19 @@ internal static class DeviceCli
 		  mobile-canvas file list <id> [--bundle <bundle-id>] [--path <p>] [--json]
 		  mobile-canvas file pull <id> [--bundle <bundle-id>] --path <p> --output <host-path>
 		  mobile-canvas file push <id> [--bundle <bundle-id>] --path <p> --input <host-path>
+		  mobile-canvas file delete <id> [--bundle <bundle-id>] --path <p> [--recursive]
+		  mobile-canvas file mkdir <id> [--bundle <bundle-id>] --path <p>
 		  mobile-canvas permission list <id> --bundle <bundle-id> [--json]
 		  mobile-canvas permission grant|revoke|reset <id> <permission> --bundle <bundle-id>
+		  mobile-canvas app-op list <id> --bundle <bundle-id> [--json]
+		  mobile-canvas app-op set <id> <operation> --bundle <bundle-id>
+		                            [--mode allow|deny|ignore|default]
+		  mobile-canvas presentation get <id> [--json]
+		  mobile-canvas presentation set <id> [--time HH:mm] [--battery-level 0-100]
+		                                      [--battery-charging true|false] [--wifi-bars 0-4]
+		                                      [--cellular-bars 0-4] [--carrier <name>]
+		                                      [--hide-notifications true|false]
+		  mobile-canvas presentation clear <id>
 		  mobile-canvas settings get <id> [--json]
 		  mobile-canvas settings set <id> [--appearance light|dark] [--font-scale <n>]
 		                                  [--content-size <c>] [--contrast true|false]
@@ -680,6 +749,9 @@ internal static class DeviceCli
 		absolute device path. Prefer `--bundle`: on Android nothing but the app can read those files, and
 		on iOS the container is a directory named after a GUID that changes when the app is reinstalled.
 		Android app access needs a debuggable build, and says so when the build is not one.
+		`file delete` resets one fixture without clearing everything an uninstall would; it refuses a
+		directory unless `--recursive`, and reports a path that was never there rather than passing
+		silently. `file mkdir` makes any missing parent, so a push has somewhere to land.
 
 		`permission` takes names that work on both platforms -- camera, microphone, location,
 		contacts, calendar, photos, notifications -- as well as a platform's own name. One name can
@@ -690,6 +762,25 @@ internal static class DeviceCli
 		`settings` covers the two things worth flipping mid-test: dark mode, and the text size that
 		breaks a layout. iOS names text sizes (`--content-size large`) where Android scales them
 		(`--font-scale 1.3`), and each says so if given the other.
+
+		`app-op` reaches the Android permissions that never appear in a runtime prompt, such as
+		SYSTEM_ALERT_WINDOW and WRITE_SETTINGS. The mode is read back afterwards, because `appops set`
+		exits zero and does nothing at all when the app never declared a permission backed by that
+		operation -- and because a mode set for the whole uid overrides the package's own, which is
+		the usual reason a change appears to have been ignored. Both cases are reported as failures
+		with the reason, not as success. Android only; on iOS use `permission`.
+
+		`presentation` fixes the clock, battery and signal so a screenshot is reproducible instead of
+		carrying today's wall clock. It is confirmed rather than assumed on both platforms, and the
+		failure it exists to catch is a quiet one: Android drops every request unless a secure setting
+		is on, and answers 'Broadcast completed: result=0' whether or not it did anything, so `set`
+		turns that setting on and then reads SystemUI's own view state back. iOS reports the values it
+		is overriding; Android will confirm only that presentation mode is on, so `readable` says
+		which of the two you got. Note that iOS replaces a group rather than merging into it -- a
+		battery state sent alone resets the level to 100 -- so the current overrides are read and
+		re-sent whole, and anything left unset survives. `--carrier` is the one value that cannot be
+		confirmed: simctl accepts it, never lists it back, and a notched iPhone has no room to draw
+		it -- so it is absent from the reported overrides on iOS whether or not it took.
 
 		`location`, `battery` and `network` simulate hardware, and the platforms differ enough that
 		each says what it cannot do rather than pretending. Neither can read a location back, so a fix

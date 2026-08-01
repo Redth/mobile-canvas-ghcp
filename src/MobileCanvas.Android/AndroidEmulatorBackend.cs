@@ -1725,6 +1725,390 @@ public sealed partial class AndroidEmulatorBackend : IDeviceBackend, IAsyncDispo
 		};
 	}
 
+	public async Task<AppOperationListResult> ListAppOperationsAsync(
+		string deviceId,
+		string bundleId,
+		CancellationToken cancellationToken = default)
+	{
+		var serial = await RequireSerialAsync(deviceId, cancellationToken).ConfigureAwait(false);
+		var operations = await ReadAppOperationsAsync(serial, bundleId, deviceId, cancellationToken)
+			.ConfigureAwait(false);
+
+		return new AppOperationListResult
+		{
+			DeviceId = deviceId,
+			Platform = DevicePlatforms.Android,
+			BundleId = bundleId,
+			Operations = operations,
+			Total = operations.Length,
+		};
+	}
+
+	public async Task<AppOperationChangeResult> ChangeAppOperationAsync(
+		string deviceId,
+		AppOperationChangeRequest request,
+		CancellationToken cancellationToken = default)
+	{
+		var serial = await RequireSerialAsync(deviceId, cancellationToken).ConfigureAwait(false);
+
+		var result = await RunAdbResultAsync(
+			serial,
+			["shell", "appops", "set", QuoteForDeviceShell(request.BundleId), request.Operation, request.Mode],
+			cancellationToken).ConfigureAwait(false);
+
+		// appops prints "Error: Unknown operation string: X" to stdout and still exits zero, so the
+		// exit code says nothing here.
+		var complaint = FindShellFailure(result);
+		if (complaint is not null)
+			throw new DeviceCapabilityException(
+				$"Could not put '{request.Operation}' into '{request.Mode}' for '{request.BundleId}' "
+				+ $"on '{deviceId}': {complaint}");
+
+		var after = await ReadAppOperationsAsync(serial, request.BundleId, deviceId, cancellationToken)
+			.ConfigureAwait(false);
+
+		var packageMode = after.FirstOrDefault(
+			operation => !operation.UidScoped
+				&& string.Equals(operation.Name, request.Operation, StringComparison.OrdinalIgnoreCase));
+
+		if (packageMode is null)
+			throw new DeviceCapabilityException(
+				$"'{request.BundleId}' does not declare a permission backed by '{request.Operation}', "
+				+ "so appops accepted the change and dropped it. Add the permission to the manifest and "
+				+ "reinstall, or name an operation the app already has -- `app-op list` shows those.");
+
+		if (!string.Equals(packageMode.Mode, request.Mode, StringComparison.OrdinalIgnoreCase))
+		{
+			var uidMode = after.FirstOrDefault(
+				operation => operation.UidScoped
+					&& string.Equals(operation.Name, request.Operation, StringComparison.OrdinalIgnoreCase));
+
+			// A uid mode overrides the package mode, and is the usual reason a set appears to have
+			// been ignored. When there is one, say so; when there is not, the cause is one of two
+			// things and guessing between them would put a confident wrong reason in front of a
+			// reader who then goes and checks it.
+			var because = uidMode is not null
+				? $" The uid is separately set to '{uidMode.Mode}', which wins over the package."
+				: " Either the app does not declare a permission backed by this operation -- add it to"
+					+ " the manifest and reinstall -- or the operation follows a runtime permission"
+					+ " grant, in which case change the permission with `permission set` instead.";
+
+			throw new DeviceCapabilityException(
+				$"'{request.Operation}' is '{packageMode.Mode}' for '{request.BundleId}' on '{deviceId}' "
+				+ $"rather than the requested '{request.Mode}'.{because}");
+		}
+
+		return new AppOperationChangeResult
+		{
+			DeviceId = deviceId,
+			BundleId = request.BundleId,
+			Operation = packageMode.Name,
+			Mode = packageMode.Mode,
+		};
+	}
+
+	private async Task<AppOperation[]> ReadAppOperationsAsync(
+		string serial,
+		string bundleId,
+		string deviceId,
+		CancellationToken cancellationToken)
+	{
+		var result = await RunAdbResultAsync(
+			serial,
+			["shell", "dumpsys", "appops", "--package", QuoteForDeviceShell(bundleId)],
+			cancellationToken).ConfigureAwait(false);
+
+		if (!result.StandardOutput.Contains("AppOps Service state", StringComparison.Ordinal))
+			throw new DeviceCapabilityException(
+				$"Could not read app operations for '{bundleId}' on '{deviceId}'. "
+				+ $"{FindShellFailure(result) ?? "dumpsys returned nothing recognisable."}");
+
+		return ParseAppOperations(result.StandardOutput, bundleId);
+	}
+
+	/// <summary>
+	/// Reads <c>dumpsys appops --package</c>, which reports two kinds of mode for one app.
+	/// </summary>
+	/// <remarks>
+	/// The package block is nested inside the uid block, and the two use different shapes --
+	/// <c>NAME: mode=value</c> for the uid and <c>NAME (value):</c> for the package. Both are kept,
+	/// because a uid mode overrides its package mode, so reporting only the package one explains
+	/// neither what the app is subject to nor why a set looked ignored.
+	/// </remarks>
+	internal static AppOperation[] ParseAppOperations(string output, string bundleId)
+	{
+		var operations = new List<AppOperation>();
+		var inPackage = false;
+
+		foreach (var raw in output.Split('\n'))
+		{
+			var line = raw.Trim();
+			if (line.Length == 0)
+				continue;
+
+			if (line.StartsWith("Package ", StringComparison.Ordinal))
+			{
+				inPackage = line.AsSpan(8).TrimEnd(':').SequenceEqual(bundleId);
+				continue;
+			}
+
+			// A new uid block ends the package block that was nested in the previous one.
+			if (line.StartsWith("Uid ", StringComparison.Ordinal))
+			{
+				inPackage = false;
+				continue;
+			}
+
+			if (inPackage)
+			{
+				if (TryReadPackageMode(line, out var name, out var mode))
+					operations.Add(new AppOperation { Name = name, Mode = mode });
+
+				continue;
+			}
+
+			if (TryReadUidMode(line, out var uidName, out var uidMode))
+				operations.Add(new AppOperation { Name = uidName, Mode = uidMode, UidScoped = true });
+		}
+
+		return [.. operations];
+	}
+
+	/// <summary>Reads <c>SYSTEM_ALERT_WINDOW (default):</c>.</summary>
+	private static bool TryReadPackageMode(string line, out string name, out string mode)
+	{
+		name = "";
+		mode = "";
+
+		var open = line.IndexOf(" (", StringComparison.Ordinal);
+		var close = line.IndexOf("):", StringComparison.Ordinal);
+		if (open <= 0 || close <= open)
+			return false;
+
+		name = line[..open];
+		mode = line[(open + 2)..close];
+		return IsOperationName(name) && mode.Length > 0;
+	}
+
+	/// <summary>Reads <c>COARSE_LOCATION: mode=ignore</c>.</summary>
+	private static bool TryReadUidMode(string line, out string name, out string mode)
+	{
+		name = "";
+		mode = "";
+
+		var colon = line.IndexOf(": mode=", StringComparison.Ordinal);
+		if (colon <= 0)
+			return false;
+
+		name = line[..colon];
+		mode = line[(colon + 7)..].Trim();
+
+		// The uid block carries a trailing time on ops that have run, as in 'mode=allow; time=...'.
+		var extra = mode.IndexOf(';');
+		if (extra >= 0)
+			mode = mode[..extra].Trim();
+
+		return IsOperationName(name) && mode.Length > 0;
+	}
+
+	/// <summary>
+	/// Whether a token looks like an operation name rather than one of the block's own fields, which
+	/// share the same indentation.
+	/// </summary>
+	private static bool IsOperationName(string value) =>
+		value.Length > 0 && value.All(character => char.IsAsciiLetterUpper(character) || character == '_');
+
+	public async Task<PresentationState> GetPresentationAsync(
+		string deviceId,
+		CancellationToken cancellationToken = default)
+	{
+		var serial = await RequireSerialAsync(deviceId, cancellationToken).ConfigureAwait(false);
+		return await ReadPresentationAsync(serial, deviceId, cancellationToken).ConfigureAwait(false);
+	}
+
+	public async Task<PresentationState> SetPresentationAsync(
+		string deviceId,
+		PresentationRequest request,
+		CancellationToken cancellationToken = default)
+	{
+		var serial = await RequireSerialAsync(deviceId, cancellationToken).ConfigureAwait(false);
+
+		if (request.Enabled == false)
+		{
+			await SendDemoCommandAsync(serial, deviceId, ["exit"], cancellationToken).ConfigureAwait(false);
+			return await ConfirmPresentationAsync(serial, deviceId, expected: false, cancellationToken)
+				.ConfigureAwait(false);
+		}
+
+		// SystemUI drops every demo broadcast unless this is set, and answers each one with
+		// 'Broadcast completed: result=0' either way -- so without this the whole call looks like it
+		// worked and changes nothing.
+		await AllowDemoModeAsync(serial, deviceId, cancellationToken).ConfigureAwait(false);
+		await SendDemoCommandAsync(serial, deviceId, ["enter"], cancellationToken).ConfigureAwait(false);
+
+		if (request.Time is { } time && PresentationClock.TryParse(time, out var hours, out var minutes))
+		{
+			await SendDemoCommandAsync(
+				serial,
+				deviceId,
+				["clock", "-e", "hhmm", $"{hours:00}{minutes:00}"],
+				cancellationToken).ConfigureAwait(false);
+		}
+
+		if (request.BatteryLevel is not null || request.BatteryCharging is not null)
+		{
+			var battery = new List<string> { "battery" };
+			if (request.BatteryLevel is { } level)
+			{
+				battery.Add("-e");
+				battery.Add("level");
+				battery.Add(level.ToString(CultureInfo.InvariantCulture));
+			}
+
+			if (request.BatteryCharging is { } charging)
+			{
+				battery.Add("-e");
+				battery.Add("plugged");
+				battery.Add(charging ? "true" : "false");
+			}
+
+			await SendDemoCommandAsync(serial, deviceId, battery, cancellationToken).ConfigureAwait(false);
+		}
+
+		if (request.WifiBars is { } wifi)
+		{
+			await SendDemoCommandAsync(
+				serial,
+				deviceId,
+				["network", "-e", "wifi", "show", "-e", "level", wifi.ToString(CultureInfo.InvariantCulture)],
+				cancellationToken).ConfigureAwait(false);
+		}
+
+		if (request.CellularBars is { } cellular)
+		{
+			await SendDemoCommandAsync(
+				serial,
+				deviceId,
+				["network", "-e", "mobile", "show", "-e", "level", cellular.ToString(CultureInfo.InvariantCulture)],
+				cancellationToken).ConfigureAwait(false);
+		}
+
+		if (request.CarrierName is { } carrier)
+		{
+			await SendDemoCommandAsync(
+				serial,
+				deviceId,
+				["network", "-e", "carriernetworkchange", "hide", "-e", "operator", carrier],
+				cancellationToken).ConfigureAwait(false);
+		}
+
+		if (request.HideNotifications is { } hide)
+		{
+			await SendDemoCommandAsync(
+				serial,
+				deviceId,
+				["notifications", "-e", "visible", hide ? "false" : "true"],
+				cancellationToken).ConfigureAwait(false);
+		}
+
+		return await ConfirmPresentationAsync(serial, deviceId, expected: true, cancellationToken)
+			.ConfigureAwait(false);
+	}
+
+	private async Task AllowDemoModeAsync(string serial, string deviceId, CancellationToken cancellationToken)
+	{
+		await RunAdbResultAsync(
+			serial,
+			["shell", "settings", "put", "global", DemoAllowedSetting, "1"],
+			cancellationToken).ConfigureAwait(false);
+
+		var read = await RunAdbResultAsync(
+			serial,
+			["shell", "settings", "get", "global", DemoAllowedSetting],
+			cancellationToken).ConfigureAwait(false);
+
+		if (read.StandardOutput.Trim() != "1")
+			throw new DeviceCapabilityException(
+				$"'{deviceId}' would not accept {DemoAllowedSetting}, so SystemUI will ignore every "
+				+ "presentation change. A device that restricts secure settings cannot do this.");
+	}
+
+	private async Task SendDemoCommandAsync(
+		string serial,
+		string deviceId,
+		IReadOnlyList<string> command,
+		CancellationToken cancellationToken)
+	{
+		var result = await RunAdbResultAsync(
+			serial,
+			["shell", "am", "broadcast", "-a", DemoBroadcast, "-e", "command", .. command],
+			cancellationToken).ConfigureAwait(false);
+
+		var complaint = FindShellFailure(result);
+		if (complaint is not null)
+			throw new DeviceCapabilityException(
+				$"Could not send '{command[0]}' to '{deviceId}': {complaint}");
+	}
+
+	/// <summary>
+	/// Waits for SystemUI to catch up, then reports what it is actually drawing.
+	/// </summary>
+	/// <remarks>
+	/// The broadcast returns before SystemUI has swapped its status bar views, so an immediate read
+	/// finds the old ones and reports the change as having failed.
+	/// </remarks>
+	private async Task<PresentationState> ConfirmPresentationAsync(
+		string serial,
+		string deviceId,
+		bool expected,
+		CancellationToken cancellationToken)
+	{
+		PresentationState state;
+		for (var attempt = 0; ; attempt++)
+		{
+			state = await ReadPresentationAsync(serial, deviceId, cancellationToken).ConfigureAwait(false);
+			if (state.Enabled == expected || attempt >= 10)
+				break;
+
+			await Task.Delay(250, cancellationToken).ConfigureAwait(false);
+		}
+
+		if (state.Enabled != expected)
+			throw new DeviceCapabilityException(
+				expected
+					? $"SystemUI on '{deviceId}' accepted the presentation broadcast without applying it. "
+						+ "This is what a locked-down or non-standard SystemUI looks like: the broadcast "
+						+ "always reports success."
+					: $"SystemUI on '{deviceId}' is still in presentation mode after being told to leave it.");
+
+		return state;
+	}
+
+	private async Task<PresentationState> ReadPresentationAsync(
+		string serial,
+		string deviceId,
+		CancellationToken cancellationToken)
+	{
+		var result = await RunAdbResultAsync(
+			serial,
+			["shell", "dumpsys", "activity", "service", SystemUiService],
+			cancellationToken).ConfigureAwait(false);
+
+		return new PresentationState
+		{
+			DeviceId = deviceId,
+			Platform = DevicePlatforms.Android,
+			// SystemUI swaps in a distinct set of status bar views for demo mode, so their presence is
+			// the one honest signal that the broadcast landed. Nothing reports the values themselves.
+			Enabled = result.StandardOutput.Contains("DemoStatusIcons", StringComparison.Ordinal),
+			Readable = false,
+		};
+	}
+
+	private const string DemoBroadcast = "com.android.systemui.demo";
+	private const string DemoAllowedSetting = "sysui_demo_allowed";
+	private const string SystemUiService = "com.android.systemui/.SystemUIService";
+
 	private async Task<Dictionary<string, bool>> ReadPermissionStateAsync(
 		string serial,
 		string bundleId,
@@ -2765,6 +3149,128 @@ public sealed partial class AndroidEmulatorBackend : IDeviceBackend, IAsyncDispo
 			throw new DeviceCapabilityException($"'{path}' is a directory, not a file.");
 
 		return entry.Size;
+	}
+
+	public async Task<FileMutationResult> DeleteFileAsync(
+		string deviceId,
+		FileMutationRequest request,
+		CancellationToken cancellationToken = default)
+	{
+		var serial = await RequireSerialAsync(deviceId, cancellationToken).ConfigureAwait(false);
+		var path = NormalizeDevicePath(request.Path, request.BundleId);
+
+		if (path is "/" or ".")
+			throw new DeviceCapabilityException(
+				"Refusing to delete the storage root itself. Name something inside it.");
+
+		// rm -f would report success for a path that was never there, hiding a typo, so the target is
+		// confirmed first and rm is left to report anything else that goes wrong.
+		var kind = await StatDeviceEntryAsync(serial, request.BundleId, path, cancellationToken)
+			.ConfigureAwait(false);
+
+		if (kind == DeviceEntryKind.Missing)
+			throw new DeviceCapabilityException($"No file or directory '{request.Path}' exists on '{deviceId}'.");
+
+		if (kind == DeviceEntryKind.Directory && !request.Recursive)
+			throw new DeviceCapabilityException(
+				$"'{request.Path}' is a directory. Pass recursive to delete it and its contents.");
+
+		string[] command = kind == DeviceEntryKind.Directory
+			? ["rm", "-rf", QuoteForDeviceShell(path)]
+			: ["rm", "-f", QuoteForDeviceShell(path)];
+
+		var result = await RunAppShellAsync(serial, request.BundleId, command, cancellationToken)
+			.ConfigureAwait(false);
+
+		var failure = FindShellFailure(result);
+		if (failure is not null)
+			throw new DeviceCapabilityException(DescribeFileFailure(failure, path, request.BundleId, deviceId));
+
+		return new FileMutationResult
+		{
+			DeviceId = deviceId,
+			Platform = DevicePlatforms.Android,
+			Path = path,
+			Operation = FileOperations.Delete,
+		};
+	}
+
+	public async Task<FileMutationResult> CreateDirectoryAsync(
+		string deviceId,
+		FileMutationRequest request,
+		CancellationToken cancellationToken = default)
+	{
+		var serial = await RequireSerialAsync(deviceId, cancellationToken).ConfigureAwait(false);
+		var path = NormalizeDevicePath(request.Path, request.BundleId);
+
+		if (await StatDeviceEntryAsync(serial, request.BundleId, path, cancellationToken)
+			.ConfigureAwait(false) == DeviceEntryKind.File)
+		{
+			throw new DeviceCapabilityException($"'{request.Path}' already exists as a file on '{deviceId}'.");
+		}
+
+		// -p creates the parents and is content with a directory that already exists, which is what a
+		// caller preparing somewhere to write wants either way.
+		var result = await RunAppShellAsync(
+			serial,
+			request.BundleId,
+			["mkdir", "-p", QuoteForDeviceShell(path)],
+			cancellationToken).ConfigureAwait(false);
+
+		var failure = FindShellFailure(result);
+		if (failure is not null)
+			throw new DeviceCapabilityException(DescribeFileFailure(failure, path, request.BundleId, deviceId));
+
+		return new FileMutationResult
+		{
+			DeviceId = deviceId,
+			Platform = DevicePlatforms.Android,
+			Path = path,
+			Operation = FileOperations.MakeDirectory,
+		};
+	}
+
+	private enum DeviceEntryKind
+	{
+		Missing,
+		File,
+		Directory,
+	}
+
+	/// <summary>
+	/// Reports whether a device path is a file, a directory, or absent.
+	/// </summary>
+	/// <remarks>
+	/// Uses the shell's own test rather than parsing <c>ls</c>, so a name with spaces or a symlink
+	/// needs no special handling. Every branch echoes, so an empty answer means the command itself
+	/// did not run -- <c>run-as</c> refusing a release build, for instance.
+	/// </remarks>
+	private async Task<DeviceEntryKind> StatDeviceEntryAsync(
+		string serial,
+		string? bundleId,
+		string path,
+		CancellationToken cancellationToken)
+	{
+		var quoted = QuoteForDeviceShell(path);
+		var result = await RunAppShellAsync(
+			serial,
+			bundleId,
+			["sh", "-c", QuoteForDeviceShell(
+				$"if [ -d {quoted} ]; then echo dir; elif [ -e {quoted} ]; then echo file; else echo none; fi")],
+			cancellationToken).ConfigureAwait(false);
+
+		return result.StandardOutput.Trim() switch
+		{
+			"dir" => DeviceEntryKind.Directory,
+			"file" => DeviceEntryKind.File,
+			"none" => DeviceEntryKind.Missing,
+			_ => throw new DeviceCapabilityException(
+				DescribeFileFailure(
+					FindShellFailure(result) ?? "the device gave no answer",
+					path,
+					bundleId,
+					serial)),
+		};
 	}
 
 	private Task<ProcessResult> RunAppShellAsync(

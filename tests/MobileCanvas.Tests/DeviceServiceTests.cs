@@ -337,6 +337,40 @@ public sealed class DeviceServiceTests
 	}
 
 	[Fact]
+	public async Task DeleteFile_RequiresAPath()
+	{
+		var service = new DeviceService([new FakeBackend()]);
+
+		await Assert.ThrowsAsync<ArgumentException>(() => service.DeleteFileAsync(
+			FakeBackend.Device.Id,
+			new FileMutationRequest { Path = "  " }));
+	}
+
+	[Fact]
+	public async Task DeleteFile_CarriesRecursiveThrough()
+	{
+		var backend = new FakeBackend();
+		var service = new DeviceService([backend]);
+
+		await service.DeleteFileAsync(
+			FakeBackend.Device.Id,
+			new FileMutationRequest { Path = "files/cache", Recursive = true });
+
+		Assert.True(backend.LastMutation?.Recursive);
+		Assert.Equal("files/cache", backend.LastMutation?.Path);
+	}
+
+	[Fact]
+	public async Task CreateDirectory_RequiresAPath()
+	{
+		var service = new DeviceService([new FakeBackend()]);
+
+		await Assert.ThrowsAsync<ArgumentException>(() => service.CreateDirectoryAsync(
+			FakeBackend.Device.Id,
+			new FileMutationRequest { Path = "" }));
+	}
+
+	[Fact]
 	public async Task ListFiles_PassesTheQueryThroughUntouched()
 	{
 		var backend = new FakeBackend();
@@ -717,9 +751,28 @@ public sealed class DeviceServiceTests
 				Action = request.Action,
 			});
 		}
+		public Task<AppOperationListResult> ListAppOperationsAsync(string deviceId, string bundleId, CancellationToken cancellationToken = default) =>
+			Task.FromResult(new AppOperationListResult { DeviceId = deviceId, BundleId = bundleId });
+		public Task<AppOperationChangeResult> ChangeAppOperationAsync(string deviceId, AppOperationChangeRequest request, CancellationToken cancellationToken = default)
+		{
+			LastAppOperation = request;
+			return Task.FromResult(new AppOperationChangeResult
+			{
+				DeviceId = deviceId,
+				BundleId = request.BundleId,
+				Operation = request.Operation,
+				Mode = request.Mode,
+			});
+		}
+		public Task<PresentationState> GetPresentationAsync(string deviceId, CancellationToken cancellationToken = default) =>
+			Task.FromResult(new PresentationState { DeviceId = deviceId });
+		public Task<PresentationState> SetPresentationAsync(string deviceId, PresentationRequest request, CancellationToken cancellationToken = default)
+		{
+			LastPresentation = request;
+			return Task.FromResult(new PresentationState { DeviceId = deviceId, Enabled = request.Enabled ?? true });
+		}
 		public Task<DeviceSettings> GetSettingsAsync(string deviceId, CancellationToken cancellationToken = default) =>
-			Task.FromResult(new DeviceSettings { DeviceId = deviceId, Appearance = DeviceAppearances.Light });
-		public Task<DeviceSettings> UpdateSettingsAsync(string deviceId, DeviceSettingsRequest request, CancellationToken cancellationToken = default)
+			Task.FromResult(new DeviceSettings { DeviceId = deviceId, Appearance = DeviceAppearances.Light });		public Task<DeviceSettings> UpdateSettingsAsync(string deviceId, DeviceSettingsRequest request, CancellationToken cancellationToken = default)
 		{
 			LastSettingsChange = request;
 			return Task.FromResult(new DeviceSettings { DeviceId = deviceId, Appearance = request.Appearance });
@@ -869,6 +922,34 @@ public sealed class DeviceServiceTests
 				Operation = FileOperations.Push,
 				DevicePath = request.DevicePath,
 				HostPath = request.HostPath,
+			});
+		}
+
+		public FileMutationRequest? LastMutation { get; private set; }
+
+		public AppOperationChangeRequest? LastAppOperation { get; private set; }
+
+		public PresentationRequest? LastPresentation { get; private set; }
+
+		public Task<FileMutationResult> DeleteFileAsync(string deviceId, FileMutationRequest request, CancellationToken cancellationToken = default)
+		{
+			LastMutation = request;
+			return Task.FromResult(new FileMutationResult
+			{
+				DeviceId = deviceId,
+				Operation = FileOperations.Delete,
+				Path = request.Path,
+			});
+		}
+
+		public Task<FileMutationResult> CreateDirectoryAsync(string deviceId, FileMutationRequest request, CancellationToken cancellationToken = default)
+		{
+			LastMutation = request;
+			return Task.FromResult(new FileMutationResult
+			{
+				DeviceId = deviceId,
+				Operation = FileOperations.MakeDirectory,
+				Path = request.Path,
 			});
 		}
 

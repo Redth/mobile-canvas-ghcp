@@ -950,6 +950,72 @@ public sealed class IosSimulatorBackend : IDeviceBackend, IAsyncDisposable
 		};
 	}
 
+	public async Task<FileMutationResult> DeleteFileAsync(
+		string deviceId,
+		FileMutationRequest request,
+		CancellationToken cancellationToken = default)
+	{
+		var (root, target) = await ResolveAsync(deviceId, request.BundleId, request.Path, cancellationToken)
+			.ConfigureAwait(false);
+
+		// Deleting the container itself would take the app's storage with it and leave the app in a
+		// state no reinstall produces, so the root is off limits however the path was written.
+		if (target == root)
+			throw new DeviceCapabilityException(
+				"Refusing to delete the storage root itself. Name something inside it.");
+
+		if (Directory.Exists(target))
+		{
+			if (!request.Recursive)
+				throw new DeviceCapabilityException(
+					$"'{request.Path}' is a directory. Pass recursive to delete it and its contents.");
+
+			Directory.Delete(target, recursive: true);
+		}
+		else if (File.Exists(target))
+		{
+			File.Delete(target);
+		}
+		else
+		{
+			// Reporting success for a path that was never there would hide a typo, and a caller
+			// clearing a fixture wants to know it cleared the thing it meant.
+			throw new DeviceCapabilityException($"No file or directory '{request.Path}' exists on '{deviceId}'.");
+		}
+
+		return new FileMutationResult
+		{
+			DeviceId = deviceId,
+			Platform = DevicePlatforms.Ios,
+			Path = request.Path,
+			Operation = FileOperations.Delete,
+		};
+	}
+
+	public async Task<FileMutationResult> CreateDirectoryAsync(
+		string deviceId,
+		FileMutationRequest request,
+		CancellationToken cancellationToken = default)
+	{
+		var (_, target) = await ResolveAsync(deviceId, request.BundleId, request.Path, cancellationToken)
+			.ConfigureAwait(false);
+
+		if (File.Exists(target))
+			throw new DeviceCapabilityException($"'{request.Path}' already exists as a file on '{deviceId}'.");
+
+		// CreateDirectory makes the parents too and is content with a directory that already exists,
+		// which is what a caller preparing somewhere to write wants either way.
+		Directory.CreateDirectory(target);
+
+		return new FileMutationResult
+		{
+			DeviceId = deviceId,
+			Platform = DevicePlatforms.Ios,
+			Path = request.Path,
+			Operation = FileOperations.MakeDirectory,
+		};
+	}
+
 	/// <summary>
 	/// Resolves a device path to a host path, and returns the root it must stay inside.
 	/// </summary>
@@ -1541,6 +1607,188 @@ public sealed class IosSimulatorBackend : IDeviceBackend, IAsyncDisposable
 					_ => null,
 				}
 				: null);
+	}
+
+	public Task<AppOperationListResult> ListAppOperationsAsync(
+		string deviceId,
+		string bundleId,
+		CancellationToken cancellationToken = default) =>
+		throw new DeviceCapabilityException(
+			"App operations are an Android idea. iOS keeps the equivalent decisions in the privacy "
+			+ "database, which `permission list` reads.");
+
+	public Task<AppOperationChangeResult> ChangeAppOperationAsync(
+		string deviceId,
+		AppOperationChangeRequest request,
+		CancellationToken cancellationToken = default) =>
+		throw new DeviceCapabilityException(
+			"App operations are an Android idea. Use `permission set` to change what an iOS app is "
+			+ "allowed to do.");
+
+	public async Task<PresentationState> GetPresentationAsync(
+		string deviceId,
+		CancellationToken cancellationToken = default)
+	{
+		var device = await RequireBootedAsync(deviceId, cancellationToken).ConfigureAwait(false);
+		return await ReadPresentationAsync(device, cancellationToken).ConfigureAwait(false);
+	}
+
+	public async Task<PresentationState> SetPresentationAsync(
+		string deviceId,
+		PresentationRequest request,
+		CancellationToken cancellationToken = default)
+	{
+		var device = await RequireBootedAsync(deviceId, cancellationToken).ConfigureAwait(false);
+
+		if (request.Enabled == false)
+		{
+			await RequireSimctlAsync(
+				["status_bar", device.NativeId, "clear"],
+				"return the status bar to the simulator's own values",
+				cancellationToken).ConfigureAwait(false);
+
+			return await ReadPresentationAsync(device, cancellationToken).ConfigureAwait(false);
+		}
+
+		// Every group has to be re-sent, not just the changed one: `override` replaces a group rather
+		// than merging into it, so setting only a battery state resets a level of 42 to 100. Measured,
+		// not assumed. Reading first and sending the whole picture is the only way a caller keeps what
+		// it did not mention.
+		var current = await ReadStatusBarAsync(device, cancellationToken).ConfigureAwait(false);
+		var arguments = new List<string> { "status_bar", device.NativeId, "override" };
+
+		Apply(arguments, "--time", request.Time ?? current.Time);
+		Apply(arguments, "--wifiBars", (request.WifiBars ?? current.WifiBars)?.ToString(CultureInfo.InvariantCulture));
+		Apply(arguments, "--cellularBars", (request.CellularBars ?? current.CellularBars)?.ToString(CultureInfo.InvariantCulture));
+		Apply(arguments, "--operatorName", request.CarrierName ?? current.CarrierName);
+
+		var level = request.BatteryLevel ?? current.BatteryLevel;
+		var state = request.BatteryCharging switch
+		{
+			true => "charging",
+			false => "discharging",
+			null => current.BatteryState,
+		};
+
+		Apply(arguments, "--batteryLevel", level?.ToString(CultureInfo.InvariantCulture));
+		Apply(arguments, "--batteryState", state);
+
+		if (arguments.Count == 3)
+			throw new DeviceCapabilityException(
+				"Name something to show -- a time, a battery level, signal bars or a carrier. "
+				+ "Turning presentation mode on by itself has nothing to override.");
+
+		await RequireSimctlAsync(arguments, "fix the status bar", cancellationToken).ConfigureAwait(false);
+
+		var after = await ReadPresentationAsync(device, cancellationToken).ConfigureAwait(false);
+		if (!after.Enabled)
+			throw new DeviceCapabilityException(
+				$"simctl accepted the overrides for '{deviceId}' and then listed none.");
+
+		return after;
+
+		static void Apply(List<string> arguments, string flag, string? value)
+		{
+			if (string.IsNullOrWhiteSpace(value))
+				return;
+
+			arguments.Add(flag);
+			arguments.Add(value);
+		}
+	}
+
+	private async Task<PresentationState> ReadPresentationAsync(
+		DeviceTarget device,
+		CancellationToken cancellationToken)
+	{
+		var current = await ReadStatusBarAsync(device, cancellationToken).ConfigureAwait(false);
+		var overrides = new List<PresentationOverride>();
+
+		Add("time", current.Time);
+		Add("batteryLevel", current.BatteryLevel?.ToString(CultureInfo.InvariantCulture));
+		Add("batteryState", current.BatteryState);
+		Add("wifiBars", current.WifiBars?.ToString(CultureInfo.InvariantCulture));
+		Add("cellularBars", current.CellularBars?.ToString(CultureInfo.InvariantCulture));
+		Add("carrierName", current.CarrierName);
+
+		return new PresentationState
+		{
+			DeviceId = device.Id,
+			Platform = DevicePlatforms.Ios,
+			// simctl lists only what is overridden, so anything at all means the status bar is fixed.
+			Enabled = overrides.Count > 0,
+			Overrides = [.. overrides],
+			Readable = true,
+		};
+
+		void Add(string name, string? value)
+		{
+			if (!string.IsNullOrWhiteSpace(value))
+				overrides.Add(new PresentationOverride { Name = name, Value = value });
+		}
+	}
+
+	private async Task<StatusBarOverrides> ReadStatusBarAsync(
+		DeviceTarget device,
+		CancellationToken cancellationToken)
+	{
+		var result = await RunAsync(["status_bar", device.NativeId, "list"], cancellationToken)
+			.ConfigureAwait(false);
+
+		return result.ExitCode == 0 ? ParseStatusBar(result.StandardOutput) : new StatusBarOverrides();
+	}
+
+	/// <summary>
+	/// Reads every override out of <c>simctl status_bar list</c>.
+	/// </summary>
+	/// <remarks>
+	/// Only overrides appear, so an absent value means the simulator is showing its own -- which
+	/// simctl will not report. That is why every field is nullable rather than defaulted.
+	/// </remarks>
+	internal static StatusBarOverrides ParseStatusBar(string output)
+	{
+		var (level, state) = ParseStatusBarBattery(output);
+
+		return new StatusBarOverrides
+		{
+			Time = Text(@"Time:\s*(.+?)\s*$"),
+			WifiBars = Number(@"WiFi Bars:\s*(\d+)"),
+			CellularBars = Number(@"Cell Bars:\s*(\d+)"),
+			CarrierName = Text(@"Operator Name:\s*(.+?)\s*$"),
+			BatteryLevel = level,
+			BatteryState = state switch
+			{
+				// simctl calls a full battery 'charged'; re-sending the shared vocabulary's word for it
+				// would be rejected.
+				BatteryStates.Full => "charged",
+				_ => state,
+			},
+		};
+
+		string? Text(string pattern)
+		{
+			var match = Regex.Match(output, pattern, RegexOptions.Multiline);
+			return match.Success && match.Groups[1].Value.Trim().Length > 0
+				? match.Groups[1].Value.Trim()
+				: null;
+		}
+
+		int? Number(string pattern)
+		{
+			var match = Regex.Match(output, pattern);
+			return match.Success && int.TryParse(match.Groups[1].Value, out var value) ? value : null;
+		}
+	}
+
+	/// <summary>What simctl currently overrides in the status bar, with null meaning "not overridden".</summary>
+	internal sealed record StatusBarOverrides
+	{
+		public string? Time { get; init; }
+		public int? BatteryLevel { get; init; }
+		public string? BatteryState { get; init; }
+		public int? WifiBars { get; init; }
+		public int? CellularBars { get; init; }
+		public string? CarrierName { get; init; }
 	}
 
 	/// <summary>
