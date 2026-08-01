@@ -89,8 +89,45 @@ public sealed record FileTransferResult
 	public string Operation { get; init; } = "";
 }
 
+/// <summary>
+/// Creates or removes something on the device, addressed the same way as a listing.
+/// </summary>
+public sealed record FileMutationRequest
+{
+	/// <summary>Scopes <see cref="Path"/> to this app's data container.</summary>
+	public string? BundleId { get; init; }
+
+	/// <summary>
+	/// Relative to the app's data container when <see cref="BundleId"/> is set, absolute otherwise.
+	/// </summary>
+	public string Path { get; init; } = "";
+
+	/// <summary>
+	/// Allows a delete to take a directory and everything inside it. A directory delete without this
+	/// is refused, so a mistyped path cannot quietly take a subtree with it. Ignored by mkdir, which
+	/// always creates missing parents.
+	/// </summary>
+	public bool Recursive { get; init; }
+}
+
+public sealed record FileMutationResult
+{
+	public string SchemaVersion { get; init; } = MobileCanvasProtocol.Version;
+	public bool Success { get; init; } = true;
+	public string DeviceId { get; init; } = "";
+	public string Platform { get; init; } = "";
+
+	/// <summary>The path that was acted on, echoed back as it was resolved.</summary>
+	public string Path { get; init; } = "";
+
+	/// <summary>One of the <see cref="FileOperations"/> values.</summary>
+	public string Operation { get; init; } = "";
+}
+
 public static class FileOperations
 {
 	public const string Push = "push";
 	public const string Pull = "pull";
+	public const string Delete = "delete";
+	public const string MakeDirectory = "mkdir";
 }

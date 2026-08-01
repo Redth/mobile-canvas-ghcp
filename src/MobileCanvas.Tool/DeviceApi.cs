@@ -621,6 +621,16 @@ internal static class DeviceApi
 			(string deviceId, FileTransferRequest request,
 				DeviceService devices, CancellationToken cancellationToken) =>
 				devices.PushFileAsync(deviceId, request, cancellationToken));
+		app.MapPost(
+			"/api/v1/devices/{deviceId}/files/delete",
+			(string deviceId, FileMutationRequest request,
+				DeviceService devices, CancellationToken cancellationToken) =>
+				devices.DeleteFileAsync(deviceId, request, cancellationToken));
+		app.MapPost(
+			"/api/v1/devices/{deviceId}/files/mkdir",
+			(string deviceId, FileMutationRequest request,
+				DeviceService devices, CancellationToken cancellationToken) =>
+				devices.CreateDirectoryAsync(deviceId, request, cancellationToken));
 	}
 
 	private static void MapSettings(WebApplication app)

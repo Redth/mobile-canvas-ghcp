@@ -499,6 +499,34 @@ public sealed class DeviceHostClient
 			.ConfigureAwait(false);
 	}
 
+	public async Task<FileMutationResult> DeleteFileAsync(
+		string deviceId,
+		FileMutationRequest request,
+		CancellationToken cancellationToken = default)
+	{
+		var response = await SendAsync(
+			HttpMethod.Post,
+			$"/api/v1/devices/{Escape(deviceId)}/files/delete",
+			JsonContent.Create(request, DeviceJsonContext.Default.FileMutationRequest),
+			cancellationToken).ConfigureAwait(false);
+		return await ReadAsync(response, DeviceJsonContext.Default.FileMutationResult, cancellationToken)
+			.ConfigureAwait(false);
+	}
+
+	public async Task<FileMutationResult> CreateDirectoryAsync(
+		string deviceId,
+		FileMutationRequest request,
+		CancellationToken cancellationToken = default)
+	{
+		var response = await SendAsync(
+			HttpMethod.Post,
+			$"/api/v1/devices/{Escape(deviceId)}/files/mkdir",
+			JsonContent.Create(request, DeviceJsonContext.Default.FileMutationRequest),
+			cancellationToken).ConfigureAwait(false);
+		return await ReadAsync(response, DeviceJsonContext.Default.FileMutationResult, cancellationToken)
+			.ConfigureAwait(false);
+	}
+
 	public async Task<PermissionListResult> ListPermissionsAsync(
 		string deviceId,
 		string bundleId,

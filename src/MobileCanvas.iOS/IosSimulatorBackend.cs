@@ -950,6 +950,72 @@ public sealed class IosSimulatorBackend : IDeviceBackend, IAsyncDisposable
 		};
 	}
 
+	public async Task<FileMutationResult> DeleteFileAsync(
+		string deviceId,
+		FileMutationRequest request,
+		CancellationToken cancellationToken = default)
+	{
+		var (root, target) = await ResolveAsync(deviceId, request.BundleId, request.Path, cancellationToken)
+			.ConfigureAwait(false);
+
+		// Deleting the container itself would take the app's storage with it and leave the app in a
+		// state no reinstall produces, so the root is off limits however the path was written.
+		if (target == root)
+			throw new DeviceCapabilityException(
+				"Refusing to delete the storage root itself. Name something inside it.");
+
+		if (Directory.Exists(target))
+		{
+			if (!request.Recursive)
+				throw new DeviceCapabilityException(
+					$"'{request.Path}' is a directory. Pass recursive to delete it and its contents.");
+
+			Directory.Delete(target, recursive: true);
+		}
+		else if (File.Exists(target))
+		{
+			File.Delete(target);
+		}
+		else
+		{
+			// Reporting success for a path that was never there would hide a typo, and a caller
+			// clearing a fixture wants to know it cleared the thing it meant.
+			throw new DeviceCapabilityException($"No file or directory '{request.Path}' exists on '{deviceId}'.");
+		}
+
+		return new FileMutationResult
+		{
+			DeviceId = deviceId,
+			Platform = DevicePlatforms.Ios,
+			Path = request.Path,
+			Operation = FileOperations.Delete,
+		};
+	}
+
+	public async Task<FileMutationResult> CreateDirectoryAsync(
+		string deviceId,
+		FileMutationRequest request,
+		CancellationToken cancellationToken = default)
+	{
+		var (_, target) = await ResolveAsync(deviceId, request.BundleId, request.Path, cancellationToken)
+			.ConfigureAwait(false);
+
+		if (File.Exists(target))
+			throw new DeviceCapabilityException($"'{request.Path}' already exists as a file on '{deviceId}'.");
+
+		// CreateDirectory makes the parents too and is content with a directory that already exists,
+		// which is what a caller preparing somewhere to write wants either way.
+		Directory.CreateDirectory(target);
+
+		return new FileMutationResult
+		{
+			DeviceId = deviceId,
+			Platform = DevicePlatforms.Ios,
+			Path = request.Path,
+			Operation = FileOperations.MakeDirectory,
+		};
+	}
+
 	/// <summary>
 	/// Resolves a device path to a host path, and returns the root it must stay inside.
 	/// </summary>

@@ -185,6 +185,23 @@ internal static class DeviceCli
 					HostPath = options.Required("input"),
 				},
 				cancellationToken).ConfigureAwait(false),
+			("file", "delete") => await Client.DeleteFileAsync(
+				options.RequiredPosition(0, "device ID"),
+				new FileMutationRequest
+				{
+					BundleId = options.Value("bundle"),
+					Path = options.Required("path"),
+					Recursive = options.Flag("recursive"),
+				},
+				cancellationToken).ConfigureAwait(false),
+			("file", "mkdir") => await Client.CreateDirectoryAsync(
+				options.RequiredPosition(0, "device ID"),
+				new FileMutationRequest
+				{
+					BundleId = options.Value("bundle"),
+					Path = options.Required("path"),
+				},
+				cancellationToken).ConfigureAwait(false),
 			("permission", "list") => await Client.ListPermissionsAsync(
 				options.RequiredPosition(0, "device ID"),
 				options.Required("bundle"),
@@ -626,6 +643,8 @@ internal static class DeviceCli
 		  mobile-canvas file list <id> [--bundle <bundle-id>] [--path <p>] [--json]
 		  mobile-canvas file pull <id> [--bundle <bundle-id>] --path <p> --output <host-path>
 		  mobile-canvas file push <id> [--bundle <bundle-id>] --path <p> --input <host-path>
+		  mobile-canvas file delete <id> [--bundle <bundle-id>] --path <p> [--recursive]
+		  mobile-canvas file mkdir <id> [--bundle <bundle-id>] --path <p>
 		  mobile-canvas permission list <id> --bundle <bundle-id> [--json]
 		  mobile-canvas permission grant|revoke|reset <id> <permission> --bundle <bundle-id>
 		  mobile-canvas settings get <id> [--json]
@@ -680,6 +699,9 @@ internal static class DeviceCli
 		absolute device path. Prefer `--bundle`: on Android nothing but the app can read those files, and
 		on iOS the container is a directory named after a GUID that changes when the app is reinstalled.
 		Android app access needs a debuggable build, and says so when the build is not one.
+		`file delete` resets one fixture without clearing everything an uninstall would; it refuses a
+		directory unless `--recursive`, and reports a path that was never there rather than passing
+		silently. `file mkdir` makes any missing parent, so a push has somewhere to land.
 
 		`permission` takes names that work on both platforms -- camera, microphone, location,
 		contacts, calendar, photos, notifications -- as well as a platform's own name. One name can

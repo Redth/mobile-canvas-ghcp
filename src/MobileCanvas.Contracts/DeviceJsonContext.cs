@@ -57,6 +57,8 @@ namespace MobileCanvas.Contracts;
 [JsonSerializable(typeof(FileListResult))]
 [JsonSerializable(typeof(FileTransferRequest))]
 [JsonSerializable(typeof(FileTransferResult))]
+[JsonSerializable(typeof(FileMutationRequest))]
+[JsonSerializable(typeof(FileMutationResult))]
 [JsonSerializable(typeof(DevicePermission))]
 [JsonSerializable(typeof(DevicePermission[]))]
 [JsonSerializable(typeof(PermissionListResult))]

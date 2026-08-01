@@ -337,6 +337,40 @@ public sealed class DeviceServiceTests
 	}
 
 	[Fact]
+	public async Task DeleteFile_RequiresAPath()
+	{
+		var service = new DeviceService([new FakeBackend()]);
+
+		await Assert.ThrowsAsync<ArgumentException>(() => service.DeleteFileAsync(
+			FakeBackend.Device.Id,
+			new FileMutationRequest { Path = "  " }));
+	}
+
+	[Fact]
+	public async Task DeleteFile_CarriesRecursiveThrough()
+	{
+		var backend = new FakeBackend();
+		var service = new DeviceService([backend]);
+
+		await service.DeleteFileAsync(
+			FakeBackend.Device.Id,
+			new FileMutationRequest { Path = "files/cache", Recursive = true });
+
+		Assert.True(backend.LastMutation?.Recursive);
+		Assert.Equal("files/cache", backend.LastMutation?.Path);
+	}
+
+	[Fact]
+	public async Task CreateDirectory_RequiresAPath()
+	{
+		var service = new DeviceService([new FakeBackend()]);
+
+		await Assert.ThrowsAsync<ArgumentException>(() => service.CreateDirectoryAsync(
+			FakeBackend.Device.Id,
+			new FileMutationRequest { Path = "" }));
+	}
+
+	[Fact]
 	public async Task ListFiles_PassesTheQueryThroughUntouched()
 	{
 		var backend = new FakeBackend();
@@ -869,6 +903,30 @@ public sealed class DeviceServiceTests
 				Operation = FileOperations.Push,
 				DevicePath = request.DevicePath,
 				HostPath = request.HostPath,
+			});
+		}
+
+		public FileMutationRequest? LastMutation { get; private set; }
+
+		public Task<FileMutationResult> DeleteFileAsync(string deviceId, FileMutationRequest request, CancellationToken cancellationToken = default)
+		{
+			LastMutation = request;
+			return Task.FromResult(new FileMutationResult
+			{
+				DeviceId = deviceId,
+				Operation = FileOperations.Delete,
+				Path = request.Path,
+			});
+		}
+
+		public Task<FileMutationResult> CreateDirectoryAsync(string deviceId, FileMutationRequest request, CancellationToken cancellationToken = default)
+		{
+			LastMutation = request;
+			return Task.FromResult(new FileMutationResult
+			{
+				DeviceId = deviceId,
+				Operation = FileOperations.MakeDirectory,
+				Path = request.Path,
 			});
 		}
 

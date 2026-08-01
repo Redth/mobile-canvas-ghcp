@@ -452,6 +452,34 @@ public sealed class DeviceService(IEnumerable<IDeviceBackend> backends)
 	}
 
 	/// <summary>
+	/// Removes a file, or a directory when the request allows it.
+	/// </summary>
+	public Task<FileMutationResult> DeleteFileAsync(
+		string deviceId,
+		FileMutationRequest request,
+		CancellationToken cancellationToken = default)
+	{
+		if (string.IsNullOrWhiteSpace(request.Path))
+			throw new ArgumentException("A device path is required.", nameof(request));
+
+		return GetBackend(deviceId).DeleteFileAsync(deviceId, request, cancellationToken);
+	}
+
+	/// <summary>
+	/// Creates a directory, and any missing parent above it.
+	/// </summary>
+	public Task<FileMutationResult> CreateDirectoryAsync(
+		string deviceId,
+		FileMutationRequest request,
+		CancellationToken cancellationToken = default)
+	{
+		if (string.IsNullOrWhiteSpace(request.Path))
+			throw new ArgumentException("A device path is required.", nameof(request));
+
+		return GetBackend(deviceId).CreateDirectoryAsync(deviceId, request, cancellationToken);
+	}
+
+	/// <summary>
 	/// Reports the permissions one app holds.
 	/// </summary>
 	public Task<PermissionListResult> ListPermissionsAsync(

@@ -67,6 +67,12 @@ public interface IDeviceBackend
 	/// <summary>Copies a file from this machine onto the device.</summary>
 	Task<FileTransferResult> PushFileAsync(string deviceId, FileTransferRequest request, CancellationToken cancellationToken = default);
 
+	/// <summary>Removes a file, or a directory when the request allows it.</summary>
+	Task<FileMutationResult> DeleteFileAsync(string deviceId, FileMutationRequest request, CancellationToken cancellationToken = default);
+
+	/// <summary>Creates a directory, and any missing parent above it.</summary>
+	Task<FileMutationResult> CreateDirectoryAsync(string deviceId, FileMutationRequest request, CancellationToken cancellationToken = default);
+
 	/// <summary>Reports the permissions one app holds.</summary>
 	Task<PermissionListResult> ListPermissionsAsync(string deviceId, string bundleId, CancellationToken cancellationToken = default);
 

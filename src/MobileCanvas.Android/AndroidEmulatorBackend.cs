@@ -2767,6 +2767,128 @@ public sealed partial class AndroidEmulatorBackend : IDeviceBackend, IAsyncDispo
 		return entry.Size;
 	}
 
+	public async Task<FileMutationResult> DeleteFileAsync(
+		string deviceId,
+		FileMutationRequest request,
+		CancellationToken cancellationToken = default)
+	{
+		var serial = await RequireSerialAsync(deviceId, cancellationToken).ConfigureAwait(false);
+		var path = NormalizeDevicePath(request.Path, request.BundleId);
+
+		if (path is "/" or ".")
+			throw new DeviceCapabilityException(
+				"Refusing to delete the storage root itself. Name something inside it.");
+
+		// rm -f would report success for a path that was never there, hiding a typo, so the target is
+		// confirmed first and rm is left to report anything else that goes wrong.
+		var kind = await StatDeviceEntryAsync(serial, request.BundleId, path, cancellationToken)
+			.ConfigureAwait(false);
+
+		if (kind == DeviceEntryKind.Missing)
+			throw new DeviceCapabilityException($"No file or directory '{request.Path}' exists on '{deviceId}'.");
+
+		if (kind == DeviceEntryKind.Directory && !request.Recursive)
+			throw new DeviceCapabilityException(
+				$"'{request.Path}' is a directory. Pass recursive to delete it and its contents.");
+
+		string[] command = kind == DeviceEntryKind.Directory
+			? ["rm", "-rf", QuoteForDeviceShell(path)]
+			: ["rm", "-f", QuoteForDeviceShell(path)];
+
+		var result = await RunAppShellAsync(serial, request.BundleId, command, cancellationToken)
+			.ConfigureAwait(false);
+
+		var failure = FindShellFailure(result);
+		if (failure is not null)
+			throw new DeviceCapabilityException(DescribeFileFailure(failure, path, request.BundleId, deviceId));
+
+		return new FileMutationResult
+		{
+			DeviceId = deviceId,
+			Platform = DevicePlatforms.Android,
+			Path = path,
+			Operation = FileOperations.Delete,
+		};
+	}
+
+	public async Task<FileMutationResult> CreateDirectoryAsync(
+		string deviceId,
+		FileMutationRequest request,
+		CancellationToken cancellationToken = default)
+	{
+		var serial = await RequireSerialAsync(deviceId, cancellationToken).ConfigureAwait(false);
+		var path = NormalizeDevicePath(request.Path, request.BundleId);
+
+		if (await StatDeviceEntryAsync(serial, request.BundleId, path, cancellationToken)
+			.ConfigureAwait(false) == DeviceEntryKind.File)
+		{
+			throw new DeviceCapabilityException($"'{request.Path}' already exists as a file on '{deviceId}'.");
+		}
+
+		// -p creates the parents and is content with a directory that already exists, which is what a
+		// caller preparing somewhere to write wants either way.
+		var result = await RunAppShellAsync(
+			serial,
+			request.BundleId,
+			["mkdir", "-p", QuoteForDeviceShell(path)],
+			cancellationToken).ConfigureAwait(false);
+
+		var failure = FindShellFailure(result);
+		if (failure is not null)
+			throw new DeviceCapabilityException(DescribeFileFailure(failure, path, request.BundleId, deviceId));
+
+		return new FileMutationResult
+		{
+			DeviceId = deviceId,
+			Platform = DevicePlatforms.Android,
+			Path = path,
+			Operation = FileOperations.MakeDirectory,
+		};
+	}
+
+	private enum DeviceEntryKind
+	{
+		Missing,
+		File,
+		Directory,
+	}
+
+	/// <summary>
+	/// Reports whether a device path is a file, a directory, or absent.
+	/// </summary>
+	/// <remarks>
+	/// Uses the shell's own test rather than parsing <c>ls</c>, so a name with spaces or a symlink
+	/// needs no special handling. Every branch echoes, so an empty answer means the command itself
+	/// did not run -- <c>run-as</c> refusing a release build, for instance.
+	/// </remarks>
+	private async Task<DeviceEntryKind> StatDeviceEntryAsync(
+		string serial,
+		string? bundleId,
+		string path,
+		CancellationToken cancellationToken)
+	{
+		var quoted = QuoteForDeviceShell(path);
+		var result = await RunAppShellAsync(
+			serial,
+			bundleId,
+			["sh", "-c", QuoteForDeviceShell(
+				$"if [ -d {quoted} ]; then echo dir; elif [ -e {quoted} ]; then echo file; else echo none; fi")],
+			cancellationToken).ConfigureAwait(false);
+
+		return result.StandardOutput.Trim() switch
+		{
+			"dir" => DeviceEntryKind.Directory,
+			"file" => DeviceEntryKind.File,
+			"none" => DeviceEntryKind.Missing,
+			_ => throw new DeviceCapabilityException(
+				DescribeFileFailure(
+					FindShellFailure(result) ?? "the device gave no answer",
+					path,
+					bundleId,
+					serial)),
+		};
+	}
+
 	private Task<ProcessResult> RunAppShellAsync(
 		string serial,
 		string? bundleId,

@@ -58,4 +58,36 @@ public sealed class DeviceFileTools(DeviceHostClient client)
 			deviceId,
 			new FileTransferRequest { BundleId = bundleId, DevicePath = path, HostPath = input },
 			cancellationToken);
+
+	[McpServerTool(Name = "mobile_device_file_delete", Title = "Delete a file or directory", Destructive = true, OpenWorld = false)]
+	[Description(
+		"Remove a file or directory from the device. Use it to reset one fixture without clearing "
+		+ "all of an app's data, which is what uninstalling or wiping would do. Deleting a directory "
+		+ "needs recursive, so a mistyped path cannot take a subtree with it. A path that does not "
+		+ "exist is an error rather than a quiet success.")]
+	public Task<FileMutationResult> Delete(
+		[Description("Provider-qualified device ID.")] string deviceId,
+		[Description("Path to remove; relative to the app container when bundleId is set.")] string path,
+		[Description("Scope the path to this app's data container.")] string? bundleId = null,
+		[Description("Required to delete a directory and everything inside it.")] bool recursive = false,
+		CancellationToken cancellationToken = default) =>
+		client.DeleteFileAsync(
+			deviceId,
+			new FileMutationRequest { BundleId = bundleId, Path = path, Recursive = recursive },
+			cancellationToken);
+
+	[McpServerTool(Name = "mobile_device_file_mkdir", Title = "Create a directory", Destructive = false, OpenWorld = false)]
+	[Description(
+		"Create a directory on the device, along with any missing parent. Use it to prepare a place "
+		+ "to push a file into, since a push fails when the destination directory does not exist. A "
+		+ "directory that already exists is fine.")]
+	public Task<FileMutationResult> MakeDirectory(
+		[Description("Provider-qualified device ID.")] string deviceId,
+		[Description("Directory to create; relative to the app container when bundleId is set.")] string path,
+		[Description("Scope the path to this app's data container.")] string? bundleId = null,
+		CancellationToken cancellationToken = default) =>
+		client.CreateDirectoryAsync(
+			deviceId,
+			new FileMutationRequest { BundleId = bundleId, Path = path },
+			cancellationToken);
 }
