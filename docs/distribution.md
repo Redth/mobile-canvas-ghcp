@@ -18,6 +18,11 @@ install directory:
 - The extension manifest has **no field for per-platform binaries**. The docs
   describe an extension only as a directory holding `package.json`, an entry
   file, and optional artifacts.
+- A plugin's `extensions` field names **container directories**. The loader
+  scans each container's immediate child directories for `extension.mjs`; it
+  does not load an entrypoint placed directly at the configured path. The
+  plugin therefore exposes `extensions/mobile-canvas/extension.mjs`, which
+  imports the shared root entrypoint used by source installs.
 
 The consequences are strict:
 

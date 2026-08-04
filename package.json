@@ -20,6 +20,7 @@
   },
   "files": [
     "extension.mjs",
+    "extensions/",
     "lib/",
     "runtimes/",
     "scripts/",
