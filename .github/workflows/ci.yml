@@ -25,6 +25,12 @@ jobs:
       - name: Check the version agrees everywhere
         run: node scripts/stamp-version.mjs --check
 
+      # Plugin extension paths are containers whose immediate child directories
+      # contain extension.mjs. Pointing at the extension directory itself is
+      # accepted by the manifest but silently discovers no canvas.
+      - name: Verify plugin extension layout
+        run: node scripts/verify-plugin.mjs
+
       # The bundled binaries are what a plugin install actually runs, so a
       # corrupt or mismatched archive is a shipping bug, not a packaging detail.
       - name: Verify bundled runtimes
