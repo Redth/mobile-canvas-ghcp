@@ -61,6 +61,7 @@ internal static class SimctlCatalogParser
 				};
 			})
 			.Where(runtime => runtime.Id.Length > 0)
+			.DistinctBy(runtime => runtime.Id, StringComparer.Ordinal)
 			.OrderByDescending(runtime => ParseVersion(runtime.Version))
 			.ToArray();
 	}

@@ -52,6 +52,61 @@ public sealed class SimctlParserTests
 	}
 
 	[Fact]
+	public void Parse_DeduplicatesRuntimeIdentifiersAndResolvesDeviceMetadata()
+	{
+		const string json = """
+		{
+		  "runtimes": [{
+		    "identifier": "com.apple.CoreSimulator.SimRuntime.iOS-27-0",
+		    "buildversion": "24A5279h",
+		    "name": "iOS 27.0",
+		    "version": "27.0",
+		    "isAvailable": true,
+		    "supportedArchitectures": ["arm64"],
+		    "supportedDeviceTypes": [{
+		      "identifier": "com.apple.CoreSimulator.SimDeviceType.iPhone-17-Pro"
+		    }]
+		  }, {
+		    "identifier": "com.apple.CoreSimulator.SimRuntime.iOS-27-0",
+		    "buildversion": "24A5298h",
+		    "name": "iOS 27.0",
+		    "version": "27.0",
+		    "isAvailable": true,
+		    "supportedArchitectures": ["arm64"],
+		    "supportedDeviceTypes": [{
+		      "identifier": "com.apple.CoreSimulator.SimDeviceType.iPhone-17-Pro"
+		    }]
+		  }],
+		  "devicetypes": [{
+		    "identifier": "com.apple.CoreSimulator.SimDeviceType.iPhone-17-Pro",
+		    "name": "iPhone 17 Pro",
+		    "productFamily": "iPhone",
+		    "modelIdentifier": "iPhone18,1"
+		  }],
+		  "devices": {
+		    "com.apple.CoreSimulator.SimRuntime.iOS-27-0": [{
+		      "name": "Beta Test iPhone",
+		      "udid": "EFGH-5678",
+		      "state": "Shutdown",
+		      "isAvailable": true,
+		      "deviceTypeIdentifier": "com.apple.CoreSimulator.SimDeviceType.iPhone-17-Pro"
+		    }]
+		  }
+		}
+		""";
+
+		var catalog = SimctlCatalogParser.Parse(json);
+		var runtime = Assert.Single(catalog.Runtimes);
+		var device = Assert.Single(catalog.Devices);
+
+		Assert.Equal("com.apple.CoreSimulator.SimRuntime.iOS-27-0", runtime.Id);
+		Assert.Equal(runtime.Id, device.RuntimeId);
+		Assert.Equal("iOS 27.0", device.RuntimeName);
+		Assert.Equal("27.0", device.OsVersion);
+		Assert.Equal("iPhone 17 Pro", device.DeviceTypeName);
+	}
+
+	[Fact]
 	public void DisplayParser_MapsLogicalGeometryAndOrientation()
 	{
 		const string output = """
