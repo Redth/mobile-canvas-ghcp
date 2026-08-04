@@ -47,6 +47,8 @@ public sealed partial class AndroidEmulatorBackend : IDeviceBackend, IAsyncDispo
 	private readonly ConcurrentDictionary<string, string> _dialledNumbers =
 		new(StringComparer.OrdinalIgnoreCase);
 	private static readonly TimeSpan InstanceCacheTtl = TimeSpan.FromSeconds(3);
+	private static readonly TimeSpan GeometryProbeTimeout = TimeSpan.FromSeconds(2);
+	private static readonly TimeSpan CornerProbeTimeout = TimeSpan.FromMilliseconds(500);
 
 	private readonly Lock _geometryLock = new();
 	private readonly Dictionary<string, DisplayGeometry> _geometryCache = new(StringComparer.OrdinalIgnoreCase);
@@ -1304,14 +1306,16 @@ public sealed partial class AndroidEmulatorBackend : IDeviceBackend, IAsyncDispo
 	{
 		if (instance.HasGrpc)
 		{
+			using var timeout = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+			timeout.CancelAfter(GeometryProbeTimeout);
 			try
 			{
-				var connection = await _connections.GetAsync(instance, cancellationToken).ConfigureAwait(false);
+				var connection = await _connections.GetAsync(instance, timeout.Token).ConfigureAwait(false);
 				var status = await connection.Client
 					.getStatusAsync(
 						new Google.Protobuf.WellKnownTypes.Empty(),
 						connection.Metadata,
-						cancellationToken: cancellationToken)
+						cancellationToken: timeout.Token)
 					.ConfigureAwait(false);
 
 				var entries = status.HardwareConfig?.Entry;
@@ -1325,6 +1329,10 @@ public sealed partial class AndroidEmulatorBackend : IDeviceBackend, IAsyncDispo
 						.ConfigureAwait(false);
 				}
 			}
+			catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested)
+			{
+				_logger.LogDebug("gRPC geometry lookup timed out for {Avd}; falling back to adb.", instance.AvdId);
+			}
 			catch (RpcException exception)
 			{
 				_logger.LogDebug(exception, "gRPC geometry lookup failed for {Avd}; falling back to adb.", instance.AvdId);
@@ -1334,11 +1342,21 @@ public sealed partial class AndroidEmulatorBackend : IDeviceBackend, IAsyncDispo
 		if (instance.Serial is not { } serial)
 			return null;
 
-		var sizeOutput = await RunAdbAsync(serial, ["shell", "wm", "size"], cancellationToken).ConfigureAwait(false);
+		var sizeOutput = await RunAdbProbeAsync(
+				serial,
+				["shell", "wm", "size"],
+				GeometryProbeTimeout,
+				cancellationToken)
+			.ConfigureAwait(false);
 		if (sizeOutput is null || EmulatorDiscoveryParser.ParseWmSize(sizeOutput) is not { } size)
 			return null;
 
-		var densityOutput = await RunAdbAsync(serial, ["shell", "wm", "density"], cancellationToken).ConfigureAwait(false);
+		var densityOutput = await RunAdbProbeAsync(
+				serial,
+				["shell", "wm", "density"],
+				GeometryProbeTimeout,
+				cancellationToken)
+			.ConfigureAwait(false);
 		var parsedDensity = densityOutput is null ? 0 : EmulatorDiscoveryParser.ParseWmDensity(densityOutput) ?? 0;
 
 		return await WithCornersAsync(
@@ -1378,7 +1396,11 @@ public sealed partial class AndroidEmulatorBackend : IDeviceBackend, IAsyncDispo
 		if (instance.Serial is not { } serial)
 			return geometry;
 
-		var output = await RunAdbAsync(serial, ["shell", "dumpsys", "display"], cancellationToken)
+		var output = await RunAdbProbeAsync(
+				serial,
+				["shell", "dumpsys", "display"],
+				CornerProbeTimeout,
+				cancellationToken)
 			.ConfigureAwait(false);
 		if (output is null || EmulatorDiscoveryParser.ParseRoundedCornerRadius(output) is not { } pixels)
 			return geometry;
@@ -1389,6 +1411,28 @@ public sealed partial class AndroidEmulatorBackend : IDeviceBackend, IAsyncDispo
 			CornerRadius = Math.Round(pixels / scale, 2),
 			CornerCurve = DisplayCornerCurves.Circular,
 		};
+	}
+
+	private async Task<string?> RunAdbProbeAsync(
+		string serial,
+		string[] arguments,
+		TimeSpan timeout,
+		CancellationToken cancellationToken)
+	{
+		using var probeTimeout = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+		probeTimeout.CancelAfter(timeout);
+		try
+		{
+			return await RunAdbAsync(serial, arguments, probeTimeout.Token).ConfigureAwait(false);
+		}
+		catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested)
+		{
+			_logger.LogDebug(
+				"adb probe timed out for {Serial}: {Arguments}",
+				serial,
+				string.Join(' ', arguments));
+			return null;
+		}
 	}
 
 	private static int FindHardwareInt(IEnumerable<Entry>? entries, string key)
