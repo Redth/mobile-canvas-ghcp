@@ -79,7 +79,10 @@ public sealed class SystemProcessRunner : IProcessRunner
 		catch (OperationCanceledException)
 		{
 			if (!process.HasExited)
+			{
 				process.Kill(entireProcessTree: true);
+				await process.WaitForExitAsync(CancellationToken.None).ConfigureAwait(false);
+			}
 			throw;
 		}
 
