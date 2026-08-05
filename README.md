@@ -11,6 +11,9 @@ controls through MCP.
   </tr>
 </table>
 
+https://github.com/user-attachments/assets/bedf866a-331b-463d-971e-b3aae82019ed
+
+
 Live H.264 video at ~58 FPS (iOS) and ~50 FPS (Android), with real tap, drag,
 scroll, and keyboard input. Everything runs locally on loopback; nothing is
 uploaded anywhere.
