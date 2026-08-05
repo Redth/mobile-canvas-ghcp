@@ -11,6 +11,10 @@ import { fileURLToPath } from "node:url";
 const root = join(dirname(fileURLToPath(import.meta.url)), "..");
 const manifestPath = join(root, ".github", "plugin", "plugin.json");
 const manifest = JSON.parse(readFileSync(manifestPath, "utf8"));
+const marketplace = JSON.parse(
+  readFileSync(join(root, ".github", "plugin", "marketplace.json"), "utf8"),
+);
+const packageManifest = JSON.parse(readFileSync(join(root, "package.json"), "utf8"));
 
 const configured = typeof manifest.extensions === "object" && !Array.isArray(manifest.extensions)
   ? manifest.extensions.paths
@@ -22,6 +26,30 @@ const fail = (message) => {
   console.error(`FAIL ${message}`);
   failures += 1;
 };
+
+const marketplacePlugin = marketplace.plugins?.find(
+  (plugin) => plugin.name === manifest.name,
+);
+const metadataDocuments = [
+  ["plugin.json", manifest],
+  ["marketplace.json", marketplacePlugin],
+  ["package.json", packageManifest],
+];
+
+for (const [name, metadata] of metadataDocuments) {
+  if (!metadata) {
+    fail(`${name} has no metadata for ${manifest.name}`);
+  } else if (!metadata.keywords?.includes("canvas")) {
+    fail(`${name} must include the exact "canvas" keyword`);
+  }
+}
+
+const requiredLogo = "assets/preview.png";
+if (manifest.logo !== requiredLogo) {
+  fail(`plugin.json logo must be ${requiredLogo}`);
+} else if (!existsSync(resolve(root, manifest.logo))) {
+  fail(`plugin logo is missing at ${manifest.logo}`);
+}
 
 if (containers.some((entry) => typeof entry !== "string" || entry.length === 0)) {
   fail("plugin.json must configure at least one extension container path");
