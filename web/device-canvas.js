@@ -411,6 +411,7 @@ const ACTION_CAPABILITY = {
   back: "button",
   apps: "button",
   lock: "button",
+  rotate: "rotate",
   screenshot: "screenshot",
   record: "recording",
   restart: "restart",
@@ -447,7 +448,7 @@ function updateControlAvailability() {
       Boolean(state.selected && capability && capabilities[capability] === false);
 
     const needsBooted =
-      ["home", "back", "apps", "lock", "screenshot", "record", "restart", "shutdown"].includes(action);
+      ["home", "back", "apps", "lock", "rotate", "screenshot", "record", "restart", "shutdown"].includes(action);
     button.disabled = !state.selected ||
       (action === "boot" ? booted : needsBooted && !booted);
 
@@ -937,26 +938,12 @@ function drawVideoFrame(frame) {
     width: frame.codedWidth,
     height: frame.codedHeight,
   };
-  const width = visible.width || frame.displayWidth || frame.codedWidth;
-  const height = visible.height || frame.displayHeight || frame.codedHeight;
-  if (elements.canvas.width !== width || elements.canvas.height !== height) {
-    elements.canvas.width = width;
-    elements.canvas.height = height;
-    state.canvasContext = null;
-    fitDeviceScreen();
-  }
-  // Resizing a canvas invalidates its context, so the cache is cleared above rather than re-fetched
-  // on every frame.
-  canvasContext().drawImage(
+  drawScreenSource(
     frame,
     visible.x,
     visible.y,
     visible.width,
     visible.height,
-    0,
-    0,
-    width,
-    height,
   );
   frame.close();
   elements.overlay.classList.add("hidden");
@@ -965,6 +952,51 @@ function drawVideoFrame(frame) {
     renderLinkHealth();
   }
   countFrame();
+}
+
+/**
+ * CoreSimulator keeps its IOSurface in the device's native portrait geometry. Simulator.app normally
+ * rotates that surface while displaying it, but a headless direct orientation event has no app window
+ * transform to capture. The emulator stream can likewise lag one frame shape behind its sensor. Rotate
+ * only when the source and reported display aspects disagree, so native landscape frames stay untouched.
+ */
+function drawScreenSource(source, sourceX, sourceY, sourceWidth, sourceHeight) {
+  const displayLandscape = state.display?.pointWidth > state.display?.pointHeight;
+  const sourceLandscape = sourceWidth > sourceHeight;
+  const rotation = displayLandscape !== sourceLandscape
+    ? (state.display?.orientation === "landscape-right" ? 90 : -90)
+    : 0;
+  const width = rotation === 0 ? sourceWidth : sourceHeight;
+  const height = rotation === 0 ? sourceHeight : sourceWidth;
+
+  if (elements.canvas.width !== width || elements.canvas.height !== height) {
+    elements.canvas.width = width;
+    elements.canvas.height = height;
+    state.canvasContext = null;
+    fitDeviceScreen();
+  }
+
+  const context = canvasContext();
+  context.save();
+  if (rotation < 0) {
+    context.translate(0, height);
+    context.rotate(-Math.PI / 2);
+  } else if (rotation > 0) {
+    context.translate(width, 0);
+    context.rotate(Math.PI / 2);
+  }
+  context.drawImage(
+    source,
+    sourceX,
+    sourceY,
+    sourceWidth,
+    sourceHeight,
+    0,
+    0,
+    sourceWidth,
+    sourceHeight,
+  );
+  context.restore();
 }
 
 // The stream can silently degrade to idb when ScreenCaptureKit is unavailable, which reads as a
@@ -1022,13 +1054,7 @@ function startPngFallback(label) {
     try {
       const response = await api(`/api/v1/devices/${encodeURIComponent(state.selected.id)}/screenshot`);
       const bitmap = await createImageBitmap(await response.blob());
-      if (elements.canvas.width !== bitmap.width || elements.canvas.height !== bitmap.height) {
-        elements.canvas.width = bitmap.width;
-        elements.canvas.height = bitmap.height;
-        state.canvasContext = null;
-        fitDeviceScreen();
-      }
-      canvasContext().drawImage(bitmap, 0, 0);
+      drawScreenSource(bitmap, 0, 0, bitmap.width, bitmap.height);
       bitmap.close();
       elements.overlay.classList.add("hidden");
       countFrame();
@@ -1103,6 +1129,34 @@ function sendInput(kind, payload, label = formatAction(kind)) {
   const pending = state.inputQueue.then(operation, operation);
   state.inputQueue = pending.catch(() => undefined);
   return pending;
+}
+
+async function rotateDevice() {
+  const target = state.display?.orientation?.startsWith("landscape")
+    ? "portrait"
+    : "landscape-left";
+  const deviceId = state.selected.id;
+
+  await sendInput("rotate", { orientation: target }, "Rotate");
+
+  // Both platforms acknowledge the rotation request before their display geometry changes. Wait for
+  // the new orientation so the replacement stream and pointer mapping start with the right dimensions.
+  for (let attempt = 0; attempt < 20 && state.selected?.id === deviceId; attempt++) {
+    const response = await api(`/api/v1/devices/${encodeURIComponent(deviceId)}/display`);
+    const display = await response.json();
+    state.display = display;
+    elements.geometry.value =
+      `${display.pointWidth}x${display.pointHeight} pt @${display.scale}x`;
+
+    const settled = target === "portrait"
+      ? display.orientation === "portrait"
+      : display.orientation?.startsWith("landscape");
+    if (settled) break;
+    await new Promise((resolve) => setTimeout(resolve, 100));
+  }
+
+  startStream();
+  fitDeviceScreen();
 }
 
 function setInputStatus(status, message, latency = "") {
@@ -1742,6 +1796,9 @@ for (const button of document.querySelectorAll("[data-action]")) {
         break;
       case "lock":
         await sendInput("button", { button: "lock" }, "Lock");
+        break;
+      case "rotate":
+        await rotateDevice();
         break;
       case "screenshot":
         await downloadScreenshot();

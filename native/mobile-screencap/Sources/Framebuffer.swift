@@ -12,7 +12,7 @@ enum FramebufferCommand {
 		let fps = max(1, min(120, options.int("fps") ?? 60))
 		let bitrate = max(500_000, options.int("bitrate") ?? 16_000_000)
 		let maxHeight = options.int("max-height").flatMap { $0 > 0 ? $0 : nil }
-		let developerDirectory = try selectedDeveloperDirectory(options.string("developer-dir"))
+		let developerDirectory = try DeveloperDirectory.resolve(options.string("developer-dir"))
 		let sink = ByteSink(fd: FileHandle.standardOutput.fileDescriptor)
 		let stopper = FramebufferStopper()
 		let capture = FramebufferCapture(
@@ -61,36 +61,6 @@ enum FramebufferCommand {
 				"surfaceChanges": stats.surfaceChanges,
 			])
 		}
-	}
-
-	private static func selectedDeveloperDirectory(_ override: String?) throws -> String {
-		if let override, !override.isEmpty {
-			return override
-		}
-		if let environment = ProcessInfo.processInfo.environment["DEVELOPER_DIR"], !environment.isEmpty {
-			return environment
-		}
-
-		let process = Process()
-		let output = Pipe()
-		process.executableURL = URL(fileURLWithPath: "/usr/bin/xcode-select")
-		process.arguments = ["-p"]
-		process.standardOutput = output
-		process.standardError = Pipe()
-		try process.run()
-		process.waitUntilExit()
-		guard process.terminationStatus == 0 else {
-			throw HelperError("xcode-select could not locate the active developer directory")
-		}
-		let data = output.fileHandleForReading.readDataToEndOfFile()
-		guard
-			let path = String(data: data, encoding: .utf8)?
-				.trimmingCharacters(in: .whitespacesAndNewlines),
-			!path.isEmpty
-		else {
-			throw HelperError("xcode-select returned an empty developer directory")
-		}
-		return path
 	}
 
 	private static func installSignalHandlers(_ stopper: FramebufferStopper) -> [DispatchSourceSignal] {

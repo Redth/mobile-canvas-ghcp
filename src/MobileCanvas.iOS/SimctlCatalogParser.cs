@@ -162,7 +162,7 @@ internal static class SimctlCatalogParser
 		Text = true,
 		Key = true,
 		Button = true,
-		Rotate = false,
+		Rotate = true,
 		Screenshot = true,
 		LiveStream = true,
 		Recording = true,

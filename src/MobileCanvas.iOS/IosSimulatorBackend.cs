@@ -21,6 +21,7 @@ public sealed class IosSimulatorBackend : IDeviceBackend, IAsyncDisposable
 	// shutdown, and the latter surfaces as a companion failure anyway.
 	private readonly ConcurrentDictionary<string, (DeviceTarget Device, long Stamp)> _bootedCache = new();
 	private readonly ConcurrentDictionary<string, bool> _revalidating = new();
+	private readonly ConcurrentDictionary<string, string> _orientations = new(StringComparer.OrdinalIgnoreCase);
 	private static readonly TimeSpan BootedCacheLifetime = TimeSpan.FromSeconds(15);
 
 	public IosSimulatorBackend(IProcessRunner processRunner)
@@ -90,6 +91,9 @@ public sealed class IosSimulatorBackend : IDeviceBackend, IAsyncDisposable
 		var result = await RunAsync(arguments, cancellationToken).ConfigureAwait(false);
 		EnsureSuccess("xcrun", ["simctl", .. arguments], result);
 		var display = SimctlDisplayParser.Parse(result.StandardOutput);
+		display = SimulatorOrientation.Apply(
+			display,
+			_orientations.GetValueOrDefault(device.NativeId, "portrait"));
 
 		var cornerRadius = await _profiles.TryGetCornerRadiusAsync(
 			device.DeviceTypeId,
@@ -306,12 +310,30 @@ public sealed class IosSimulatorBackend : IDeviceBackend, IAsyncDisposable
 			cancellationToken).ConfigureAwait(false);
 	}
 
-	public Task RotateAsync(
+	public async Task RotateAsync(
 		string deviceId,
 		string orientation,
-		CancellationToken cancellationToken = default) =>
-		throw new NotSupportedException(
-			"Rotation is not exposed by the installed idb companion protocol.");
+		CancellationToken cancellationToken = default)
+	{
+		var device = await RequireBootedAsync(deviceId, cancellationToken).ConfigureAwait(false);
+		var normalizedOrientation = SimulatorOrientation.Normalize(orientation);
+		var helperPath = ScreenCaptureHelper.Path
+			?? throw new InvalidOperationException(
+				"mobile-screencap is required to rotate an iOS Simulator.");
+		var arguments = new[]
+		{
+			"rotate",
+			"--udid",
+			device.NativeId,
+			"--orientation",
+			normalizedOrientation,
+		};
+		var result = await _processRunner.RunAsync(
+			new ProcessRequest(helperPath, arguments),
+			cancellationToken).ConfigureAwait(false);
+		EnsureSuccess(helperPath, arguments, result);
+		_orientations[device.NativeId] = normalizedOrientation;
+	}
 
 	public async Task<byte[]> ScreenshotAsync(string deviceId, CancellationToken cancellationToken = default)
 	{

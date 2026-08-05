@@ -49,6 +49,7 @@ public sealed class SimctlParserTests
 		Assert.Equal("18.6", device.OsVersion);
 		Assert.Equal("iPhone 16 Pro", device.DeviceTypeName);
 		Assert.True(device.Capabilities.LiveStream);
+		Assert.True(device.Capabilities.Rotate);
 	}
 
 	[Fact]
