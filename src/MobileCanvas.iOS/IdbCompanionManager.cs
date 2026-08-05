@@ -94,6 +94,8 @@ internal sealed class IdbCompanionSession : IAsyncDisposable
 		var companionPath = IdbCompanionLocator.Find()
 			?? throw new FileNotFoundException(
 				"idb_companion was not found. Install it with Homebrew or set MOBILE_CANVAS_IDB_COMPANION.");
+		var simulatorKit = await SimulatorKitLocator.ResolveSelectedAsync(processRunner, cancellationToken)
+			.ConfigureAwait(false);
 		var root = Path.Combine("/tmp", $"mobile-canvas-idb-{Environment.UserName}");
 		Directory.CreateDirectory(root);
 		File.SetUnixFileMode(root, UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute);
@@ -103,43 +105,46 @@ internal sealed class IdbCompanionSession : IAsyncDisposable
 			workingDirectory,
 			UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute);
 		var socketPath = Path.Combine(workingDirectory, "companion.sock");
-
-		var startInfo = new ProcessStartInfo
-		{
-			FileName = companionPath,
-			UseShellExecute = false,
-			RedirectStandardOutput = true,
-			RedirectStandardError = true,
-			CreateNoWindow = true,
-		};
-		foreach (var argument in new[]
-		{
-			"--udid", udid,
-			"--grpc-domain-sock", socketPath,
-			"--only", "simulator",
-			"--log-level", "info",
-		})
-		{
-			startInfo.ArgumentList.Add(argument);
-		}
-
-		var process = Process.Start(startInfo)
-			?? throw new InvalidOperationException("Failed to start idb_companion.");
+		Process? process = null;
 		var errorLines = new List<string>();
-		process.OutputDataReceived += (_, _) => { };
-		process.ErrorDataReceived += (_, eventArgs) =>
-		{
-			if (eventArgs.Data is not null)
-			{
-				lock (errorLines)
-					errorLines.Add(eventArgs.Data);
-			}
-		};
-		process.BeginOutputReadLine();
-		process.BeginErrorReadLine();
 
 		try
 		{
+			var idbDeveloperDirectory = simulatorKit.PrepareIdbDeveloperDirectory(workingDirectory);
+			var startInfo = new ProcessStartInfo
+			{
+				FileName = companionPath,
+				UseShellExecute = false,
+				RedirectStandardOutput = true,
+				RedirectStandardError = true,
+				CreateNoWindow = true,
+			};
+			startInfo.Environment["DEVELOPER_DIR"] = idbDeveloperDirectory;
+			foreach (var argument in new[]
+			{
+				"--udid", udid,
+				"--grpc-domain-sock", socketPath,
+				"--only", "simulator",
+				"--log-level", "info",
+			})
+			{
+				startInfo.ArgumentList.Add(argument);
+			}
+
+			process = Process.Start(startInfo)
+				?? throw new InvalidOperationException("Failed to start idb_companion.");
+			process.OutputDataReceived += (_, _) => { };
+			process.ErrorDataReceived += (_, eventArgs) =>
+			{
+				if (eventArgs.Data is not null)
+				{
+					lock (errorLines)
+						errorLines.Add(eventArgs.Data);
+				}
+			};
+			process.BeginOutputReadLine();
+			process.BeginErrorReadLine();
+
 			var deadline = DateTimeOffset.UtcNow.AddSeconds(20);
 			while (!File.Exists(socketPath))
 			{
@@ -167,9 +172,12 @@ internal sealed class IdbCompanionSession : IAsyncDisposable
 		}
 		catch
 		{
-			if (!process.HasExited)
-				process.Kill(entireProcessTree: true);
-			process.Dispose();
+			if (process is not null)
+			{
+				if (!process.HasExited)
+					process.Kill(entireProcessTree: true);
+				process.Dispose();
+			}
 			if (Directory.Exists(workingDirectory))
 				Directory.Delete(workingDirectory, recursive: true);
 			throw;
