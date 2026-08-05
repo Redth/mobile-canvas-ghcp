@@ -25,6 +25,7 @@
         "simulator",
         "emulator",
         "copilot-canvas",
+        "canvas",
         "mobile",
         "device-control",
         "mcp"
