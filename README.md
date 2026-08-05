@@ -112,7 +112,9 @@ cd mobile-canvas-ghcp
 ./scripts/install.sh    # Installs into ~/.copilot/extensions/mobile-canvas
 ```
 
-Reload Copilot afterwards so it picks up the extension.
+Reload Copilot afterwards so it picks up the extension. Source installs register
+as **Mobile Device (Local)** (`mobile-device-local`), so a development build can
+coexist with the marketplace plugin without registering the same canvas ID twice.
 
 ### As a .NET global tool
 

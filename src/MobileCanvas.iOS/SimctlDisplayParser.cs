@@ -8,7 +8,8 @@ internal static partial class SimctlDisplayParser
 	public static DisplayGeometry Parse(string output)
 	{
 		var screenStart = output.IndexOf("Connected Screens:", StringComparison.Ordinal);
-		var display = screenStart >= 0 ? output[screenStart..] : output;
+		var displays = screenStart >= 0 ? output[screenStart..] : output;
+		var display = SelectPrimaryDisplay(displays);
 		var pixelMatch = PixelSizeRegex().Match(display);
 		var scaleMatch = ScaleRegex().Match(display);
 		var orientationMatch = OrientationRegex().Match(display);
@@ -38,6 +39,26 @@ internal static partial class SimctlDisplayParser
 		};
 	}
 
+	private static string SelectPrimaryDisplay(string output)
+	{
+		var screens = ScreenRegex().Matches(output)
+			.Select(match => new
+			{
+				Name = match.Groups["name"].Value.Trim(),
+				Body = match.Groups["body"].Value,
+			})
+			.ToArray();
+
+		if (screens.Length == 0)
+			return output;
+
+		return screens.FirstOrDefault(screen =>
+				ScreenTypeRegex().IsMatch(screen.Body))?.Body
+			?? screens.FirstOrDefault(screen =>
+				screen.Name.Equals("LCD", StringComparison.OrdinalIgnoreCase))?.Body
+			?? screens[0].Body;
+	}
+
 	private static double InferScale(int width) => width >= 1000 ? 3 : 2;
 
 	private static string NormalizeOrientation(string? value) =>
@@ -57,4 +78,12 @@ internal static partial class SimctlDisplayParser
 
 	[GeneratedRegex(@"UI Orientation:\s*([^\r\n]+)", RegexOptions.CultureInvariant)]
 	private static partial Regex OrientationRegex();
+
+	[GeneratedRegex(
+		@"^\s*\(\d+\)\s+(?<name>[^:\r\n]+):\s*\r?\n(?<body>.*?)(?=^\s*\(\d+\)\s+[^:\r\n]+:\s*$|\z)",
+		RegexOptions.CultureInvariant | RegexOptions.Multiline | RegexOptions.Singleline)]
+	private static partial Regex ScreenRegex();
+
+	[GeneratedRegex(@"^\s*Screen Type:\s*Integrated\s*$", RegexOptions.CultureInvariant | RegexOptions.Multiline | RegexOptions.IgnoreCase)]
+	private static partial Regex ScreenTypeRegex();
 }

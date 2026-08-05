@@ -3,6 +3,7 @@ using System.Reflection;
 using System.Runtime.InteropServices;
 using System.Text.Json;
 using MobileCanvas.Contracts;
+using MobileCanvas.Core;
 
 namespace MobileCanvas.Tool;
 
@@ -549,7 +550,7 @@ internal static class DeviceCli
 			: options.RequiredPosition(0, "device ID");
 		if (string.IsNullOrWhiteSpace(id))
 			throw new ArgumentException("A device ID is required.");
-		var output = options.Value("output") ?? CreateScreenshotPath();
+		var output = options.Value("output") ?? CreateScreenshotPath(id);
 		output = Path.GetFullPath(output);
 		Directory.CreateDirectory(Path.GetDirectoryName(output)!);
 		var bytes = await Client.ScreenshotAsync(id, options.Context(), cancellationToken)
@@ -564,12 +565,15 @@ internal static class DeviceCli
 		};
 	}
 
-	private static string CreateScreenshotPath()
+	private static string CreateScreenshotPath(string deviceId)
 	{
 		var directory = Path.Combine(DevicePaths.Home, "artifacts", "screenshots");
 		Directory.CreateDirectory(directory);
-		return Path.Combine(directory, $"ios-{DateTimeOffset.Now:yyyyMMdd-HHmmss}.png");
+		return Path.Combine(directory, CreateScreenshotFileName(deviceId, DateTimeOffset.Now));
 	}
+
+	internal static string CreateScreenshotFileName(string deviceId, DateTimeOffset timestamp) =>
+		$"{DeviceIdentity.GetPlatform(deviceId).ToLowerInvariant()}-{timestamp:yyyyMMdd-HHmmss}.png";
 
 	private static void Write(object value, bool json)
 	{

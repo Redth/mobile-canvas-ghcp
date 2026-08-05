@@ -20,8 +20,8 @@ namespace MobileCanvas.Android;
 /// <c>adb exec-out screenrecord</c> has idb's exact fatal flaw (one IDR for an entire stream, so a
 /// corrupt picture never recovers) and <c>adb shell input</c> measured 53 ms median / 4301 ms worst
 /// case per event because it spawns a host process and an on-device JVM. The emulator's gRPC service
-/// delivers ~50 FPS at every resolution including full native, and 0.03 ms median input latency over
-/// a persistent <c>streamInputEvent</c> call.
+/// delivers ~50 FPS at every resolution including full native and acknowledged touch input with
+/// low enough latency for live gestures.
 /// </remarks>
 public sealed partial class AndroidEmulatorBackend : IDeviceBackend, IAsyncDisposable
 {
@@ -49,6 +49,7 @@ public sealed partial class AndroidEmulatorBackend : IDeviceBackend, IAsyncDispo
 	private static readonly TimeSpan InstanceCacheTtl = TimeSpan.FromSeconds(3);
 	private static readonly TimeSpan GeometryProbeTimeout = TimeSpan.FromSeconds(2);
 	private static readonly TimeSpan CornerProbeTimeout = TimeSpan.FromMilliseconds(500);
+	private static readonly TimeSpan InputCommandTimeout = TimeSpan.FromSeconds(8);
 
 	private readonly Lock _geometryLock = new();
 	private readonly Dictionary<string, DisplayGeometry> _geometryCache = new(StringComparer.OrdinalIgnoreCase);
@@ -634,7 +635,7 @@ public sealed partial class AndroidEmulatorBackend : IDeviceBackend, IAsyncDispo
 		// KeyboardEvent over both `streamInputEvent` and the unary `sendKey`, reports success, and
 		// never delivers a character. Verified against a focused text field on emulator 36.x.
 		var serial = await RequireSerialAsync(deviceId, cancellationToken).ConfigureAwait(false);
-		await RunAdbAsync(
+		await RunAdbInputAsync(
 			serial,
 			["shell", "input", "text", QuoteForDeviceShell(text)],
 			cancellationToken).ConfigureAwait(false);
@@ -651,7 +652,10 @@ public sealed partial class AndroidEmulatorBackend : IDeviceBackend, IAsyncDispo
 		// Same gRPC keyboard limitation as TypeTextAsync and PressButtonAsync.
 		var serial = await RequireSerialAsync(deviceId, cancellationToken).ConfigureAwait(false);
 		if (AndroidKeyMap.UsbToAndroidKeyEvent(keyCode) is { } androidKey)
-			await RunAdbAsync(serial, ["shell", "input", "keyevent", androidKey], cancellationToken).ConfigureAwait(false);
+			await RunAdbInputAsync(
+				serial,
+				["shell", "input", "keyevent", androidKey],
+				cancellationToken).ConfigureAwait(false);
 		else
 			throw new DeviceCapabilityException($"Key code 0x{keyCode:X} has no Android key mapping.");
 	}
@@ -680,7 +684,10 @@ public sealed partial class AndroidEmulatorBackend : IDeviceBackend, IAsyncDispo
 		};
 
 		var serial = await RequireSerialAsync(deviceId, cancellationToken).ConfigureAwait(false);
-		await RunAdbAsync(serial, ["shell", "input", "keyevent", androidKey], cancellationToken).ConfigureAwait(false);
+		await RunAdbInputAsync(
+			serial,
+			["shell", "input", "keyevent", androidKey],
+			cancellationToken).ConfigureAwait(false);
 	}
 
 	public async Task RotateAsync(string deviceId, string orientation, CancellationToken cancellationToken = default)
@@ -719,13 +726,10 @@ public sealed partial class AndroidEmulatorBackend : IDeviceBackend, IAsyncDispo
 		int y,
 		int pressure,
 		CancellationToken cancellationToken) =>
-		connection.SendInputAsync(
-			new InputEvent
+		connection.SendTouchAsync(
+			new TouchEvent
 			{
-				TouchEvent = new TouchEvent
-				{
-					Touches = { new Touch { X = x, Y = y, Identifier = 0, Pressure = pressure } },
-				},
+				Touches = { new Touch { X = x, Y = y, Identifier = 0, Pressure = pressure } },
 			},
 			cancellationToken);
 
@@ -1568,6 +1572,28 @@ public sealed partial class AndroidEmulatorBackend : IDeviceBackend, IAsyncDispo
 	#region adb
 
 	internal string? AdbPath => _locator.Adb;
+
+	private async Task RunAdbInputAsync(
+		string serial,
+		string[] arguments,
+		CancellationToken cancellationToken)
+	{
+		using var timeout = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+		timeout.CancelAfter(InputCommandTimeout);
+
+		try
+		{
+			var result = await RunAdbResultAsync(serial, arguments, timeout.Token).ConfigureAwait(false);
+			if (result.ExitCode != 0)
+				throw new ProcessExecutionException(_locator.Adb!, ["-s", serial, .. arguments], result);
+		}
+		catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested)
+		{
+			throw new DeviceCapabilityException(
+				$"Android input timed out on '{serial}'. The emulator's adb input service is not responding; "
+				+ "restart the emulator from Mobile Canvas and retry.");
+		}
+	}
 
 	internal async Task<string?> RunAdbAsync(string serial, string[] arguments, CancellationToken cancellationToken)
 	{
