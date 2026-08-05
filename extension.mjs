@@ -1,9 +1,15 @@
 import { execFile } from "node:child_process";
+import { fileURLToPath } from "node:url";
+import { sep } from "node:path";
 import { promisify } from "node:util";
 import { createCanvas, joinSession } from "@github/copilot-sdk/extension";
 import { resolveCommand } from "./lib/runtime.mjs";
 
 const execFileAsync = promisify(execFile);
+const extensionPath = process.env.EXTENSION_PATH || fileURLToPath(import.meta.url);
+const isPluginInstall = extensionPath.includes(`${sep}installed-plugins${sep}`);
+const canvasId = isPluginInstall ? "mobile-device" : "mobile-device-local";
+const canvasName = isPluginInstall ? "Mobile Device" : "Mobile Device (Local)";
 
 // Resolved lazily and then cached: extracting the bundled binary should happen
 // on first use rather than at import time, so a resolution failure surfaces as
@@ -52,8 +58,8 @@ function targetAction(name, description, verb) {
 }
 
 const canvas = createCanvas({
-  id: "mobile-device",
-  displayName: "Mobile Device",
+  id: canvasId,
+  displayName: canvasName,
   description: "View, create, boot, and interact with local iOS simulators and Android emulators.",
   inputSchema: {
     type: "object",

@@ -6,19 +6,13 @@ using Grpc.Net.Client;
 namespace MobileCanvas.Android;
 
 /// <summary>
-/// A pooled gRPC connection to one running emulator, plus the persistent input stream.
-///
-/// The input stream matters: <c>streamInputEvent</c> is a single client-streaming RPC, so sending a
-/// touch costs one HTTP/2 frame write (measured at 0.03 ms median) instead of a full RPC (1.1 ms) or
-/// an <c>adb shell input</c> subprocess (53 ms median, 4301 ms worst case). Live drag is only smooth
-/// on the streaming path.
+/// A pooled gRPC connection to one running emulator.
 /// </summary>
 internal sealed class EmulatorConnection : IAsyncDisposable
 {
 	private readonly GrpcChannel _channel;
 	private readonly Metadata _metadata;
 	private readonly SemaphoreSlim _inputGate = new(1, 1);
-	private AsyncClientStreamingCall<InputEvent, Google.Protobuf.WellKnownTypes.Empty>? _inputStream;
 	private bool _disposed;
 
 	private EmulatorConnection(EmulatorInstance instance, GrpcChannel channel, Metadata metadata)
@@ -52,32 +46,22 @@ internal sealed class EmulatorConnection : IAsyncDisposable
 	}
 
 	/// <summary>
-	/// Writes one input event on the shared stream, reopening it if the emulator closed it. Writes
-	/// are serialized because gRPC allows only one in-flight write per client stream, and because an
-	/// out-of-order release would strand a touch slot.
+	/// Sends one touch and waits for the emulator to acknowledge it. The client-streaming endpoint
+	/// can accept writes after a guest reset without reporting that the events were discarded, which
+	/// makes controls appear successful while doing nothing. The unary endpoint costs about 1 ms but
+	/// gives every event a server response, and serialization keeps releases ordered after presses.
 	/// </summary>
-	public async Task SendInputAsync(InputEvent inputEvent, CancellationToken cancellationToken)
+	public async Task SendTouchAsync(TouchEvent touchEvent, CancellationToken cancellationToken)
 	{
 		await _inputGate.WaitAsync(cancellationToken).ConfigureAwait(false);
 		try
 		{
 			ObjectDisposedException.ThrowIf(_disposed, this);
-
-			for (var attempt = 0; attempt < 2; attempt++)
-			{
-				var stream = _inputStream ??= Client.streamInputEvent(_metadata);
-				try
-				{
-					await stream.RequestStream.WriteAsync(inputEvent, cancellationToken).ConfigureAwait(false);
-					return;
-				}
-				catch (Exception) when (attempt == 0)
-				{
-					// The emulator drops the stream on reboot or rotation. Rebuild once and retry so a
-					// transient close does not surface as a failed gesture.
-					await DisposeInputStreamAsync().ConfigureAwait(false);
-				}
-			}
+			await Client.sendTouchAsync(
+					touchEvent,
+					_metadata,
+					cancellationToken: cancellationToken)
+				.ConfigureAwait(false);
 		}
 		finally
 		{
@@ -89,38 +73,19 @@ internal sealed class EmulatorConnection : IAsyncDisposable
 	// KeyboardEvent over both `streamInputEvent` and the unary `sendKey`, returns success, and never
 	// acts on it -- verified on emulator 36.x for system buttons (GoHome), USB-HID key codes, and
 	// text. `adb shell input keyevent|text` works on the same emulator in the same state, so
-	// AndroidEmulatorBackend routes every keyboard path through adb. Touch is unaffected and stays
-	// on `streamInputEvent`, where the 0.03 ms latency actually matters. Do not reintroduce a gRPC
-	// key path without first confirming a keypress moves the device, not just that the call succeeds.
+	// AndroidEmulatorBackend routes every keyboard path through adb. Touch uses the acknowledged
+	// unary `sendTouch` endpoint instead. Do not reintroduce a gRPC key path without first confirming
+	// a keypress moves the device, not just that the call succeeds.
 
-	public async ValueTask DisposeAsync()
+	public ValueTask DisposeAsync()
 	{
 		if (_disposed)
-			return;
+			return ValueTask.CompletedTask;
 
 		_disposed = true;
-		await DisposeInputStreamAsync().ConfigureAwait(false);
 		_channel.Dispose();
 		_inputGate.Dispose();
-	}
-
-	private async Task DisposeInputStreamAsync()
-	{
-		var stream = _inputStream;
-		_inputStream = null;
-		if (stream is null)
-			return;
-
-		try
-		{
-			await stream.RequestStream.CompleteAsync().ConfigureAwait(false);
-		}
-		catch (Exception)
-		{
-			// The stream is being torn down; a failure to close it cleanly is not actionable.
-		}
-
-		stream.Dispose();
+		return ValueTask.CompletedTask;
 	}
 }
 

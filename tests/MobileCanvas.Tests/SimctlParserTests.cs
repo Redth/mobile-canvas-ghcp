@@ -125,4 +125,36 @@ public sealed class SimctlParserTests
 		Assert.Equal(812, display.PointHeight);
 		Assert.Equal("landscape-left", display.Orientation);
 	}
+
+	[Fact]
+	public void DisplayParser_PrefersIntegratedDisplayOverExternalScreens()
+	{
+		const string output = """
+		Connected Screens:
+		    (2) TVOut:
+		        Screen Type: TVOut
+		        Pixel Size: {720, 480}
+		        Preferred UI Scale: 1
+		        UI Orientation: Ambiguous
+		    (1) LCD:
+		        Screen Type: Integrated
+		        Pixel Size: {1125, 2436}
+		        Preferred UI Scale: 3
+		        UI Orientation: Portrait
+		    (3) Wireless:
+		        Screen Type: CarPlay
+		        Pixel Size: {720, 480}
+		        Preferred UI Scale: 1
+		        UI Orientation: Ambiguous
+		""";
+
+		var display = SimctlDisplayParser.Parse(output);
+
+		Assert.Equal(1125, display.PixelWidth);
+		Assert.Equal(2436, display.PixelHeight);
+		Assert.Equal(375, display.PointWidth);
+		Assert.Equal(812, display.PointHeight);
+		Assert.Equal(3, display.Scale);
+		Assert.Equal("portrait", display.Orientation);
+	}
 }
