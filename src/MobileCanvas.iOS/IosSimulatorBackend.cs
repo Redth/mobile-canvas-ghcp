@@ -2169,14 +2169,35 @@ public sealed class IosSimulatorBackend : IDeviceBackend, IAsyncDisposable
 		var xcode = await _processRunner.RunAsync(
 			new ProcessRequest("xcode-select", ["-p"]),
 			cancellationToken).ConfigureAwait(false);
+		var xcodePath = xcode.ExitCode == 0 ? xcode.StandardOutput.Trim() : null;
+		var xcodeReady = !string.IsNullOrWhiteSpace(xcodePath);
 		checks.Add(new DependencyCheck
 		{
 			Name = "Xcode",
-			Status = xcode.ExitCode == 0 ? "ok" : "error",
-			Message = xcode.ExitCode == 0
+			Status = xcodeReady ? "ok" : "error",
+			Message = xcodeReady
 				? "Full Xcode developer directory is selected."
-				: xcode.StandardError.Trim(),
-			Path = xcode.ExitCode == 0 ? xcode.StandardOutput.Trim() : null,
+				: string.IsNullOrWhiteSpace(xcode.StandardError)
+					? "xcode-select did not return a developer directory."
+					: xcode.StandardError.Trim(),
+			Path = xcodePath,
+		});
+
+		SimulatorKitInstallation? simulatorKit = null;
+		if (xcodeReady)
+			SimulatorKitLocator.TryResolve(xcodePath!, out simulatorKit);
+		checks.Add(new DependencyCheck
+		{
+			Name = "SimulatorKit",
+			Status = simulatorKit is null ? "error" : "ok",
+			Message = simulatorKit is null
+				? xcodeReady
+					? SimulatorKitLocator.GetMissingFrameworkMessage(xcodePath!)
+					: "Select a full Xcode installation before checking SimulatorKit.framework."
+				: simulatorKit.Layout == SimulatorKitLayout.SharedFrameworks
+					? "Xcode 27 shared-framework layout is available for HID interactions."
+					: "Legacy Xcode private-framework layout is available for HID interactions.",
+			Path = simulatorKit?.FrameworkPath,
 		});
 
 		var companion = IdbCompanionLocator.Find();
