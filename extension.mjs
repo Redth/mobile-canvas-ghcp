@@ -15,14 +15,20 @@ const canvasName = isPluginInstall ? "Mobile Device" : "Mobile Device (Local)";
 // on first use rather than at import time, so a resolution failure surfaces as
 // a readable action error instead of preventing the extension from loading.
 let resolved = null;
-function command() {
+async function command() {
   if (!resolved) resolved = resolveCommand();
-  return resolved.command;
+  const current = resolved;
+  try {
+    return (await current).command;
+  } catch (error) {
+    if (resolved === current) resolved = null;
+    throw error;
+  }
 }
 
 async function runCli(args) {
   try {
-    const { stdout } = await execFileAsync(command(), [...args, "--json"], {
+    const { stdout } = await execFileAsync(await command(), [...args, "--json"], {
       encoding: "utf8",
       maxBuffer: 8 * 1024 * 1024,
       timeout: 120_000,

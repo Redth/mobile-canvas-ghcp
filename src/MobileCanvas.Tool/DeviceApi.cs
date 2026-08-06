@@ -127,14 +127,21 @@ internal static class DeviceApi
 	}
 
 	private static bool IsPublicRequest(HttpRequest request) =>
-		request.Path == "/" ||
-		request.Path == "/device-canvas.js" ||
-		request.Path == "/device-canvas.css" ||
-		request.Path == "/api/v1/auth/bootstrap";
+		IsPublicPath(request.Path);
+
+	internal static bool IsPublicPath(PathString path) =>
+		path == "/" ||
+		path == "/create-device-options.js" ||
+		path == "/device-canvas.js" ||
+		path == "/device-canvas.css" ||
+		path == "/api/v1/auth/bootstrap";
 
 	private static void MapAssets(WebApplication app)
 	{
 		app.MapGet("/", () => EmbeddedAsset("index.html", "text/html; charset=utf-8"));
+		app.MapGet(
+			"/create-device-options.js",
+			() => EmbeddedAsset("create-device-options.js", "text/javascript; charset=utf-8"));
 		app.MapGet(
 			"/device-canvas.js",
 			() => EmbeddedAsset("device-canvas.js", "text/javascript; charset=utf-8"));

@@ -1,0 +1,17 @@
+{
+  "version": "0.2.0",
+  "configurations": [
+    {
+      "name": "Run Mobile Canvas VS Code Extension",
+      "type": "extensionHost",
+      "request": "launch",
+      "args": [
+        "--extensionDevelopmentPath=${workspaceFolder}/vscode"
+      ],
+      "outFiles": [
+        "${workspaceFolder}/vscode/out/**/*.js"
+      ],
+      "preLaunchTask": "Build VS Code extension"
+    }
+  ]
+}

@@ -1,0 +1,157 @@
+{
+  "name": "mobile-canvas",
+  "displayName": "Mobile Canvas",
+  "description": "View and interact with local iOS Simulators and Android emulators from VS Code and Copilot Chat.",
+  "version": "0.1.6",
+  "publisher": "redth",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/Redth/mobile-canvas-ghcp"
+  },
+  "homepage": "https://github.com/Redth/mobile-canvas-ghcp#vs-code",
+  "bugs": {
+    "url": "https://github.com/Redth/mobile-canvas-ghcp/issues"
+  },
+  "engines": {
+    "vscode": "^1.101.0"
+  },
+  "extensionKind": [
+    "ui"
+  ],
+  "categories": [
+    "Visualization",
+    "Other"
+  ],
+  "keywords": [
+    "ios",
+    "android",
+    "simulator",
+    "emulator",
+    "copilot",
+    "mcp"
+  ],
+  "activationEvents": [
+    "onStartupFinished",
+    "onView:mobileCanvas.deviceView",
+    "onCommand:mobileCanvas.refresh",
+    "onLanguageModelTool:mobileCanvas_selectedDevice",
+    "onLanguageModelTool:mobileCanvas_screenshot",
+    "onLanguageModelTool:mobileCanvas_uiTree"
+  ],
+  "main": "./out/extension.js",
+  "contributes": {
+    "viewsContainers": {
+      "activitybar": [
+        {
+          "id": "mobileCanvas",
+          "title": "Mobile",
+          "icon": "media/activitybar.svg"
+        }
+      ]
+    },
+    "views": {
+      "mobileCanvas": [
+        {
+          "id": "mobileCanvas.deviceView",
+          "name": "Device",
+          "type": "webview"
+        }
+      ]
+    },
+    "commands": [
+      {
+        "command": "mobileCanvas.open",
+        "title": "Open Mobile Device",
+        "category": "Mobile Devices"
+      },
+      {
+        "command": "mobileCanvas.refresh",
+        "title": "Refresh",
+        "category": "Mobile Devices",
+        "icon": "$(refresh)"
+      }
+    ],
+    "menus": {
+      "view/title": [
+        {
+          "command": "mobileCanvas.refresh",
+          "group": "navigation",
+          "when": "view == mobileCanvas.deviceView"
+        }
+      ]
+    },
+    "mcpServerDefinitionProviders": [
+      {
+        "id": "mobileCanvas.mcp",
+        "label": "Mobile Canvas"
+      }
+    ],
+    "languageModelTools": [
+      {
+        "name": "mobileCanvas_selectedDevice",
+        "displayName": "Mobile: Selected Device",
+        "toolReferenceName": "mobileDevice",
+        "canBeReferencedInPrompt": true,
+        "modelDescription": "Returns information about the device currently selected in the Mobile view.",
+        "userDescription": "Attach the device currently selected in the Mobile view.",
+        "inputSchema": {
+          "type": "object",
+          "properties": {},
+          "additionalProperties": false
+        }
+      },
+      {
+        "name": "mobileCanvas_screenshot",
+        "displayName": "Mobile: Screenshot",
+        "toolReferenceName": "mobileScreenshot",
+        "canBeReferencedInPrompt": true,
+        "modelDescription": "Captures and returns a PNG screenshot of the device currently selected in the Mobile view.",
+        "userDescription": "Attach a current screenshot of the selected mobile device.",
+        "inputSchema": {
+          "type": "object",
+          "properties": {},
+          "additionalProperties": false
+        }
+      },
+      {
+        "name": "mobileCanvas_uiTree",
+        "displayName": "Mobile: UI Tree",
+        "toolReferenceName": "mobileUiTree",
+        "canBeReferencedInPrompt": true,
+        "modelDescription": "Returns the current accessibility UI tree for the device selected in the Mobile view.",
+        "userDescription": "Attach the current accessibility tree for the selected mobile device.",
+        "inputSchema": {
+          "type": "object",
+          "properties": {},
+          "additionalProperties": false
+        }
+      }
+    ]
+  },
+  "scripts": {
+    "compile": "tsc -p .",
+    "check:web": "node --check ../web/device-canvas.js && node --check media/vscode-theme.js && node --check media/vscode-transport.js",
+    "check:scripts": "node --check ../lib/runtime.mjs && node --check ../lib/runtime-assets.mjs && node --check ../lib/mcp-vscode-proxy.mjs && node --check ../scripts/mcp-vscode.mjs && node --check ../scripts/prepare-vscode.mjs && node --check ../scripts/prepare-plugin.mjs && node --check ../scripts/package-runtime-assets.mjs && node --check ../scripts/package-vscode-thin.mjs && node --check ../scripts/package-vscode-targets.mjs && node --check ../scripts/verify-vsix.mjs",
+    "prepare-assets": "node ../scripts/prepare-vscode.mjs",
+    "build": "npm run compile && npm run check:web && npm run check:scripts && npm run prepare-assets",
+    "test:unit": "node --test test/*.test.mjs",
+    "test:integration": "node out/test/runTest.js",
+    "test": "npm run build && npm run test:unit && npm run test:integration",
+    "vscode:prepublish": "npm run compile && npm run check:web && npm run check:scripts",
+    "package": "npm run build && vsce package --out ../.build/mobile-canvas-vscode.vsix && node ../scripts/verify-vsix.mjs ../.build/mobile-canvas-vscode.vsix",
+    "package:thin": "npm run compile && npm run check:web && npm run check:scripts && node ../scripts/package-vscode-thin.mjs",
+    "package:targets": "npm run compile && npm run check:web && npm run check:scripts && node ../scripts/package-vscode-targets.mjs"
+  },
+  "dependencies": {
+    "ws": "^8.18.3"
+  },
+  "devDependencies": {
+    "@types/node": "^22.0.0",
+    "@types/vscode": "^1.101.0",
+    "@types/ws": "^8.18.1",
+    "@vscode/test-electron": "^2.5.2",
+    "@vscode/vsce": "^3.6.0",
+    "typescript": "^5.9.2"
+  }
+}

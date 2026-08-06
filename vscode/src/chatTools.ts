@@ -1,0 +1,90 @@
+import * as vscode from "vscode";
+import type { SelectedDeviceContext } from "./hostBridge";
+
+export const CHAT_TOOL_NAMES = {
+  selectedDevice: "mobileCanvas_selectedDevice",
+  screenshot: "mobileCanvas_screenshot",
+  uiTree: "mobileCanvas_uiTree",
+} as const;
+
+export interface MobileDeviceContextSource {
+  getSelectedDeviceContext(): Promise<SelectedDeviceContext>;
+  getSelectedScreenshot(): Promise<{
+    context: SelectedDeviceContext;
+    bytes: Uint8Array;
+  }>;
+  getSelectedUiTree(): Promise<{
+    context: SelectedDeviceContext;
+    tree: unknown;
+  }>;
+}
+
+export function registerChatTools(
+  source: MobileDeviceContextSource,
+): vscode.Disposable[] {
+  return [
+    vscode.lm.registerTool(
+      CHAT_TOOL_NAMES.selectedDevice,
+      new SelectedDeviceTool(source),
+    ),
+    vscode.lm.registerTool(
+      CHAT_TOOL_NAMES.screenshot,
+      new ScreenshotTool(source),
+    ),
+    vscode.lm.registerTool(
+      CHAT_TOOL_NAMES.uiTree,
+      new UiTreeTool(source),
+    ),
+  ];
+}
+
+class SelectedDeviceTool implements vscode.LanguageModelTool<Record<string, never>> {
+  constructor(private readonly source: MobileDeviceContextSource) {}
+
+  async invoke(): Promise<vscode.LanguageModelToolResult> {
+    const context = await this.source.getSelectedDeviceContext();
+    return new vscode.LanguageModelToolResult([
+      vscode.LanguageModelDataPart.json(context.selection),
+    ]);
+  }
+
+  prepareInvocation(): vscode.PreparedToolInvocation {
+    return { invocationMessage: "Reading the selected mobile device" };
+  }
+}
+
+class ScreenshotTool implements vscode.LanguageModelTool<Record<string, never>> {
+  constructor(private readonly source: MobileDeviceContextSource) {}
+
+  async invoke(): Promise<vscode.LanguageModelToolResult> {
+    const screenshot = await this.source.getSelectedScreenshot();
+    return new vscode.LanguageModelToolResult([
+      new vscode.LanguageModelTextPart(
+        `Current screenshot of ${screenshot.context.deviceLabel} (${screenshot.context.deviceId}).`,
+      ),
+      vscode.LanguageModelDataPart.image(screenshot.bytes, "image/png"),
+    ]);
+  }
+
+  prepareInvocation(): vscode.PreparedToolInvocation {
+    return { invocationMessage: "Capturing the selected mobile device" };
+  }
+}
+
+class UiTreeTool implements vscode.LanguageModelTool<Record<string, never>> {
+  constructor(private readonly source: MobileDeviceContextSource) {}
+
+  async invoke(): Promise<vscode.LanguageModelToolResult> {
+    const snapshot = await this.source.getSelectedUiTree();
+    return new vscode.LanguageModelToolResult([
+      new vscode.LanguageModelTextPart(
+        `Accessibility tree for ${snapshot.context.deviceLabel} (${snapshot.context.deviceId}).`,
+      ),
+      vscode.LanguageModelDataPart.json(snapshot.tree),
+    ]);
+  }
+
+  prepareInvocation(): vscode.PreparedToolInvocation {
+    return { invocationMessage: "Reading the selected device UI tree" };
+  }
+}

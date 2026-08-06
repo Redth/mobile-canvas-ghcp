@@ -15,10 +15,16 @@ jobs:
         with:
           global-json-file: global.json
 
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: vscode/package-lock.json
+
       - name: Test
         run: dotnet test MobileCanvas.slnx -c Release
 
-      # Four separate files carry the version, and they drift silently: the
+      # Several manifests carry the version, and they drift silently: the
       # marketplace manifests sat a whole release behind while the binary
       # shipped a newer number, so a bug report would name a version nobody
       # could install.
@@ -30,6 +36,11 @@ jobs:
       # accepted by the manifest but silently discovers no canvas.
       - name: Verify plugin extension layout
         run: node scripts/verify-plugin.mjs
+
+      - name: Package Copilot plugin
+        run: |
+          npm run package:plugin
+          node scripts/verify-plugin.mjs .build/copilot-plugin/mobile-canvas
 
       # The bundled binaries are what a plugin install actually runs, so a
       # corrupt or mismatched archive is a shipping bug, not a packaging detail.
@@ -48,3 +59,34 @@ jobs:
             console.log("bundled:", Object.keys(m.runtimes).join(", "));
           '
           node scripts/source-hash.mjs --check
+
+      - name: Install VS Code extension dependencies
+        run: npm ci --prefix vscode --ignore-scripts
+
+      - name: Test VS Code extension
+        run: npm test --prefix vscode
+
+      - name: Package VS Code extension
+        run: npm run package --prefix vscode
+
+      - name: Package platform-specific VS Code extensions
+        run: npm run package:targets --prefix vscode
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: mobile-canvas-copilot-plugin-${{ github.sha }}
+          path: .build/copilot-plugin/mobile-canvas
+          include-hidden-files: true
+          if-no-files-found: error
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: mobile-canvas-vscode-universal-${{ github.sha }}
+          path: .build/mobile-canvas-vscode.vsix
+          if-no-files-found: error
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: mobile-canvas-vscode-platforms-${{ github.sha }}
+          path: .build/mobile-canvas-vscode-*.vsix
+          if-no-files-found: error

@@ -7,6 +7,24 @@ namespace MobileCanvas.Tests;
 public sealed class DeviceServiceTests
 {
 	[Fact]
+	public async Task Create_StartsTheNewDevice()
+	{
+		var backend = new FakeBackend();
+		var service = new DeviceService([backend]);
+
+		var device = await service.CreateAsync(new CreateDeviceRequest
+		{
+			Platform = DevicePlatforms.Ios,
+			Name = "Created iPhone",
+			RuntimeId = "runtime",
+			DeviceTypeId = "type",
+		});
+
+		Assert.Equal(FakeBackend.Device, device);
+		Assert.Equal([FakeBackend.Device.Id], backend.BootedDeviceIds);
+	}
+
+	[Fact]
 	public async Task SelectAndGetSelected_ReturnsDeployableTarget()
 	{
 		var backend = new FakeBackend();
@@ -619,6 +637,7 @@ public sealed class DeviceServiceTests
 
 		public string Platform => DevicePlatforms.Ios;
 		public bool IsDeleted { get; set; }
+		public List<string> BootedDeviceIds { get; } = [];
 		public Task<DeviceCatalog> GetCatalogAsync(CancellationToken cancellationToken = default) =>
 			Task.FromResult(new DeviceCatalog { Devices = [Device] });
 		public Task<DeviceTarget[]> ListDevicesAsync(CancellationToken cancellationToken = default) =>
@@ -631,8 +650,11 @@ public sealed class DeviceServiceTests
 			Task.FromResult(new DisplayGeometry());
 		public Task<DeviceTarget> CreateAsync(CreateDeviceRequest request, CancellationToken cancellationToken = default) =>
 			Task.FromResult(Device);
-		public Task<DeviceTarget> BootAsync(string deviceId, CancellationToken cancellationToken = default) =>
-			Task.FromResult(Device);
+		public Task<DeviceTarget> BootAsync(string deviceId, CancellationToken cancellationToken = default)
+		{
+			BootedDeviceIds.Add(deviceId);
+			return Task.FromResult(Device);
+		}
 		public Task<DeviceTarget> ShutdownAsync(string deviceId, CancellationToken cancellationToken = default) =>
 			Task.FromResult(Device);
 		public Task<DeviceTarget> RestartAsync(string deviceId, CancellationToken cancellationToken = default) =>

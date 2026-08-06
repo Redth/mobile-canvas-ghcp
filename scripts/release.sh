@@ -1,11 +1,10 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# Rebuilds every shipped architecture and refreshes runtimes/.
+# Rebuilds both macOS architectures for local validation.
 #
-# A Copilot plugin install is a plain file copy -- nothing is compiled and
-# nothing is downloaded -- so the contents of runtimes/ are literally what users
-# execute. Run this whenever src/ or native/ changes, and commit the result.
+# Native AOT cannot cross-compile between operating systems, so the GitHub
+# "Release runtimes" workflow remains the canonical way to produce a release.
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
@@ -24,5 +23,7 @@ for rid in osx-arm64 osx-x64; do
 done
 
 node scripts/verify-bundle.mjs
+npm run package:runtimes
 
-printf '\n%s\n' "runtimes/ refreshed. Commit it so plugin installs ship the new build."
+printf '\n%s\n' "macOS runtimes and local release assets refreshed."
+printf '%s\n' "Run the Release runtimes workflow to rebuild every supported RID."

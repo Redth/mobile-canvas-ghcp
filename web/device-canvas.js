@@ -1,3 +1,5 @@
+import { creatablePlatforms, createOptions } from "./create-device-options.js";
+
 const elements = {
   list: document.querySelector("#device-list"),
   diagnostics: document.querySelector("#diagnostics"),
@@ -59,6 +61,8 @@ const elements = {
   dataDialog: document.querySelector("#data-dialog"),
 };
 
+const transport = window.mobileCanvasTransport || null;
+
 const state = {
   catalog: null,
   selected: null,
@@ -85,18 +89,23 @@ const state = {
   actualFps: 0,
   linkExpanded: false,
   selectionTarget: null,
+  selectionVersion: 0,
   followTarget: null,
+  panelVisible: !document.hidden,
 };
 
 async function api(path, options = {}) {
-  const response = await fetch(path, {
+  const request = {
     credentials: "same-origin",
     ...options,
     headers: {
       ...(options.body ? { "Content-Type": "application/json" } : {}),
       ...(options.headers || {}),
     },
-  });
+  };
+  const response = transport
+    ? await transport.api(path, request)
+    : await fetch(path, request);
   if (!response.ok) {
     const payload = await response.json().catch(() => ({
       message: `${response.status} ${response.statusText}`,
@@ -111,6 +120,13 @@ async function api(path, options = {}) {
 }
 
 async function bootstrap() {
+  if (transport) {
+    const context = await transport.bootstrap();
+    sessionStorage.setItem("mobile-canvas-session", context.sessionId || "");
+    sessionStorage.setItem("mobile-canvas-instance", context.instanceId || "");
+    return;
+  }
+
   const fragment = new URLSearchParams(location.hash.slice(1));
   const secret = fragment.get("bootstrap");
   if (!secret) return;
@@ -182,8 +198,20 @@ function renderDiagnostics() {
  * picks the sprite.
  */
 const PLATFORMS = {
-  ios: { label: "iOS Simulators", noun: "simulator", icon: "#icon-ios", provider: "CoreSimulator" },
-  android: { label: "Android Emulators", noun: "emulator", icon: "#icon-android", provider: "Android Emulator" },
+  ios: {
+    label: "iOS Simulators",
+    shortLabel: "iOS",
+    noun: "simulator",
+    icon: "#icon-ios",
+    provider: "CoreSimulator",
+  },
+  android: {
+    label: "Android Emulators",
+    shortLabel: "Android",
+    noun: "emulator",
+    icon: "#icon-android",
+    provider: "Android Emulator",
+  },
 };
 
 const PLATFORM_ORDER = ["ios", "android"];
@@ -264,6 +292,10 @@ function describeDevice(device) {
 }
 
 function updateSelectorDisplay(device) {
+  transport?.setViewTitle?.(
+    device?.name || "Device",
+    device ? describeDevice(device) : undefined,
+  );
   if (!device) {
     const platforms = availablePlatforms();
     elements.selectorName.textContent =
@@ -292,6 +324,7 @@ function closeDevicePopover() {
 }
 
 async function selectDevice(device, persist) {
+  const selectionVersion = ++state.selectionVersion;
   // Recorded before the first await so a selection announcement that races this request can tell it
   // is watching work already under way rather than starting a second switch to the same device.
   state.selectionTarget = device.id;
@@ -304,6 +337,7 @@ async function selectDevice(device, persist) {
     });
     device = await response.json();
   }
+  if (selectionVersion !== state.selectionVersion) return;
 
   state.selected = device;
   // A cursor left over from the previous device would point at coordinates that no longer mean
@@ -324,13 +358,18 @@ async function selectDevice(device, persist) {
 
   if (device.state === "booted") {
     const displayResponse = await api(`/api/v1/devices/${encodeURIComponent(device.id)}/display`);
-    state.display = await displayResponse.json();
+    const display = await displayResponse.json();
+    if (
+      selectionVersion !== state.selectionVersion
+      || state.selected?.id !== device.id
+    ) return;
+    state.display = display;
     elements.geometry.value =
       `${state.display.pointWidth}x${state.display.pointHeight} pt @${state.display.scale}x`;
     fitDeviceScreen();
     setInputStatus("ready", "Input ready");
     startStream();
-    await updateRecordingStatus();
+    await updateRecordingStatus(device.id, selectionVersion);
   } else {
     state.display = null;
     showOverlay(`${capitalize(platformInfo(state.selected?.platform).noun)} is powered off`);
@@ -341,6 +380,8 @@ async function selectDevice(device, persist) {
 }
 
 function showEmptySelection() {
+  state.selectionVersion += 1;
+  state.selectionTarget = null;
   stopStream();
   endAutomation();
   state.selected = null;
@@ -361,8 +402,8 @@ function showEmptySelection() {
 
 /**
  * Toolbar/action gating. A backend advertises what it can actually do per instance, so an action it
- * cannot perform is hidden rather than shown broken -- an Android emulator has no Simulator.app to
- * reveal, and an AVD without a gRPC endpoint cannot record.
+ * cannot perform is hidden rather than shown broken. An AVD without a gRPC endpoint, for example,
+ * cannot record.
  */
 const ACTION_CAPABILITY = {
   boot: "boot",
@@ -409,6 +450,14 @@ function updateControlAvailability() {
       ["home", "back", "apps", "lock", "screenshot", "record", "restart", "shutdown"].includes(action);
     button.disabled = !state.selected ||
       (action === "boot" ? booted : needsBooted && !booted);
+
+    if (action === "reveal") {
+      const description = state.selected?.platform === "android"
+        ? "Show emulator window (restarts emulator)"
+        : "Show simulator in Simulator.app";
+      button.title = description;
+      button.setAttribute("aria-label", description);
+    }
   }
 
   // A pill of entirely hidden buttons would still draw its border and eat a grid row.
@@ -669,7 +718,7 @@ function showOverlay(message, { busy = false } = {}) {
 
 function startStream() {
   stopStream();
-  if (!state.selected || state.selected.state !== "booted") return;
+  if (!state.panelVisible || !state.selected || state.selected.state !== "booted") return;
 
   showOverlay("Connecting", { busy: true });
   setStreamMode("connecting");
@@ -680,7 +729,6 @@ function startStream() {
     return;
   }
 
-  const protocol = location.protocol === "https:" ? "wss:" : "ws:";
   state.activeScale = resolveScale();
   renderEncodeSize();
   const query = new URLSearchParams({
@@ -688,7 +736,7 @@ function startStream() {
     fps: elements.fps.value,
     scale: state.activeScale,
   });
-  const socket = new WebSocket(`${protocol}//${location.host}/ws/video?${query}`);
+  const socket = createSocket("video", query);
   state.socket = socket;
   socket.binaryType = "arraybuffer";
   const parser = new AnnexBDecoder();
@@ -950,7 +998,12 @@ function canvasContext() {
 }
 
 function startPngFallback(label) {
-  if (state.detached || !state.selected || state.selected.state !== "booted") return;
+  if (
+    !state.panelVisible
+    || state.detached
+    || !state.selected
+    || state.selected.state !== "booted"
+  ) return;
   applyCaptureSource({ source: "png", sourceDetail: "Screenshot polling fallback." });
   if (state.socket) {
     const socket = state.socket;
@@ -982,7 +1035,12 @@ function startPngFallback(label) {
     } catch (error) {
       showOverlay(error.message);
     } finally {
-      if (!state.detached && state.selected?.state === "booted" && !state.socket) {
+      if (
+        state.panelVisible
+        && !state.detached
+        && state.selected?.state === "booted"
+        && !state.socket
+      ) {
         state.pngTimer = setTimeout(capture, 750);
       }
     }
@@ -1005,9 +1063,11 @@ async function lifecycle(action) {
   const device = state.selected;
   if (!device) return;
 
-  if (action !== "reveal") {
+  const disruptive = action !== "reveal" || device.platform === "android";
+  const label = action === "reveal" ? "Show device window" : formatAction(action);
+  if (disruptive) {
     stopStream();
-    showOverlay(`${formatAction(action)} in progress`, { busy: true });
+    showOverlay(`${label} in progress`, { busy: true });
   }
 
   const response = await api(
@@ -1016,7 +1076,7 @@ async function lifecycle(action) {
   );
   state.selected = await response.json();
   await refresh();
-  showToast(`${formatAction(action)} complete`);
+  showToast(`${label} complete`);
 }
 
 function sendInput(kind, payload, label = formatAction(kind)) {
@@ -1087,21 +1147,27 @@ const automation = {
   retryTimer: null,
   active: false,
   point: null,
+  selectionGeneration: 0,
 };
 
 function connectAutomationEvents() {
   clearTimeout(automation.retryTimer);
-  const protocol = location.protocol === "https:" ? "wss:" : "ws:";
+  if (!state.panelVisible || state.detached) return;
   let socket;
   try {
-    socket = new WebSocket(`${protocol}//${location.host}/ws/events`);
+    socket = createSocket("events");
   } catch {
     scheduleAutomationReconnect();
     return;
   }
   automation.socket = socket;
 
-  socket.addEventListener("message", (event) => {
+  socket.addEventListener("open", () => {
+    if (automation.socket === socket) {
+      void reconcileCanvasSelection(socket).catch(showError);
+    }
+  });
+  socket.addEventListener("message", async (event) => {
     if (automation.socket !== socket) return;
     let activity;
     try {
@@ -1110,11 +1176,16 @@ function connectAutomationEvents() {
       return;
     }
     // Events reach every canvas on the host, so a panel first works out whether it is the audience.
-    if (addressedToThisCanvas(activity)) {
+    const addressed = addressedToThisCanvas(activity);
+    if (transport && !addressed) return;
+    if (addressed) {
+      if (activity.kind === "selection") {
+        automation.selectionGeneration += 1;
+      }
       // The host points a canvas at whatever device an agent addresses. Following that here is what
       // keeps the panel from sitting on the device the person last picked while work happens
       // somewhere else.
-      followSelection(activity.deviceId).catch(showError);
+      await followSelection(activity.deviceId).catch(showError);
     }
     if (activity.kind === "selection") return;
     if (!state.selected || activity.deviceId !== state.selected.id) return;
@@ -1134,6 +1205,7 @@ function connectAutomationEvents() {
 
 function scheduleAutomationReconnect() {
   clearTimeout(automation.retryTimer);
+  if (!state.panelVisible || state.detached) return;
   automation.retryTimer = setTimeout(connectAutomationEvents, 2000);
 }
 
@@ -1142,7 +1214,9 @@ function scheduleAutomationReconnect() {
  * is not speaking on any panel's behalf, so those never move a selection.
  */
 function addressedToThisCanvas(activity) {
-  if (!activity.sessionId || !activity.instanceId) return false;
+  if (!activity.sessionId || !activity.instanceId) {
+    return transport?.followUnscopedAutomation === true;
+  }
   return activity.sessionId === sessionStorage.getItem("mobile-canvas-session") &&
     activity.instanceId === sessionStorage.getItem("mobile-canvas-instance");
 }
@@ -1161,6 +1235,39 @@ async function followSelection(deviceId) {
     device = state.catalog?.devices?.find((entry) => entry.id === deviceId);
   }
   if (device) await selectDevice(device, false);
+}
+
+async function reconcileAnnouncedSelection(deviceId, guard = () => true) {
+  if (!deviceId || state.detached) return;
+  state.followTarget = deviceId;
+  await loadCatalog();
+  if (!guard() || state.followTarget !== deviceId) return;
+  const device = state.catalog?.devices?.find((entry) => entry.id === deviceId);
+  if (device) {
+    await selectDevice(device, false);
+  } else {
+    await refresh();
+  }
+}
+
+async function reconcileCanvasSelection(socket) {
+  const generation = automation.selectionGeneration;
+  const response = await api("/api/v1/selection");
+  const selection = await response.json();
+  if (
+    automation.socket !== socket
+    || automation.selectionGeneration !== generation
+  ) return;
+  if (selection?.hasSelection && selection.device) {
+    await reconcileAnnouncedSelection(
+      selection.device.id,
+      () =>
+        automation.socket === socket
+        && automation.selectionGeneration === generation,
+    );
+  } else {
+    await refresh();
+  }
 }
 
 function handleAutomationEvent(activity) {
@@ -1572,9 +1679,9 @@ elements.linkChip.addEventListener("click", () => setLinkExpanded(!state.linkExp
 setLinkExpanded(false);
 
 /*
- * The canvas provider protocol exposes no theme hint, so "auto" defers to the
- * host webview's prefers-color-scheme. The explicit choices are the escape hatch
- * for hosts that do not propagate the app appearance.
+ * The canvas provider protocol exposes no theme hint, so "auto" defers to
+ * prefers-color-scheme there. Hosts with a native theme can load an adapter that
+ * remaps the same semantic tokens while this preference remains set to auto.
  */
 const THEME_STORAGE_KEY = "mobile-canvas-theme";
 
@@ -1667,6 +1774,7 @@ for (const button of document.querySelectorAll("[data-action]")) {
 elements.createName.addEventListener("input", () => {
   elements.createName.dataset.edited = "1";
 });
+elements.createRuntime.addEventListener("change", populateCreateOptions);
 
 elements.createForm.addEventListener("submit", (event) => {
   event.preventDefault();
@@ -1682,7 +1790,8 @@ elements.createForm.addEventListener("submit", (event) => {
     });
     state.selected = await response.json();
     elements.createDialog.close();
-    await lifecycle("boot");
+    await refresh();
+    showToast(`${state.selected.name} created and started`);
   }).catch(showError);
 });
 
@@ -1735,7 +1844,9 @@ document.querySelector("#delete-button").addEventListener("click", async (event)
 elements.copyUdid.addEventListener("click", async () => {
   const identifier = identifierLabels(state.selected?.platform);
   try {
-    await navigator.clipboard.writeText(state.selected.udid || state.selected.nativeId);
+    const value = state.selected.udid || state.selected.nativeId;
+    if (transport?.copyText) await transport.copyText(value);
+    else await navigator.clipboard.writeText(value);
     showToast(identifier.copied);
   } catch (error) {
     showError(new Error(`Could not copy the ${identifier.label}: ${error.message}`));
@@ -1757,18 +1868,32 @@ async function runBusy(button, operation) {
 async function downloadScreenshot() {
   const response = await api(`/api/v1/devices/${encodeURIComponent(state.selected.id)}/screenshot`);
   const blob = await response.blob();
+  const suggestedName =
+    `${state.selected.name.replaceAll(/\W+/g, "-").toLowerCase()}-${Date.now()}.png`;
+  if (transport?.saveBlob) {
+    if (await transport.saveBlob(blob, suggestedName)) showToast("Screenshot saved");
+    return;
+  }
   const url = URL.createObjectURL(blob);
   const link = document.createElement("a");
   link.href = url;
-  link.download = `${state.selected.name.replaceAll(/\W+/g, "-").toLowerCase()}-${Date.now()}.png`;
+  link.download = suggestedName;
   link.click();
   URL.revokeObjectURL(url);
   showToast("Screenshot saved");
 }
 
-async function updateRecordingStatus() {
-  const response = await api(`/api/v1/devices/${encodeURIComponent(state.selected.id)}/recording`);
+async function updateRecordingStatus(
+  deviceId = state.selected?.id,
+  selectionVersion = state.selectionVersion,
+) {
+  if (!deviceId) return;
+  const response = await api(`/api/v1/devices/${encodeURIComponent(deviceId)}/recording`);
   const status = await response.json();
+  if (
+    selectionVersion !== state.selectionVersion
+    || state.selected?.id !== deviceId
+  ) return;
   setRecordingState(status.isRecording);
 }
 
@@ -1798,6 +1923,8 @@ async function toggleRecording() {
 }
 
 async function detach() {
+  state.selectionVersion += 1;
+  state.selectionTarget = null;
   stopStream();
   endAutomation();
   // Detach means this panel is done with the device. Clearing the reference first makes the close
@@ -1808,6 +1935,7 @@ async function detach() {
   socket?.close();
   await api("/api/v1/canvas/detach", { method: "POST" });
   state.detached = true;
+  transport?.setViewTitle?.("Device", "Detached");
   elements.view.classList.add("hidden");
   elements.empty.classList.add("hidden");
   elements.detached.classList.remove("hidden");
@@ -1819,11 +1947,11 @@ async function detach() {
  * profile and the create call would fail well after the user committed to it.
  */
 function populateCreateOptions() {
-  const platforms = availablePlatforms();
+  const platforms = creatablePlatforms(state.catalog);
   if (!platforms.includes(state.createPlatform)) {
     state.createPlatform = platforms.includes(state.selected?.platform)
       ? state.selected.platform
-      : platforms[0] || "ios";
+      : platforms[0] || null;
   }
 
   // With one platform installed there is nothing to choose, so the control is hidden rather than
@@ -1837,9 +1965,10 @@ function populateCreateOptions() {
     option.className = `segmented-option ${platform === state.createPlatform ? "selected" : ""}`;
     option.setAttribute("role", "radio");
     option.setAttribute("aria-checked", String(platform === state.createPlatform));
+    option.setAttribute("aria-label", info.label);
     option.innerHTML = `
       <svg class="icon" aria-hidden="true"><use href="${info.icon}"></use></svg>
-      ${escapeHtml(info.label)}`;
+      ${escapeHtml(info.shortLabel)}`;
     option.addEventListener("click", () => {
       state.createPlatform = platform;
       populateCreateOptions();
@@ -1849,19 +1978,32 @@ function populateCreateOptions() {
 
   const platform = state.createPlatform;
   const info = platformInfo(platform);
-  elements.createKicker.textContent = info.provider;
+  elements.createKicker.textContent = info.provider || "No creatable devices";
 
-  const runtimes = (state.catalog?.runtimes || [])
-    .filter((runtime) => runtime.isAvailable && runtime.platform === platform);
-  elements.createRuntime.innerHTML = runtimes
-    .map((runtime) => `<option value="${escapeHtml(runtime.id)}">${escapeHtml(runtime.name)}</option>`)
-    .join("");
+  const priorRuntimeId = elements.createRuntime.value;
+  const { runtimes } = createOptions(state.catalog, platform, priorRuntimeId);
+  const selectedRuntimeId = runtimes.some((runtime) => runtime.id === priorRuntimeId)
+    ? priorRuntimeId
+    : runtimes[0]?.id;
+  elements.createRuntime.innerHTML = runtimes.length > 0
+    ? runtimes
+      .map((runtime) => `<option value="${escapeHtml(runtime.id)}">${escapeHtml(runtime.name)}</option>`)
+      .join("")
+    : '<option value="">No compatible runtime installed</option>';
+  elements.createRuntime.value = selectedRuntimeId || "";
+  elements.createRuntime.disabled = runtimes.length === 0;
 
-  const deviceTypes = (state.catalog?.deviceTypes || [])
-    .filter((type) => !type.platform || type.platform === platform);
-  elements.createDeviceType.innerHTML = deviceTypes
-    .map((type) => `<option value="${escapeHtml(type.id)}">${escapeHtml(type.name)}</option>`)
-    .join("");
+  const { deviceTypes } = createOptions(state.catalog, platform, selectedRuntimeId);
+  const priorDeviceTypeId = elements.createDeviceType.value;
+  elements.createDeviceType.innerHTML = deviceTypes.length > 0
+    ? deviceTypes
+      .map((type) => `<option value="${escapeHtml(type.id)}">${escapeHtml(type.name)}</option>`)
+      .join("")
+    : '<option value="">No compatible device type found</option>';
+  if (deviceTypes.some((type) => type.id === priorDeviceTypeId))
+    elements.createDeviceType.value = priorDeviceTypeId;
+  elements.createDeviceType.disabled = deviceTypes.length === 0;
+  elements.createSubmit.disabled = runtimes.length === 0 || deviceTypes.length === 0;
 
   if (!elements.createName.dataset.edited)
     elements.createName.value = platform === "android" ? "Test Android" : "Test iPhone";
@@ -1916,6 +2058,55 @@ function concatBytes(chunks) {
     offset += chunk.length;
   }
   return result;
+}
+
+function createSocket(channel, query) {
+  if (transport?.createSocket) return transport.createSocket(channel, query);
+  const protocol = location.protocol === "https:" ? "wss:" : "ws:";
+  return new WebSocket(
+    `${protocol}//${location.host}/ws/${channel}${query ? `?${query}` : ""}`,
+  );
+}
+
+function setPanelVisible(visible) {
+  if (state.panelVisible === visible) return;
+  state.panelVisible = visible;
+  if (!visible) {
+    stopStream();
+    clearTimeout(automation.retryTimer);
+    const socket = automation.socket;
+    automation.socket = null;
+    socket?.close();
+    endAutomation();
+    return;
+  }
+  if (!state.detached) {
+    startStream();
+    connectAutomationEvents();
+  }
+}
+
+document.addEventListener("visibilitychange", () => setPanelVisible(!document.hidden));
+transport?.onVisibilityChanged?.(setPanelVisible);
+let transportRefresh = Promise.resolve();
+transport?.onRefreshRequested?.(() => {
+  if (!state.detached) {
+    transportRefresh = transportRefresh.then(refresh).catch(showError);
+  }
+});
+transport?.onAutomationRequested?.((activity) => {
+  void transportRefresh
+    .then(() => handleScopedAutomation(activity))
+    .catch(showError);
+});
+
+async function handleScopedAutomation(activity) {
+  if (!activity?.deviceId || state.detached) return;
+  automation.selectionGeneration += 1;
+  await followSelection(activity.deviceId);
+  if (state.selected?.id === activity.deviceId) {
+    handleAutomationEvent(activity);
+  }
 }
 
 function findStartCodes(bytes) {

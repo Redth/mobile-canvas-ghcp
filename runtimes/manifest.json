@@ -1,6 +1,10 @@
 {
   "version": "0.1.6",
   "sourceHash": "2f57eae72f10a4cc68f93ae5d78ed012ff3c72ca1923e3e7bdf207177575cb4d",
+  "distribution": {
+    "repository": "Redth/mobile-canvas-ghcp",
+    "tag": "v0.1.6"
+  },
   "runtimes": {
     "darwin-arm64": {
       "rid": "osx-arm64",

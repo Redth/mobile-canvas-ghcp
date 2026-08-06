@@ -107,6 +107,42 @@ public sealed class SimctlParserTests
 	}
 
 	[Fact]
+	public void Parse_OnlyExposesCanonicalIosRuntimes()
+	{
+		const string json = """
+		{
+		  "runtimes": [{
+		    "identifier": "com.apple.CoreSimulator.SimRuntime.iOS-18-6",
+		    "name": "iOS 18.6",
+		    "version": "18.6",
+		    "platform": "iOS",
+		    "isAvailable": true
+		  }, {
+		    "identifier": "com.apple.CoreSimulator.SimRuntime.tvOS-18-6",
+		    "name": "tvOS 18.6",
+		    "version": "18.6",
+		    "platform": "tvOS",
+		    "isAvailable": true
+		  }, {
+		    "identifier": "com.apple.CoreSimulator.SimRuntime.watchOS-11-6",
+		    "name": "watchOS 11.6",
+		    "version": "11.6",
+		    "platform": "watchOS",
+		    "isAvailable": true
+		  }],
+		  "devicetypes": [],
+		  "devices": {}
+		}
+		""";
+
+		var catalog = SimctlCatalogParser.Parse(json);
+		var runtime = Assert.Single(catalog.Runtimes);
+
+		Assert.Equal("com.apple.CoreSimulator.SimRuntime.iOS-18-6", runtime.Id);
+		Assert.Equal(DevicePlatforms.Ios, runtime.Platform);
+	}
+
+	[Fact]
 	public void DisplayParser_MapsLogicalGeometryAndOrientation()
 	{
 		const string output = """

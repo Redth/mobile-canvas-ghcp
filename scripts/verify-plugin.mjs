@@ -8,7 +8,8 @@ import {
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
-const root = join(dirname(fileURLToPath(import.meta.url)), "..");
+const scriptRoot = join(dirname(fileURLToPath(import.meta.url)), "..");
+const root = resolve(process.argv[2] ?? scriptRoot);
 const manifestPath = join(root, ".github", "plugin", "plugin.json");
 const manifest = JSON.parse(readFileSync(manifestPath, "utf8"));
 const marketplace = JSON.parse(

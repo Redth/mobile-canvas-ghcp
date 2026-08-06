@@ -1,0 +1,9 @@
+src/**
+test/**
+out/test/**
+out/**/*.map
+tsconfig.json
+.npmrc
+*.tsbuildinfo
+.vscode-test/**
+node_modules/@types/**

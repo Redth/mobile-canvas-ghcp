@@ -3,6 +3,10 @@ obj/
 .build/
 native/*/out/
 node_modules/
+vscode/out/
+vscode/dist/
+vscode/.vscode-test/
+*.vsix
 *.user
 .DS_Store
 

@@ -32,6 +32,7 @@ internal static class SimctlCatalogParser
 			return [];
 
 		return runtimesElement.EnumerateArray()
+			.Where(IsIosRuntime)
 			.Select(runtime =>
 			{
 				var supportedTypes = runtime.TryGetProperty("supportedDeviceTypes", out var types)
@@ -54,7 +55,7 @@ internal static class SimctlCatalogParser
 					Id = GetString(runtime, "identifier") ?? "",
 					Name = GetString(runtime, "name") ?? "",
 					Version = GetString(runtime, "version") ?? "",
-					Platform = GetString(runtime, "platform") ?? DevicePlatforms.Ios,
+					Platform = DevicePlatforms.Ios,
 					IsAvailable = GetBoolean(runtime, "isAvailable", defaultValue: true),
 					SupportedArchitectures = architectures,
 					SupportedDeviceTypeIds = supportedTypes,
@@ -64,6 +65,16 @@ internal static class SimctlCatalogParser
 			.DistinctBy(runtime => runtime.Id, StringComparer.Ordinal)
 			.OrderByDescending(runtime => ParseVersion(runtime.Version))
 			.ToArray();
+	}
+
+	private static bool IsIosRuntime(JsonElement runtime)
+	{
+		var platform = GetString(runtime, "platform");
+		if (!string.IsNullOrWhiteSpace(platform))
+			return platform.Equals("iOS", StringComparison.OrdinalIgnoreCase);
+
+		return GetString(runtime, "identifier")
+			?.Contains(".iOS-", StringComparison.OrdinalIgnoreCase) == true;
 	}
 
 	private static DeviceType[] ParseDeviceTypes(JsonElement root)

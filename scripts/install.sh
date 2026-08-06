@@ -20,6 +20,7 @@ install -m 600 "${REPO_ROOT}/package.json" "${DESTINATION}/package.json"
 # rather than an optional extra.
 mkdir -p "${DESTINATION}/lib"
 install -m 600 "${REPO_ROOT}/lib/runtime.mjs" "${DESTINATION}/lib/runtime.mjs"
+install -m 600 "${REPO_ROOT}/lib/runtime-assets.mjs" "${DESTINATION}/lib/runtime-assets.mjs"
 
 # The canvas tab icon is read from disk by the host, so it has to travel with the
 # extension rather than being embedded in the binary like the web assets are.
@@ -41,7 +42,7 @@ if [[ -x "${BUILD_DIR}/mobile-canvas" ]]; then
 elif [[ -f "${REPO_ROOT}/runtimes/manifest.json" ]]; then
   rm -rf "${DESTINATION}/bin" "${DESTINATION}/runtimes"
   cp -R "${REPO_ROOT}/runtimes" "${DESTINATION}/runtimes"
-  SOURCE_LABEL="bundled runtimes"
+  SOURCE_LABEL="runtime manifest"
 else
   printf '%s\n' "No binary found. Run scripts/build.sh, then rerun this installer." >&2
   exit 1
@@ -49,7 +50,11 @@ fi
 
 # Resolving here rather than at first canvas open turns a packaging mistake into
 # an install-time failure instead of a broken panel.
-RESOLVED="$(cd "${DESTINATION}" && node -e 'import("./lib/runtime.mjs").then(m=>console.log(m.resolveCommand().command))')"
+RESOLVED="$(
+  cd "${DESTINATION}"
+  node --input-type=module -e \
+    'const m = await import("./lib/runtime.mjs"); console.log((await m.resolveCommand()).command)'
+)"
 
 "${RESOLVED}" host start >/dev/null
 

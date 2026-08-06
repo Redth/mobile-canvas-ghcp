@@ -8,6 +8,9 @@ name: Release runtimes
 # compilation is not supported"), so every OS needs its own runner. Architectures
 # within one OS do cross-compile, which is why macOS builds both its slices.
 on:
+  push:
+    tags:
+      - "v*"
   workflow_dispatch:
     inputs:
       version:
@@ -42,6 +45,16 @@ jobs:
           - { rid: linux-arm64, os: ubuntu-24.04-arm, optional: true }
     steps:
       - uses: actions/checkout@v4
+
+      - name: Verify tag matches package version
+        if: startsWith(github.ref, 'refs/tags/v')
+        shell: bash
+        run: |
+          expected="v$(node -p 'require("./package.json").version')"
+          test "$GITHUB_REF_NAME" = "$expected" || {
+            echo "tag $GITHUB_REF_NAME does not match package version $expected" >&2
+            exit 1
+          }
 
       - uses: actions/setup-dotnet@v4
         with:
@@ -78,10 +91,25 @@ jobs:
         with:
           global-json-file: global.json
 
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: vscode/package-lock.json
+
       - uses: actions/download-artifact@v4
         with:
           path: .build/artifacts
           pattern: bin-*
+
+      - name: Require core runtime builds
+        run: |
+          for rid in osx-arm64 osx-x64 win-x64 linux-x64; do
+            test -d ".build/artifacts/bin-$rid" || {
+              echo "required runtime did not build: $rid" >&2
+              exit 1
+            }
+          done
 
       - name: Stamp version
         if: inputs.version != ''
@@ -92,6 +120,8 @@ jobs:
       - name: Bundle every architecture that built
         run: |
           shopt -s nullglob
+          rm -rf runtimes
+          mkdir runtimes
           found=0
           for dir in .build/artifacts/bin-*; do
             rid="${dir##*/bin-}"
@@ -110,6 +140,65 @@ jobs:
         run: |
           node scripts/verify-bundle.mjs
           dotnet test MobileCanvas.slnx -c Release
+
+      - name: Package runtime release assets
+        run: npm run package:runtimes
+
+      - name: Package Copilot plugin
+        run: |
+          npm run package:plugin
+          node scripts/verify-plugin.mjs .build/copilot-plugin/mobile-canvas
+          npm run package:plugin:thin
+          node scripts/verify-plugin.mjs .build/copilot-plugin-thin/mobile-canvas
+
+      - name: Package VS Code extension
+        run: |
+          npm ci --prefix vscode --ignore-scripts
+          npm run package --prefix vscode
+
+      - name: Package platform-specific VS Code extensions
+        run: |
+          npm run package:thin --prefix vscode
+          npm run package:targets --prefix vscode
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: mobile-canvas-runtime-assets
+          path: .build/release-assets
+          if-no-files-found: error
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: mobile-canvas-copilot-plugin
+          path: .build/copilot-plugin/mobile-canvas
+          include-hidden-files: true
+          if-no-files-found: error
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: mobile-canvas-copilot-plugin-thin
+          path: .build/copilot-plugin-thin/mobile-canvas
+          include-hidden-files: true
+          if-no-files-found: error
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: mobile-canvas-vscode
+          path: .build/mobile-canvas-vscode*.vsix
+          if-no-files-found: error
+
+      - name: Publish tagged release
+        if: startsWith(github.ref, 'refs/tags/v')
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release view "$GITHUB_REF_NAME" >/dev/null 2>&1 \
+            || gh release create "$GITHUB_REF_NAME" --verify-tag --generate-notes
+          gh release upload "$GITHUB_REF_NAME" \
+            .build/release-assets/* \
+            .build/mobile-canvas-vscode*.vsix \
+            .build/mobile-canvas-copilot-plugin-*.tar.gz \
+            --clobber
 
       - name: Summarise
         run: |
@@ -140,6 +229,8 @@ jobs:
           add-paths: |
             runtimes
             package.json
+            vscode/package.json
+            vscode/package-lock.json
             Directory.Build.props
             .github/plugin/plugin.json
             .github/plugin/marketplace.json
