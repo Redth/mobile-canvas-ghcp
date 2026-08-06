@@ -229,6 +229,7 @@ jobs:
         with:
           name: mobile-canvas-vscode
           path: .build/mobile-canvas-vscode*.vsix
+          include-hidden-files: true
           if-no-files-found: error
 
       - name: Publish tagged release
