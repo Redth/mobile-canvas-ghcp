@@ -30,7 +30,7 @@ permissions:
 
 jobs:
   build:
-    name: ${{ matrix.rid }}
+    name: ${{ matrix.key }}
     runs-on: ${{ matrix.os }}
     # One unavailable architecture should not hide whether the others work.
     continue-on-error: ${{ matrix.optional || false }}
@@ -38,14 +38,15 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - { rid: osx-arm64,   os: macos-15 }
-          - { rid: osx-x64,     os: macos-15 }
-          - { rid: win-x64,     os: windows-latest }
-          - { rid: linux-x64,   os: ubuntu-latest }
+          # One macOS runner can cross-compile both architectures. Keeping them
+          # together avoids competing for two scarce macOS hosted runners.
+          - { key: osx,         rids: "osx-arm64 osx-x64", os: macos-14 }
+          - { key: win-x64,     rids: "win-x64",           os: windows-latest }
+          - { key: linux-x64,   rids: "linux-x64",         os: ubuntu-latest }
           # ARM runners are not offered on every plan, so these may be skipped
           # without failing the release.
-          - { rid: win-arm64,   os: windows-11-arm, optional: true }
-          - { rid: linux-arm64, os: ubuntu-24.04-arm, optional: true }
+          - { key: win-arm64,   rids: "win-arm64",         os: windows-11-arm, optional: true }
+          - { key: linux-arm64, rids: "linux-arm64",       os: ubuntu-24.04-arm, optional: true }
     steps:
       - uses: actions/checkout@v4
 
@@ -72,12 +73,15 @@ jobs:
 
       - name: Build
         shell: bash
-        run: ./scripts/build.sh "${{ matrix.rid }}"
+        run: |
+          for rid in ${{ matrix.rids }}; do
+            ./scripts/build.sh "$rid"
+          done
 
       - uses: actions/upload-artifact@v4
         with:
-          name: bin-${{ matrix.rid }}
-          path: .build/bin/${{ matrix.rid }}/mobile-*
+          name: bin-${{ matrix.key }}
+          path: .build/bin/*/mobile-*
           if-no-files-found: error
           retention-days: 1
 
@@ -108,7 +112,9 @@ jobs:
       - name: Require core runtime builds
         run: |
           for rid in osx-arm64 osx-x64 win-x64 linux-x64; do
-            test -d ".build/artifacts/bin-$rid" || {
+            find ".build/artifacts" -type f \
+              \( -path "*/$rid/mobile-canvas" -o -path "*/$rid/mobile-canvas.exe" \) \
+              | grep -q . || {
               echo "required runtime did not build: $rid" >&2
               exit 1
             }
@@ -148,14 +154,22 @@ jobs:
           rm -rf runtimes
           mkdir runtimes
           found=0
-          for dir in .build/artifacts/bin-*; do
-            rid="${dir##*/bin-}"
+          while IFS= read -r executable; do
+            dir="${executable%/*}"
+            rid="${dir##*/}"
+            if [[ "$rid" == bin-* ]]; then
+              rid="${rid#bin-}"
+            fi
             echo "::group::$rid"
             MOBILE_CANVAS_RELEASE_TAG="${{ inputs.prerelease_tag }}" \
               node scripts/bundle.mjs --rid "$rid" --from "$dir"
             echo "::endgroup::"
             found=$((found + 1))
-          done
+          done < <(
+            find .build/artifacts -type f \
+              \( -name mobile-canvas -o -name mobile-canvas.exe \) \
+              | sort
+          )
           if [ "$found" -eq 0 ]; then
             echo "no architectures built" >&2
             exit 1
