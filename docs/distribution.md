@@ -267,5 +267,11 @@ artifact cannot contain its own hash. Expect it to trail `git log` by one.
 5. A `v*` tag publishes every file to the corresponding GitHub Release.
 6. A manual run can still open a PR refreshing the compatibility bundle.
 
+Before merging a distribution change, manually dispatch the workflow with a new
+numeric `version`, a unique `prerelease_tag` matching `v*-rc.*`, and `commit`
+disabled. This creates an isolated GitHub prerelease from the branch so the thin
+Copilot plugin and thin VSIX can be installed against real release URLs. Delete
+the prerelease and tag after the smoke test.
+
 `scripts/verify-bundle.mjs` checks every local archive on any host. CI also
 warns when the manifest source hash has drifted behind `src/`.

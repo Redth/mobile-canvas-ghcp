@@ -101,7 +101,7 @@ manifest.version = JSON.parse(
 ).version;
 manifest.distribution = {
   repository: "Redth/mobile-canvas-ghcp",
-  tag: `v${manifest.version}`,
+  tag: process.env.MOBILE_CANVAS_RELEASE_TAG || `v${manifest.version}`,
 };
 // Recorded so CI can tell whether runtimes/ still matches src/ without rebuilding.
 // Comparing the built bytes cannot answer that: Native AOT is not bit-reproducible,

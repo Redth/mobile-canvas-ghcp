@@ -16,6 +16,9 @@ on:
       version:
         description: Version to stamp into every file that carries one
         required: false
+      prerelease_tag:
+        description: Publish a prerelease tag (for example v0.1.7-rc.1) for end-to-end testing
+        required: false
       commit:
         description: Open a PR with the refreshed runtimes
         type: boolean
@@ -115,6 +118,28 @@ jobs:
         if: inputs.version != ''
         run: node scripts/stamp-version.mjs "${{ inputs.version }}"
 
+      - name: Validate prerelease inputs
+        if: inputs.prerelease_tag != ''
+        run: |
+          test -n "${{ inputs.version }}" || {
+            echo "version is required when prerelease_tag is set" >&2
+            exit 1
+          }
+          case "${{ inputs.prerelease_tag }}" in
+            v*-rc.*) ;;
+            *)
+              echo "prerelease_tag must match v*-rc.*" >&2
+              exit 1
+              ;;
+          esac
+          gh release view "${{ inputs.prerelease_tag }}" >/dev/null 2>&1 && {
+            echo "prerelease already exists: ${{ inputs.prerelease_tag }}" >&2
+            exit 1
+          }
+          exit 0
+        env:
+          GH_TOKEN: ${{ github.token }}
+
       # bundle.mjs merges into the existing manifest, so bundling each downloaded
       # architecture in turn produces one manifest covering all of them.
       - name: Bundle every architecture that built
@@ -126,7 +151,8 @@ jobs:
           for dir in .build/artifacts/bin-*; do
             rid="${dir##*/bin-}"
             echo "::group::$rid"
-            node scripts/bundle.mjs --rid "$rid" --from "$dir"
+            MOBILE_CANVAS_RELEASE_TAG="${{ inputs.prerelease_tag }}" \
+              node scripts/bundle.mjs --rid "$rid" --from "$dir"
             echo "::endgroup::"
             found=$((found + 1))
           done
@@ -188,13 +214,22 @@ jobs:
           if-no-files-found: error
 
       - name: Publish tagged release
-        if: startsWith(github.ref, 'refs/tags/v')
+        if: startsWith(github.ref, 'refs/tags/v') || inputs.prerelease_tag != ''
         env:
           GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ inputs.prerelease_tag || github.ref_name }}
         run: |
-          gh release view "$GITHUB_REF_NAME" >/dev/null 2>&1 \
-            || gh release create "$GITHUB_REF_NAME" --verify-tag --generate-notes
-          gh release upload "$GITHUB_REF_NAME" \
+          if [[ -n "${{ inputs.prerelease_tag }}" ]]; then
+            gh release create "$RELEASE_TAG" \
+              --target "$GITHUB_SHA" \
+              --prerelease \
+              --title "Mobile Canvas $RELEASE_TAG" \
+              --notes "Release candidate for end-to-end artifact and runtime download validation."
+          else
+            gh release view "$RELEASE_TAG" >/dev/null 2>&1 \
+              || gh release create "$RELEASE_TAG" --verify-tag --generate-notes
+          fi
+          gh release upload "$RELEASE_TAG" \
             .build/release-assets/* \
             .build/mobile-canvas-vscode*.vsix \
             .build/mobile-canvas-copilot-plugin-*.tar.gz \
@@ -217,7 +252,7 @@ jobs:
           } >> "$GITHUB_STEP_SUMMARY"
 
       - uses: peter-evans/create-pull-request@v7
-        if: inputs.commit
+        if: inputs.commit && inputs.prerelease_tag == ''
         with:
           branch: release/runtimes
           title: Refresh bundled runtimes
