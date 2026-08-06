@@ -160,6 +160,10 @@ jobs:
             if [[ "$rid" == bin-* ]]; then
               rid="${rid#bin-}"
             fi
+            case "$rid" in
+              osx-arm64|osx-x64|win-x64|win-arm64|linux-x64|linux-arm64) ;;
+              *) continue ;;
+            esac
             echo "::group::$rid"
             MOBILE_CANVAS_RELEASE_TAG="${{ inputs.prerelease_tag }}" \
               node scripts/bundle.mjs --rid "$rid" --from "$dir"
