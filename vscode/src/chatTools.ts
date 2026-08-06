@@ -44,7 +44,7 @@ class SelectedDeviceTool implements vscode.LanguageModelTool<Record<string, neve
   async invoke(): Promise<vscode.LanguageModelToolResult> {
     const context = await this.source.getSelectedDeviceContext();
     return new vscode.LanguageModelToolResult([
-      jsonPart(context.selection),
+      jsonTextPart(context.selection),
     ]);
   }
 
@@ -80,7 +80,7 @@ class UiTreeTool implements vscode.LanguageModelTool<Record<string, never>> {
       new vscode.LanguageModelTextPart(
         `Accessibility tree for ${snapshot.context.deviceLabel} (${snapshot.context.deviceId}).`,
       ),
-      jsonPart(snapshot.tree),
+      jsonTextPart(snapshot.tree),
     ]);
   }
 
@@ -89,9 +89,6 @@ class UiTreeTool implements vscode.LanguageModelTool<Record<string, never>> {
   }
 }
 
-function jsonPart(value: unknown): vscode.LanguageModelDataPart {
-  return new vscode.LanguageModelDataPart(
-    new TextEncoder().encode(JSON.stringify(value)),
-    "application/json",
-  );
+function jsonTextPart(value: unknown): vscode.LanguageModelTextPart {
+  return new vscode.LanguageModelTextPart(JSON.stringify(value));
 }

@@ -376,12 +376,7 @@ if (args[0] === "canvas" && args[1] === "open") {
   }
 
   function readJsonPart(part: unknown): unknown {
-    const data = readDataPart(part);
-    assert.ok(
-      data.mimeType === "application/json" || data.mimeType === "text/x-json",
-      `unexpected JSON MIME type: ${data.mimeType}`,
-    );
-    return JSON.parse(new TextDecoder().decode(data.data));
+    return JSON.parse(readTextPart(part));
   }
 }
 
