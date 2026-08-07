@@ -13,7 +13,7 @@ public sealed class DeviceLifecycleTools(DeviceHostClient client)
 		Destructive = false,
 		OpenWorld = false,
 		UseStructuredContent = true)]
-	[Description("Create an iOS simulator or Android emulator from an installed runtime/system image and device type returned by mobile_device_catalog.")]
+	[Description("Create and boot a hidden iOS simulator or Android emulator from an installed runtime/system image and device type returned by mobile_device_catalog.")]
 	public Task<DeviceTarget> Create(
 		[Description("Display name for the new device.")] string name,
 		[Description("Runtime identifier from the device catalog.")] string runtimeId,
@@ -76,7 +76,7 @@ public sealed class DeviceLifecycleTools(DeviceHostClient client)
 		Idempotent = true,
 		OpenWorld = false,
 		UseStructuredContent = true)]
-	[Description("Boot an iOS simulator if needed and reveal its window in Simulator.app. Android emulators do not support this.")]
+	[Description("Show a virtual device window. Reveals an iOS simulator in Simulator.app; restarts a headless Android emulator with its native window.")]
 	public Task<DeviceTarget> Reveal(
 		[Description("Provider-qualified device ID.")] string deviceId,
 		CancellationToken cancellationToken = default) =>

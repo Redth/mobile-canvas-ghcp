@@ -1,0 +1,191 @@
+/*
+ * This adapter is loaded only by the VS Code webview. The shared stylesheet remains the
+ * GitHub canvas appearance; Auto mode remaps its semantic tokens to the active VS Code theme.
+ */
+:root[data-host="vscode"]:not([data-theme]) {
+  --canvas-default: var(--vscode-sideBar-background, var(--vscode-editor-background));
+  --canvas-subtle: var(
+    --vscode-sideBarSectionHeader-background,
+    var(--vscode-editorWidget-background, var(--canvas-default))
+  );
+  --canvas-inset: var(--vscode-editor-background, var(--canvas-default));
+  --control-default: var(
+    --vscode-dropdown-background,
+    var(--vscode-input-background, var(--canvas-subtle))
+  );
+  --control-hover: var(
+    --vscode-toolbar-hoverBackground,
+    var(--vscode-list-hoverBackground, var(--control-default))
+  );
+  --control-active: var(
+    --vscode-toolbar-activeBackground,
+    var(--vscode-list-activeSelectionBackground, var(--control-hover))
+  );
+  --border-default: var(
+    --vscode-widget-border,
+    var(--vscode-panel-border, var(--vscode-contrastBorder, transparent))
+  );
+  --border-muted: var(
+    --vscode-sideBarSectionHeader-border,
+    var(--vscode-panel-border, var(--border-default))
+  );
+  --fg-default: var(--vscode-sideBar-foreground, var(--vscode-foreground));
+  --fg-muted: var(--vscode-descriptionForeground, var(--fg-default));
+  --fg-subtle: var(--vscode-disabledForeground, var(--fg-muted));
+  --accent-fg: var(--vscode-textLink-foreground, var(--vscode-focusBorder));
+  --accent-emphasis: var(--vscode-focusBorder, var(--accent-fg));
+  --accent-muted: var(
+    --vscode-list-activeSelectionBackground,
+    var(--vscode-editor-selectionBackground, var(--control-active))
+  );
+  --success-fg: var(--vscode-testing-iconPassed, #3fb950);
+  --success-emphasis: var(--success-fg);
+  --success-muted: color-mix(in srgb, var(--success-fg) 18%, transparent);
+  --danger-fg: var(--vscode-errorForeground, #f85149);
+  --danger-emphasis: var(--vscode-inputValidation-errorBorder, var(--danger-fg));
+  --danger-muted: color-mix(in srgb, var(--danger-fg) 18%, transparent);
+  --attention-fg: var(
+    --vscode-list-warningForeground,
+    var(--vscode-editorWarning-foreground, #cca700)
+  );
+  --focus: var(--vscode-focusBorder, var(--accent-fg));
+  --overlay-backdrop: color-mix(in srgb, #000000 60%, transparent);
+  --shadow-popover: 0 8px 24px var(--vscode-widget-shadow, #00000040);
+  --shadow-device: 0 1px 2px var(--vscode-widget-shadow, #00000066),
+    0 12px 32px var(--vscode-widget-shadow, #00000066);
+  --scrim: color-mix(in srgb, var(--canvas-default) 88%, transparent);
+  --btn-hover-bg: var(--vscode-toolbar-hoverBackground, var(--control-hover));
+  --control-radius: 2px;
+  --control-radius-sm: 2px;
+
+  color: var(--fg-default);
+  background: var(--canvas-default);
+  font-family: var(
+    --vscode-font-family,
+    -apple-system,
+    BlinkMacSystemFont,
+    "Segoe UI",
+    sans-serif
+  );
+  font-weight: var(--vscode-font-weight, normal);
+}
+
+:root[data-host="vscode"][data-host-theme="light"]:not([data-theme]) {
+  color-scheme: only light;
+}
+
+:root[data-host="vscode"][data-host-theme="dark"]:not([data-theme]) {
+  color-scheme: only dark;
+}
+
+:root[data-host="vscode"][data-host-contrast="high"]:not([data-theme]) {
+  --border-default: var(--vscode-contrastBorder, var(--vscode-panel-border));
+  --border-muted: var(--vscode-contrastBorder, var(--border-default));
+}
+
+html,
+body {
+  padding: 0;
+}
+
+:root[data-host="vscode"]:not([data-theme]) body {
+  background: var(--canvas-default);
+  color: var(--fg-default);
+  font-family: inherit;
+  font-size: var(--vscode-font-size, 13px);
+}
+
+:root[data-host="vscode"] .topbar {
+  min-height: 30px;
+  gap: 0;
+  padding: 0;
+  border-top: 1px solid var(--border-muted);
+}
+
+:root[data-host="vscode"] .device-selector {
+  height: 30px;
+  border: 0;
+  border-right: 1px solid var(--border-default);
+  border-radius: 0;
+}
+
+:root[data-host="vscode"] .selector-glyph {
+  width: 30px;
+}
+
+:root[data-host="vscode"] .topbar-actions {
+  gap: 0;
+  align-self: stretch;
+}
+
+:root[data-host="vscode"] .topbar .icon-button {
+  width: 30px;
+  height: 30px;
+  border: 0;
+  border-radius: 0;
+}
+
+:root[data-host="vscode"] .topbar .device-selector:focus-visible,
+:root[data-host="vscode"] .topbar .icon-button:focus-visible {
+  outline-offset: -2px;
+}
+
+:root[data-host="vscode"] .device-popover {
+  top: 100%;
+  border-radius: 0 0 var(--control-radius) var(--control-radius);
+}
+
+:root[data-host="vscode"]:not([data-theme]) .icon-button {
+  border-color: transparent;
+  background: transparent;
+}
+
+:root[data-host="vscode"]:not([data-theme]) .button {
+  border-color: var(--vscode-button-border, transparent);
+  background: var(--vscode-button-secondaryBackground, var(--control-default));
+  color: var(--vscode-button-secondaryForeground, var(--fg-default));
+}
+
+:root[data-host="vscode"]:not([data-theme]) .button:hover:not(:disabled) {
+  background: var(--vscode-button-secondaryHoverBackground, var(--control-hover));
+}
+
+:root[data-host="vscode"]:not([data-theme]) .button.primary,
+:root[data-host="vscode"]:not([data-theme]) .icon-button.primary {
+  border-color: var(--vscode-button-border, transparent);
+  background: var(--vscode-button-background, var(--accent-emphasis));
+  color: var(--vscode-button-foreground, #ffffff);
+}
+
+:root[data-host="vscode"]:not([data-theme]) .button.primary:hover:not(:disabled),
+:root[data-host="vscode"]:not([data-theme]) .icon-button.primary:hover:not(:disabled) {
+  background: var(--vscode-button-hoverBackground, var(--vscode-button-background));
+  color: var(--vscode-button-foreground, #ffffff);
+  filter: none;
+}
+
+:root[data-host="vscode"]:not([data-theme]) select,
+:root[data-host="vscode"]:not([data-theme]) input {
+  border-color: var(--vscode-input-border, transparent);
+  border-radius: var(--control-radius);
+  background: var(--vscode-input-background, var(--canvas-default));
+  color: var(--vscode-input-foreground, var(--fg-default));
+}
+
+:root[data-host="vscode"]:not([data-theme]) select {
+  border-color: var(--vscode-dropdown-border, var(--vscode-input-border, transparent));
+  background: var(--vscode-dropdown-background, var(--vscode-input-background));
+  color: var(--vscode-dropdown-foreground, var(--vscode-input-foreground));
+}
+
+:root[data-host="vscode"]:not([data-theme]) input[readonly] {
+  background: var(--vscode-input-background, var(--canvas-subtle));
+  color: var(--vscode-descriptionForeground, var(--fg-muted));
+}
+
+:root[data-host="vscode"]:not([data-theme]) dialog {
+  border-color: var(--vscode-widget-border, var(--border-default));
+  background: var(--vscode-editorWidget-background, var(--canvas-default));
+  color: var(--vscode-editorWidget-foreground, var(--fg-default));
+  box-shadow: 0 8px 24px var(--vscode-widget-shadow, #00000066);
+}

@@ -1,6 +1,7 @@
 #!/usr/bin/env node
-// Writes one version into every file that carries it. There are four, and they
-// drift apart silently: package.json is the version the plugin manager shows,
+// Writes one version into every file that carries it. These files drift apart
+// silently: package.json is the plugin version, vscode/package*.json describe
+// the VS Code package,
 // Directory.Build.props is what the binary reports from `mobile-canvas
 // --version`, and the two files under .github/plugin are what someone browsing
 // the marketplace sees. Drift means a bug report names a version that never
@@ -46,6 +47,7 @@ const marketplacePlugin = (document) => {
 };
 
 const propsPath = join(root, "Directory.Build.props");
+const vscodeLockPath = join(root, "vscode", "package-lock.json");
 const propsPatterns = {
 	VersionPrefix: /<VersionPrefix>([^<]*)<\/VersionPrefix>/,
 	VersionSuffix: /<VersionSuffix>([^<]*)<\/VersionSuffix>/,
@@ -71,6 +73,29 @@ const readProps = (text) => {
 
 const files = [
 	jsonFile("package.json", (document) => document),
+	jsonFile("vscode/package.json", (document) => document),
+	{
+		relative: "vscode/package-lock.json",
+		read: () => {
+			const document = JSON.parse(readFileSync(vscodeLockPath, "utf8"));
+			const rootVersion = document.packages?.[""]?.version;
+			if (document.version !== rootVersion) {
+				throw new Error(
+					`vscode/package-lock.json disagrees internally: ${document.version} and ${rootVersion}`,
+				);
+			}
+			return document.version;
+		},
+		write: (version) => {
+			const document = JSON.parse(readFileSync(vscodeLockPath, "utf8"));
+			if (!document.packages?.[""]) {
+				throw new Error("vscode/package-lock.json has no root package entry");
+			}
+			document.version = version;
+			document.packages[""].version = version;
+			writeFileSync(vscodeLockPath, JSON.stringify(document, null, 2) + "\n");
+		},
+	},
 	jsonFile(".github/plugin/plugin.json", (document) => document),
 	jsonFile(".github/plugin/marketplace.json", marketplacePlugin),
 	{

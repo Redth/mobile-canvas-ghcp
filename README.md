@@ -1,8 +1,8 @@
 # Mobile Canvas
 
 View, create, boot, and **interact with** local iOS Simulators and Android
-emulators from inside a GitHub Copilot canvas — and give your agent the same
-controls through MCP.
+emulators from a GitHub Copilot canvas or the VS Code Activity Bar — and give
+your agent the same controls through MCP.
 
 <table>
   <tr>
@@ -56,7 +56,8 @@ see [How the executable ships](docs/distribution.md).
 **Device management**
 
 - Discover installed runtimes/system images, device types, and existing devices.
-- Create, boot, wait, restart, shut down, reveal, erase, and delete.
+- Create and automatically boot devices headlessly, then restart, shut down, show their native
+  window, erase, or delete them. Showing an Android emulator restarts it with its window enabled.
 - Erase and delete always require an explicit confirmation.
 
 **Live interaction**
@@ -163,27 +164,43 @@ your app to that exact device → drive it with the input tools.
 
 ## VS Code
 
-The same MCP server works in VS Code's Copilot Chat with no extra code. See
-[docs/vscode.md](docs/vscode.md), or copy [`.vscode/mcp.json`](.vscode/mcp.json)
-into your project.
+Download the VSIX artifact from a successful CI run. Prefer the package matching
+your platform (`darwin-arm64`, `darwin-x64`, `linux-arm64`, `linux-x64`,
+`win32-arm64`, or `win32-x64`); the larger universal package remains available
+for environments where the target is not known in advance. Tagged releases also
+provide a tiny universal `-thin` package that downloads and verifies only the
+matching runtime on first use.
 
-The canvas and MCP can run at the same time: MCP is a thin client of the shared
-background host rather than a second copy of it.
+```bash
+code --install-extension mobile-canvas-vscode.vsix
+```
+
+Reload VS Code and open **Mobile** from the Activity Bar. The extension
+contains all native runtimes and automatically registers the `mobile_device_*`
+tools with Copilot Chat; no global tool or `mcp.json` is required. Agent actions
+also select and animate the same device in the live view. The view follows the
+active VS Code theme while preserving the GitHub canvas appearance elsewhere.
+The selected device, a current screenshot, or its accessibility tree can be
+attached to chat as `#mobileDevice`, `#mobileScreenshot`, or `#mobileUiTree`.
+
+The extension runs locally for Remote SSH, Dev Containers, and Codespaces.
+`vscode.dev` is unsupported. See [the VS Code guide](docs/vscode.md) for artifact
+downloads, manual MCP configuration, security details, and development commands.
 
 ## Architecture
 
 ```text
-GitHub Copilot app                    VS Code / CLI / agent
-  └─ extension.mjs                      └─ mobile-canvas mcp (stdio)
-       │ canvas actions                      │ 24 tools
-       └──────────────┬───────────────────────┘
-                      ▼
-              mobile-canvas host          (per-user singleton, loopback only)
-                ├─ HTTP + WebSocket for the canvas UI
-                ├─ per-canvas selected-device state
-                └─ platform backends
-                     ├─ iOS      simctl + CoreSimulator IOSurface + idb (input)
-                     └─ Android  emulator gRPC (video + input) + adb
+GitHub Copilot app        VS Code extension          CLI / other agent
+  └─ extension.mjs          ├─ Activity Bar webview    └─ mobile-canvas mcp
+       │ canvas actions     └─ MCP context proxy              │
+       └──────────────────┬───────────────┬────────────────────┘
+                          ▼
+                  mobile-canvas host     (per-user singleton, loopback only)
+                    ├─ HTTP + WebSocket UI transport
+                    ├─ per-panel selected-device state
+                    └─ platform backends
+                         ├─ iOS      simctl + CoreSimulator IOSurface + idb
+                         └─ Android  emulator gRPC + adb
 ```
 
 The host is started on demand, binds only to `127.0.0.1`, and authenticates
@@ -208,6 +225,9 @@ crosses to the canvas instead of the 41-577 MiB/s the emulator emits.
 ```bash
 dotnet build MobileCanvas.slnx
 dotnet test  tests/MobileCanvas.Tests/MobileCanvas.Tests.csproj
+npm ci --prefix vscode --ignore-scripts
+npm test --prefix vscode
+npm run package --prefix vscode
 ./scripts/build.sh          # builds one architecture into .build/bin/<rid>
 ./scripts/release.sh        # rebuilds every shipped arch and refreshes runtimes/
 ```
@@ -221,9 +241,10 @@ Two things to know before you change anything:
   builds both. A stale helper fails only later, at stream start; check it with
   `mobile-screencap --help` and confirm a `framebuffer` subcommand exists.
 
-Changing `src/` or `native/` also means re-running `scripts/release.sh` and
-committing `runtimes/`, because that bundle is what a plugin install actually
-executes. See [How the executable ships](docs/distribution.md).
+Changing `src/` or `native/` requires the **Release runtimes** workflow. It builds
+each Native AOT RID on its native OS, publishes checksummed release assets, and
+packages both host extensions from those exact binaries. See
+[How the executable ships](docs/distribution.md).
 
 ## License
 

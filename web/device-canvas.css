@@ -1,9 +1,8 @@
 /*
- * The canvas provider protocol has no theme hint (CanvasHostContext only carries
- * capabilities), so appearance follows the host webview's prefers-color-scheme.
- * A data-theme attribute on <html> lets the user pin a theme when the host does
- * not propagate one. The dark token block is intentionally repeated rather than
- * using light-dark(), so a webview without that function still renders correctly.
+ * This is the GitHub canvas style set. The canvas provider protocol has no theme hint, so Auto
+ * follows prefers-color-scheme there. Other hosts may load an adapter after this file to remap
+ * these semantic tokens without changing the GitHub appearance. A data-theme attribute on <html>
+ * lets the user pin a theme in every host.
  */
 :root {
   color-scheme: light dark;
@@ -398,6 +397,7 @@ summary:focus-visible,
   justify-content: center;
   gap: 6px;
   flex: 1 1 0;
+  min-width: 0;
   min-height: 30px;
   padding: 0 10px;
   border: 1px solid transparent;
@@ -407,6 +407,7 @@ summary:focus-visible,
   font: inherit;
   font-size: 12px;
   font-weight: 500;
+  white-space: nowrap;
   cursor: pointer;
 }
 

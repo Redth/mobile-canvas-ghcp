@@ -16,6 +16,11 @@
     "mobile",
     "device-control"
   ],
+  "scripts": {
+    "package:plugin": "node scripts/prepare-plugin.mjs",
+    "package:plugin:thin": "node scripts/prepare-plugin.mjs --thin",
+    "package:runtimes": "node scripts/package-runtime-assets.mjs"
+  },
   "dependencies": {
     "@github/copilot-sdk": "latest"
   },

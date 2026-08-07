@@ -8,10 +8,16 @@ name: Release runtimes
 # compilation is not supported"), so every OS needs its own runner. Architectures
 # within one OS do cross-compile, which is why macOS builds both its slices.
 on:
+  push:
+    tags:
+      - "v*"
   workflow_dispatch:
     inputs:
       version:
         description: Version to stamp into every file that carries one
+        required: false
+      prerelease_tag:
+        description: Publish a prerelease tag (for example v0.1.7-rc.1) for end-to-end testing
         required: false
       commit:
         description: Open a PR with the refreshed runtimes
@@ -24,7 +30,7 @@ permissions:
 
 jobs:
   build:
-    name: ${{ matrix.rid }}
+    name: ${{ matrix.key }}
     runs-on: ${{ matrix.os }}
     # One unavailable architecture should not hide whether the others work.
     continue-on-error: ${{ matrix.optional || false }}
@@ -32,16 +38,27 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - { rid: osx-arm64,   os: macos-15 }
-          - { rid: osx-x64,     os: macos-15 }
-          - { rid: win-x64,     os: windows-latest }
-          - { rid: linux-x64,   os: ubuntu-latest }
+          # One macOS runner can cross-compile both architectures. Keeping them
+          # together avoids competing for two scarce macOS hosted runners.
+          - { key: osx,         rids: "osx-arm64 osx-x64", os: macos-14 }
+          - { key: win-x64,     rids: "win-x64",           os: windows-latest }
+          - { key: linux-x64,   rids: "linux-x64",         os: ubuntu-latest }
           # ARM runners are not offered on every plan, so these may be skipped
           # without failing the release.
-          - { rid: win-arm64,   os: windows-11-arm, optional: true }
-          - { rid: linux-arm64, os: ubuntu-24.04-arm, optional: true }
+          - { key: win-arm64,   rids: "win-arm64",         os: windows-11-arm, optional: true }
+          - { key: linux-arm64, rids: "linux-arm64",       os: ubuntu-24.04-arm, optional: true }
     steps:
       - uses: actions/checkout@v4
+
+      - name: Verify tag matches package version
+        if: startsWith(github.ref, 'refs/tags/v')
+        shell: bash
+        run: |
+          expected="v$(node -p 'require("./package.json").version')"
+          test "$GITHUB_REF_NAME" = "$expected" || {
+            echo "tag $GITHUB_REF_NAME does not match package version $expected" >&2
+            exit 1
+          }
 
       - uses: actions/setup-dotnet@v4
         with:
@@ -56,12 +73,15 @@ jobs:
 
       - name: Build
         shell: bash
-        run: ./scripts/build.sh "${{ matrix.rid }}"
+        run: |
+          for rid in ${{ matrix.rids }}; do
+            ./scripts/build.sh "$rid"
+          done
 
       - uses: actions/upload-artifact@v4
         with:
-          name: bin-${{ matrix.rid }}
-          path: .build/bin/${{ matrix.rid }}/mobile-*
+          name: bin-${{ matrix.key }}
+          path: .build/bin/*/mobile-*
           if-no-files-found: error
           retention-days: 1
 
@@ -78,28 +98,82 @@ jobs:
         with:
           global-json-file: global.json
 
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: vscode/package-lock.json
+
       - uses: actions/download-artifact@v4
         with:
           path: .build/artifacts
           pattern: bin-*
 
+      - name: Require core runtime builds
+        run: |
+          for rid in osx-arm64 osx-x64 win-x64 linux-x64; do
+            find ".build/artifacts" -type f \
+              \( -path "*/$rid/mobile-canvas" -o -path "*/$rid/mobile-canvas.exe" \) \
+              | grep -q . || {
+              echo "required runtime did not build: $rid" >&2
+              exit 1
+            }
+          done
+
       - name: Stamp version
         if: inputs.version != ''
         run: node scripts/stamp-version.mjs "${{ inputs.version }}"
+
+      - name: Validate prerelease inputs
+        if: inputs.prerelease_tag != ''
+        run: |
+          test -n "${{ inputs.version }}" || {
+            echo "version is required when prerelease_tag is set" >&2
+            exit 1
+          }
+          case "${{ inputs.prerelease_tag }}" in
+            v*-rc.*) ;;
+            *)
+              echo "prerelease_tag must match v*-rc.*" >&2
+              exit 1
+              ;;
+          esac
+          gh release view "${{ inputs.prerelease_tag }}" >/dev/null 2>&1 && {
+            echo "prerelease already exists: ${{ inputs.prerelease_tag }}" >&2
+            exit 1
+          }
+          exit 0
+        env:
+          GH_TOKEN: ${{ github.token }}
 
       # bundle.mjs merges into the existing manifest, so bundling each downloaded
       # architecture in turn produces one manifest covering all of them.
       - name: Bundle every architecture that built
         run: |
           shopt -s nullglob
+          rm -rf runtimes
+          mkdir runtimes
           found=0
-          for dir in .build/artifacts/bin-*; do
-            rid="${dir##*/bin-}"
+          while IFS= read -r executable; do
+            dir="${executable%/*}"
+            rid="${dir##*/}"
+            if [[ "$rid" == bin-* ]]; then
+              rid="${rid#bin-}"
+            fi
+            case "$rid" in
+              osx-arm64|osx-x64|win-x64|win-arm64|linux-x64|linux-arm64) ;;
+              *) continue ;;
+            esac
             echo "::group::$rid"
-            node scripts/bundle.mjs --rid "$rid" --from "$dir"
+            MOBILE_CANVAS_RELEASE_TAG="${{ inputs.prerelease_tag }}" \
+              node scripts/bundle.mjs --rid "$rid" --from "$dir"
             echo "::endgroup::"
             found=$((found + 1))
-          done
+          done < <(
+            find .build/artifacts -type f \
+              \( -name mobile-canvas -o -name mobile-canvas.exe \) \
+              | sort
+          )
           if [ "$found" -eq 0 ]; then
             echo "no architectures built" >&2
             exit 1
@@ -110,6 +184,75 @@ jobs:
         run: |
           node scripts/verify-bundle.mjs
           dotnet test MobileCanvas.slnx -c Release
+
+      - name: Package runtime release assets
+        run: npm run package:runtimes
+
+      - name: Package Copilot plugin
+        run: |
+          npm run package:plugin
+          node scripts/verify-plugin.mjs .build/copilot-plugin/mobile-canvas
+          npm run package:plugin:thin
+          node scripts/verify-plugin.mjs .build/copilot-plugin-thin/mobile-canvas
+
+      - name: Package VS Code extension
+        run: |
+          npm ci --prefix vscode --ignore-scripts
+          npm run package --prefix vscode
+
+      - name: Package platform-specific VS Code extensions
+        run: |
+          npm run package:thin --prefix vscode
+          npm run package:targets --prefix vscode
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: mobile-canvas-runtime-assets
+          path: .build/release-assets
+          if-no-files-found: error
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: mobile-canvas-copilot-plugin
+          path: .build/copilot-plugin/mobile-canvas
+          include-hidden-files: true
+          if-no-files-found: error
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: mobile-canvas-copilot-plugin-thin
+          path: .build/copilot-plugin-thin/mobile-canvas
+          include-hidden-files: true
+          if-no-files-found: error
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: mobile-canvas-vscode
+          path: .build/mobile-canvas-vscode*.vsix
+          include-hidden-files: true
+          if-no-files-found: error
+
+      - name: Publish tagged release
+        if: startsWith(github.ref, 'refs/tags/v') || inputs.prerelease_tag != ''
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ inputs.prerelease_tag || github.ref_name }}
+        run: |
+          if [[ -n "${{ inputs.prerelease_tag }}" ]]; then
+            gh release create "$RELEASE_TAG" \
+              --target "$GITHUB_SHA" \
+              --prerelease \
+              --title "Mobile Canvas $RELEASE_TAG" \
+              --notes "Release candidate for end-to-end artifact and runtime download validation."
+          else
+            gh release view "$RELEASE_TAG" >/dev/null 2>&1 \
+              || gh release create "$RELEASE_TAG" --verify-tag --generate-notes
+          fi
+          gh release upload "$RELEASE_TAG" \
+            .build/release-assets/* \
+            .build/mobile-canvas-vscode*.vsix \
+            .build/mobile-canvas-copilot-plugin-*.tar.gz \
+            --clobber
 
       - name: Summarise
         run: |
@@ -128,7 +271,7 @@ jobs:
           } >> "$GITHUB_STEP_SUMMARY"
 
       - uses: peter-evans/create-pull-request@v7
-        if: inputs.commit
+        if: inputs.commit && inputs.prerelease_tag == ''
         with:
           branch: release/runtimes
           title: Refresh bundled runtimes
@@ -140,6 +283,8 @@ jobs:
           add-paths: |
             runtimes
             package.json
+            vscode/package.json
+            vscode/package-lock.json
             Directory.Build.props
             .github/plugin/plugin.json
             .github/plugin/marketplace.json

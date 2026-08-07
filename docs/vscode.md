@@ -1,13 +1,92 @@
 # Using Mobile Canvas from VS Code
 
-The Copilot app surfaces Mobile Canvas as a canvas panel. VS Code has no canvas
-API, but it does speak MCP — so the same 24 device tools work in Copilot Chat's
-agent mode with no additional code.
+The Mobile Canvas VS Code extension provides the live device view and registers
+the same MCP tools used by the GitHub Copilot canvas. It is self-contained: the
+VSIX includes the web UI and every supported native runtime.
 
-## Setup
+## Install the VSIX
 
-Copy [`.vscode/mcp.json`](../.vscode/mcp.json) into your project (or add the
-same entry to your user-level `mcp.json` to enable it everywhere):
+The first distribution is CI-built VSIX packages rather than a Marketplace
+listing. Download the `mobile-canvas-vscode-platforms-*` artifact from a
+successful GitHub Actions run and select the VSIX matching the machine where the
+extension host runs. A larger `mobile-canvas-vscode-universal-*` artifact is also
+available. Install the selected VSIX with either:
+
+```bash
+code --install-extension mobile-canvas-vscode.vsix
+```
+
+or **Extensions: Install from VSIX...** in the Command Palette. Reload VS Code,
+then open **Mobile** from the Activity Bar.
+
+VS Code 1.101 or newer is required. No separate `mobile-canvas` or .NET tool
+installation is needed.
+
+## Use the device view and Copilot tools
+
+The Activity Bar view can list, create, boot, select, and interact with local iOS
+Simulators and Android emulators. Its video and input behavior matches the
+GitHub Copilot canvas, including H.264 streaming and PNG fallback. The view pane
+title follows the selected device. In Auto appearance mode, a VS Code-only style
+adapter uses the active theme's `--vscode-*` colors and updates live for light,
+dark, and high-contrast themes; the GitHub canvas keeps its existing style set.
+
+New devices boot automatically without opening a separate Simulator or Emulator
+window. Use **Show device window** in the toolbar when the native window is
+needed; Android restarts the emulator to switch from headless to visible mode.
+
+Activation also registers a **Mobile Canvas** MCP server definition with Copilot
+Chat. In Agent mode, enable the `mobile_device_*` tools and ask for actions such
+as:
+
+```text
+Boot an iPhone 16 simulator and tell me its UDID.
+Take a screenshot of the booted Android emulator.
+Tap the Sign in button, then swipe up.
+```
+
+When a tool targets a device, the VS Code view follows that selection and shows
+the automation cursor and accent glow. The panel and MCP process remain separate
+clients of the same loopback host, so either can be restarted independently.
+
+### Attach the selected device to chat
+
+After selecting a device in the Mobile view, use the paperclip menu or type one
+of these references into Copilot Chat:
+
+- `#mobileDevice` adds the selected device record.
+- `#mobileScreenshot` captures and adds a current PNG screenshot.
+- `#mobileUiTree` adds the current accessibility hierarchy.
+
+These are zero-argument language-model tools, so they appear as normal chat tool
+pills and always resolve against the device selected in this VS Code window.
+They use the authenticated extension-host bridge; no host cookie or bootstrap
+secret is exposed to the chat input or webview.
+
+VS Code's API for arbitrary custom context providers is still proposed, so the
+extension uses the stable attachable-tool API instead. The GitHub Copilot canvas
+SDK does not currently expose a composer attachment API; its equivalent device,
+screenshot, and UI-tree data remains available through canvas actions and MCP.
+
+## Local execution and remote workspaces
+
+The extension declares `extensionKind: ["ui"]`. It therefore runs on the local
+machine even when the current workspace is connected through Remote SSH,
+Dev Containers, or Codespaces. This is intentional: Xcode, Android emulators,
+and the bundled native executable are local-machine resources.
+
+`vscode.dev` is unsupported because a browser extension host cannot launch the
+native runtime or reach local simulators.
+
+All Mobile Canvas traffic remains on `127.0.0.1`. The extension host exchanges
+the host's one-time bootstrap secret for a scoped cookie, then relays typed HTTP
+requests and binary WebSocket frames. Webview JavaScript receives neither the
+bootstrap secret nor the authenticated cookie.
+
+## Manual MCP fallback
+
+The live panel is optional. To expose only the tools from an existing
+`mobile-canvas` installation, add this to a workspace or user `mcp.json`:
 
 ```json
 {
@@ -21,62 +100,54 @@ same entry to your user-level `mcp.json` to enable it everywhere):
 }
 ```
 
-If `mobile-canvas` is not on your `PATH`, use an absolute path — for example the
-copy bundled with the Copilot extension:
+Open Copilot Chat in Agent mode and enable the `mobile_device_*` tools. This
+manual server is not bound to the Activity Bar view, so agent actions will not
+change that view's selection.
 
-```json
-"command": "${userHome}/.copilot/extensions/mobile-canvas/bin/mobile-canvas"
+## Build and test from source
+
+Dependencies are restored through
+`https://packagefeedproxy.microsoft.io/npm/`, configured in `vscode/.npmrc`.
+
+```bash
+npm ci --prefix vscode --ignore-scripts
+npm test --prefix vscode
+npm run package --prefix vscode
 ```
 
-Open Copilot Chat, switch to **Agent** mode, and the `mobile_device_*` tools
-appear in the tool picker.
+The package command writes `.build/mobile-canvas-vscode.vsix` and verifies that
+it contains all six platform runtimes and their archives, the production web
+assets, and no test or source-map files. `npm run package:targets --prefix
+vscode` additionally creates six platform-specific packages containing only the
+matching runtime. VS Code Marketplace selects these packages automatically.
 
-## What you get
+To debug interactively, run **Run Mobile Canvas VS Code Extension** from the
+repository's Run and Debug view. The pre-launch task compiles TypeScript and
+stages the shared assets before opening an Extension Development Host.
 
-Everything except the live video panel:
+### Packaging layout
 
+`scripts/prepare-vscode.mjs` recreates `vscode/dist/` from committed sources:
+
+```text
+vscode/dist/
+  web/
+  lib/runtime.mjs
+  lib/mcp-vscode-proxy.mjs
+  scripts/mcp-vscode.mjs
+  runtimes/
+  LICENSE
 ```
-"Boot an iPhone 16 simulator and tell me its UDID"
-"Take a screenshot of the booted Android emulator"
-"Tap at 200,400 then swipe up"
+
+The extension imports the same content-addressed runtime resolver as the Copilot
+plugin. The matching archive is extracted and checksum-verified on first use;
+the other platform archives remain compressed.
+
+The MCP definition uses the positional VS Code API constructor:
+
+```ts
+new vscode.McpStdioServerDefinition(label, command, args, env, version)
 ```
 
-`mobile_device_screenshot` returns a real image content block, so the agent can
-actually look at the device between actions. That covers most of what the canvas
-gives you visually — the canvas is better for continuous interaction, MCP is
-better for scripted flows.
-
-## Running both at once
-
-This is supported and is the normal setup.
-
-The MCP server is a **thin client of the shared background host**, not a second
-copy of it. `mobile-canvas mcp` speaks stdio to the editor and HTTP to the same
-per-user host that serves the canvas, so the canvas panel in the Copilot app and
-the MCP tools in VS Code operate on one consistent view of your devices.
-
-Selection is scoped per canvas panel, so an MCP client and a canvas panel can
-each target a different device without fighting.
-
-## Notes on a future VS Code extension
-
-A dedicated extension is not required for tool access and is not shipped today.
-If one is added later, the useful hooks are:
-
-- `vscode.lm.registerMcpServerDefinitionProvider(id, provider)` plus a
-  `contributes.mcpServerDefinitionProviders` entry, to register the server
-  automatically instead of asking users to write `mcp.json`. Requires engine
-  `^1.101.0`.
-- A webview for the live video. A raw `<iframe src="http://127.0.0.1:...">` is
-  blocked by webview CSP; the working shape is to bundle the HTML in the
-  extension and let it `fetch`/`WebSocket` to loopback with
-  `connect-src http://127.0.0.1:* ws://127.0.0.1:*`.
-
-Two gotchas worth recording:
-
-- The docs page shows an object-literal constructor for
-  `McpStdioServerDefinition`, but `vscode.d.ts` defines a **positional** one:
-  `(label, command, args?, env?, version?)`, with `cwd` set as a property after
-  construction. Trust `vscode.d.ts` for your target engine.
-- `asExternalUri` is a no-op on desktop. It only matters for Remote SSH,
-  Codespaces, and vscode.dev — none of which can reach a local simulator anyway.
+Its `cwd` is assigned afterward. Some older documentation showed an
+object-literal constructor that does not match the stable `vscode.d.ts` API.

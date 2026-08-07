@@ -1,8 +1,8 @@
 # How the executable ships
 
 Mobile Canvas is a JavaScript canvas extension in front of a Native AOT .NET
-executable. This describes how that executable reaches a machine, and why it is
-committed to the repository rather than downloaded or installed separately.
+executable. This describes how CI builds each platform, how release assets are
+verified, and how the Copilot and VS Code hosts obtain the matching runtime.
 
 ## What a plugin install actually does
 
@@ -26,24 +26,34 @@ install directory:
 
 The consequences are strict:
 
-1. Whatever is committed is exactly what users get.
-2. An npm package would never be downloaded, so npm is not a delivery channel.
-3. Per-architecture selection has to happen at **runtime**, in JavaScript, using
+1. There is no install hook that can restore a native package.
+2. npm is not a delivery channel for a Copilot plugin.
+3. The JavaScript resolver may download a published binary on first use.
+4. Per-architecture selection has to happen at **runtime**, using
    `process.platform` and `process.arch`.
 
 ## The approach
 
-Prebuilt Native AOT binaries are committed under `runtimes/`, gzipped, one
-directory per .NET runtime identifier:
+`runtimes/manifest.json` pins every executable by version, RID, uncompressed
+size, and SHA-256. Release CI publishes each gzip stream as a GitHub Release
+asset:
 
 ```
-runtimes/
-  manifest.json
-  osx-arm64/mobile-canvas.gz
-  osx-arm64/mobile-screencap.gz
-  osx-x64/mobile-canvas.gz
-  osx-x64/mobile-screencap.gz
+mobile-canvas-v0.1.7-osx-arm64.gz
+mobile-screencap-v0.1.7-osx-arm64.gz
+mobile-canvas-v0.1.7-linux-x64.gz
+mobile-canvas-runtime-manifest-v0.1.7.json
+SHA256SUMS
 ```
+
+The resolver first uses an archive bundled beside the manifest when one exists.
+If a thin distribution omits that archive, it downloads the versioned asset from
+the pinned release, verifies the uncompressed size and SHA-256, and writes it to
+the same content-addressed cache. It never follows a mutable `latest` URL.
+
+The current release keeps local archives as a compatibility bridge. Once a
+release containing the remote assets is published, later plugin revisions can
+omit those archives without changing the resolver or cache format.
 
 `manifest.json` is keyed by `${process.platform}-${process.arch}` so the
 resolver does a direct lookup with no platform mapping table at runtime:
@@ -82,15 +92,32 @@ Measured: **56 ms** on a cold start, **0 ms** once extracted.
 
 ### What the size actually costs
 
-All six runtimes are 62 MB compressed, and every one ships to every user because
-a plugin install is a plain git clone. Only the matching runtime is ever
-extracted, so a Windows user unpacks 29 MB and never touches the other five.
+The legacy universal bundle is roughly 62 MB compressed. Release assets avoid
+adding another copy of that data to Git history and let thin packages fetch only
+the matching 10-13 MB archive. The cache expands only the current RID.
 
-The real cost is history, not checkout size. Git keeps every version of a binary
-forever and these do not delta-compress, so each release adds roughly another
-62 MB permanently. That is affordable for occasional releases and is not
-affordable for per-commit binary updates -- only refresh `runtimes/` when cutting
-a release, never as part of ordinary development.
+### VS Code packaging
+
+The universal downloadable VSIX includes the same six compressed archives.
+`scripts/prepare-vscode.mjs` stages the shared web UI, runtime resolver, MCP
+proxy, and `runtimes/` under `vscode/dist/`; `@vscode/vsce` then produces a
+self-contained package of approximately 73 MiB.
+
+CI also runs `vsce package --target` for all six supported VS Code targets.
+Those packages contain only their matching runtime, and VS Code Marketplace
+automatically selects the correct target package. A future thin universal VSIX
+is also produced at release time: it omits every archive, is about 0.1 MiB, and
+uses the same verified first-use download path.
+
+Installing the VSIX does not extract all binaries. On first use, the shared
+resolver verifies and expands only the current platform into the same
+content-addressed cache used by the Copilot plugin.
+
+CI runs `scripts/verify-vsix.mjs` after packaging every VSIX. It checks each
+archive named by that package's filtered runtime manifest, required production
+files, version agreement, local UI extension placement, and the absence of test
+and source-map files. Successful CI runs upload the Copilot plugin directory,
+the universal VSIX, and all six target-specific VSIXs as separate artifacts.
 
 ### Why the cache is content-addressed
 
@@ -113,7 +140,11 @@ MCP server so both always run the same build:
    to re-bundle to test a change
 3. the bundled `runtimes/` archive for this platform
 4. `~/.local/bin`, then `~/.dotnet/tools`
-5. bare `mobile-canvas` on `PATH`
+5. the matching versioned GitHub Release asset, verified against the manifest
+6. bare `mobile-canvas` on `PATH`
+
+`MOBILE_CANVAS_RUNTIME_BASE_URL` can point first-use downloads at an enterprise
+mirror. `MOBILE_CANVAS_CACHE_DIR` can relocate the content-addressed cache.
 
 If the platform is not bundled, the error names the platform, lists what the
 build does ship, and points at the global tool.
@@ -226,16 +257,21 @@ artifact cannot contain its own hash. Expect it to trail `git log` by one.
 
 ## Releasing
 
-```bash
-./scripts/release.sh   # builds both architectures, re-bundles, verifies
-git commit -am "Refresh bundled runtimes"
-```
+`.github/workflows/release.yml` is the canonical release path:
 
-Native AOT cross-compiles between macOS architectures, so one machine produces
-both slices and both get the identical universal Swift helper.
+1. Native OS runners build all six RIDs.
+2. The bundle job merges and verifies their manifests.
+3. `package-runtime-assets.mjs` creates versioned gzip assets and `SHA256SUMS`.
+4. CI packages bundled and thin Copilot plugins, bundled and thin universal
+   VSIXs, and up to six target VSIXs.
+5. A `v*` tag publishes every file to the corresponding GitHub Release.
+6. A manual run can still open a PR refreshing the compatibility bundle.
 
-`.github/workflows/release.yml` does the same on demand and opens a PR.
-`scripts/verify-bundle.mjs` checks every archive on any host — the resolver only
-checksums the architecture it extracts, so a corrupt archive for another
-platform would otherwise stay invisible until a user on that platform hit it.
-CI also warns when `runtimes/` has drifted behind `src/`.
+Before merging a distribution change, manually dispatch the workflow with a new
+numeric `version`, a unique `prerelease_tag` matching `v*-rc.*`, and `commit`
+disabled. This creates an isolated GitHub prerelease from the branch so the thin
+Copilot plugin and thin VSIX can be installed against real release URLs. Delete
+the prerelease and tag after the smoke test.
+
+`scripts/verify-bundle.mjs` checks every local archive on any host. CI also
+warns when the manifest source hash has drifted behind `src/`.

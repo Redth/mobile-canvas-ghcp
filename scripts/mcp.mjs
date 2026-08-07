@@ -11,7 +11,7 @@ import { resolveCommand } from "../lib/runtime.mjs";
 
 let command;
 try {
-  ({ command } = resolveCommand());
+  ({ command } = await resolveCommand());
 } catch (error) {
   // stdout is the JSON-RPC channel, so diagnostics must never go there.
   process.stderr.write(`mobile-canvas: ${error.message}\n`);

@@ -99,6 +99,10 @@ const manifest = existsSync(manifestPath)
 manifest.version = JSON.parse(
   readFileSync(join(packageRoot, "package.json"), "utf8"),
 ).version;
+manifest.distribution = {
+  repository: "Redth/mobile-canvas-ghcp",
+  tag: process.env.MOBILE_CANVAS_RELEASE_TAG || `v${manifest.version}`,
+};
 // Recorded so CI can tell whether runtimes/ still matches src/ without rebuilding.
 // Comparing the built bytes cannot answer that: Native AOT is not bit-reproducible,
 // so a rebuild of identical source differs anyway.

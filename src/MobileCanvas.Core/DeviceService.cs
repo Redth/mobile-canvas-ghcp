@@ -45,8 +45,14 @@ public sealed class DeviceService(IEnumerable<IDeviceBackend> backends)
 	public Task<DisplayGeometry> GetDisplayAsync(string deviceId, CancellationToken cancellationToken = default) =>
 		GetBackend(deviceId).GetDisplayAsync(deviceId, cancellationToken);
 
-	public Task<DeviceTarget> CreateAsync(CreateDeviceRequest request, CancellationToken cancellationToken = default) =>
-		GetBackendForPlatform(request.Platform).CreateAsync(request, cancellationToken);
+	public async Task<DeviceTarget> CreateAsync(
+		CreateDeviceRequest request,
+		CancellationToken cancellationToken = default)
+	{
+		var backend = GetBackendForPlatform(request.Platform);
+		var created = await backend.CreateAsync(request, cancellationToken).ConfigureAwait(false);
+		return await backend.BootAsync(created.Id, cancellationToken).ConfigureAwait(false);
+	}
 
 	public async Task<DeviceTarget> SelectAsync(
 		string sessionId,

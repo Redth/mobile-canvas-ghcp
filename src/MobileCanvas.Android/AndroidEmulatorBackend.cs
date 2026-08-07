@@ -208,7 +208,7 @@ public sealed partial class AndroidEmulatorBackend : IDeviceBackend, IAsyncDispo
 			Restart = true,
 			Erase = true,
 			Delete = true,
-			Reveal = false,
+			Reveal = true,
 			Tap = true,
 			LongPress = true,
 			Swipe = true,
@@ -325,7 +325,11 @@ public sealed partial class AndroidEmulatorBackend : IDeviceBackend, IAsyncDispo
 		InvalidateCache(avdId);
 
 		if (FindRunning(avdId) is null)
-			await LaunchEmulatorAsync(avdId, wipeData: false, cancellationToken).ConfigureAwait(false);
+			await LaunchEmulatorAsync(
+				avdId,
+				wipeData: false,
+				showWindow: false,
+				cancellationToken).ConfigureAwait(false);
 
 		await WaitForBootAsync(avdId, cancellationToken).ConfigureAwait(false);
 		InvalidateCache(avdId);
@@ -342,22 +346,17 @@ public sealed partial class AndroidEmulatorBackend : IDeviceBackend, IAsyncDispo
 	/// <c>-gpu host</c> is equally load-bearing: the same capture code measured 3 FPS against a
 	/// software-rendered AVD and 50 FPS with host GPU.
 	/// </remarks>
-	private async Task LaunchEmulatorAsync(string avdId, bool wipeData, CancellationToken cancellationToken)
+	private async Task LaunchEmulatorAsync(
+		string avdId,
+		bool wipeData,
+		bool showWindow,
+		CancellationToken cancellationToken)
 	{
 		if (_locator.Emulator is null)
 			throw new DeviceCapabilityException("The Android emulator executable was not found.");
 
 		var grpcPort = FindFreePort();
-		var arguments = new List<string>
-		{
-			"-avd", avdId,
-			"-grpc", grpcPort.ToString(CultureInfo.InvariantCulture),
-			"-gpu", "host",
-			"-no-snapshot-save",
-		};
-
-		if (wipeData)
-			arguments.Add("-wipe-data");
+		var arguments = BuildLaunchArguments(avdId, grpcPort, wipeData, showWindow);
 
 		_logger.LogInformation("Launching emulator {Avd} with gRPC on port {Port}.", avdId, grpcPort);
 
@@ -401,6 +400,28 @@ public sealed partial class AndroidEmulatorBackend : IDeviceBackend, IAsyncDispo
 				}
 			});
 		}
+	}
+
+	internal static string[] BuildLaunchArguments(
+		string avdId,
+		int grpcPort,
+		bool wipeData,
+		bool showWindow)
+	{
+		var arguments = new List<string>
+		{
+			"-avd", avdId,
+			"-grpc", grpcPort.ToString(CultureInfo.InvariantCulture),
+			"-gpu", "host",
+			"-no-snapshot-save",
+		};
+
+		if (!showWindow)
+			arguments.Add("-no-window");
+		if (wipeData)
+			arguments.Add("-wipe-data");
+
+		return [.. arguments];
 	}
 
 	private async Task WaitForBootAsync(string avdId, CancellationToken cancellationToken)
@@ -530,7 +551,11 @@ public sealed partial class AndroidEmulatorBackend : IDeviceBackend, IAsyncDispo
 		await ShutdownAsync(deviceId, cancellationToken).ConfigureAwait(false);
 
 		// -wipe-data only takes effect at launch, so erasing means relaunching.
-		await LaunchEmulatorAsync(avdId, wipeData: true, cancellationToken).ConfigureAwait(false);
+		await LaunchEmulatorAsync(
+			avdId,
+			wipeData: true,
+			showWindow: false,
+			cancellationToken).ConfigureAwait(false);
 		await WaitForBootAsync(avdId, cancellationToken).ConfigureAwait(false);
 		InvalidateCache(avdId);
 
@@ -559,9 +584,23 @@ public sealed partial class AndroidEmulatorBackend : IDeviceBackend, IAsyncDispo
 		InvalidateCache(avdId);
 	}
 
-	public Task<DeviceTarget> RevealAsync(string deviceId, CancellationToken cancellationToken = default) =>
-		throw new DeviceCapabilityException(
-			"Emulators have no window to reveal; Mobile Canvas launches them headless-capable and renders them in the canvas.");
+	public async Task<DeviceTarget> RevealAsync(
+		string deviceId,
+		CancellationToken cancellationToken = default)
+	{
+		var avdId = DeviceIdentity.GetNativeId(deviceId);
+		if (FindRunning(avdId) is not null)
+			await ShutdownAsync(deviceId, cancellationToken).ConfigureAwait(false);
+
+		await LaunchEmulatorAsync(
+			avdId,
+			wipeData: false,
+			showWindow: true,
+			cancellationToken).ConfigureAwait(false);
+		await WaitForBootAsync(avdId, cancellationToken).ConfigureAwait(false);
+		InvalidateCache(avdId);
+		return await GetDeviceAsync(deviceId, cancellationToken).ConfigureAwait(false);
+	}
 
 	#endregion
 

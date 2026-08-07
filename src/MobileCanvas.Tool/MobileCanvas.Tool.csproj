@@ -30,6 +30,7 @@
 
   <ItemGroup>
     <EmbeddedResource Include="..\..\web\index.html" LogicalName="MobileCanvas.Web.index.html" />
+    <EmbeddedResource Include="..\..\web\create-device-options.js" LogicalName="MobileCanvas.Web.create-device-options.js" />
     <EmbeddedResource Include="..\..\web\device-canvas.js" LogicalName="MobileCanvas.Web.device-canvas.js" />
     <EmbeddedResource Include="..\..\web\device-canvas.css" LogicalName="MobileCanvas.Web.device-canvas.css" />
     <None Include="..\..\README.md" Pack="true" PackagePath="" Link="README.md" />
