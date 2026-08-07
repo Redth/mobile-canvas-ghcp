@@ -31,6 +31,10 @@ struct MobileScreencap {
 				switch command {
 				case "list":
 					try await runList()
+				case "framebuffer-doctor":
+					try runFramebufferDoctor()
+				case "framebuffer":
+					try await FramebufferCommand.run(options)
 				case "capture":
 					try await runCapture(options)
 				case "encode":
@@ -63,8 +67,16 @@ struct MobileScreencap {
 			Commands:
 			  list                     Print simulator windows as JSON.
 			  doctor                   Report capture prerequisites as JSON.
+			  framebuffer-doctor       Report direct framebuffer availability as JSON.
+			  framebuffer              Stream a simulator IOSurface as Annex-B H.264.
 			  capture                  Stream Annex-B H.264 on stdout.
 			  encode                   Encode raw frames from stdin to Annex-B H.264 on stdout.
+
+			Framebuffer options:
+			  --udid <udid>            Simulator UDID. Required.
+			  --fps <n>                Target frame rate. Default 60.
+			  --bitrate <bits>         Average bitrate ceiling. Default 16000000.
+			  --max-height <px>        Clamp the encoded height, preserving aspect ratio.
 
 			Capture options:
 			  --window-id <id>         ScreenCaptureKit window id (from `list`).
@@ -99,6 +111,7 @@ struct MobileScreencap {
 	}
 
 	static func runDoctor() async throws {
+		let framebufferAvailable = MCSimulatorFramebuffer.isSupported
 		var screenRecording = false
 		var detail = ""
 		do {
@@ -115,13 +128,36 @@ struct MobileScreencap {
 			"screenRecordingGranted": screenRecording,
 			"screenRecordingDetail": detail,
 			"accessibilityGranted": Discovery.accessibilityTrusted(),
+			"framebufferAvailable": framebufferAvailable,
+			"framebufferDetail": framebufferAvailable
+				? "CoreSimulator IOSurface capture is available."
+				: "CoreSimulator IOSurface capture is unavailable.",
 			"simulatorWindows": windows.count,
 			"exactGeometry": windows.contains { $0.screenRect != nil },
 		]
 		let data = try JSONSerialization.data(withJSONObject: payload, options: [.prettyPrinted, .sortedKeys])
 		FileHandle.standardOutput.write(data)
 		FileHandle.standardOutput.write(Data("\n".utf8))
-		exit(screenRecording ? 0 : 1)
+		exit(screenRecording || framebufferAvailable ? 0 : 1)
+	}
+
+	static func runFramebufferDoctor() throws {
+		let framebufferAvailable = MCSimulatorFramebuffer.isSupported
+		let payload: [String: Any] = [
+			"type": "doctor",
+			"framebufferAvailable": framebufferAvailable,
+			"framebufferDetail": framebufferAvailable
+				? "CoreSimulator IOSurface capture is available."
+				: "CoreSimulator IOSurface capture is unavailable.",
+			// Preflight reads current TCC state without asking for either fallback permission.
+			"screenRecordingGranted": CGPreflightScreenCaptureAccess(),
+			"screenRecordingDetail": "Permission preflight only; ScreenCaptureKit was not started.",
+			"accessibilityGranted": Discovery.accessibilityTrusted(),
+		]
+		let data = try JSONSerialization.data(withJSONObject: payload, options: [.prettyPrinted, .sortedKeys])
+		FileHandle.standardOutput.write(data)
+		FileHandle.standardOutput.write(Data("\n".utf8))
+		exit(framebufferAvailable ? 0 : 1)
 	}
 
 	static func runCapture(_ options: CommandLineOptions) async throws {
@@ -361,4 +397,5 @@ struct CommandLineOptions {
 
 	func string(_ key: String) -> String? { values[key] }
 	func int(_ key: String) -> Int? { values[key].flatMap(Int.init) }
+	func double(_ key: String) -> Double? { values[key].flatMap(Double.init) }
 }

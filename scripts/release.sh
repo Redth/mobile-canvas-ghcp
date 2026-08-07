@@ -12,7 +12,7 @@ REPO_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
 cd "${REPO_ROOT}"
 
 if [[ "$(uname -s)" != "Darwin" ]]; then
-  printf '%s\n' "Bundling requires macOS: the screen capture helper is Swift/ScreenCaptureKit." >&2
+  printf '%s\n' "Bundling requires macOS: the simulator capture helper uses Apple frameworks." >&2
   exit 1
 fi
 

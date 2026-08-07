@@ -89,7 +89,7 @@ see [How the executable ships](docs/distribution.md).
 |---|---|
 | **iOS** | macOS, Xcode with Simulator runtimes, and [`idb_companion`](https://fbidb.io) (`brew install facebook/fb/idb-companion`) for input |
 | **Android** | Android SDK with `emulator`, `avdmanager`, and `adb` on `PATH` |
-| **Both** | Screen Recording and Accessibility permission (iOS video only) |
+| **Optional iOS fallback** | Screen Recording and Accessibility permission for ScreenCaptureKit |
 
 Android emulators must be started with `-gpu host`. A software-rendered AVD
 drops video from ~50 FPS to ~3 FPS.
@@ -182,7 +182,7 @@ GitHub Copilot app                    VS Code / CLI / agent
                 ├─ HTTP + WebSocket for the canvas UI
                 ├─ per-canvas selected-device state
                 └─ platform backends
-                     ├─ iOS      simctl + ScreenCaptureKit + idb (input)
+                     ├─ iOS      simctl + CoreSimulator IOSurface + idb (input)
                      └─ Android  emulator gRPC (video + input) + adb
 ```
 
@@ -195,7 +195,7 @@ Video is deliberately split from input on both platforms:
 
 | Concern | iOS | Android |
 |---|---|---|
-| Frames | ScreenCaptureKit window capture | emulator gRPC `streamScreenshot` |
+| Frames | CoreSimulator IOSurface (ScreenCaptureKit fallback) | emulator gRPC `streamScreenshot` |
 | Encode | VideoToolbox H.264 | same VideoToolbox H.264 |
 | Input | idb (Indigo HID) | emulator gRPC `streamInputEvent` |
 | Lifecycle | `simctl` | `emulator`/`avdmanager` + gRPC |
@@ -219,7 +219,7 @@ Two things to know before you change anything:
   directly and is not part of the binary.
 - **`dotnet publish` does not build the Swift helper.** `scripts/build.sh`
   builds both. A stale helper fails only later, at stream start; check it with
-  `mobile-screencap --help` and confirm an `encode` subcommand exists.
+  `mobile-screencap --help` and confirm a `framebuffer` subcommand exists.
 
 Changing `src/` or `native/` also means re-running `scripts/release.sh` and
 committing `runtimes/`, because that bundle is what a plugin install actually

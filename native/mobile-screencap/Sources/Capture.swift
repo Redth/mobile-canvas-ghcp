@@ -9,7 +9,8 @@ import VideoToolbox
 final class ByteSink: @unchecked Sendable {
 	private let fd: Int32
 	private let lock = NSLock()
-	private(set) var closed = false
+	private var isClosed = false
+	private var totalBytes: UInt64 = 0
 
 	init(fd: Int32) {
 		self.fd = fd
@@ -18,17 +19,18 @@ final class ByteSink: @unchecked Sendable {
 	func write(_ bytes: UnsafePointer<UInt8>, _ count: Int) {
 		lock.lock()
 		defer { lock.unlock() }
-		guard !closed else { return }
+		guard !isClosed else { return }
 
 		var offset = 0
 		while offset < count {
 			let written = Foundation.write(fd, bytes + offset, count - offset)
 			if written > 0 {
 				offset += written
+				totalBytes += UInt64(written)
 				continue
 			}
 			if written < 0 && errno == EINTR { continue }
-			closed = true
+			isClosed = true
 			return
 		}
 	}
@@ -38,6 +40,18 @@ final class ByteSink: @unchecked Sendable {
 			guard let base = buffer.baseAddress else { return }
 			write(base, buffer.count)
 		}
+	}
+
+	var closed: Bool {
+		lock.lock()
+		defer { lock.unlock() }
+		return isClosed
+	}
+
+	var bytesWritten: UInt64 {
+		lock.lock()
+		defer { lock.unlock() }
+		return totalBytes
 	}
 }
 
