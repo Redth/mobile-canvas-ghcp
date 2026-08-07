@@ -59,8 +59,8 @@ const sourceDir = resolve(packageRoot, args.from ?? ".build/bin");
 const suffix = rid.startsWith("win-") ? ".exe" : "";
 const executable = `mobile-canvas${suffix}`;
 
-// The screencap helper only exists on macOS, where it owns ScreenCaptureKit
-// capture and the VideoToolbox H.264 encode that both platforms rely on.
+// The capture helper only exists on macOS, where it owns direct simulator
+// framebuffer capture, ScreenCaptureKit fallback, and VideoToolbox encoding.
 const wanted = [executable, `mobile-screencap${suffix}`];
 
 const files = {};

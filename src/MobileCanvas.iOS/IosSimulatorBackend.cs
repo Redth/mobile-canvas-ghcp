@@ -332,61 +332,94 @@ public sealed class IosSimulatorBackend : IDeviceBackend, IAsyncDisposable
 	}
 
 	/// <summary>
-	/// Opens a live video stream, preferring ScreenCaptureKit and falling back to idb.
+	/// Opens a live video stream, preferring the direct simulator framebuffer.
 	/// </summary>
 	/// <remarks>
 	/// idb's encoder emits a single IDR per session with frame reordering on, so a corrupt picture
-	/// never recovers, and it never exceeded ~28 FPS. ScreenCaptureKit is the primary path; idb is
-	/// kept as a fallback for hosts without the native helper or without Screen Recording and
-	/// Accessibility permission, so video degrades instead of disappearing.
+	/// never recovers, and it never exceeded ~28 FPS. The native helper reads CoreSimulator's
+	/// IOSurface without TCC permissions; ScreenCaptureKit and then idb remain fallbacks so private
+	/// framework changes degrade instead of removing video.
 	/// </remarks>
 	public async Task<ILiveVideoSession> OpenVideoStreamAsync(
 		string deviceId,
 		StreamOptions options,
 		CancellationToken cancellationToken = default)
 	{
+		string? framebufferUnavailableReason = null;
+		string? screenCaptureUnavailableReason = null;
 		var display = await GetDisplayAsync(deviceId, cancellationToken).ConfigureAwait(false);
 
 		if (ScreenCaptureHelper.Path is { } helperPath)
 		{
 			var device = await RequireBootedAsync(deviceId, cancellationToken).ConfigureAwait(false);
-			var window = await FindCaptureWindowAsync(deviceId, device.NativeId, cancellationToken)
+			try
+			{
+				return await IosScreenCaptureVideoSession.StartFramebufferAsync(
+					helperPath,
+					device.NativeId,
+					options,
+					display,
+					static () => { },
+					cancellationToken).ConfigureAwait(false);
+			}
+			catch (Exception exception) when (exception is not OperationCanceledException)
+			{
+				framebufferUnavailableReason = exception.Message;
+			}
+
+			var windowResult = await FindCaptureWindowAsync(deviceId, device.NativeId, cancellationToken)
 				.ConfigureAwait(false);
-			if (window is not null)
+			screenCaptureUnavailableReason = windowResult.FailureReason;
+			if (windowResult.Window is not null)
 			{
 				try
 				{
 					return await IosScreenCaptureVideoSession.StartAsync(
 						helperPath,
-						window,
+						windowResult.Window,
 						options,
 						display,
 						static () => { },
-						cancellationToken).ConfigureAwait(false);
+						cancellationToken,
+						BuildCaptureFallbackDetail(framebufferUnavailableReason, null))
+						.ConfigureAwait(false);
 				}
 				catch (Exception exception) when (exception is not OperationCanceledException)
 				{
-					ScreenCaptureUnavailableReason = exception.Message;
+					screenCaptureUnavailableReason = exception.Message;
 				}
 			}
+		}
+		else
+		{
+			framebufferUnavailableReason =
+				$"{ScreenCaptureHelper.ExecutableName} is unavailable, so native capture cannot start.";
 		}
 
 		var companion = await GetCompanionAsync(deviceId, cancellationToken).ConfigureAwait(false);
 		return await companion.OpenVideoAsync(
 				options,
 				display,
-				ScreenCaptureUnavailableReason,
+				BuildCaptureFallbackDetail(
+					framebufferUnavailableReason,
+					screenCaptureUnavailableReason),
 				cancellationToken)
 			.ConfigureAwait(false);
 	}
 
-	/// <summary>
-	/// The most recent reason ScreenCaptureKit capture could not be used, surfaced through
-	/// diagnostics so the canvas can explain a degraded stream instead of silently looking worse.
-	/// </summary>
-	internal string? ScreenCaptureUnavailableReason { get; private set; }
+	internal static string? BuildCaptureFallbackDetail(
+		string? framebufferReason,
+		string? screenCaptureReason)
+	{
+		var details = new List<string>(2);
+		if (!string.IsNullOrWhiteSpace(framebufferReason))
+			details.Add($"Direct framebuffer capture unavailable: {framebufferReason}");
+		if (!string.IsNullOrWhiteSpace(screenCaptureReason))
+			details.Add($"ScreenCaptureKit fallback unavailable: {screenCaptureReason}");
+		return details.Count == 0 ? null : string.Join(" ", details);
+	}
 
-	private async Task<ScreencapWindow?> FindCaptureWindowAsync(
+	private async Task<CaptureWindowResult> FindCaptureWindowAsync(
 		string deviceId,
 		string nativeId,
 		CancellationToken cancellationToken)
@@ -395,16 +428,22 @@ public sealed class IosSimulatorBackend : IDeviceBackend, IAsyncDisposable
 		// Checking first avoids a pointless reveal (which activates Simulator.app and retargets its
 		// displayed device) followed by ten failed retries, and reports the real cause.
 		var permissions = await ScreenCaptureHelper.GetDiagnosticsAsync(cancellationToken).ConfigureAwait(false);
+		if (!permissions.ScreenRecordingGranted)
+		{
+			return new CaptureWindowResult(
+				null,
+				"Grant Screen Recording permission so ScreenCaptureKit can read Simulator.app.");
+		}
 		if (!permissions.AccessibilityGranted)
 		{
-			ScreenCaptureUnavailableReason =
-				"Grant Accessibility permission so the device screen can be located precisely.";
-			return null;
+			return new CaptureWindowResult(
+				null,
+				"Grant Accessibility permission so the device screen can be located precisely.");
 		}
 
-		var window = await MatchWindowAsync(nativeId, cancellationToken).ConfigureAwait(false);
-		if (window is not null)
-			return window;
+		var result = await MatchWindowAsync(nativeId, cancellationToken).ConfigureAwait(false);
+		if (result.Window is not null)
+			return result;
 
 		// ScreenCaptureKit can only capture a window that exists, so a booted device whose window
 		// was closed or is showing another simulator needs Simulator.app brought forward first.
@@ -414,49 +453,56 @@ public sealed class IosSimulatorBackend : IDeviceBackend, IAsyncDisposable
 		}
 		catch (Exception exception) when (exception is not OperationCanceledException)
 		{
-			ScreenCaptureUnavailableReason = exception.Message;
-			return null;
+			return new CaptureWindowResult(null, exception.Message);
 		}
 
 		for (var attempt = 0; attempt < 10; attempt++)
 		{
 			await Task.Delay(300, cancellationToken).ConfigureAwait(false);
-			window = await MatchWindowAsync(nativeId, cancellationToken).ConfigureAwait(false);
-			if (window is not null)
-				return window;
+			result = await MatchWindowAsync(nativeId, cancellationToken).ConfigureAwait(false);
+			if (result.Window is not null)
+				return result;
 		}
 
-		ScreenCaptureUnavailableReason =
-			"Simulator.app is not showing a window for this device, so ScreenCaptureKit cannot capture it.";
-		return null;
+		return result.FailureReason is not null
+			? result
+			: new CaptureWindowResult(
+				null,
+				"Simulator.app is not showing a window for this device, so ScreenCaptureKit cannot capture it.");
 	}
 
-	private async Task<ScreencapWindow?> MatchWindowAsync(string nativeId, CancellationToken cancellationToken)
+	private async Task<CaptureWindowResult> MatchWindowAsync(
+		string nativeId,
+		CancellationToken cancellationToken)
 	{
 		var windows = await ScreenCaptureHelper.ListAsync(cancellationToken).ConfigureAwait(false);
 		if (windows.Count == 0)
 		{
-			ScreenCaptureUnavailableReason =
-				"No simulator windows are visible to ScreenCaptureKit. Grant Screen Recording permission.";
-			return null;
+			return new CaptureWindowResult(
+				null,
+				"No simulator windows are visible to ScreenCaptureKit. Grant Screen Recording permission.");
 		}
 
 		var match = windows.FirstOrDefault(window =>
 			string.Equals(window.Udid, nativeId, StringComparison.OrdinalIgnoreCase));
 		if (match is null)
-			return null;
+			return default;
 
 		if (!match.HasExactGeometry)
 		{
 			// Without Accessibility we would capture Simulator chrome and the bezel, which breaks
 			// input coordinate mapping. Degrading to idb is better than a misaligned picture.
-			ScreenCaptureUnavailableReason =
-				"Grant Accessibility permission so the device screen can be cropped exactly.";
-			return null;
+			return new CaptureWindowResult(
+				null,
+				"Grant Accessibility permission so the device screen can be cropped exactly.");
 		}
 
-		return match;
+		return new CaptureWindowResult(match, null);
 	}
+
+	private readonly record struct CaptureWindowResult(
+		ScreencapWindow? Window,
+		string? FailureReason);
 
 	public async Task<RecordingStatus> StartRecordingAsync(
 		string deviceId,
@@ -2211,26 +2257,37 @@ public sealed class IosSimulatorBackend : IDeviceBackend, IAsyncDisposable
 			Path = companion,
 		});
 
-		// Capture is the one dependency that degrades silently: without it the stream still works,
-		// just through idb's corrupt encoder. Report the helper and both TCC grants separately so a
-		// user knows which prompt to accept rather than only seeing a worse picture.
+		// Report the permission-free primary source separately from the TCC-gated fallback. This
+		// makes a healthy direct stream unambiguous and still shows whether the safety net is ready.
 		var screencap = await ScreenCaptureHelper.GetDiagnosticsAsync(cancellationToken)
 			.ConfigureAwait(false);
 		var screencapPath = ScreenCaptureHelper.Path;
-		var screencapReady = screencapPath is not null
+		var framebufferReady = screencapPath is not null && screencap.FramebufferAvailable;
+		var screenCaptureReady = screencapPath is not null
 			&& screencap.ScreenRecordingGranted
 			&& screencap.AccessibilityGranted;
 		checks.Add(new DependencyCheck
 		{
-			Name = "mobile-screencap",
-			// A missing permission is a warning rather than an error: the idb fallback still
-			// streams, so the host is degraded but not broken.
-			Status = screencapReady ? "ok" : screencapPath is null ? "error" : "warning",
+			Name = "Simulator framebuffer",
+			Status = framebufferReady ? "ok" : screencapPath is null ? "error" : "warning",
 			Message = screencapPath is null
 				? "mobile-screencap was not found next to mobile-canvas; video falls back to idb."
-				: screencapReady
-					? "ScreenCaptureKit capture is available."
-					: BuildScreencapMessage(screencap),
+				: framebufferReady
+					? "Direct CoreSimulator IOSurface capture is available without TCC permissions."
+					: string.IsNullOrWhiteSpace(screencap.FramebufferDetail)
+						? "Direct CoreSimulator IOSurface capture is unavailable; using a fallback."
+						: screencap.FramebufferDetail,
+			Path = screencapPath,
+		});
+		checks.Add(new DependencyCheck
+		{
+			Name = "ScreenCaptureKit fallback",
+			Status = screenCaptureReady ? "ok" : "warning",
+			Message = screencapPath is null
+				? "The native helper is unavailable; idb is the only video fallback."
+				: screenCaptureReady
+					? "ScreenCaptureKit and exact Accessibility geometry are available as a fallback."
+					: BuildScreencapMessage(screencap, framebufferReady),
 			Path = screencapPath,
 		});
 
@@ -2242,7 +2299,9 @@ public sealed class IosSimulatorBackend : IDeviceBackend, IAsyncDisposable
 		};
 	}
 
-	private static string BuildScreencapMessage(ScreencapDiagnostics diagnostics)
+	private static string BuildScreencapMessage(
+		ScreencapDiagnostics diagnostics,
+		bool framebufferReady)
 	{
 		var missing = new List<string>();
 		if (!diagnostics.ScreenRecordingGranted)
@@ -2253,7 +2312,9 @@ public sealed class IosSimulatorBackend : IDeviceBackend, IAsyncDisposable
 			? "permission"
 			: string.Join(" and ", missing);
 		return $"Grant {permissions} in System Settings > Privacy & Security to enable "
-			+ "ScreenCaptureKit video; until then video falls back to idb.";
+			+ (framebufferReady
+				? "the ScreenCaptureKit fallback; direct framebuffer capture remains available."
+				: "ScreenCaptureKit video; until then video falls back to idb.");
 	}
 
 	private static void EnsureSuccess(

@@ -698,6 +698,7 @@ function startStream() {
     if (state.socket !== socket) return;
     if (typeof event.data === "string") {
       const descriptor = JSON.parse(event.data);
+      parser.setSource(descriptor.source);
       if (descriptor.display) {
         state.display = descriptor.display;
         elements.geometry.value =
@@ -757,8 +758,13 @@ class AnnexBDecoder {
     this.prefix = [];
     this.timestamp = 0;
     this.codec = "avc1.64001f";
+    this.source = null;
     this.idleTimer = null;
     this.draining = false;
+  }
+
+  setSource(source) {
+    this.source = source || null;
   }
 
   push(bytes) {
@@ -777,12 +783,11 @@ class AnnexBDecoder {
    * Nothing about a paused stream is visible without this.
    *
    * A NAL unit ends where the next one begins, so the trailing slice always has to wait for more
-   * bytes to prove it is complete, and a decoder configured for correct B-frame reordering holds
-   * its output back until more input arrives. Both are fine at 60 FPS. The Android emulator only
-   * emits a frame when the screen changes, so a static screen sends one keyframe and stops: the
-   * IDR sits in this buffer, and even once decoded the picture sits in the decoder's reorder queue.
-   * A gap in the stream is the only available signal that the producer is done, so it drains both.
-   * On a moving picture the timer is rearmed long before it can fire.
+   * bytes to prove it is complete. idb also encodes B-frames, so its decoder holds output back until
+   * more input arrives. A gap in that stream is the only available signal that the producer is done,
+   * so it drains both. The native framebuffer, ScreenCaptureKit, and emulator encoders disable frame
+   * reordering; flushing those decoders would instead make WebKit require a new keyframe and reject
+   * the next delta frame. On a moving picture the timer is rearmed long before it can fire.
    */
   armIdleFlush() {
     clearTimeout(this.idleTimer);
@@ -799,7 +804,7 @@ class AnnexBDecoder {
       this.buffer = new Uint8Array();
       this.handleNal(nal);
     }
-    this.drainDecoder();
+    if (this.source === "idb") this.drainDecoder();
   }
 
   drainDecoder() {
@@ -858,11 +863,9 @@ class AnnexBDecoder {
     state.decoder.configure({
       codec: this.codec,
       // idb encodes High profile with B-frames (has_b_frames=1), so decode order is not presentation
-      // order and the decoder has to hold a frame back to reorder. optimizeForLatency asks it to emit
-      // frames with as little buffering as possible, which defeats that reordering and shows up as
-      // temporally scrambled motion while static screens still look correct. The reorder depth is one
-      // frame, so the latency this costs is far smaller than the artefacts it removes.
-      optimizeForLatency: false,
+      // order and the decoder has to hold a frame back to reorder. The native encoders disable frame
+      // reordering and can use the low-latency path without temporally scrambling motion.
+      optimizeForLatency: this.source !== "idb",
       hardwareAcceleration: "prefer-hardware",
       avc: { format: "annexb" },
     });
@@ -920,10 +923,12 @@ function drawVideoFrame(frame) {
 // quality regression rather than a fixable permission problem. Name the active backend, and carry
 // the reason in the tooltip so a denied TCC prompt explains itself.
 const CAPTURE_SOURCE_LABELS = {
+  framebuffer: "Simulator framebuffer",
   screencapturekit: "ScreenCaptureKit",
   idb: "idb (fallback)",
   png: "Screenshots (fallback)",
 };
+const PRIMARY_CAPTURE_SOURCES = new Set(["framebuffer", "screencapturekit", "emulator-grpc"]);
 
 function applyCaptureSource(descriptor) {
   if (!elements.captureSource) return;
@@ -936,7 +941,7 @@ function applyCaptureSource(descriptor) {
   const source = descriptor.source || "unknown";
   elements.captureSource.value = CAPTURE_SOURCE_LABELS[source] || source;
   elements.captureSource.title = descriptor.sourceDetail || elements.captureSource.value;
-  elements.captureSource.classList.toggle("field-degraded", source !== "screencapturekit");
+  elements.captureSource.classList.toggle("field-degraded", !PRIMARY_CAPTURE_SOURCES.has(source));
 }
 
 function canvasContext() {

@@ -164,12 +164,16 @@ The Copilot plugin installer does not currently quarantine anything, but a user
 downloading a source ZIP would be, and that is an install path we do not
 control. Shipping raw binaries would hand those users a `SIGKILL`.
 
-### Screen Recording and Accessibility
+### Direct framebuffer capture and fallback permissions
 
-The Swift helper uses ScreenCaptureKit, which needs Screen Recording, and it
-reads window geometry, which needs Accessibility. Neither grant attaches to our
-binary: macOS attributes TCC to the **responsible process**, meaning the
-application that spawned it.
+The primary iOS video path reads the simulator's CoreSimulator IOSurface
+directly and encodes it with VideoToolbox. It does **not** need Screen Recording,
+Accessibility, a visible Simulator.app window, or either TCC prompt.
+
+ScreenCaptureKit remains the first fallback for private-framework compatibility.
+That path needs Screen Recording and reads window geometry through Accessibility.
+Neither grant attaches to our binary: macOS attributes TCC to the **responsible
+process**, meaning the application that spawned it.
 
 That matters because the extraction cache is content-addressed, so every rebuild
 lands at a new path with a new cdhash. If TCC keyed on our binary, permissions
@@ -177,9 +181,11 @@ would reset on every update. It does not — a copy of the helper at a path that
 had never been granted anything, and a re-signed copy with a different cdhash,
 both reported `screenRecordingGranted: true`.
 
-So a user grants Screen Recording once, to the app hosting the canvas, and
-updates never disturb it. Where a grant is missing, `mobile-screencap doctor`
-reports it and the iOS path degrades to idb rather than failing.
+So a user who wants the ScreenCaptureKit fallback grants Screen Recording once
+to the app hosting the canvas, and updates never disturb it.
+`mobile-screencap framebuffer-doctor` preflights both fallback grants without
+prompting. If the private framebuffer API changes, capture falls through to
+ScreenCaptureKit and then idb rather than failing.
 
 ## Supported platforms
 

@@ -29,19 +29,21 @@ internal sealed record ScreencapWindow
 
 internal sealed record ScreencapDiagnostics
 {
+	public bool FramebufferAvailable { get; init; }
+	public string FramebufferDetail { get; init; } = "";
 	public bool ScreenRecordingGranted { get; init; }
 	public bool AccessibilityGranted { get; init; }
 	public string Detail { get; init; } = "";
 }
 
 /// <summary>
-/// Locates and drives the native ScreenCaptureKit helper.
+/// Locates and drives the native simulator capture helper.
 /// </summary>
 /// <remarks>
-/// ScreenCaptureKit and VideoToolbox are unreachable from Native AOT .NET, so capture lives in a
-/// small Swift executable shipped beside <c>mobile-canvas</c>. Everything here is deliberately
-/// tolerant: if the helper is missing or its permissions are not granted, the caller falls back to
-/// the idb capture path rather than failing the stream outright.
+/// CoreSimulator's IOSurface APIs, ScreenCaptureKit, and VideoToolbox are unreachable from Native
+/// AOT .NET, so capture lives in a small executable shipped beside <c>mobile-canvas</c>. Everything
+/// here is deliberately tolerant: the caller falls through to the next capture source rather than
+/// failing the stream outright.
 /// </remarks>
 internal static class ScreenCaptureHelper
 {
@@ -146,10 +148,9 @@ internal static class ScreenCaptureHelper
 		}
 	}
 
-	// Probing costs a helper subprocess, and SCShareableContent contends with an already-running
-	// capture, so probing on every catalog poll both wasted processes and disturbed the live stream.
-	// A granted permission does not spontaneously revoke, so cache success for the host's lifetime
-	// and only re-probe a failing state, which is what a user actively fixing permissions needs.
+	// Probing costs a helper subprocess, and older helpers start SCShareableContent while doing it.
+	// Cache complete success for the host lifetime and re-probe an incomplete fallback periodically,
+	// which is what a user actively fixing permissions needs.
 	private static readonly SemaphoreSlim ProbeGate = new(1, 1);
 	private static readonly TimeSpan DeniedProbeInterval = TimeSpan.FromSeconds(30);
 	private static ScreencapDiagnostics? _cachedDiagnostics;
@@ -204,17 +205,44 @@ internal static class ScreenCaptureHelper
 			};
 		}
 
-		var output = await RunAsync(path, ["doctor"], TimeSpan.FromSeconds(15), cancellationToken)
+		// This command only preflights TCC state; unlike ScreenCaptureKit discovery, it cannot cause
+		// a Screen Recording prompt on a host where direct framebuffer capture already works.
+		var output = await RunAsync(
+				path,
+				["framebuffer-doctor"],
+				TimeSpan.FromSeconds(15),
+				cancellationToken)
 			.ConfigureAwait(false);
-		if (output is null)
-			return new ScreencapDiagnostics { Detail = $"{ExecutableName} did not respond." };
+		if (!string.IsNullOrWhiteSpace(output))
+		{
+			var direct = ParseDiagnostics(output);
+			if (!string.IsNullOrWhiteSpace(direct.FramebufferDetail))
+				return direct;
+		}
 
+		// Compatibility with helpers built before direct framebuffer capture was introduced.
+		output = await RunAsync(path, ["doctor"], TimeSpan.FromSeconds(15), cancellationToken)
+			.ConfigureAwait(false);
+		return output is null
+			? new ScreencapDiagnostics { Detail = $"{ExecutableName} did not respond." }
+			: ParseDiagnostics(output);
+	}
+
+	internal static ScreencapDiagnostics ParseDiagnostics(string output)
+	{
 		try
 		{
 			using var document = JsonDocument.Parse(output);
 			var root = document.RootElement;
 			return new ScreencapDiagnostics
 			{
+				FramebufferAvailable =
+					root.TryGetProperty("framebufferAvailable", out var framebuffer)
+					&& framebuffer.GetBoolean(),
+				FramebufferDetail =
+					root.TryGetProperty("framebufferDetail", out var framebufferDetail)
+						? framebufferDetail.GetString() ?? ""
+						: "",
 				ScreenRecordingGranted =
 					root.TryGetProperty("screenRecordingGranted", out var recording) && recording.GetBoolean(),
 				AccessibilityGranted =

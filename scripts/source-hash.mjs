@@ -36,9 +36,18 @@ const INPUTS = [
 ];
 
 export function sourceHash() {
-	// git ls-files rather than a directory walk: it already knows what is tracked,
-	// so build output and local scratch files cannot alter the hash.
-	const listed = execFileSync("git", ["ls-files", "-z", "--", ...INPUTS], {
+	// Include new source files before their first commit as well as tracked files. Ignored build
+	// output remains excluded, so a release prepared in the same change that adds a source file
+	// records the same hash it will have after that file is committed.
+	const listed = execFileSync("git", [
+		"ls-files",
+		"-z",
+		"--cached",
+		"--others",
+		"--exclude-standard",
+		"--",
+		...INPUTS,
+	], {
 		cwd: root,
 		maxBuffer: 64 * 1024 * 1024,
 	})

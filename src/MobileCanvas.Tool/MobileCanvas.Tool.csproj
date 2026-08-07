@@ -43,9 +43,9 @@
   </ItemGroup>
 
   <!--
-    ScreenCaptureKit and VideoToolbox are unreachable from Native AOT .NET, so the iOS video path
-    lives in a small Swift helper that ships beside mobile-canvas. It is built on demand and only
-    when its sources change, and its absence is never fatal: the iOS backend falls back to idb.
+    CoreSimulator IOSurfaces, ScreenCaptureKit, and VideoToolbox are unreachable from Native AOT
+    .NET, so the iOS video path lives in a small helper beside mobile-canvas. It is built on demand
+    and only when its sources change; its absence is never fatal because the backend falls to idb.
   -->
   <PropertyGroup>
     <ScreencapDirectory>$(MSBuildThisFileDirectory)../../native/mobile-screencap/</ScreencapDirectory>
@@ -60,6 +60,8 @@
 
   <ItemGroup>
     <ScreencapSource Include="$(ScreencapDirectory)Sources/*.swift" />
+    <ScreencapSource Include="$(ScreencapDirectory)Sources/*.h" />
+    <ScreencapSource Include="$(ScreencapDirectory)Sources/*.m" />
     <ScreencapSource Include="$(ScreencapDirectory)build.sh" />
   </ItemGroup>
 

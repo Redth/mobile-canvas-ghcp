@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 # Builds the mobile-screencap helper.
 #
-# ScreenCaptureKit and VideoToolbox are not reachable from Native AOT .NET, so the capture
-# path lives in this small Swift executable that ships beside `mobile-canvas`.
+# CoreSimulator's IOSurface APIs, ScreenCaptureKit, and VideoToolbox are not reachable from
+# Native AOT .NET, so capture lives in this small executable beside `mobile-canvas`.
 #
 # Usage:
 #   ./build.sh                 # universal binary into out/
@@ -42,7 +42,10 @@ if [[ "$(uname -s)" != "Darwin" ]]; then
 	exit 1
 fi
 
-SOURCES=("$SCRIPT_DIR"/Sources/*.swift)
+SWIFT_SOURCES=("$SCRIPT_DIR"/Sources/*.swift)
+OBJC_SOURCE="$SCRIPT_DIR/Sources/SimulatorFramebufferBridge.m"
+BRIDGING_HEADER="$SCRIPT_DIR/Sources/SimulatorFramebufferBridge.h"
+SDK_PATH="$(xcrun --sdk macosx --show-sdk-path)"
 mkdir -p "$OUTPUT_DIR"
 
 OPTIMIZATION=(-O -wmo)
@@ -55,19 +58,31 @@ for arch in "${ARCHES[@]}"; do
 	slice_dir="$OUTPUT_DIR/$arch"
 	mkdir -p "$slice_dir"
 	echo "building $arch..."
+	xcrun clang \
+		-target "${arch}-apple-macos${DEPLOYMENT_TARGET}" \
+		-isysroot "$SDK_PATH" \
+		-fobjc-arc \
+		-fblocks \
+		-O \
+		-c "$OBJC_SOURCE" \
+		-o "$slice_dir/SimulatorFramebufferBridge.o"
 	xcrun swiftc \
 		"${OPTIMIZATION[@]}" \
 		-swift-version 5 \
 		-parse-as-library \
 		-target "${arch}-apple-macos${DEPLOYMENT_TARGET}" \
+		-import-objc-header "$BRIDGING_HEADER" \
 		-framework ScreenCaptureKit \
 		-framework VideoToolbox \
 		-framework CoreMedia \
+		-framework CoreVideo \
+		-framework IOSurface \
 		-framework AppKit \
 		-framework ApplicationServices \
 		-framework Accelerate \
 		-o "$slice_dir/mobile-screencap" \
-		"${SOURCES[@]}"
+		"${SWIFT_SOURCES[@]}" \
+		"$slice_dir/SimulatorFramebufferBridge.o"
 	SLICES+=("$slice_dir/mobile-screencap")
 done
 

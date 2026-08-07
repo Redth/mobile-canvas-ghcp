@@ -7,18 +7,12 @@ using MobileCanvas.Core;
 namespace MobileCanvas.iOS;
 
 /// <summary>
-/// Live H.264 capture of an iOS Simulator device screen through ScreenCaptureKit.
+/// Live H.264 capture of an iOS Simulator device screen through the native capture helper.
 /// </summary>
 /// <remarks>
-/// This replaces idb's video path, which produced a stream that could not be repaired on the
-/// client: idb emitted a single IDR for an entire session with frame reordering enabled, so any
-/// decode divergence was permanent, and it never exceeded ~28 FPS. The helper drives VideoToolbox
-/// directly at ~59 FPS with one keyframe per second and no reordering.
-///
-/// The helper crops to the exact device screen using Simulator.app's <c>iOSContentGroup</c>
-/// accessibility element, so the emitted frames match idb's geometry contract: the video is the
-/// device screen and nothing else. That keeps the existing client-side coordinate mapping correct
-/// with no changes.
+/// The primary command attaches directly to CoreSimulator's IOSurface. ScreenCaptureKit remains a
+/// fallback for private-framework changes, and idb remains the final fallback in the backend.
+/// Both native commands share the same VideoToolbox encoder and Annex-B wire format.
 /// </remarks>
 internal sealed class IosScreenCaptureVideoSession : ILiveVideoSession
 {
@@ -36,41 +30,114 @@ internal sealed class IosScreenCaptureVideoSession : ILiveVideoSession
 
 	public StreamDescriptor Descriptor { get; }
 
+	public static Task<IosScreenCaptureVideoSession> StartFramebufferAsync(
+		string helperPath,
+		string nativeId,
+		StreamOptions options,
+		DisplayGeometry display,
+		Action release,
+		CancellationToken cancellationToken) =>
+		StartProcessAsync(
+			CreateFramebufferStartInfo(helperPath, nativeId, options, display),
+			options,
+			display,
+			"framebuffer",
+			sourceDetail: null,
+			release,
+			cancellationToken);
+
 	public static async Task<IosScreenCaptureVideoSession> StartAsync(
 		string helperPath,
 		ScreencapWindow window,
 		StreamOptions options,
 		DisplayGeometry display,
 		Action release,
-		CancellationToken cancellationToken)
-	{		var startInfo = new ProcessStartInfo(helperPath)
+		CancellationToken cancellationToken,
+		string? sourceDetail = null) =>
+		await StartProcessAsync(
+			CreateScreenCaptureStartInfo(helperPath, window, options),
+			options,
+			display,
+			"screencapturekit",
+			sourceDetail,
+			release,
+			cancellationToken).ConfigureAwait(false);
+
+	internal static ProcessStartInfo CreateFramebufferStartInfo(
+		string helperPath,
+		string nativeId,
+		StreamOptions options,
+		DisplayGeometry display)
+	{
+		var startInfo = CreateStartInfo(helperPath);
+		startInfo.ArgumentList.Add("framebuffer");
+		startInfo.ArgumentList.Add("--udid");
+		startInfo.ArgumentList.Add(nativeId);
+		AddEncodingOptions(startInfo, options);
+		AddScaleOption(startInfo, options.Scale, display.PixelHeight);
+		return startInfo;
+	}
+
+	internal static ProcessStartInfo CreateScreenCaptureStartInfo(
+		string helperPath,
+		ScreencapWindow window,
+		StreamOptions options)
+	{
+		var startInfo = CreateStartInfo(helperPath);
+		startInfo.ArgumentList.Add("capture");
+		startInfo.ArgumentList.Add("--window-id");
+		startInfo.ArgumentList.Add(window.WindowId.ToString());
+		AddEncodingOptions(startInfo, options);
+
+		// The capture is already limited by how large Simulator.app draws the window, so scaling up
+		// would only upsample.
+		AddScaleOption(startInfo, options.Scale, window.CaptureHeightPixels);
+		return startInfo;
+	}
+
+	private static ProcessStartInfo CreateStartInfo(string helperPath) =>
+		new(helperPath)
 		{
 			RedirectStandardOutput = true,
 			RedirectStandardError = true,
 			UseShellExecute = false,
 		};
-		startInfo.ArgumentList.Add("capture");
-		startInfo.ArgumentList.Add("--window-id");
-		startInfo.ArgumentList.Add(window.WindowId.ToString());
+
+	private static void AddEncodingOptions(ProcessStartInfo startInfo, StreamOptions options)
+	{
 		startInfo.ArgumentList.Add("--fps");
 		startInfo.ArgumentList.Add(options.FramesPerSecond.ToString());
 		startInfo.ArgumentList.Add("--bitrate");
-		startInfo.ArgumentList.Add(((int)Math.Max(500_000, options.AverageBitrate)).ToString());
+		var bitrate = (int)Math.Clamp(options.AverageBitrate, 500_000, int.MaxValue);
+		startInfo.ArgumentList.Add(bitrate.ToString());
+	}
 
-		// Scale is a view-resolution control, so it clamps the encoded height rather than changing
-		// the crop. The capture is already limited by how large Simulator.app draws the window, so
-		// scaling up would only upsample.
-		if (options.Scale is > 0 and < 0.999 && window.CaptureHeightPixels > 0)
+	private static void AddScaleOption(ProcessStartInfo startInfo, double scale, int sourceHeight)
+	{
+		// Scale is a view-resolution control, so it clamps encoded height without changing the
+		// device-space geometry used for input.
+		if (scale is > 0 and < 0.999 && sourceHeight > 0)
 		{
-			var maxHeight = (int)Math.Round(window.CaptureHeightPixels * options.Scale);
+			var maxHeight = (int)Math.Round(sourceHeight * scale);
 			startInfo.ArgumentList.Add("--max-height");
 			startInfo.ArgumentList.Add(Math.Max(64, maxHeight).ToString());
 		}
+	}
 
+	private static async Task<IosScreenCaptureVideoSession> StartProcessAsync(
+		ProcessStartInfo startInfo,
+		StreamOptions options,
+		DisplayGeometry display,
+		string source,
+		string? sourceDetail,
+		Action release,
+		CancellationToken cancellationToken)
+	{
 		var process = new Process { StartInfo = startInfo };
 		if (!process.Start())
 		{
 			process.Dispose();
+			release();
 			throw new InvalidOperationException($"Could not start {ScreenCaptureHelper.ExecutableName}.");
 		}
 
@@ -84,7 +151,8 @@ internal sealed class IosScreenCaptureVideoSession : ILiveVideoSession
 					FramesPerSecond = ready.FramesPerSecond,
 					Scale = options.Scale,
 					Display = display,
-					Source = "screencapturekit",
+					Source = source,
+					SourceDetail = sourceDetail,
 				},
 				release);
 			session.StartStderrPump();
@@ -94,6 +162,7 @@ internal sealed class IosScreenCaptureVideoSession : ILiveVideoSession
 		{
 			ScreenCaptureHelper.TryKill(process);
 			process.Dispose();
+			release();
 			throw;
 		}
 	}

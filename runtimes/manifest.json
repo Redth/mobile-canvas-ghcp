@@ -1,38 +1,38 @@
 {
   "version": "0.1.6",
-  "sourceHash": "8459b6a98e8d8937354cb53529d70cbc87c76ecb23aff34c8070d8dba7498973",
+  "sourceHash": "2f57eae72f10a4cc68f93ae5d78ed012ff3c72ca1923e3e7bdf207177575cb4d",
   "runtimes": {
     "darwin-arm64": {
       "rid": "osx-arm64",
       "executable": "mobile-canvas",
-      "id": "484d14b62a94f11eeb3d422f02fffaa16d27a6d6c39141cd367f4a7c79f510f8",
+      "id": "b24b24b46fa89778cba1ad183703f15a1694bbd7262763e60bdfe765e8bd4a1f",
       "files": {
         "mobile-canvas": {
           "archive": "osx-arm64/mobile-canvas.gz",
-          "sha256": "484d14b62a94f11eeb3d422f02fffaa16d27a6d6c39141cd367f4a7c79f510f8",
-          "size": 31746800
+          "sha256": "b24b24b46fa89778cba1ad183703f15a1694bbd7262763e60bdfe765e8bd4a1f",
+          "size": 31763344
         },
         "mobile-screencap": {
           "archive": "osx-arm64/mobile-screencap.gz",
-          "sha256": "31e9a9e48e7eb76b1180e317fe107bbdb90f41c763a20814ec48d0d21637486a",
-          "size": 516128
+          "sha256": "294cfdc57d946fcf40ef2084a6c2d5357ec68e8442859a074a8807fc300637c9",
+          "size": 644672
         }
       }
     },
     "darwin-x64": {
       "rid": "osx-x64",
       "executable": "mobile-canvas",
-      "id": "94e55d199caef9da9cd32a3f437078090543c276636c6434b44706532b8d4b09",
+      "id": "ab0138adb889b93d2b12353142c34d8bbe1607e9decc845ce9a4197decaeebb8",
       "files": {
         "mobile-canvas": {
           "archive": "osx-x64/mobile-canvas.gz",
-          "sha256": "94e55d199caef9da9cd32a3f437078090543c276636c6434b44706532b8d4b09",
-          "size": 32912304
+          "sha256": "ab0138adb889b93d2b12353142c34d8bbe1607e9decc845ce9a4197decaeebb8",
+          "size": 32928704
         },
         "mobile-screencap": {
           "archive": "osx-x64/mobile-screencap.gz",
-          "sha256": "31e9a9e48e7eb76b1180e317fe107bbdb90f41c763a20814ec48d0d21637486a",
-          "size": 516128
+          "sha256": "294cfdc57d946fcf40ef2084a6c2d5357ec68e8442859a074a8807fc300637c9",
+          "size": 644672
         }
       }
     },
