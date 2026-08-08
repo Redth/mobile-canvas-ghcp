@@ -1,4 +1,9 @@
 import { creatablePlatforms, createOptions } from "./create-device-options.js";
+import {
+  clearStoredDeviceId,
+  readStoredDeviceId,
+  storeDeviceId,
+} from "./canvas-state.js";
 
 const elements = {
   list: document.querySelector("#device-list"),
@@ -62,6 +67,7 @@ const elements = {
 };
 
 const transport = window.mobileCanvasTransport || null;
+let bootstrapExchange = null;
 
 const state = {
   catalog: null,
@@ -95,6 +101,19 @@ const state = {
 };
 
 async function api(path, options = {}) {
+  let response = await sendApiRequest(path, options);
+  if (
+    response.status === 401
+    && !transport
+    && path !== "/api/v1/auth/bootstrap"
+    && await exchangeBootstrapGrant()
+  ) {
+    response = await sendApiRequest(path, options);
+  }
+  return requireSuccessfulResponse(response);
+}
+
+async function sendApiRequest(path, options = {}) {
   const request = {
     credentials: "same-origin",
     ...options,
@@ -103,9 +122,12 @@ async function api(path, options = {}) {
       ...(options.headers || {}),
     },
   };
-  const response = transport
+  return transport
     ? await transport.api(path, request)
     : await fetch(path, request);
+}
+
+async function requireSuccessfulResponse(response) {
   if (!response.ok) {
     const payload = await response.json().catch(() => ({
       message: `${response.status} ${response.statusText}`,
@@ -127,19 +149,32 @@ async function bootstrap() {
     return;
   }
 
+  await exchangeBootstrapGrant();
+}
+
+function exchangeBootstrapGrant() {
+  bootstrapExchange ??= performBootstrapExchange().finally(() => {
+    bootstrapExchange = null;
+  });
+  return bootstrapExchange;
+}
+
+async function performBootstrapExchange() {
   const fragment = new URLSearchParams(location.hash.slice(1));
   const secret = fragment.get("bootstrap");
-  if (!secret) return;
-
+  if (!secret) return false;
   const sessionId = fragment.get("sessionId");
   const instanceId = fragment.get("instanceId");
   sessionStorage.setItem("mobile-canvas-session", sessionId || "");
   sessionStorage.setItem("mobile-canvas-instance", instanceId || "");
-  await api("/api/v1/auth/bootstrap", {
+  const response = await sendApiRequest("/api/v1/auth/bootstrap", {
     method: "POST",
     body: JSON.stringify({ secret, sessionId, instanceId }),
   });
-  history.replaceState(null, "", location.pathname);
+  await requireSuccessfulResponse(response);
+  // Copilot reloads a persisted renderer without calling the provider's open callback. The scoped
+  // fragment is therefore retained so this page can exchange it for a fresh browser session.
+  return true;
 }
 
 async function refresh() {
@@ -163,6 +198,14 @@ async function refresh() {
       await selectDevice(selection.device, false);
       return;
     }
+
+    const storedDeviceId = readStoredDeviceId(localStorage, canvasInstanceId());
+    const storedDevice = state.catalog.devices.find((device) => device.id === storedDeviceId);
+    if (storedDevice) {
+      await selectDevice(storedDevice, true);
+      return;
+    }
+    if (storedDeviceId) clearStoredDeviceId(localStorage, canvasInstanceId());
 
     const booted = state.catalog.devices.find((device) => device.state === "booted");
     if (booted) {
@@ -340,6 +383,7 @@ async function selectDevice(device, persist) {
   if (selectionVersion !== state.selectionVersion) return;
 
   state.selected = device;
+  storeDeviceId(localStorage, canvasInstanceId(), device.id);
   // A cursor left over from the previous device would point at coordinates that no longer mean
   // anything, so drop the overlay whenever the selection changes.
   endAutomation();
@@ -1991,6 +2035,7 @@ async function detach() {
   clearTimeout(automation.retryTimer);
   socket?.close();
   await api("/api/v1/canvas/detach", { method: "POST" });
+  clearStoredDeviceId(localStorage, canvasInstanceId());
   state.detached = true;
   transport?.setViewTitle?.("Device", "Detached");
   elements.view.classList.add("hidden");
@@ -2123,6 +2168,14 @@ function createSocket(channel, query) {
   return new WebSocket(
     `${protocol}//${location.host}/ws/${channel}${query ? `?${query}` : ""}`,
   );
+}
+
+function canvasInstanceId() {
+  const instanceId = sessionStorage.getItem("mobile-canvas-instance");
+  if (!instanceId) {
+    throw new Error("Mobile Canvas has no active panel identity.");
+  }
+  return instanceId;
 }
 
 function setPanelVisible(visible) {

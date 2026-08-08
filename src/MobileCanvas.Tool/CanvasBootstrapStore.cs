@@ -1,4 +1,3 @@
-using System.Collections.Concurrent;
 using System.Security.Cryptography;
 using MobileCanvas.Contracts;
 
@@ -6,52 +5,117 @@ namespace MobileCanvas.Tool;
 
 internal sealed class CanvasBootstrapStore
 {
-	private readonly ConcurrentDictionary<string, BootstrapGrant> _grants = new();
-	private readonly ConcurrentDictionary<string, CanvasContextKey> _sessions = new();
+	internal static readonly TimeSpan CredentialLifetime = TimeSpan.FromDays(30);
+
+	private readonly object _gate = new();
+	private readonly Dictionary<string, BootstrapGrant> _grants = [];
+	private readonly Dictionary<string, BrowserSession> _sessions = [];
 
 	public string Create(CanvasContextKey key)
 	{
-		CleanupExpired();
-		var secret = CreateSecret();
-		_grants[secret] = new BootstrapGrant(key, DateTimeOffset.UtcNow.AddMinutes(1));
-		return secret;
+		lock (_gate)
+		{
+			var now = DateTimeOffset.UtcNow;
+			CleanupExpired(now);
+			RemoveGrants(key);
+			RemoveSessions(key);
+
+			var secret = CreateSecret();
+			_grants[secret] = new BootstrapGrant(key, now.Add(CredentialLifetime));
+			return secret;
+		}
 	}
 
 	public string Exchange(CanvasBootstrapRequest request)
 	{
-		if (!_grants.TryRemove(request.Secret, out var grant) ||
-			grant.ExpiresAt < DateTimeOffset.UtcNow ||
-			!grant.Key.SessionId.Equals(request.SessionId, StringComparison.Ordinal) ||
-			!grant.Key.InstanceId.Equals(request.InstanceId, StringComparison.Ordinal))
+		lock (_gate)
 		{
-			throw new UnauthorizedAccessException("The canvas bootstrap secret is invalid or expired.");
-		}
+			var now = DateTimeOffset.UtcNow;
+			CleanupExpired(now);
+			if (!_grants.TryGetValue(request.Secret, out var grant) ||
+				!grant.Key.SessionId.Equals(request.SessionId, StringComparison.Ordinal) ||
+				!grant.Key.InstanceId.Equals(request.InstanceId, StringComparison.Ordinal))
+			{
+				throw new UnauthorizedAccessException("The canvas bootstrap secret is invalid or expired.");
+			}
 
-		var session = CreateSecret();
-		_sessions[session] = grant.Key;
-		return session;
+			// Canvas renderers reload without invoking the provider's open callback. Keep the scoped
+			// grant reusable, but rotate the browser session so only the newest renderer stays active.
+			RemoveSessions(grant.Key);
+			_grants[request.Secret] = grant with { ExpiresAt = now.Add(CredentialLifetime) };
+			var session = CreateSecret();
+			_sessions[session] = new BrowserSession(grant.Key, now.Add(CredentialLifetime));
+			return session;
+		}
 	}
 
-	public bool TryGetSession(string session, out CanvasContextKey key) =>
-		_sessions.TryGetValue(session, out key!);
+	public bool TryGetSession(string session, out CanvasContextKey key)
+	{
+		lock (_gate)
+		{
+			if (_sessions.TryGetValue(session, out var browserSession) &&
+				browserSession.ExpiresAt >= DateTimeOffset.UtcNow)
+			{
+				key = browserSession.Key;
+				return true;
+			}
+
+			_sessions.Remove(session);
+			key = null!;
+			return false;
+		}
+	}
+
+	public void Close(CanvasContextKey key)
+	{
+		lock (_gate)
+			RemoveSessions(key);
+	}
 
 	public void Detach(CanvasContextKey key)
 	{
-		foreach (var session in _sessions.Where(pair => pair.Value == key).Select(pair => pair.Key))
-			_sessions.TryRemove(session, out _);
-		foreach (var grant in _grants.Where(pair => pair.Value.Key == key).Select(pair => pair.Key))
-			_grants.TryRemove(grant, out _);
+		lock (_gate)
+		{
+			RemoveSessions(key);
+			RemoveGrants(key);
+		}
 	}
 
-	private void CleanupExpired()
+	private void CleanupExpired(DateTimeOffset now)
 	{
-		var now = DateTimeOffset.UtcNow;
-		foreach (var grant in _grants.Where(pair => pair.Value.ExpiresAt < now).Select(pair => pair.Key))
-			_grants.TryRemove(grant, out _);
+		foreach (var grant in _grants
+			.Where(pair => pair.Value.ExpiresAt < now)
+			.Select(pair => pair.Key)
+			.ToArray())
+			_grants.Remove(grant);
+		foreach (var session in _sessions
+			.Where(pair => pair.Value.ExpiresAt < now)
+			.Select(pair => pair.Key)
+			.ToArray())
+			_sessions.Remove(session);
+	}
+
+	private void RemoveGrants(CanvasContextKey key)
+	{
+		foreach (var grant in _grants
+			.Where(pair => pair.Value.Key == key)
+			.Select(pair => pair.Key)
+			.ToArray())
+			_grants.Remove(grant);
+	}
+
+	private void RemoveSessions(CanvasContextKey key)
+	{
+		foreach (var session in _sessions
+			.Where(pair => pair.Value.Key == key)
+			.Select(pair => pair.Key)
+			.ToArray())
+			_sessions.Remove(session);
 	}
 
 	private static string CreateSecret() =>
 		Convert.ToHexString(RandomNumberGenerator.GetBytes(32)).ToLowerInvariant();
 
 	private sealed record BootstrapGrant(CanvasContextKey Key, DateTimeOffset ExpiresAt);
+	private sealed record BrowserSession(CanvasContextKey Key, DateTimeOffset ExpiresAt);
 }
