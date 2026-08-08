@@ -2,6 +2,7 @@ import { creatablePlatforms, createOptions } from "./create-device-options.js";
 import {
   clearStoredDeviceId,
   readStoredDeviceId,
+  resumeAuthenticatedPanel,
   storeDeviceId,
 } from "./canvas-state.js";
 
@@ -68,6 +69,7 @@ const elements = {
 
 const transport = window.mobileCanvasTransport || null;
 let bootstrapExchange = null;
+let panelVisibilityVersion = 0;
 
 const state = {
   catalog: null,
@@ -2180,6 +2182,7 @@ function canvasInstanceId() {
 
 function setPanelVisible(visible) {
   if (state.panelVisible === visible) return;
+  const visibilityVersion = ++panelVisibilityVersion;
   state.panelVisible = visible;
   if (!visible) {
     stopStream();
@@ -2191,8 +2194,25 @@ function setPanelVisible(visible) {
     return;
   }
   if (!state.detached) {
-    startStream();
-    connectAutomationEvents();
+    if (transport) {
+      startStream();
+      connectAutomationEvents();
+      return;
+    }
+    const isActive = () =>
+      panelVisibilityVersion === visibilityVersion
+      && state.panelVisible
+      && !state.detached;
+    void resumeAuthenticatedPanel({
+      authenticate: () => api("/api/v1/status"),
+      isActive,
+      resume: () => {
+        startStream();
+        connectAutomationEvents();
+      },
+    }).catch((error) => {
+      if (isActive()) showError(error);
+    });
   }
 }
 
