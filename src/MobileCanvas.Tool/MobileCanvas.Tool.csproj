@@ -30,6 +30,7 @@
 
   <ItemGroup>
     <EmbeddedResource Include="..\..\web\index.html" LogicalName="MobileCanvas.Web.index.html" />
+    <EmbeddedResource Include="..\..\web\canvas-state.js" LogicalName="MobileCanvas.Web.canvas-state.js" />
     <EmbeddedResource Include="..\..\web\create-device-options.js" LogicalName="MobileCanvas.Web.create-device-options.js" />
     <EmbeddedResource Include="..\..\web\device-canvas.js" LogicalName="MobileCanvas.Web.device-canvas.js" />
     <EmbeddedResource Include="..\..\web\device-canvas.css" LogicalName="MobileCanvas.Web.device-canvas.css" />

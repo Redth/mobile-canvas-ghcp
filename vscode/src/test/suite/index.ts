@@ -78,6 +78,7 @@ async function verifyHostBridge(): Promise<void> {
   let apiCookie = "";
   let socketCookie = "";
   let selectionRestores = 0;
+  let rejectCatalogOnce = false;
   const server = createServer((request, response) => {
     if (request.url === "/api/v1/auth/bootstrap") {
       let body = "";
@@ -96,6 +97,12 @@ async function verifyHostBridge(): Promise<void> {
       return;
     }
     if (request.url === "/api/v1/catalog") {
+      if (rejectCatalogOnce) {
+        rejectCatalogOnce = false;
+        response.statusCode = 401;
+        response.end();
+        return;
+      }
       apiCookie = request.headers.cookie ?? "";
       response.setHeader("Content-Type", "application/json");
       response.setHeader("Set-Cookie", "mobile_device_session=must-not-leak");
@@ -273,6 +280,16 @@ if (args[0] === "canvas" && args[1] === "open") {
       );
     }
 
+    const bootstrapsBeforeReconnect = bootstrapBodies.length;
+    rejectCatalogOnce = true;
+    await bridge.handleMessage({
+      type: "api",
+      id: "catalog-after-session-expired",
+      path: "/api/v1/catalog",
+    });
+    assert.equal(bootstrapBodies.length, bootstrapsBeforeReconnect + 1);
+    assert.equal(messages.shift()?.type, "api-result");
+
     await bridge.handleMessage({
       type: "api",
       id: "escape",
@@ -318,13 +335,16 @@ if (args[0] === "canvas" && args[1] === "open") {
     assert.ok(messages.some(
       (message) => message.type === "visibility" && !message.visible,
     ));
+    const bootstrapsBeforeRestart = bootstrapBodies.length;
     await bridge.restart();
     await bridge.handleMessage({ type: "ready" });
+    assert.equal(bootstrapBodies.length, bootstrapsBeforeRestart + 1);
     assert.equal(selectionRestores, 1);
 
+    const bootstrapsBeforeView = bootstrapBodies.length;
     await vscode.commands.executeCommand("mobileCanvas.open");
-    await waitFor(() => bootstrapBodies.length >= 3);
-    const viewBootstrap = JSON.parse(bootstrapBodies[2]);
+    await waitFor(() => bootstrapBodies.length > bootstrapsBeforeView);
+    const viewBootstrap = JSON.parse(bootstrapBodies.at(-1)!);
     assert.equal(viewBootstrap.secret, "test-secret");
     assert.match(viewBootstrap.sessionId, /^[0-9a-f-]{36}$/);
     assert.notEqual(viewBootstrap.sessionId, vscode.env.sessionId);

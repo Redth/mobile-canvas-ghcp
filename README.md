@@ -204,7 +204,9 @@ GitHub Copilot app        VS Code extension          CLI / other agent
 ```
 
 The host is started on demand, binds only to `127.0.0.1`, and authenticates
-canvas panels with a single-use bootstrap secret exchanged for a session cookie.
+canvas panels with a scoped reload grant exchanged for a rotating session cookie.
+The grant remains in the URL fragment so a host-restored renderer can reconnect
+without exposing the credential in an HTTP request.
 It exits after an idle grace period and **never** shuts down a device
 implicitly, so detaching a panel is always safe.
 

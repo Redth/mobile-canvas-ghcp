@@ -79,7 +79,7 @@ and the bundled native executable are local-machine resources.
 native runtime or reach local simulators.
 
 All Mobile Canvas traffic remains on `127.0.0.1`. The extension host exchanges
-the host's one-time bootstrap secret for a scoped cookie, then relays typed HTTP
+the host's panel-scoped reload grant for a rotating cookie, then relays typed HTTP
 requests and binary WebSocket frames. Webview JavaScript receives neither the
 bootstrap secret nor the authenticated cookie.
 

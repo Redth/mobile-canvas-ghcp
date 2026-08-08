@@ -9,6 +9,7 @@ const extensionRoot = join(dirname(fileURLToPath(import.meta.url)), "..");
 test("prepared extension assets contain the shared runtime and UI", () => {
   for (const relative of [
     "dist/web/index.html",
+    "dist/web/canvas-state.js",
     "dist/web/create-device-options.js",
     "dist/web/device-canvas.js",
     "dist/lib/runtime.mjs",

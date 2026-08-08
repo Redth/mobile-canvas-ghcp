@@ -7,6 +7,7 @@ public sealed class DeviceApiTests
 {
 	[Theory]
 	[InlineData("/")]
+	[InlineData("/canvas-state.js")]
 	[InlineData("/create-device-options.js")]
 	[InlineData("/device-canvas.js")]
 	[InlineData("/device-canvas.css")]
@@ -17,13 +18,15 @@ public sealed class DeviceApiTests
 	}
 
 	[Fact]
-	public void CreateDeviceOptions_IsEmbedded()
+	public void WebModules_AreEmbedded()
 	{
-		using var stream = typeof(DeviceApi).Assembly.GetManifestResourceStream(
-			"MobileCanvas.Web.create-device-options.js");
-
-		Assert.NotNull(stream);
-		Assert.True(stream.Length > 0);
+		foreach (var name in new[] { "canvas-state.js", "create-device-options.js" })
+		{
+			using var stream = typeof(DeviceApi).Assembly.GetManifestResourceStream(
+				$"MobileCanvas.Web.{name}");
+			Assert.NotNull(stream);
+			Assert.True(stream.Length > 0);
+		}
 	}
 
 	[Fact]

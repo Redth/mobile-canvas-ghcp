@@ -131,6 +131,7 @@ internal static class DeviceApi
 
 	internal static bool IsPublicPath(PathString path) =>
 		path == "/" ||
+		path == "/canvas-state.js" ||
 		path == "/create-device-options.js" ||
 		path == "/device-canvas.js" ||
 		path == "/device-canvas.css" ||
@@ -139,6 +140,9 @@ internal static class DeviceApi
 	private static void MapAssets(WebApplication app)
 	{
 		app.MapGet("/", () => EmbeddedAsset("index.html", "text/html; charset=utf-8"));
+		app.MapGet(
+			"/canvas-state.js",
+			() => EmbeddedAsset("canvas-state.js", "text/javascript; charset=utf-8"));
 		app.MapGet(
 			"/create-device-options.js",
 			() => EmbeddedAsset("create-device-options.js", "text/javascript; charset=utf-8"));
@@ -167,6 +171,7 @@ internal static class DeviceApi
 						SameSite = SameSiteMode.Strict,
 						Secure = false,
 						Path = "/",
+						MaxAge = CanvasBootstrapStore.CredentialLifetime,
 					});
 				return Results.NoContent();
 			});
@@ -214,8 +219,9 @@ internal static class DeviceApi
 				RequireControl(context);
 				ValidateCanvasContext(request.SessionId, request.InstanceId);
 				var key = new CanvasContextKey(request.SessionId, request.InstanceId);
-				store.Detach(key);
-				devices.Detach(key);
+				// Host applications restore an open renderer without invoking canvas.open again.
+				// Keep its grant and selection until explicit detach, but rotate the browser session.
+				store.Close(key);
 				return Results.NoContent();
 			});
 

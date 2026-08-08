@@ -21,6 +21,11 @@ interface CanvasOpenResult {
   title?: string;
 }
 
+interface HostConnection {
+  baseUrl: URL;
+  cookie: string;
+}
+
 interface MessageSink {
   postMessage(message: ExtensionMessage): Thenable<boolean>;
 }
@@ -37,9 +42,8 @@ export interface SelectedDeviceContext {
 
 export class HostBridge implements vscode.Disposable {
   private readonly sockets = new Map<string, WebSocket>();
-  private baseUrl: URL | undefined;
-  private cookie: string | undefined;
-  private connectPromise: Promise<void> | undefined;
+  private connection: HostConnection | undefined;
+  private connectPromise: Promise<HostConnection> | undefined;
   private disposed = false;
   private signalOffset = 0;
   private selectionToRestore: string | undefined;
@@ -111,9 +115,7 @@ export class HostBridge implements vscode.Disposable {
   async restart(): Promise<void> {
     this.selectionToRestore = await this.readSelectedDeviceId();
     await this.closeCanvas();
-    this.connectPromise = undefined;
-    this.baseUrl = undefined;
-    this.cookie = undefined;
+    this.invalidateConnection();
   }
 
   async getSelectedDeviceContext(): Promise<SelectedDeviceContext> {
@@ -180,15 +182,27 @@ export class HostBridge implements vscode.Disposable {
     });
   }
 
-  private async connect(): Promise<void> {
+  private async connect(): Promise<HostConnection> {
     if (this.disposed) {
       throw new Error("The Mobile Canvas view is closed.");
     }
-    this.connectPromise ??= this.openCanvas();
-    await this.connectPromise;
+    const pending = this.connectPromise ??= this.openCanvas();
+    try {
+      const connection = await pending;
+      if (this.connectPromise === pending) {
+        this.connection = connection;
+      }
+      return connection;
+    } catch (error) {
+      if (this.connectPromise === pending) {
+        this.connectPromise = undefined;
+        this.connection = undefined;
+      }
+      throw error;
+    }
   }
 
-  private async openCanvas(): Promise<void> {
+  private async openCanvas(): Promise<HostConnection> {
     const { stdout } = await execFileAsync(
       this.command,
       [
@@ -243,67 +257,94 @@ export class HostBridge implements vscode.Disposable {
       throw new Error("The Mobile Canvas host did not establish a panel session.");
     }
 
-    this.baseUrl = baseUrl;
-    this.cookie = cookie;
-    await this.restoreSelection();
+    const connection = { baseUrl, cookie };
+    await this.restoreSelection(connection);
+    return connection;
   }
 
   private async forwardApi(
     message: Extract<WebviewMessage, { type: "api" }>,
   ): Promise<void> {
-    await this.connect();
     const method = (message.method ?? "GET").toUpperCase();
     if (!ALLOWED_METHODS.has(method)) {
       throw new Error(`Unsupported Mobile Canvas HTTP method: ${method}`);
     }
-    const url = this.apiUrl(message.path);
-    const headers: Record<string, string> = { Cookie: this.cookie! };
-    if (message.body !== undefined) {
-      headers["Content-Type"] = "application/json";
-    }
 
-    try {
-      const response = await fetch(url, {
-        method,
-        headers,
-        body: message.body,
-        signal: AbortSignal.timeout(API_REQUEST_TIMEOUT_MS),
-      });
-      const body = response.status === 204 || response.status === 205 || response.status === 304
-        ? null
-        : await response.arrayBuffer();
-      const responseHeaders = Object.fromEntries(response.headers.entries());
-      delete responseHeaders["set-cookie"];
-      delete responseHeaders["set-cookie2"];
-      await this.post({
-        type: "api-result",
-        id: message.id,
-        status: response.status,
-        statusText: response.statusText,
-        headers: responseHeaders,
-        body,
-      });
-    } catch (error) {
-      await this.post({
-        type: "api-error",
-        id: message.id,
-        message: errorMessage(error),
-      });
+    for (let attempt = 0; attempt < 2; attempt += 1) {
+      const connection = await this.connect();
+      const url = this.apiUrl(message.path, connection);
+      const headers: Record<string, string> = { Cookie: connection.cookie };
+      if (message.body !== undefined) {
+        headers["Content-Type"] = "application/json";
+      }
+
+      try {
+        const response = await fetch(url, {
+          method,
+          headers,
+          body: message.body,
+          signal: AbortSignal.timeout(API_REQUEST_TIMEOUT_MS),
+        });
+        if (response.status === 401 && attempt === 0) {
+          this.invalidateConnection(connection);
+          continue;
+        }
+        const body = response.status === 204 || response.status === 205 || response.status === 304
+          ? null
+          : await response.arrayBuffer();
+        const responseHeaders = Object.fromEntries(response.headers.entries());
+        delete responseHeaders["set-cookie"];
+        delete responseHeaders["set-cookie2"];
+        await this.post({
+          type: "api-result",
+          id: message.id,
+          status: response.status,
+          statusText: response.statusText,
+          headers: responseHeaders,
+          body,
+        });
+        return;
+      } catch (error) {
+        this.invalidateConnection(connection);
+        if (method === "GET" && attempt === 0 && isConnectionFailure(error)) {
+          continue;
+        }
+        await this.post({
+          type: "api-error",
+          id: message.id,
+          message: errorMessage(error),
+        });
+        return;
+      }
     }
   }
 
   private async get(path: string): Promise<Response> {
-    await this.connect();
-    const response = await fetch(this.apiUrl(path), {
-      headers: { Cookie: this.cookie! },
-      signal: AbortSignal.timeout(API_REQUEST_TIMEOUT_MS),
-    });
-    if (!response.ok) {
-      throw new Error(
-        `Mobile Canvas request failed: ${response.status} ${response.statusText}`,
-      );
+    for (let attempt = 0; attempt < 2; attempt += 1) {
+      const connection = await this.connect();
+      try {
+        const response = await fetch(this.apiUrl(path, connection), {
+          headers: { Cookie: connection.cookie },
+          signal: AbortSignal.timeout(API_REQUEST_TIMEOUT_MS),
+        });
+        if (response.status === 401 && attempt === 0) {
+          this.invalidateConnection(connection);
+          continue;
+        }
+        if (!response.ok) {
+          throw new Error(
+            `Mobile Canvas request failed: ${response.status} ${response.statusText}`,
+          );
+        }
+        return response;
+      } catch (error) {
+        if (!isConnectionFailure(error) || attempt > 0) {
+          throw error;
+        }
+        this.invalidateConnection(connection);
+      }
     }
-    return response;
+    throw new Error("Mobile Canvas could not reconnect to its local host.");
   }
 
   private async getJson(path: string): Promise<unknown> {
@@ -322,18 +363,20 @@ export class HostBridge implements vscode.Disposable {
     channel: SocketChannel,
     query?: string,
   ): Promise<void> {
-    await this.connect();
+    const connection = await this.connect();
     if (channel !== "video" && channel !== "events") {
       throw new Error(`Unsupported Mobile Canvas socket channel: ${String(channel)}`);
     }
     this.closeSocket(id);
-    const url = this.apiUrl(`/ws/${channel}`);
+    const url = this.apiUrl(`/ws/${channel}`, connection);
     url.search = query ?? "";
     url.protocol = "ws:";
-    const socket = new WebSocket(url, { headers: { Cookie: this.cookie! } });
+    const socket = new WebSocket(url, { headers: { Cookie: connection.cookie } });
     this.sockets.set(id, socket);
+    let opened = false;
 
     socket.on("open", () => {
+      opened = true;
       void this.post({ type: "socket-opened", id });
     });
     socket.on("message", (data, isBinary) => {
@@ -348,6 +391,9 @@ export class HostBridge implements vscode.Disposable {
       void this.post({ type: "socket-message", id, data: payload });
     });
     socket.on("error", (error) => {
+      if (!opened) {
+        this.invalidateConnection(connection);
+      }
       void this.post({ type: "socket-error", id, message: error.message });
     });
     socket.on("close", (code, reason) => {
@@ -397,18 +443,17 @@ export class HostBridge implements vscode.Disposable {
     await this.post({ type: "operation-result", id });
   }
 
-  private apiUrl(path: string): URL {
+  private apiUrl(path: string, connection: HostConnection): URL {
     if (
-      !this.baseUrl
-      || (!path.startsWith("/api/v1/") && !path.startsWith("/ws/"))
+      !path.startsWith("/api/v1/") && !path.startsWith("/ws/")
     ) {
       throw new Error(`Invalid Mobile Canvas host path: ${path}`);
     }
-    const url = new URL(path, this.baseUrl);
+    const url = new URL(path, connection.baseUrl);
     const validPath = path.startsWith("/api/v1/")
       ? url.pathname.startsWith("/api/v1/")
       : url.pathname === "/ws/video" || url.pathname === "/ws/events";
-    if (url.origin !== this.baseUrl.origin || !validPath) {
+    if (url.origin !== connection.baseUrl.origin || !validPath) {
       throw new Error("Mobile Canvas requests must remain on the local host.");
     }
     return url;
@@ -447,9 +492,9 @@ export class HostBridge implements vscode.Disposable {
   private async readSelectedDeviceId(): Promise<string | undefined> {
     if (!this.connectPromise) return undefined;
     try {
-      await this.connectPromise;
-      const response = await fetch(this.apiUrl("/api/v1/selection"), {
-        headers: { Cookie: this.cookie! },
+      const connection = await this.connectPromise;
+      const response = await fetch(this.apiUrl("/api/v1/selection", connection), {
+        headers: { Cookie: connection.cookie },
         signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
       });
       if (!response.ok) {
@@ -472,15 +517,15 @@ export class HostBridge implements vscode.Disposable {
     }
   }
 
-  private async restoreSelection(): Promise<void> {
+  private async restoreSelection(connection: HostConnection): Promise<void> {
     const deviceId = this.selectionToRestore;
     this.selectionToRestore = undefined;
     if (!deviceId) return;
     try {
-      const response = await fetch(this.apiUrl("/api/v1/selection"), {
+      const response = await fetch(this.apiUrl("/api/v1/selection", connection), {
         method: "POST",
         headers: {
-          Cookie: this.cookie!,
+          Cookie: connection.cookie,
           "Content-Type": "application/json",
         },
         body: JSON.stringify({ deviceId }),
@@ -496,6 +541,15 @@ export class HostBridge implements vscode.Disposable {
         `Mobile Canvas could not restore ${deviceId}: ${errorMessage(error)}`,
       );
     }
+  }
+
+  private invalidateConnection(connection?: HostConnection): void {
+    if (connection && this.connection !== connection) {
+      return;
+    }
+    this.closeSockets();
+    this.connection = undefined;
+    this.connectPromise = undefined;
   }
 
   private post(message: ExtensionMessage): Thenable<boolean> {
@@ -568,6 +622,10 @@ function errorMessage(error: unknown): string {
     }
   }
   return error instanceof Error ? error.message : String(error);
+}
+
+function isConnectionFailure(error: unknown): boolean {
+  return error instanceof TypeError;
 }
 
 function isLoopback(hostname: string): boolean {
