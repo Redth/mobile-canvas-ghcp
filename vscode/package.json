@@ -2,7 +2,7 @@
   "name": "mobile-canvas",
   "displayName": "Mobile Canvas",
   "description": "View and interact with local iOS Simulators and Android emulators from VS Code and Copilot Chat.",
-  "version": "0.1.6",
+  "version": "0.1.7",
   "publisher": "redth",
   "license": "MIT",
   "repository": {

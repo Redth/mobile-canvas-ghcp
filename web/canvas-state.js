@@ -16,6 +16,17 @@ export function clearStoredDeviceId(storage, instanceId) {
   storage.removeItem(storageKey(instanceId));
 }
 
+export async function resumeAuthenticatedPanel({
+  authenticate,
+  isActive,
+  resume,
+}) {
+  await authenticate();
+  if (!isActive()) return false;
+  resume();
+  return true;
+}
+
 function storageKey(instanceId) {
   if (typeof instanceId !== "string" || instanceId.length === 0) {
     throw new TypeError("A canvas instance ID is required.");
