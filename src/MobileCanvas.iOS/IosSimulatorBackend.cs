@@ -2311,6 +2311,7 @@ public sealed class IosSimulatorBackend : IDeviceBackend, IAsyncDisposable
 					? "ScreenCaptureKit and exact Accessibility geometry are available as a fallback."
 					: BuildScreencapMessage(screencap, framebufferReady),
 			Path = screencapPath,
+			Actions = screencapPath is null ? [] : BuildScreencapActions(screencap),
 		});
 
 		return new HostDiagnostics
@@ -2337,6 +2338,32 @@ public sealed class IosSimulatorBackend : IDeviceBackend, IAsyncDisposable
 			+ (framebufferReady
 				? "the ScreenCaptureKit fallback; direct framebuffer capture remains available."
 				: "ScreenCaptureKit video; until then video falls back to idb.");
+	}
+
+	internal static DiagnosticAction[] BuildScreencapActions(ScreencapDiagnostics diagnostics)
+	{
+		var actions = new List<DiagnosticAction>(2);
+		if (!diagnostics.ScreenRecordingGranted)
+		{
+			actions.Add(new DiagnosticAction
+			{
+				Type = DiagnosticActionTypes.OpenSystemSettings,
+				Target = SystemSettingsTargets.ScreenRecording,
+				Label = "Open Screen Recording",
+			});
+		}
+
+		if (!diagnostics.AccessibilityGranted)
+		{
+			actions.Add(new DiagnosticAction
+			{
+				Type = DiagnosticActionTypes.OpenSystemSettings,
+				Target = SystemSettingsTargets.Accessibility,
+				Label = "Open Accessibility",
+			});
+		}
+
+		return [.. actions];
 	}
 
 	private static void EnsureSuccess(

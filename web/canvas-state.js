@@ -27,6 +27,29 @@ export async function resumeAuthenticatedPanel({
   return true;
 }
 
+export function organizeDiagnostics(diagnostics) {
+  const failures = (diagnostics ?? [])
+    .flatMap((entry) => entry?.checks ?? [])
+    .filter((check) => check?.status !== "ok");
+  const notices = [];
+  const popover = [];
+
+  for (const check of failures) {
+    const actions = (check.actions ?? []).filter(
+      (action) =>
+        action?.type === "open-system-settings" &&
+        typeof action.target === "string" &&
+        action.target.length > 0 &&
+        typeof action.label === "string" &&
+        action.label.length > 0,
+    );
+    if (actions.length > 0) notices.push({ ...check, actions });
+    else popover.push(check);
+  }
+
+  return { notices, popover };
+}
+
 function storageKey(instanceId) {
   if (typeof instanceId !== "string" || instanceId.length === 0) {
     throw new TypeError("A canvas instance ID is required.");

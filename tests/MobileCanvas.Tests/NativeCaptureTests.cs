@@ -100,4 +100,35 @@ public class NativeCaptureTests
 			+ "ScreenCaptureKit fallback unavailable: Screen Recording denied",
 			detail);
 	}
+
+	[Fact]
+	public void ScreencapActions_OnlyIncludeMissingPermissions()
+	{
+		var actions = IosSimulatorBackend.BuildScreencapActions(new ScreencapDiagnostics
+		{
+			ScreenRecordingGranted = true,
+			AccessibilityGranted = false,
+		});
+
+		var action = Assert.Single(actions);
+		Assert.Equal(DiagnosticActionTypes.OpenSystemSettings, action.Type);
+		Assert.Equal(SystemSettingsTargets.Accessibility, action.Target);
+		Assert.Equal("Open Accessibility", action.Label);
+		Assert.Empty(IosSimulatorBackend.BuildScreencapActions(new ScreencapDiagnostics
+		{
+			ScreenRecordingGranted = true,
+			AccessibilityGranted = true,
+		}));
+	}
+
+	[Fact]
+	public void ScreencapActions_PreservePermissionOrder()
+	{
+		var actions = IosSimulatorBackend.BuildScreencapActions(new ScreencapDiagnostics());
+
+		Assert.Collection(
+			actions,
+			action => Assert.Equal(SystemSettingsTargets.ScreenRecording, action.Target),
+			action => Assert.Equal(SystemSettingsTargets.Accessibility, action.Target));
+	}
 }

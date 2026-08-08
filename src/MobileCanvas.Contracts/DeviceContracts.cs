@@ -126,6 +126,24 @@ public sealed record DeviceType
 	public string? MaximumRuntimeVersion { get; init; }
 }
 
+public static class DiagnosticActionTypes
+{
+	public const string OpenSystemSettings = "open-system-settings";
+}
+
+public static class SystemSettingsTargets
+{
+	public const string ScreenRecording = "screen-recording";
+	public const string Accessibility = "accessibility";
+}
+
+public sealed record DiagnosticAction
+{
+	public string Type { get; init; } = "";
+	public string Target { get; init; } = "";
+	public string Label { get; init; } = "";
+}
+
 public sealed record DependencyCheck
 {
 	public string Name { get; init; } = "";
@@ -133,6 +151,7 @@ public sealed record DependencyCheck
 	public string Message { get; init; } = "";
 	public string? Path { get; init; }
 	public string? Version { get; init; }
+	public DiagnosticAction[] Actions { get; init; } = [];
 }
 
 public sealed record HostDiagnostics

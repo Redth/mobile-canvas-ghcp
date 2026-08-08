@@ -235,6 +235,17 @@ internal static class DeviceApi
 				context.Response.Cookies.Delete(SessionCookie);
 				return Results.NoContent();
 			});
+
+		app.MapPost(
+			"/api/v1/host/settings/{target}",
+			async (
+				string target,
+				MacSystemSettingsLauncher settings,
+				CancellationToken cancellationToken) =>
+			{
+				await settings.OpenAsync(target, cancellationToken).ConfigureAwait(false);
+				return Results.NoContent();
+			});
 	}
 
 	private static void MapCatalog(WebApplication app)
