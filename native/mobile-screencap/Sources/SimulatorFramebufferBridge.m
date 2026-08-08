@@ -3,6 +3,7 @@
 #import <IOSurface/IOSurface.h>
 #import <dlfcn.h>
 #import <limits.h>
+#import <mach/mach.h>
 
 static NSString *const MCFramebufferErrorDomain = @"com.github.copilot.mobile-canvas.framebuffer";
 
@@ -21,6 +22,7 @@ static NSString *const MCFramebufferErrorDomain = @"com.github.copilot.mobile-ca
 @interface SimDevice : NSObject
 @property (nonatomic, readonly) NSUUID *UDID;
 @property (nonatomic, readonly) id io;
+- (mach_port_t)lookup:(NSString *)service error:(NSError **)error;
 @end
 
 @protocol MCSimDeviceIOClient <NSObject>
@@ -111,6 +113,57 @@ static BOOL MCIsIOSurface(id _Nullable candidate)
     return CFGetTypeID((__bridge CFTypeRef)candidate) == IOSurfaceGetTypeID();
 }
 
+static SimDevice *_Nullable MCFindDevice(
+    NSString *udid,
+    NSString *developerDirectory,
+    NSError **error)
+{
+    if (!MCLoadCoreSimulator()) {
+        if (error != NULL) {
+            const char *loadError = dlerror();
+            NSString *detail = loadError != NULL
+                ? [NSString stringWithUTF8String:loadError]
+                : @"CoreSimulator.framework could not be loaded";
+            *error = MCError(1, detail, nil);
+        }
+        return nil;
+    }
+
+    id contextError = nil;
+    Class<MCSimServiceContextClass> contextClass =
+        (Class<MCSimServiceContextClass>)NSClassFromString(@"SimServiceContext");
+    id<MCSimServiceContext> context =
+        [contextClass sharedServiceContextForDeveloperDir:developerDirectory error:&contextError];
+    if (context == nil) {
+        if (error != NULL) {
+            *error = MCError(1, @"Could not connect to CoreSimulator", contextError);
+        }
+        return nil;
+    }
+
+    id deviceSetError = nil;
+    SimDeviceSet *deviceSet = [context defaultDeviceSetWithError:&deviceSetError];
+    if (deviceSet == nil) {
+        if (error != NULL) {
+            *error = MCError(2, @"Could not open the default simulator device set", deviceSetError);
+        }
+        return nil;
+    }
+
+    for (SimDevice *device in deviceSet.availableDevices) {
+        if ([device.UDID.UUIDString caseInsensitiveCompare:udid] == NSOrderedSame) {
+            return device;
+        }
+    }
+
+    if (error != NULL) {
+        *error = MCError(3,
+                         [NSString stringWithFormat:@"Simulator %@ was not found in the default device set", udid],
+                         nil);
+    }
+    return nil;
+}
+
 @interface MCSimulatorFramebuffer ()
 @property (atomic, strong, readwrite, nullable) id currentSurface;
 @property (nonatomic, strong) id descriptor;
@@ -143,51 +196,8 @@ static BOOL MCIsIOSurface(id _Nullable candidate)
         dispatch_queue_attr_make_with_qos_class(DISPATCH_QUEUE_SERIAL, QOS_CLASS_USER_INTERACTIVE, 0));
 
     @try {
-        if (!MCLoadCoreSimulator()) {
-            if (error != NULL) {
-                const char *loadError = dlerror();
-                NSString *detail = loadError != NULL
-                    ? [NSString stringWithUTF8String:loadError]
-                    : @"CoreSimulator.framework could not be loaded";
-                *error = MCError(1, detail, nil);
-            }
-            return nil;
-        }
-
-        id contextError = nil;
-        Class<MCSimServiceContextClass> contextClass =
-            (Class<MCSimServiceContextClass>)NSClassFromString(@"SimServiceContext");
-        id<MCSimServiceContext> context =
-            [contextClass sharedServiceContextForDeveloperDir:developerDirectory error:&contextError];
-        if (context == nil) {
-            if (error != NULL) {
-                *error = MCError(1, @"Could not connect to CoreSimulator", contextError);
-            }
-            return nil;
-        }
-
-        id deviceSetError = nil;
-        SimDeviceSet *deviceSet = [context defaultDeviceSetWithError:&deviceSetError];
-        if (deviceSet == nil) {
-            if (error != NULL) {
-                *error = MCError(2, @"Could not open the default simulator device set", deviceSetError);
-            }
-            return nil;
-        }
-
-        SimDevice *matchedDevice = nil;
-        for (SimDevice *device in deviceSet.availableDevices) {
-            if ([device.UDID.UUIDString caseInsensitiveCompare:udid] == NSOrderedSame) {
-                matchedDevice = device;
-                break;
-            }
-        }
+        SimDevice *matchedDevice = MCFindDevice(udid, developerDirectory, error);
         if (matchedDevice == nil) {
-            if (error != NULL) {
-                *error = MCError(3,
-                                 [NSString stringWithFormat:@"Simulator %@ was not found in the default device set", udid],
-                                 nil);
-            }
             return nil;
         }
 
@@ -445,6 +455,70 @@ static BOOL MCIsIOSurface(id _Nullable candidate)
 - (void)dealloc
 {
     [self stop];
+}
+
+@end
+
+@implementation MCSimulatorRotation
+
++ (BOOL)rotateDeviceWithUDID:(NSString *)udid
+          developerDirectory:(NSString *)developerDirectory
+                 orientation:(NSUInteger)orientation
+                       error:(NSError **)error
+{
+    @try {
+        SimDevice *device = MCFindDevice(udid, developerDirectory, error);
+        if (device == nil) {
+            return NO;
+        }
+
+        NSError *lookupError = nil;
+        mach_port_t port = [device lookup:@"PurpleWorkspacePort" error:&lookupError];
+        if (port == MACH_PORT_NULL) {
+            if (error != NULL) {
+                *error = MCError(7, @"The simulator did not publish PurpleWorkspacePort", lookupError);
+            }
+            return NO;
+        }
+
+        uint8_t message[112] = {0};
+        mach_msg_header_t *header = (mach_msg_header_t *)message;
+        header->msgh_bits = MACH_MSGH_BITS(MACH_MSG_TYPE_COPY_SEND, 0);
+        header->msgh_size = 108;
+        header->msgh_remote_port = port;
+        header->msgh_id = 0x7B;
+
+        uint32_t eventType = 50 | 0x20000;
+        uint32_t payloadSize = 4;
+        uint32_t deviceOrientation = (uint32_t)orientation;
+        memcpy(message + 0x18, &eventType, sizeof(eventType));
+        memcpy(message + 0x48, &payloadSize, sizeof(payloadSize));
+        memcpy(message + 0x4C, &deviceOrientation, sizeof(deviceOrientation));
+
+        kern_return_t result = mach_msg(
+            header,
+            MACH_SEND_MSG | MACH_SEND_TIMEOUT,
+            header->msgh_size,
+            0,
+            MACH_PORT_NULL,
+            2000,
+            MACH_PORT_NULL);
+        if (result != KERN_SUCCESS) {
+            if (error != NULL) {
+                NSString *detail = [NSString stringWithUTF8String:mach_error_string(result)];
+                *error = MCError(8,
+                                 [NSString stringWithFormat:@"Could not send the orientation event: %@", detail],
+                                 nil);
+            }
+            return NO;
+        }
+        return YES;
+    } @catch (NSException *exception) {
+        if (error != NULL) {
+            *error = MCExceptionError(exception, @"Rotating the simulator");
+        }
+        return NO;
+    }
 }
 
 @end

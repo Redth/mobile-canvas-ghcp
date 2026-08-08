@@ -245,4 +245,44 @@ internal static class EmulatorDiscoveryParser
 
 		return largest;
 	}
+
+	/// <summary>
+	/// Parses the current rotated framebuffer dimensions from the built-in display viewport.
+	/// Hardware configuration and <c>wm size</c> keep reporting the panel's portrait dimensions
+	/// after an emulator rotation, while this viewport tracks the frame actually being streamed.
+	/// </summary>
+	public static (int Width, int Height)? ParseDisplayViewportSize(string output)
+	{
+		const string viewportMarker = "DisplayViewport{type=INTERNAL";
+		var start = output.IndexOf(viewportMarker, StringComparison.Ordinal);
+		if (start < 0)
+			return null;
+
+		var end = output.IndexOf('}', start);
+		var block = end >= 0 ? output[start..end] : output[start..Math.Min(output.Length, start + 1024)];
+		var width = ParseField(block, "deviceWidth=");
+		var height = ParseField(block, "deviceHeight=");
+		return width > 0 && height > 0 ? (width.Value, height.Value) : null;
+
+		static int? ParseField(string block, string marker)
+		{
+			var markerIndex = block.IndexOf(marker, StringComparison.Ordinal);
+			if (markerIndex < 0)
+				return null;
+
+			var digitsStart = markerIndex + marker.Length;
+			var digitsEnd = digitsStart;
+			while (digitsEnd < block.Length && char.IsAsciiDigit(block[digitsEnd]))
+				digitsEnd++;
+
+			return digitsEnd > digitsStart &&
+				int.TryParse(
+					block.AsSpan(digitsStart, digitsEnd - digitsStart),
+					NumberStyles.Integer,
+					CultureInfo.InvariantCulture,
+					out var value)
+				? value
+				: null;
+		}
+	}
 }

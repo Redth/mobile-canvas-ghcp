@@ -74,7 +74,10 @@ internal sealed class IosScreenCaptureVideoSession : ILiveVideoSession
 		startInfo.ArgumentList.Add("--udid");
 		startInfo.ArgumentList.Add(nativeId);
 		AddEncodingOptions(startInfo, options);
-		AddScaleOption(startInfo, options.Scale, display.PixelHeight);
+		// CoreSimulator keeps the IOSurface in native portrait geometry even when the guest is
+		// landscape. Use the panel's long side so scaling stays consistent after the client rotates
+		// that portrait-shaped source into the reported display orientation.
+		AddScaleOption(startInfo, options.Scale, Math.Max(display.PixelWidth, display.PixelHeight));
 		return startInfo;
 	}
 

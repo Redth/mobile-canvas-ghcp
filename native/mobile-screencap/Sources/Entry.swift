@@ -39,6 +39,9 @@ struct MobileScreencap {
 					try await runCapture(options)
 				case "encode":
 					try EncodeCommand.run(options)
+				case "rotate":
+					try RotationCommand.run(options)
+					exit(0)
 				case "doctor":
 					try await runDoctor()
 				case "--help", "-h", "help":
@@ -71,6 +74,7 @@ struct MobileScreencap {
 			  framebuffer              Stream a simulator IOSurface as Annex-B H.264.
 			  capture                  Stream Annex-B H.264 on stdout.
 			  encode                   Encode raw frames from stdin to Annex-B H.264 on stdout.
+			  rotate                   Rotate an iOS Simulator device.
 
 			Framebuffer options:
 			  --udid <udid>            Simulator UDID. Required.
@@ -92,6 +96,11 @@ struct MobileScreencap {
 			  --pixel-format <fmt>     rgba8888 (default) or bgra8888.
 			  --fps <n>                Declared frame rate. Default 60.
 			  --bitrate <bits>         Average bitrate ceiling. Default 16000000.
+
+			Rotate options:
+			  --udid <udid>            Simulator device identifier. Required.
+			  --orientation <name>     portrait, portrait-upside-down, landscape-left,
+			                           or landscape-right. Required.
 
 			"""
 		FileHandle.standardError.write(Data(usage.utf8))

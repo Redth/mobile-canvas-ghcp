@@ -48,7 +48,8 @@ public sealed partial class AndroidEmulatorBackend : IDeviceBackend, IAsyncDispo
 		new(StringComparer.OrdinalIgnoreCase);
 	private static readonly TimeSpan InstanceCacheTtl = TimeSpan.FromSeconds(3);
 	private static readonly TimeSpan GeometryProbeTimeout = TimeSpan.FromSeconds(2);
-	private static readonly TimeSpan CornerProbeTimeout = TimeSpan.FromMilliseconds(500);
+	private static readonly TimeSpan DisplayStateProbeTimeout = TimeSpan.FromSeconds(2);
+	private static readonly TimeSpan RotationSettleTimeout = TimeSpan.FromSeconds(5);
 	private static readonly TimeSpan InputCommandTimeout = TimeSpan.FromSeconds(8);
 
 	private readonly Lock _geometryLock = new();
@@ -755,8 +756,46 @@ public sealed partial class AndroidEmulatorBackend : IDeviceBackend, IAsyncDispo
 			.ConfigureAwait(false);
 
 		// Rotation changes the frame size, so the cached geometry is now wrong.
+		var avdId = DeviceIdentity.GetNativeId(deviceId);
 		lock (_geometryLock)
-			_geometryCache.Remove(DeviceIdentity.GetNativeId(deviceId));
+			_geometryCache.Remove(avdId);
+
+		await WaitForRotationAsync(connection.Instance, degrees % 180 != 0, cancellationToken)
+			.ConfigureAwait(false);
+	}
+
+	private async Task WaitForRotationAsync(
+		EmulatorInstance instance,
+		bool landscape,
+		CancellationToken cancellationToken)
+	{
+		using var timeout = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+		timeout.CancelAfter(RotationSettleTimeout);
+
+		try
+		{
+			while (true)
+			{
+				// Bypass TryGetGeometryAsync here. The first probe often races the guest and still
+				// sees the old viewport; caching that result would prevent every later probe from
+				// observing the completed rotation.
+				var geometry = await ReadGeometryAsync(instance, timeout.Token).ConfigureAwait(false);
+				if (geometry is not null && (geometry.PixelWidth > geometry.PixelHeight) == landscape)
+				{
+					lock (_geometryLock)
+						_geometryCache[instance.AvdId] = geometry;
+					return;
+				}
+
+				await Task.Delay(TimeSpan.FromMilliseconds(100), timeout.Token).ConfigureAwait(false);
+			}
+		}
+		catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested)
+		{
+			throw new TimeoutException(
+				$"Emulator '{instance.AvdId}' did not settle into the requested orientation within " +
+				$"{RotationSettleTimeout.TotalSeconds:0} seconds.");
+		}
 	}
 
 	private static Task SendTouchAsync(
@@ -1368,7 +1407,7 @@ public sealed partial class AndroidEmulatorBackend : IDeviceBackend, IAsyncDispo
 
 				if (width > 0 && height > 0)
 				{
-					return await WithCornersAsync(Build(width, height, density), instance, cancellationToken)
+					return await WithDisplayStateAsync(Build(width, height, density), instance, cancellationToken)
 						.ConfigureAwait(false);
 				}
 			}
@@ -1402,7 +1441,7 @@ public sealed partial class AndroidEmulatorBackend : IDeviceBackend, IAsyncDispo
 			.ConfigureAwait(false);
 		var parsedDensity = densityOutput is null ? 0 : EmulatorDiscoveryParser.ParseWmDensity(densityOutput) ?? 0;
 
-		return await WithCornersAsync(
+		return await WithDisplayStateAsync(
 				Build(size.Width, size.Height, parsedDensity),
 				instance,
 				cancellationToken)
@@ -1426,12 +1465,11 @@ public sealed partial class AndroidEmulatorBackend : IDeviceBackend, IAsyncDispo
 	}
 
 	/// <summary>
-	/// Adds the panel's rounded-corner radius, which only the guest OS knows: the emulator hands out
-	/// a square framebuffer and the hardware config carries no corner geometry, so without this the
-	/// canvas would draw sharp corners on a device that has none. A failed lookup leaves the radius
-	/// unknown rather than failing the whole geometry read.
+	/// Applies display state that only the guest OS knows: the current rotated viewport and the
+	/// panel's rounded-corner radius. The emulator hardware config keeps reporting portrait
+	/// dimensions after rotation and carries no corner geometry.
 	/// </summary>
-	private async Task<DisplayGeometry> WithCornersAsync(
+	private async Task<DisplayGeometry> WithDisplayStateAsync(
 		DisplayGeometry geometry,
 		EmulatorInstance instance,
 		CancellationToken cancellationToken)
@@ -1442,14 +1480,28 @@ public sealed partial class AndroidEmulatorBackend : IDeviceBackend, IAsyncDispo
 		var output = await RunAdbProbeAsync(
 				serial,
 				["shell", "dumpsys", "display"],
-				CornerProbeTimeout,
+				DisplayStateProbeTimeout,
 				cancellationToken)
 			.ConfigureAwait(false);
-		if (output is null || EmulatorDiscoveryParser.ParseRoundedCornerRadius(output) is not { } pixels)
+		if (output is null)
 			return geometry;
 
 		var scale = geometry.Scale > 0 ? geometry.Scale : 1.0;
-		return geometry with
+		var current = EmulatorDiscoveryParser.ParseDisplayViewportSize(output) is { } viewport
+			? geometry with
+			{
+				PixelWidth = viewport.Width,
+				PixelHeight = viewport.Height,
+				PointWidth = Math.Round(viewport.Width / scale, 2),
+				PointHeight = Math.Round(viewport.Height / scale, 2),
+				Orientation = viewport.Width > viewport.Height ? "landscape" : "portrait",
+			}
+			: geometry;
+
+		if (EmulatorDiscoveryParser.ParseRoundedCornerRadius(output) is not { } pixels)
+			return current;
+
+		return current with
 		{
 			CornerRadius = Math.Round(pixels / scale, 2),
 			CornerCurve = DisplayCornerCurves.Circular,

@@ -26,4 +26,14 @@ typedef void (^MCSimulatorFrameRenderedHandler)(void);
 
 @end
 
+/// Sends device control events through CoreSimulator without depending on Simulator.app UI.
+@interface MCSimulatorRotation : NSObject
+
++ (BOOL)rotateDeviceWithUDID:(NSString *)udid
+          developerDirectory:(NSString *)developerDirectory
+                 orientation:(NSUInteger)orientation
+                       error:(NSError **)error;
+
+@end
+
 NS_ASSUME_NONNULL_END

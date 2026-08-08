@@ -53,8 +53,17 @@
       <circle cx="8" cy="8" r="5.25"></circle>
       <circle class="fill-current" cx="8" cy="8" r="2.5"></circle>
     </symbol>
+    <symbol id="icon-rotate" viewBox="0 0 16 16">
+      <rect x="5" y="1.75" width="6" height="9.5" rx="1.25" transform="rotate(-32 8 6.5)"></rect>
+      <path d="M7.25 9.75h1.5" transform="rotate(-32 8 6.5)"></path>
+      <path d="M2.25 10a5.75 5.75 0 0 0 8.5 3"></path>
+      <path d="m8.75 11.75 2 1.25-1.25 2"></path>
+    </symbol>
     <symbol id="icon-restart" viewBox="0 0 16 16">
-      <path d="M13.25 5.25V2.5l-1.45 1.45A5.5 5.5 0 1 0 13 9.75"></path>
+      <path d="M13.25 6a5.25 5.25 0 0 0-9.15-2.5L2.75 4.75"></path>
+      <path d="M2.75 2.25v2.5h2.5"></path>
+      <path d="M2.75 10a5.25 5.25 0 0 0 9.15 2.5l1.35-1.25"></path>
+      <path d="M13.25 13.75v-2.5h-2.5"></path>
     </symbol>
     <symbol id="icon-power" viewBox="0 0 16 16">
       <path d="M8 1.75v6M4 3.75a5.25 5.25 0 1 0 8 0"></path>
@@ -149,6 +158,9 @@
             <div class="tool-pill">
               <button class="tool-button" data-action="boot" type="button" aria-label="Boot device" title="Boot device">
                 <svg class="icon" aria-hidden="true"><use href="#icon-play"></use></svg>
+              </button>
+              <button class="tool-button" data-action="rotate" type="button" aria-label="Rotate device" title="Rotate device">
+                <svg class="icon" aria-hidden="true"><use href="#icon-rotate"></use></svg>
               </button>
               <button class="tool-button" data-action="screenshot" type="button" aria-label="Save screenshot" title="Save screenshot">
                 <svg class="icon" aria-hidden="true"><use href="#icon-camera"></use></svg>

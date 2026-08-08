@@ -184,4 +184,22 @@ public sealed class EmulatorDiscoveryParserTests
 		Assert.Null(EmulatorDiscoveryParser.ParseRoundedCornerRadius("real 1080 x 2400, density 420"));
 		Assert.Null(EmulatorDiscoveryParser.ParseRoundedCornerRadius("roundedCorners RoundedCorners{[]}"));
 	}
+
+	[Fact]
+	public void ParseDisplayViewportSize_UsesTheRotatedInternalFramebuffer()
+	{
+		const string output = """
+			mViewports=[DisplayViewport{type=INTERNAL, valid=true, isActive=true, displayId=0, uniqueId='local:1', physicalPort=0, orientation=3, logicalFrame=Rect(0, 0 - 2400, 1080), physicalFrame=Rect(0, 0 - 2400, 1080), deviceWidth=2400, deviceHeight=1080}]
+			DisplayDeviceInfo{"Built-in Screen": 1080 x 2400, rotation 0}
+			""";
+
+		Assert.Equal((2400, 1080), EmulatorDiscoveryParser.ParseDisplayViewportSize(output));
+	}
+
+	[Fact]
+	public void ParseDisplayViewportSize_IgnoresUnrelatedDisplayDimensions()
+	{
+		Assert.Null(EmulatorDiscoveryParser.ParseDisplayViewportSize(
+			"DisplayDeviceInfo{\"Built-in Screen\": 1080 x 2400}"));
+	}
 }

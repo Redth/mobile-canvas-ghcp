@@ -5,8 +5,10 @@ namespace MobileCanvas.Tests;
 
 public class NativeCaptureTests
 {
-	[Fact]
-	public void FramebufferArguments_TargetTheUdidAndNativeDisplayScale()
+	[Theory]
+	[InlineData(1206, 2622)]
+	[InlineData(2622, 1206)]
+	public void FramebufferArguments_TargetTheUdidAndNativePanelScale(int pixelWidth, int pixelHeight)
 	{
 		var startInfo = IosScreenCaptureVideoSession.CreateFramebufferStartInfo(
 			"/tmp/mobile-screencap",
@@ -17,7 +19,7 @@ public class NativeCaptureTests
 				AverageBitrate = 5_000_000,
 				Scale = 0.5,
 			},
-			new DisplayGeometry { PixelHeight = 2622 });
+			new DisplayGeometry { PixelWidth = pixelWidth, PixelHeight = pixelHeight });
 
 		Assert.Equal(
 			[

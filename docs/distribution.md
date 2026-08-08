@@ -200,6 +200,8 @@ control. Shipping raw binaries would hand those users a `SIGKILL`.
 The primary iOS video path reads the simulator's CoreSimulator IOSurface
 directly and encodes it with VideoToolbox. It does **not** need Screen Recording,
 Accessibility, a visible Simulator.app window, or either TCC prompt.
+Rotation uses the same CoreSimulator bridge to send a device-targeted orientation
+event and likewise does not automate or depend on Simulator.app.
 
 ScreenCaptureKit remains the first fallback for private-framework compatibility.
 That path needs Screen Recording and reads window geometry through Accessibility.

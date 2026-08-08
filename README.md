@@ -214,7 +214,7 @@ Video is deliberately split from input on both platforms:
 |---|---|---|
 | Frames | CoreSimulator IOSurface (ScreenCaptureKit fallback) | emulator gRPC `streamScreenshot` |
 | Encode | VideoToolbox H.264 | same VideoToolbox H.264 |
-| Input | idb (Indigo HID) | emulator gRPC `streamInputEvent` |
+| Input | idb (touch/keys), CoreSimulator `GSEvent` (rotation) | emulator gRPC `streamInputEvent` |
 | Lifecycle | `simctl` | `emulator`/`avdmanager` + gRPC |
 
 Raw Android frames are encoded before they reach the browser, so only ~1-2 Mbps
