@@ -102,6 +102,43 @@ public class NativeCaptureTests
 	}
 
 	[Fact]
+	public void ScreencapCheck_DoesNotPromptForOptionalFallbackPermissions()
+	{
+		var check = IosSimulatorBackend.BuildScreencapCheck(
+			"/tmp/mobile-screencap",
+			new ScreencapDiagnostics
+			{
+				ScreenRecordingGranted = false,
+				AccessibilityGranted = false,
+			},
+			framebufferReady: true);
+
+		Assert.Equal("ok", check.Status);
+		Assert.Contains("fallback grants are optional", check.Message);
+		Assert.Empty(check.Actions);
+	}
+
+	[Fact]
+	public void ScreencapCheck_PromptsWhenDirectCaptureIsUnavailable()
+	{
+		var check = IosSimulatorBackend.BuildScreencapCheck(
+			"/tmp/mobile-screencap",
+			new ScreencapDiagnostics
+			{
+				ScreenRecordingGranted = false,
+				AccessibilityGranted = false,
+			},
+			framebufferReady: false);
+
+		Assert.Equal("warning", check.Status);
+		Assert.StartsWith("Grant Screen Recording and Accessibility", check.Message);
+		Assert.Collection(
+			check.Actions,
+			action => Assert.Equal(SystemSettingsTargets.ScreenRecording, action.Target),
+			action => Assert.Equal(SystemSettingsTargets.Accessibility, action.Target));
+	}
+
+	[Fact]
 	public void ScreencapActions_OnlyIncludeMissingPermissions()
 	{
 		var actions = IosSimulatorBackend.BuildScreencapActions(new ScreencapDiagnostics

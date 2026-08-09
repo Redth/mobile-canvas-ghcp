@@ -2279,15 +2279,12 @@ public sealed class IosSimulatorBackend : IDeviceBackend, IAsyncDisposable
 			Path = companion,
 		});
 
-		// Report the permission-free primary source separately from the TCC-gated fallback. This
-		// makes a healthy direct stream unambiguous and still shows whether the safety net is ready.
+		// Report the permission-free primary source separately from the TCC-gated fallback. Missing
+		// fallback grants only require attention when direct capture is unavailable.
 		var screencap = await ScreenCaptureHelper.GetDiagnosticsAsync(cancellationToken)
 			.ConfigureAwait(false);
 		var screencapPath = ScreenCaptureHelper.Path;
 		var framebufferReady = screencapPath is not null && screencap.FramebufferAvailable;
-		var screenCaptureReady = screencapPath is not null
-			&& screencap.ScreenRecordingGranted
-			&& screencap.AccessibilityGranted;
 		checks.Add(new DependencyCheck
 		{
 			Name = "Simulator framebuffer",
@@ -2301,24 +2298,44 @@ public sealed class IosSimulatorBackend : IDeviceBackend, IAsyncDisposable
 						: screencap.FramebufferDetail,
 			Path = screencapPath,
 		});
-		checks.Add(new DependencyCheck
-		{
-			Name = "ScreenCaptureKit fallback",
-			Status = screenCaptureReady ? "ok" : "warning",
-			Message = screencapPath is null
-				? "The native helper is unavailable; idb is the only video fallback."
-				: screenCaptureReady
-					? "ScreenCaptureKit and exact Accessibility geometry are available as a fallback."
-					: BuildScreencapMessage(screencap, framebufferReady),
-			Path = screencapPath,
-			Actions = screencapPath is null ? [] : BuildScreencapActions(screencap),
-		});
+		checks.Add(BuildScreencapCheck(
+			screencapPath,
+			screencap,
+			framebufferReady));
 
 		return new HostDiagnostics
 		{
 			Platform = DevicePlatforms.Ios,
 			Ready = checks.All(check => check.Status != "error"),
 			Checks = checks.ToArray(),
+		};
+	}
+
+	internal static DependencyCheck BuildScreencapCheck(
+		string? path,
+		ScreencapDiagnostics diagnostics,
+		bool framebufferReady)
+	{
+		var screenCaptureReady = path is not null
+			&& diagnostics.ScreenRecordingGranted
+			&& diagnostics.AccessibilityGranted;
+		var fallbackNeeded = !framebufferReady && !screenCaptureReady;
+		return new DependencyCheck
+		{
+			Name = "ScreenCaptureKit fallback",
+			Status = fallbackNeeded ? "warning" : "ok",
+			Message = path is null
+				? "The native helper is unavailable; idb is the only video fallback."
+				: screenCaptureReady
+					? "ScreenCaptureKit and exact Accessibility geometry are available as a fallback."
+					: framebufferReady
+						? "Direct framebuffer capture is available without TCC permissions; "
+							+ "ScreenCaptureKit fallback grants are optional."
+						: BuildScreencapMessage(diagnostics, framebufferReady),
+			Path = path,
+			Actions = path is not null && fallbackNeeded
+				? BuildScreencapActions(diagnostics)
+				: [],
 		};
 	}
 
