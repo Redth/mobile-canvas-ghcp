@@ -211,7 +211,7 @@ summary:focus-visible,
 
 .app-shell {
   display: grid;
-  grid-template-rows: auto minmax(0, 1fr);
+  grid-template-rows: auto auto minmax(0, 1fr);
   width: 100%;
   height: 100dvh;
 }
@@ -530,6 +530,62 @@ summary:focus-visible,
   background: var(--canvas-subtle);
   color: var(--attention-fg);
   font-size: 12px;
+}
+
+.diagnostic-notices {
+  display: grid;
+  gap: 1px;
+  margin: 8px 8px 0;
+  overflow: hidden;
+  border: 1px solid var(--attention-fg);
+  border-radius: var(--control-radius);
+  background: var(--border-muted);
+}
+
+.diagnostic-notice {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 8px 10px;
+  background: color-mix(in srgb, var(--attention-fg) 10%, var(--canvas-default));
+  color: var(--fg-default);
+  font-size: 12px;
+}
+
+.diagnostic-notice-copy {
+  display: grid;
+  gap: 2px;
+  min-width: 0;
+}
+
+.diagnostic-notice-title {
+  color: var(--attention-fg);
+  font-size: 12px;
+}
+
+.diagnostic-notice-actions {
+  display: flex;
+  flex: none;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 6px;
+}
+
+.button.diagnostic-action-button {
+  padding: 4px 8px;
+  white-space: nowrap;
+}
+
+@media (max-width: 620px) {
+  .diagnostic-notice {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .diagnostic-notice-actions {
+    justify-content: flex-start;
+  }
 }
 
 /* -------------------------------------------------------------- buttons --- */

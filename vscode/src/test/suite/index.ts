@@ -79,6 +79,7 @@ async function verifyHostBridge(): Promise<void> {
   let socketCookie = "";
   let selectionRestores = 0;
   let rejectCatalogOnce = false;
+  let settingsRequest: { method?: string; cookie?: string } | undefined;
   const server = createServer((request, response) => {
     if (request.url === "/api/v1/auth/bootstrap") {
       let body = "";
@@ -124,6 +125,15 @@ async function verifyHostBridge(): Promise<void> {
       } else {
         response.end('{"hasSelection":false}');
       }
+      return;
+    }
+    if (request.url === "/api/v1/host/settings/accessibility") {
+      settingsRequest = {
+        method: request.method,
+        cookie: request.headers.cookie,
+      };
+      response.statusCode = 204;
+      response.end();
       return;
     }
     if (request.url === "/api/v1/devices/ios%3Aphone/screenshot") {
@@ -278,6 +288,21 @@ if (args[0] === "canvas" && args[1] === "open") {
         JSON.parse(new TextDecoder().decode(apiResult.body)),
         { devices: [] },
       );
+    }
+
+    await bridge.handleMessage({
+      type: "api",
+      id: "open-settings",
+      path: "/api/v1/host/settings/accessibility",
+      method: "POST",
+    });
+    const settingsResult = messages.shift();
+    assert.equal(settingsResult?.type, "api-result");
+    assert.equal(settingsRequest?.method, "POST");
+    assert.equal(settingsRequest?.cookie, "mobile_device_session=test-cookie");
+    if (settingsResult?.type === "api-result") {
+      assert.equal(settingsResult.status, 204);
+      assert.equal(settingsResult.body, null);
     }
 
     const bootstrapsBeforeReconnect = bootstrapBodies.length;

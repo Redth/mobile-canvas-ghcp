@@ -17,6 +17,8 @@ namespace MobileCanvas.Contracts;
 [JsonSerializable(typeof(DeviceType[]))]
 [JsonSerializable(typeof(DependencyCheck))]
 [JsonSerializable(typeof(DependencyCheck[]))]
+[JsonSerializable(typeof(DiagnosticAction))]
+[JsonSerializable(typeof(DiagnosticAction[]))]
 [JsonSerializable(typeof(HostDiagnostics))]
 [JsonSerializable(typeof(HostDiagnostics[]))]
 [JsonSerializable(typeof(DeviceCatalog))]

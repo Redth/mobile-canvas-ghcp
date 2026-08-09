@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import {
   clearStoredDeviceId,
+  organizeDiagnostics,
   readStoredDeviceId,
   resumeAuthenticatedPanel,
   storeDeviceId,
@@ -77,4 +78,59 @@ test("does not reconnect a panel hidden while authentication is pending", async 
   finishAuthentication();
   assert.equal(await result, false);
   assert.equal(resumed, false);
+});
+
+test("promotes actionable diagnostics into main notices", () => {
+  const actionable = {
+    name: "ScreenCaptureKit fallback",
+    status: "warning",
+    message: "Grant Screen Recording.",
+    actions: [
+      {
+        type: "open-system-settings",
+        target: "screen-recording",
+        label: "Open Screen Recording",
+      },
+      {
+        type: "unsupported",
+        target: "ignored",
+        label: "Ignore",
+      },
+    ],
+  };
+  const ordinary = {
+    name: "Xcode",
+    status: "error",
+    message: "Select Xcode.",
+  };
+
+  const result = organizeDiagnostics([
+    {
+      checks: [
+        actionable,
+        ordinary,
+        { name: "Ready", status: "ok", message: "Ready." },
+      ],
+    },
+  ]);
+
+  assert.equal(result.notices.length, 1);
+  assert.equal(result.notices[0].name, actionable.name);
+  assert.deepEqual(result.notices[0].actions, [actionable.actions[0]]);
+  assert.deepEqual(result.popover, [ordinary]);
+});
+
+test("keeps unsupported diagnostic actions in the selector", () => {
+  const check = {
+    name: "Unknown",
+    status: "warning",
+    message: "Needs attention.",
+    actions: [{ type: "unsupported", target: "x", label: "Do something" }],
+  };
+
+  assert.deepEqual(organizeDiagnostics([{ checks: [check] }]), {
+    notices: [],
+    popover: [check],
+  });
+  assert.deepEqual(organizeDiagnostics(null), { notices: [], popover: [] });
 });

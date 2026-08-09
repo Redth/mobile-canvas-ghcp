@@ -33,5 +33,7 @@ public sealed class DeviceApiTests
 	public void DeviceApi_RemainsProtected()
 	{
 		Assert.False(DeviceApi.IsPublicPath(new PathString("/api/v1/catalog")));
+		Assert.False(DeviceApi.IsPublicPath(
+			new PathString("/api/v1/host/settings/screen-recording")));
 	}
 }

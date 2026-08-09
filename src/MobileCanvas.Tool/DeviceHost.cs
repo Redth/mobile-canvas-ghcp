@@ -35,6 +35,7 @@ internal static class DeviceHost
 		builder.Services.ConfigureHttpJsonOptions(options =>
 			options.SerializerOptions.TypeInfoResolverChain.Insert(0, DeviceJsonContext.Default));
 		builder.Services.AddSingleton<IProcessRunner, SystemProcessRunner>();
+		builder.Services.AddSingleton<MacSystemSettingsLauncher>();
 		builder.Services.AddSingleton<IosSimulatorBackend>();
 		builder.Services.AddSingleton<IDeviceBackend>(services =>
 			services.GetRequiredService<IosSimulatorBackend>());

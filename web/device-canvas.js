@@ -1,6 +1,7 @@
 import { creatablePlatforms, createOptions } from "./create-device-options.js";
 import {
   clearStoredDeviceId,
+  organizeDiagnostics,
   readStoredDeviceId,
   resumeAuthenticatedPanel,
   storeDeviceId,
@@ -9,6 +10,7 @@ import {
 const elements = {
   list: document.querySelector("#device-list"),
   diagnostics: document.querySelector("#diagnostics"),
+  diagnosticNotices: document.querySelector("#diagnostic-notices"),
   selector: document.querySelector("#device-selector"),
   popover: document.querySelector("#device-popover"),
   selectorName: document.querySelector("#selector-name"),
@@ -230,11 +232,47 @@ async function loadCatalog() {
 }
 
 function renderDiagnostics() {
-  const failures = (state.catalog?.diagnostics || [])
-    .flatMap((diagnostic) => diagnostic.checks || [])
-    .filter((check) => check.status !== "ok");
-  elements.diagnostics.classList.toggle("hidden", failures.length === 0);
-  elements.diagnostics.textContent = failures.map((check) => check.message).join(" ");
+  const { notices, popover } = organizeDiagnostics(state.catalog?.diagnostics);
+  elements.diagnostics.classList.toggle("hidden", popover.length === 0);
+  elements.diagnostics.textContent = popover.map((check) => check.message).join(" ");
+
+  elements.diagnosticNotices.replaceChildren(
+    ...notices.map((notice) => {
+      const item = document.createElement("div");
+      item.className = "diagnostic-notice";
+
+      const copy = document.createElement("div");
+      copy.className = "diagnostic-notice-copy";
+      const title = document.createElement("strong");
+      title.className = "diagnostic-notice-title";
+      title.textContent = notice.name;
+      const message = document.createElement("span");
+      message.textContent = notice.message;
+      copy.append(title, message);
+
+      const actions = document.createElement("div");
+      actions.className = "diagnostic-notice-actions";
+      for (const action of notice.actions) {
+        const button = document.createElement("button");
+        button.className = "button diagnostic-action-button";
+        button.type = "button";
+        button.textContent = action.label;
+        button.addEventListener("click", () => {
+          runBusy(button, async () => {
+            await api(`/api/v1/host/settings/${encodeURIComponent(action.target)}`, {
+              method: "POST",
+            });
+            showToast(`${action.label.replace(/^Open /, "")} settings opened`);
+          }).catch(showError);
+        });
+        actions.append(button);
+      }
+
+      item.append(copy, actions);
+      return item;
+    }),
+  );
+  elements.diagnosticNotices.classList.toggle("hidden", notices.length === 0);
 }
 
 /**
@@ -1964,6 +2002,7 @@ async function runBusy(button, operation) {
     await operation();
   } finally {
     button.removeAttribute("aria-busy");
+    button.disabled = false;
     updateControlAvailability();
   }
 }

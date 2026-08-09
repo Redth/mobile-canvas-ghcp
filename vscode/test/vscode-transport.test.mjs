@@ -70,6 +70,23 @@ test("bridges bootstrap, API responses, and socket frames", async () => {
   });
   assert.deepEqual((await (await api).json()).devices, []);
 
+  const settings = transport.api("/api/v1/host/settings/accessibility", {
+    method: "POST",
+  });
+  const settingsRequest = outbound.shift();
+  assert.equal(settingsRequest.type, "api");
+  assert.equal(settingsRequest.path, "/api/v1/host/settings/accessibility");
+  assert.equal(settingsRequest.method, "POST");
+  receive({
+    type: "api-result",
+    id: settingsRequest.id,
+    status: 204,
+    statusText: "No Content",
+    headers: {},
+    body: null,
+  });
+  assert.equal((await settings).status, 204);
+
   const socket = transport.createSocket("events");
   const socketRequest = outbound.shift();
   let opened = false;
