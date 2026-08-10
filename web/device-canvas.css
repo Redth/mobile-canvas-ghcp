@@ -211,6 +211,10 @@ summary:focus-visible,
 
 .app-shell {
   display: grid;
+  grid-template-areas:
+    "topbar"
+    "diagnostics"
+    "workspace";
   grid-template-rows: auto auto minmax(0, 1fr);
   width: 100%;
   height: 100dvh;
@@ -219,6 +223,7 @@ summary:focus-visible,
 /* --------------------------------------------------------------- topbar --- */
 
 .topbar {
+  grid-area: topbar;
   display: flex;
   align-items: center;
   gap: 8px;
@@ -533,6 +538,7 @@ summary:focus-visible,
 }
 
 .diagnostic-notices {
+  grid-area: diagnostics;
   display: grid;
   gap: 1px;
   margin: 8px 8px 0;
@@ -620,6 +626,7 @@ summary:focus-visible,
 }
 
 .button.primary:hover:not(:disabled) {
+  background: var(--success-emphasis);
   filter: brightness(1.08);
 }
 
@@ -671,6 +678,7 @@ summary:focus-visible,
 }
 
 .icon-button.primary:hover:not(:disabled) {
+  background: var(--success-emphasis);
   filter: brightness(1.08);
   color: #ffffff;
 }
@@ -788,6 +796,7 @@ summary:focus-visible,
 /* ------------------------------------------------------------ workspace --- */
 
 .workspace {
+  grid-area: workspace;
   display: grid;
   grid-template-rows: minmax(0, 1fr);
   min-height: 0;
@@ -918,50 +927,155 @@ summary:focus-visible,
   max-height: 100%;
   border-radius: var(--screen-radius);
   background: #000000;
-  cursor: crosshair;
   touch-action: none;
 }
 
 .stream-overlay {
+  --status-accent: var(--accent-fg);
+  --status-tint: var(--accent-muted);
   position: absolute;
   inset: 6px;
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  justify-content: center;
-  gap: 10px;
-  padding: 12px;
+  display: grid;
+  align-items: safe center;
+  justify-items: center;
+  padding: clamp(14px, 6%, 24px);
   border-radius: var(--screen-radius);
-  background: var(--scrim);
-  color: var(--fg-muted);
+  overflow: auto;
+  background: linear-gradient(180deg, var(--canvas-subtle), var(--canvas-inset));
+  color: var(--fg-default);
   text-align: center;
 }
 
-/* Busy states get a ring; terminal ones ("powered off", an error) are text only, so the spinner is
-   opt-in rather than something every caller has to remember to hide. */
+.stream-overlay[data-tone="neutral"] {
+  --status-accent: var(--fg-muted);
+  --status-tint: var(--control-default);
+}
+
+.stream-overlay[data-tone="warning"] {
+  --status-accent: var(--attention-fg);
+  --status-tint: color-mix(in srgb, var(--attention-fg) 16%, var(--canvas-default));
+}
+
+.stream-overlay[data-tone="danger"] {
+  --status-accent: var(--danger-fg);
+  --status-tint: var(--danger-muted);
+}
+
+.stream-status-card {
+  display: grid;
+  justify-items: center;
+  gap: 12px;
+  width: min(100%, 272px);
+  padding: 20px;
+  border: 1px solid var(--border-default);
+  border-radius: var(--control-radius);
+  background: var(--canvas-default);
+}
+
+.stream-status-icon {
+  display: grid;
+  place-items: center;
+  width: 40px;
+  height: 40px;
+  border-radius: var(--control-radius);
+  background: var(--status-tint);
+  color: var(--status-accent);
+}
+
+.stream-status-glyph {
+  width: 20px;
+  height: 20px;
+  stroke-width: 1.6;
+}
+
 .stream-overlay-spinner {
   display: none;
-  width: 26px;
-  height: 26px;
+  width: 18px;
+  height: 18px;
   border: 2px solid color-mix(in srgb, var(--fg-muted) 25%, transparent);
-  border-top-color: var(--accent-fg);
+  border-top-color: var(--status-accent);
   border-radius: 50%;
-  animation: stream-overlay-spin 720ms linear infinite;
+  animation: stream-overlay-spin 800ms linear infinite;
+}
+
+.stream-overlay[data-busy="true"] .stream-status-glyph {
+  display: none;
 }
 
 .stream-overlay[data-busy="true"] .stream-overlay-spinner {
   display: block;
 }
 
-.stream-overlay-text {
-  font-size: 13px;
-  letter-spacing: 0.01em;
+.stream-status-copy {
+  display: grid;
+  justify-items: center;
+  gap: 4px;
+  min-width: 0;
 }
 
-/* Busy labels are written without punctuation and get the ellipsis here, so every waiting state reads
-   the same. The spinner carries the motion: animating the dots would shift a centred label. */
-.stream-overlay[data-busy="true"] .stream-overlay-text::after {
-  content: "\2026";
+.stream-status-eyebrow {
+  color: var(--fg-muted);
+  font-size: 12px;
+  font-weight: 500;
+  line-height: 1.4;
+}
+
+.stream-status-title {
+  margin: 0;
+  font-size: 16px;
+  font-weight: 600;
+  line-height: 1.35;
+  text-wrap: balance;
+}
+
+.stream-status-detail {
+  margin: 0;
+  max-width: 30ch;
+  color: var(--fg-muted);
+  font-size: 12px;
+  line-height: 1.5;
+  text-wrap: pretty;
+}
+
+.button.stream-status-action {
+  width: auto;
+  max-width: 100%;
+  min-height: 44px;
+  margin-top: 2px;
+  padding: 8px 16px;
+  font-weight: 600;
+  touch-action: manipulation;
+}
+
+.button.stream-status-action:active:not(:disabled) {
+  filter: brightness(0.96);
+}
+
+.device-frame[data-orientation="landscape"] .stream-status-card {
+  grid-template-areas:
+    "icon copy"
+    "action action";
+  grid-template-columns: auto minmax(0, 1fr);
+  justify-items: start;
+  width: min(100%, 400px);
+  padding: 16px;
+  text-align: left;
+}
+
+.device-frame[data-orientation="landscape"] .stream-status-icon {
+  grid-area: icon;
+  align-self: center;
+}
+
+.device-frame[data-orientation="landscape"] .stream-status-copy {
+  grid-area: copy;
+  justify-items: start;
+  align-self: center;
+}
+
+.device-frame[data-orientation="landscape"] .stream-status-action {
+  grid-area: action;
+  width: auto;
 }
 
 @keyframes stream-overlay-spin {
@@ -1418,24 +1532,47 @@ input[readonly].field-degraded {
 /* --------------------------------------------------------- empty states --- */
 
 .empty-state {
+  --empty-accent: var(--accent-fg);
   display: grid;
-  justify-items: center;
-  align-content: center;
-  gap: 8px;
+  place-items: center;
   height: 100%;
   padding: 24px;
+  background: var(--canvas-default);
   text-align: center;
+}
+
+.empty-state.success-state {
+  --empty-accent: var(--success-fg);
+}
+
+.empty-state[data-tone="danger"] {
+  --empty-accent: var(--danger-fg);
+}
+
+.empty-card {
+  display: grid;
+  justify-items: center;
+  gap: 10px;
+  width: min(100%, 320px);
+  padding: 24px;
+  border: 1px solid var(--border-default);
+  border-radius: var(--control-radius);
+  background: var(--canvas-subtle);
 }
 
 .empty-icon {
   display: grid;
   place-items: center;
-  width: 44px;
-  height: 44px;
-  border: 1px solid var(--border-default);
-  border-radius: 12px;
-  background: var(--canvas-subtle);
-  color: var(--fg-muted);
+  width: 40px;
+  height: 40px;
+  border-radius: var(--control-radius);
+  background: color-mix(in srgb, var(--empty-accent) 12%, var(--canvas-default));
+  color: var(--empty-accent);
+}
+
+.empty-icon .icon {
+  width: 20px;
+  height: 20px;
 }
 
 .empty-icon.success {
@@ -1444,18 +1581,24 @@ input[readonly].field-degraded {
 }
 
 .empty-state h2 {
-  margin: 4px 0 0;
-  font-size: 15px;
+  margin: 2px 0 0;
+  font-size: 16px;
+  font-weight: 600;
+  line-height: 1.35;
 }
 
 .empty-state p {
   margin: 0;
   max-width: 34ch;
   color: var(--fg-muted);
+  font-size: 13px;
+  line-height: 1.5;
 }
 
 .empty-state .button {
   margin-top: 6px;
+  min-height: 44px;
+  padding: 9px 16px;
 }
 
 /* -------------------------------------------------------------- dialogs --- */
