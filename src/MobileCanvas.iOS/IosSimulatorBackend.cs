@@ -389,7 +389,7 @@ public sealed class IosSimulatorBackend : IDeviceBackend, IAsyncDisposable
 				framebufferUnavailableReason = exception.Message;
 			}
 
-			var windowResult = await FindCaptureWindowAsync(deviceId, device.NativeId, cancellationToken)
+			var windowResult = await FindCaptureWindowAsync(device.NativeId, cancellationToken)
 				.ConfigureAwait(false);
 			screenCaptureUnavailableReason = windowResult.FailureReason;
 			if (windowResult.Window is not null)
@@ -442,13 +442,11 @@ public sealed class IosSimulatorBackend : IDeviceBackend, IAsyncDisposable
 	}
 
 	private async Task<CaptureWindowResult> FindCaptureWindowAsync(
-		string deviceId,
 		string nativeId,
 		CancellationToken cancellationToken)
 	{
-		// Without Accessibility the helper cannot read window UDIDs, so no window can ever match.
-		// Checking first avoids a pointless reveal (which activates Simulator.app and retargets its
-		// displayed device) followed by ten failed retries, and reports the real cause.
+		// Live capture must not turn a headless boot into a visible Simulator.app window. An already
+		// visible window remains a valid fallback, but opening one is reserved for RevealAsync.
 		var permissions = await ScreenCaptureHelper.GetDiagnosticsAsync(cancellationToken).ConfigureAwait(false);
 		if (!permissions.ScreenRecordingGranted)
 		{
@@ -463,34 +461,7 @@ public sealed class IosSimulatorBackend : IDeviceBackend, IAsyncDisposable
 				"Grant Accessibility permission so the device screen can be located precisely.");
 		}
 
-		var result = await MatchWindowAsync(nativeId, cancellationToken).ConfigureAwait(false);
-		if (result.Window is not null)
-			return result;
-
-		// ScreenCaptureKit can only capture a window that exists, so a booted device whose window
-		// was closed or is showing another simulator needs Simulator.app brought forward first.
-		try
-		{
-			await RevealAsync(deviceId, cancellationToken).ConfigureAwait(false);
-		}
-		catch (Exception exception) when (exception is not OperationCanceledException)
-		{
-			return new CaptureWindowResult(null, exception.Message);
-		}
-
-		for (var attempt = 0; attempt < 10; attempt++)
-		{
-			await Task.Delay(300, cancellationToken).ConfigureAwait(false);
-			result = await MatchWindowAsync(nativeId, cancellationToken).ConfigureAwait(false);
-			if (result.Window is not null)
-				return result;
-		}
-
-		return result.FailureReason is not null
-			? result
-			: new CaptureWindowResult(
-				null,
-				"Simulator.app is not showing a window for this device, so ScreenCaptureKit cannot capture it.");
+		return await MatchWindowAsync(nativeId, cancellationToken).ConfigureAwait(false);
 	}
 
 	private async Task<CaptureWindowResult> MatchWindowAsync(
@@ -502,13 +473,17 @@ public sealed class IosSimulatorBackend : IDeviceBackend, IAsyncDisposable
 		{
 			return new CaptureWindowResult(
 				null,
-				"No simulator windows are visible to ScreenCaptureKit. Grant Screen Recording permission.");
+				"No simulator windows are open. Use Show simulator window to make this fallback available.");
 		}
 
 		var match = windows.FirstOrDefault(window =>
 			string.Equals(window.Udid, nativeId, StringComparison.OrdinalIgnoreCase));
 		if (match is null)
-			return default;
+		{
+			return new CaptureWindowResult(
+				null,
+				"Simulator.app is not showing this device. Use Show simulator window to make this fallback available.");
+		}
 
 		if (!match.HasExactGeometry)
 		{

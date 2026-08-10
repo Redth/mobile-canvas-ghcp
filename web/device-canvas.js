@@ -2432,20 +2432,17 @@ function setPanelVisible(visible) {
     return;
   }
   if (!state.detached) {
-    if (transport) {
-      startStream();
-      connectAutomationEvents();
-      return;
-    }
     const isActive = () =>
       panelVisibilityVersion === visibilityVersion
       && state.panelVisible
       && !state.detached;
     void resumeAuthenticatedPanel({
-      authenticate: () => api("/api/v1/status"),
+      authenticate: () => transport ? Promise.resolve() : api("/api/v1/status"),
       isActive,
+      // A device can finish booting while its host session is hidden. Re-read its state before
+      // deciding whether a stream can start instead of reconnecting from the stale "booting" record.
+      refresh,
       resume: () => {
-        startStream();
         connectAutomationEvents();
       },
     }).catch((error) => {

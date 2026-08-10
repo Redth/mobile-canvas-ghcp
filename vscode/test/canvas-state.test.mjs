@@ -124,6 +124,20 @@ test("authenticates before reconnecting a resumed panel", async () => {
   assert.deepEqual(calls, ["authenticate", "resume"]);
 });
 
+test("refreshes device state before reconnecting a resumed panel", async () => {
+  const calls = [];
+
+  const result = await resumeAuthenticatedPanel({
+    authenticate: async () => calls.push("authenticate"),
+    isActive: () => true,
+    refresh: async () => calls.push("refresh"),
+    resume: () => calls.push("resume"),
+  });
+
+  assert.equal(result, true);
+  assert.deepEqual(calls, ["authenticate", "refresh", "resume"]);
+});
+
 test("does not reconnect a panel hidden while authentication is pending", async () => {
   let finishAuthentication;
   let active = true;
@@ -141,6 +155,29 @@ test("does not reconnect a panel hidden while authentication is pending", async 
 
   active = false;
   finishAuthentication();
+  assert.equal(await result, false);
+  assert.equal(resumed, false);
+});
+
+test("does not reconnect a panel hidden while device state refreshes", async () => {
+  let finishRefresh;
+  let active = true;
+  let resumed = false;
+  const refresh = new Promise((resolve) => {
+    finishRefresh = resolve;
+  });
+  const result = resumeAuthenticatedPanel({
+    authenticate: async () => {},
+    isActive: () => active,
+    refresh: () => refresh,
+    resume: () => {
+      resumed = true;
+    },
+  });
+
+  await Promise.resolve();
+  active = false;
+  finishRefresh();
   assert.equal(await result, false);
   assert.equal(resumed, false);
 });

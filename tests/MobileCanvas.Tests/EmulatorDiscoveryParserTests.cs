@@ -73,6 +73,25 @@ public sealed class EmulatorDiscoveryParserTests
 		Assert.Equal("abc123", instance?.GrpcToken);
 	}
 
+	[Theory]
+	[InlineData("\"emulator\" \"-avd\" \"X\" \"-no-window\"", true)]
+	[InlineData("emulator -avd X -no-window", true)]
+	[InlineData("\"emulator\" \"-avd\" \"X\" \"-gpu\" \"host\"", false)]
+	public void Parse_ReportsWhetherTheEmulatorHasANativeWindow(string commandLine, bool expected)
+	{
+		var instance = EmulatorDiscoveryParser.Parse($"avd.id=X\ncmdline={commandLine}");
+
+		Assert.Equal(expected, instance?.IsHeadless);
+	}
+
+	[Fact]
+	public void Parse_LeavesWindowModeUnknownWithoutACommandLine()
+	{
+		var instance = EmulatorDiscoveryParser.Parse("avd.id=X");
+
+		Assert.Null(instance?.IsHeadless);
+	}
+
 	/// <summary>
 	/// Software rendering drops the stream from ~50 FPS to ~3 FPS, which looks exactly like a broken
 	/// encoder, so it is detected from the recorded launch command and surfaced as a diagnostic.
