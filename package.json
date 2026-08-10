@@ -1,6 +1,6 @@
 {
   "name": "mobile-canvas",
-  "version": "0.1.8",
+  "version": "0.1.9",
   "description": "View, create, boot, and interact with local iOS simulators and Android emulators from a GitHub Copilot canvas.",
   "main": "extension.mjs",
   "type": "module",
