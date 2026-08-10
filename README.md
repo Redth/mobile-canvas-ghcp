@@ -164,22 +164,21 @@ your app to that exact device → drive it with the input tools.
 
 ## VS Code
 
-Download the VSIX artifact from a successful CI run. Prefer the package matching
-your platform (`darwin-arm64`, `darwin-x64`, `linux-arm64`, `linux-x64`,
-`win32-arm64`, or `win32-x64`); the larger universal package remains available
-for environments where the target is not known in advance. Tagged releases also
-provide a tiny universal `-thin` package that downloads and verifies only the
-matching runtime on first use.
+Download the VSIX artifact from a successful CI run. CI produces a small
+universal package that downloads and verifies only the matching runtime on first
+use. Tagged releases also provide self-contained platform packages for
+`darwin-arm64`, `darwin-x64`, `linux-arm64`, `linux-x64`, `win32-arm64`, and
+`win32-x64`.
 
 ```bash
 code --install-extension mobile-canvas-vscode.vsix
 ```
 
-Reload VS Code and open **Mobile** from the Activity Bar. The extension
-contains all native runtimes and automatically registers the `mobile_device_*`
-tools with Copilot Chat; no global tool or `mcp.json` is required. Agent actions
-also select and animate the same device in the live view. The view follows the
-active VS Code theme while preserving the GitHub canvas appearance elsewhere.
+Reload VS Code and open **Mobile** from the Activity Bar. The extension obtains
+its pinned native runtime automatically and registers the `mobile_device_*` tools
+with Copilot Chat; no global tool or `mcp.json` is required. Agent actions also
+select and animate the same device in the live view. The view follows the active
+VS Code theme while preserving the GitHub canvas appearance elsewhere.
 The selected device, a current screenshot, or its accessibility tree can be
 attached to chat as `#mobileDevice`, `#mobileScreenshot`, or `#mobileUiTree`.
 
@@ -231,7 +230,7 @@ npm ci --prefix vscode --ignore-scripts
 npm test --prefix vscode
 npm run package --prefix vscode
 ./scripts/build.sh          # builds one architecture into .build/bin/<rid>
-./scripts/release.sh        # rebuilds every shipped arch and refreshes runtimes/
+./scripts/release.sh        # rebuilds macOS release assets for local validation
 ```
 
 Two things to know before you change anything:

@@ -2,6 +2,7 @@ bin/
 obj/
 .build/
 native/*/out/
+runtimes/**/*.gz
 node_modules/
 vscode/out/
 vscode/dist/
