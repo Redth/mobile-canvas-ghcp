@@ -1,7 +1,7 @@
 {
   "name": "mobile-canvas",
   "description": "View, create, boot, and interact with local iOS simulators and Android emulators in a Copilot canvas.",
-  "version": "0.1.9",
+  "version": "0.1.10",
   "author": {
     "name": "Jonathan Dick",
     "url": "https://github.com/Redth"

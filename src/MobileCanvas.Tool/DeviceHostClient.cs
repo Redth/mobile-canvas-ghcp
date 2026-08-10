@@ -9,6 +9,8 @@ namespace MobileCanvas.Tool;
 
 public sealed class DeviceHostClient
 {
+	private static readonly Version ClientVersion = NormalizeVersion(
+		typeof(DeviceHostClient).Assembly.GetName().Version ?? new Version());
 	private readonly HostMetadataStore _metadataStore = new();
 	private readonly SemaphoreSlim _startLock = new(1, 1);
 	private HostMetadata? _metadata;
@@ -859,18 +861,18 @@ public sealed class DeviceHostClient
 
 	private async Task EnsureStartedAsync(CancellationToken cancellationToken)
 	{
-		if (_metadata is not null && await IsHealthyAsync(_metadata, cancellationToken).ConfigureAwait(false))
+		if (_metadata is not null &&
+			IsHostCompatible(_metadata, ClientVersion) &&
+			await IsHealthyAsync(_metadata, cancellationToken).ConfigureAwait(false))
 			return;
 
 		await _startLock.WaitAsync(cancellationToken).ConfigureAwait(false);
 		try
 		{
 			var existing = _metadataStore.TryRead();
-			if (existing is not null && await IsHealthyAsync(existing, cancellationToken).ConfigureAwait(false))
-			{
-				_metadata = existing;
+			if (existing is not null &&
+				await TryAdoptHostAsync(existing, cancellationToken).ConfigureAwait(false))
 				return;
-			}
 
 			var deadline = DateTimeOffset.UtcNow.AddSeconds(20);
 			while (DateTimeOffset.UtcNow < deadline && !IsSingletonLockAvailable())
@@ -879,11 +881,8 @@ public sealed class DeviceHostClient
 				await Task.Delay(100, cancellationToken).ConfigureAwait(false);
 				var candidate = _metadataStore.TryRead();
 				if (candidate is not null &&
-					await IsHealthyAsync(candidate, cancellationToken).ConfigureAwait(false))
-				{
-					_metadata = candidate;
+					await TryAdoptHostAsync(candidate, cancellationToken).ConfigureAwait(false))
 					return;
-				}
 			}
 
 			StartHostProcess();
@@ -893,11 +892,8 @@ public sealed class DeviceHostClient
 				await Task.Delay(100, cancellationToken).ConfigureAwait(false);
 				var candidate = _metadataStore.TryRead();
 				if (candidate is not null &&
-					await IsHealthyAsync(candidate, cancellationToken).ConfigureAwait(false))
-				{
-					_metadata = candidate;
+					await TryAdoptHostAsync(candidate, cancellationToken).ConfigureAwait(false))
 					return;
-				}
 			}
 			throw new TimeoutException("Mobile Canvas host did not become ready within 20 seconds.");
 		}
@@ -909,8 +905,20 @@ public sealed class DeviceHostClient
 
 	private static void StartHostProcess()
 	{
+		DevicePaths.EnsureHome();
 		var executable = Environment.ProcessPath
 			?? throw new InvalidOperationException("Could not determine the mobile-canvas executable path.");
+		var startInfo = CreateHostStartInfo(executable, AppContext.BaseDirectory);
+		var process = Process.Start(startInfo)
+			?? throw new InvalidOperationException("Failed to start the Mobile Canvas host.");
+		process.OutputDataReceived += (_, _) => { };
+		process.ErrorDataReceived += (_, _) => { };
+		process.BeginOutputReadLine();
+		process.BeginErrorReadLine();
+	}
+
+	internal static ProcessStartInfo CreateHostStartInfo(string executable, string baseDirectory)
+	{
 		var startInfo = new ProcessStartInfo
 		{
 			FileName = executable,
@@ -918,10 +926,11 @@ public sealed class DeviceHostClient
 			RedirectStandardOutput = true,
 			RedirectStandardError = true,
 			CreateNoWindow = true,
+			WorkingDirectory = DevicePaths.Home,
 		};
 		if (Path.GetFileNameWithoutExtension(executable).Equals("dotnet", StringComparison.OrdinalIgnoreCase))
 		{
-			var entryAssembly = Path.Combine(AppContext.BaseDirectory, "mobile-canvas.dll");
+			var entryAssembly = Path.Combine(baseDirectory, "mobile-canvas.dll");
 			if (!File.Exists(entryAssembly))
 				throw new InvalidOperationException("Could not determine the Mobile Canvas assembly path.");
 			startInfo.ArgumentList.Add(entryAssembly);
@@ -929,13 +938,7 @@ public sealed class DeviceHostClient
 		startInfo.ArgumentList.Add("host");
 		startInfo.ArgumentList.Add("run");
 		startInfo.Environment["MOBILE_CANVAS_HOST_PROCESS"] = "1";
-
-		var process = Process.Start(startInfo)
-			?? throw new InvalidOperationException("Failed to start the Mobile Canvas host.");
-		process.OutputDataReceived += (_, _) => { };
-		process.ErrorDataReceived += (_, _) => { };
-		process.BeginOutputReadLine();
-		process.BeginErrorReadLine();
+		return startInfo;
 	}
 
 	private static bool IsSingletonLockAvailable()
@@ -1006,6 +1009,58 @@ public sealed class DeviceHostClient
 			return false;
 		}
 	}
+
+	private async Task<bool> TryAdoptHostAsync(
+		HostMetadata metadata,
+		CancellationToken cancellationToken)
+	{
+		if (!await IsHealthyAsync(metadata, cancellationToken).ConfigureAwait(false))
+			return false;
+		if (IsHostCompatible(metadata, ClientVersion))
+		{
+			_metadata = metadata;
+			return true;
+		}
+
+		try
+		{
+			using var client = CreateClient(metadata, TimeSpan.FromSeconds(2));
+			using var response = await client.PostAsync(
+				"/api/v1/host/stop",
+				content: null,
+				cancellationToken).ConfigureAwait(false);
+			response.EnsureSuccessStatusCode();
+		}
+		catch (HttpRequestException)
+		{
+			// Another extension process can win the same upgrade race. Waiting for
+			// the recorded PID below proves that the host really is going away.
+		}
+		catch (TaskCanceledException) when (!cancellationToken.IsCancellationRequested)
+		{
+			// The host may close its listener before this client receives the reply.
+		}
+		await WaitForProcessExitAsync(metadata.ProcessId, cancellationToken).ConfigureAwait(false);
+		if (_metadata?.ProcessId == metadata.ProcessId)
+			_metadata = null;
+		return false;
+	}
+
+	internal static bool IsHostCompatible(HostMetadata metadata, Version clientVersion)
+	{
+		if (metadata.SchemaVersion != MobileCanvasProtocol.Version ||
+			!Version.TryParse(metadata.Version, out var hostVersion))
+		{
+			return false;
+		}
+
+		// A newer v1 host remains compatible with older clients. Accepting it avoids
+		// two installed extension versions repeatedly replacing each other's host.
+		return hostVersion >= clientVersion;
+	}
+
+	private static Version NormalizeVersion(Version version) =>
+		new(version.Major, version.Minor, Math.Max(version.Build, 0));
 
 	private async Task<HttpResponseMessage> SendAsync(
 		HttpMethod method,
