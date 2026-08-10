@@ -12,6 +12,9 @@ import VideoToolbox
 /// so the canvas decode path, WebSocket framing, and Annex-B parser stay identical on both
 /// platforms and only ~1-2 Mbps crosses to the browser.
 enum EncodeCommand {
+	/// Lower than the browser's 120 ms idle drain so the first frame after a drain is always a keyframe.
+	private static let idleKeyFrameInterval: UInt64 = 80_000_000
+
 	/// Pixel layouts the emulator can produce, described by how they map onto the encoder's BGRA input.
 	enum PixelFormat: String {
 		case rgba8888
@@ -78,9 +81,11 @@ enum EncodeCommand {
 		let frameBytes = width * height * pixelFormat.bytesPerPixel
 		var staging = [UInt8](repeating: 0, count: frameBytes)
 		var frames = 0
+		var lastFrameReceivedAt: UInt64?
 
 		while true {
 			guard readFully(into: &staging, count: frameBytes) else { break }
+			let receivedAt = DispatchTime.now().uptimeNanoseconds
 
 			guard let pixelBuffer = nextPixelBuffer(from: pool) else {
 				// The pool is exhausted because the encoder is still holding every buffer. Dropping
@@ -96,7 +101,11 @@ enum EncodeCommand {
 				width: encodedWidth,
 				height: encodedHeight,
 				format: pixelFormat)
-			encoder.encode(pixelBuffer)
+			let forceKeyFrame = lastFrameReceivedAt.map {
+				receivedAt - $0 >= idleKeyFrameInterval
+			} ?? true
+			lastFrameReceivedAt = receivedAt
+			encoder.encode(pixelBuffer, forceKeyFrame: forceKeyFrame)
 
 			frames += 1
 			if frames % (fps * 2) == 0 {

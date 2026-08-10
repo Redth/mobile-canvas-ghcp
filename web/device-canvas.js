@@ -1,9 +1,13 @@
 import { creatablePlatforms, createOptions } from "./create-device-options.js";
 import {
+  canBootDeviceState,
   clearStoredDeviceId,
+  deviceStatusPresentation,
+  formatDeviceState,
   organizeDiagnostics,
   readStoredDeviceId,
   resumeAuthenticatedPanel,
+  shouldDrainIdleDecoder,
   storeDeviceId,
 } from "./canvas-state.js";
 
@@ -18,6 +22,12 @@ const elements = {
   selectorDot: document.querySelector("#selector-dot"),
   selectorGlyph: document.querySelector(".selector-glyph use"),
   empty: document.querySelector("#empty-state"),
+  emptyIcon: document.querySelector("#empty-state-icon"),
+  emptyTitle: document.querySelector("#empty-state-title"),
+  emptyDetail: document.querySelector("#empty-state-detail"),
+  emptyAction: document.querySelector("#empty-state-action"),
+  emptyActionIcon: document.querySelector("#empty-state-action-icon"),
+  emptyActionText: document.querySelector("#empty-state-action-text"),
   view: document.querySelector("#device-view"),
   detached: document.querySelector("#detached-state"),
   canvas: document.querySelector("#device-screen"),
@@ -27,7 +37,13 @@ const elements = {
   floatBar: document.querySelector(".float-bar"),
   navPill: document.querySelector("#nav-pill"),
   overlay: document.querySelector("#stream-overlay"),
-  overlayText: document.querySelector("#stream-overlay-text"),
+  overlayIcon: document.querySelector("#stream-overlay-icon"),
+  overlayEyebrow: document.querySelector("#stream-overlay-eyebrow"),
+  overlayTitle: document.querySelector("#stream-overlay-title"),
+  overlayDetail: document.querySelector("#stream-overlay-detail"),
+  overlayAction: document.querySelector("#stream-overlay-action"),
+  overlayActionIcon: document.querySelector("#stream-overlay-action-icon"),
+  overlayActionText: document.querySelector("#stream-overlay-action-text"),
   fps: document.querySelector("#fps-select"),
   scale: document.querySelector("#scale-select"),
   mode: document.querySelector("#stream-mode"),
@@ -342,6 +358,7 @@ function renderDeviceList() {
 function createDeviceCard(device) {
   const card = document.createElement("button");
   const selected = state.selected?.id === device.id;
+  const indicator = deviceStateIndicator(device);
   card.type = "button";
   card.className = `device-card ${device.state} ${selected ? "selected" : ""}`;
   card.setAttribute("role", "option");
@@ -356,7 +373,7 @@ function createDeviceCard(device) {
       <span class="device-detail">${escapeHtml(describeDevice(device))}</span>
     </span>
     <span class="device-trailing">
-      <span class="state-dot" aria-hidden="true"></span>
+      <span class="state-dot ${indicator}" aria-hidden="true"></span>
     </span>`;
   card.addEventListener("click", () => {
     closeDevicePopover();
@@ -371,7 +388,14 @@ function describeDevice(device) {
   const platform = device.platform === "android" ? "Android" : "iOS";
   // simctl reports a bare number such as "26.5"; qualify it so the platform reads clearly.
   const label = /^[\d.]+$/.test(version) ? `${platform} ${version}` : version || platform;
-  return `${label} \u00b7 ${device.state}`;
+  return `${label} \u00b7 ${formatDeviceState(device.state)}`;
+}
+
+function deviceStateIndicator(device) {
+  if (!device?.isAvailable || device.state === "unknown") return "error";
+  if (device.state === "booted") return "ready";
+  if (device.state === "booting" || device.state === "shutting-down") return "pending";
+  return "";
 }
 
 function updateSelectorDisplay(device) {
@@ -392,7 +416,7 @@ function updateSelectorDisplay(device) {
   }
   elements.selectorName.textContent = device.name;
   elements.selectorDetail.textContent = describeDevice(device);
-  elements.selectorDot.className = `state-dot ${device.state === "booted" ? "ready" : ""}`;
+  elements.selectorDot.className = `state-dot ${deviceStateIndicator(device)}`;
   elements.selectorGlyph.setAttribute("href", platformInfo(device.platform).icon);
 }
 
@@ -455,12 +479,32 @@ async function selectDevice(device, persist) {
     startStream();
     await updateRecordingStatus(device.id, selectionVersion);
   } else {
-    state.display = null;
-    showOverlay(`${capitalize(platformInfo(state.selected?.platform).noun)} is powered off`);
-    setStreamMode("offline");
+    state.display = device.display || null;
+    fitDeviceScreen();
+    const statusKind = deviceStatusKind(device);
+    showDeviceStatus(statusKind);
+    setStreamMode(
+      statusKind === "booting" || statusKind === "shutting-down" ? "connecting" : "offline",
+    );
     setActualFps(0);
-    setInputStatus("ready", `Boot the ${platformInfo(state.selected?.platform).noun} to interact`);
+    const inputState = statusKind === "booting" || statusKind === "shutting-down"
+      ? "pending"
+      : statusKind === "unavailable" ? "error" : "idle";
+    setInputStatus(
+      inputState,
+      statusKind === "offline"
+        ? `Start the ${platformInfo(state.selected?.platform).noun} to interact`
+        : formatDeviceState(device.state),
+    );
   }
+}
+
+function deviceStatusKind(device) {
+  if (!device?.isAvailable) return "unavailable";
+  if (device.state === "shutdown") return "offline";
+  if (device.state === "booting") return "booting";
+  if (device.state === "shutting-down") return "shutting-down";
+  return "unavailable";
 }
 
 function showEmptySelection() {
@@ -472,6 +516,13 @@ function showEmptySelection() {
   state.display = null;
   elements.view.classList.add("hidden");
   elements.detached.classList.add("hidden");
+  configureEmptyState({
+    tone: "accent",
+    icon: "#icon-device",
+    title: "Select a device",
+    detail: "Choose an existing target, or create one from an installed runtime.",
+    action: { id: "create", label: "New device", icon: "#icon-plus" },
+  });
   elements.empty.classList.remove("hidden");
   setStreamMode("idle");
   setActualFps(0);
@@ -482,6 +533,17 @@ function showEmptySelection() {
   updateSelectorDisplay(null);
   renderDeviceList();
   updateControlAvailability();
+}
+
+function configureEmptyState({ tone, icon, title, detail, action }) {
+  elements.empty.dataset.tone = tone;
+  elements.emptyIcon.setAttribute("href", icon);
+  setText(elements.emptyTitle, title);
+  setText(elements.emptyDetail, detail);
+  elements.emptyAction.dataset.emptyAction = action.id;
+  elements.emptyActionIcon.setAttribute("href", action.icon);
+  setText(elements.emptyActionText, action.label);
+  elements.emptyAction.setAttribute("aria-label", action.label);
 }
 
 /**
@@ -520,6 +582,7 @@ function selectedNoun() {
 
 function updateControlAvailability() {
   const booted = state.selected?.state === "booted";
+  const canBoot = canBootDeviceState(state.selected?.state);
   const capabilities = state.selected?.capabilities || {};
   for (const button of document.querySelectorAll("[data-action]")) {
     const action = button.dataset.action;
@@ -534,7 +597,7 @@ function updateControlAvailability() {
     const needsBooted =
       ["home", "back", "apps", "lock", "rotate", "screenshot", "record", "restart", "shutdown"].includes(action);
     button.disabled = !state.selected ||
-      (action === "boot" ? booted : needsBooted && !booted);
+      (action === "boot" ? !canBoot : needsBooted && !booted);
 
     if (action === "reveal") {
       const description = state.selected?.platform === "android"
@@ -735,6 +798,7 @@ function fitDeviceScreen() {
   stage.style.setProperty("--stage-top-reserve", `${reserve}px`);
   elements.canvas.style.width = `${Math.floor(fitted.width)}px`;
   elements.canvas.style.height = `${Math.floor(fitted.height)}px`;
+  elements.frame.dataset.orientation = aspect > 1 ? "landscape" : "portrait";
   applyScreenRadius(fitted.width);
   reconcileAutoScale();
 }
@@ -791,21 +855,54 @@ function applyScreenRadius(renderedWidth) {
   elements.frame.dataset.cornerCurve = state.display?.cornerCurve || "circular";
 }
 
-/**
- * The screen's only status surface. `busy` adds a spinner and an animated ellipsis, so waiting reads
- * as progress; terminal messages stay plain text and end the motion.
- */
-function showOverlay(message, { busy = false } = {}) {
-  elements.overlayText.textContent = message;
-  elements.overlay.dataset.busy = busy ? "true" : "false";
+function showDeviceStatus(kind, overrides = {}) {
+  const base = deviceStatusPresentation(kind, {
+    deviceName: state.selected?.deviceTypeName || state.selected?.name,
+    platform: state.selected?.platform,
+    detail: overrides.detail,
+  });
+  const presentation = { ...base, ...overrides };
+  const action = overrides.action === undefined ? base.action : overrides.action;
+
+  elements.frame.dataset.status = kind;
+  elements.overlay.dataset.busy = presentation.busy ? "true" : "false";
+  elements.overlay.dataset.tone = presentation.tone;
+  elements.overlay.setAttribute("role", presentation.tone === "danger" ? "alert" : "status");
+  elements.overlay.setAttribute("aria-live", presentation.tone === "danger" ? "assertive" : "polite");
+  elements.overlayIcon.setAttribute("href", presentation.icon);
+  setText(elements.overlayEyebrow, presentation.eyebrow);
+  setText(elements.overlayTitle, presentation.title);
+  setText(elements.overlayDetail, presentation.detail);
+
+  if (action) {
+    elements.overlayAction.dataset.statusAction = action.id;
+    elements.overlayActionIcon.setAttribute("href", action.icon);
+    setText(elements.overlayActionText, action.label);
+    elements.overlayAction.setAttribute("aria-label", action.label);
+    elements.overlayAction.classList.remove("hidden");
+  } else {
+    delete elements.overlayAction.dataset.statusAction;
+    elements.overlayAction.classList.add("hidden");
+  }
+
   elements.overlay.classList.remove("hidden");
+}
+
+function setText(element, value) {
+  const text = String(value);
+  if (element.textContent !== text) element.textContent = text;
+}
+
+function hideDeviceStatus() {
+  elements.overlay.classList.add("hidden");
+  elements.frame.dataset.status = "streaming";
 }
 
 function startStream() {
   stopStream();
   if (!state.panelVisible || !state.selected || state.selected.state !== "booted") return;
 
-  showOverlay("Connecting", { busy: true });
+  showDeviceStatus("connecting");
   setStreamMode("connecting");
   state.frameClock = performance.now();
 
@@ -821,7 +918,13 @@ function startStream() {
     fps: elements.fps.value,
     scale: state.activeScale,
   });
-  const socket = createSocket("video", query);
+  let socket;
+  try {
+    socket = createSocket("video", query);
+  } catch (error) {
+    showStreamFailure(error);
+    return;
+  }
   state.socket = socket;
   socket.binaryType = "arraybuffer";
   const parser = new AnnexBDecoder();
@@ -829,21 +932,25 @@ function startStream() {
 
   socket.addEventListener("message", (event) => {
     if (state.socket !== socket) return;
-    if (typeof event.data === "string") {
-      const descriptor = JSON.parse(event.data);
-      parser.setSource(descriptor.source);
-      if (descriptor.display) {
-        state.display = descriptor.display;
-        elements.geometry.value =
-          `${state.display.pointWidth}x${state.display.pointHeight} pt @${state.display.scale}x`;
-        fitDeviceScreen();
-        renderEncodeSize();
+    try {
+      if (typeof event.data === "string") {
+        const descriptor = JSON.parse(event.data);
+        parser.setSource(descriptor.source);
+        if (descriptor.display) {
+          state.display = descriptor.display;
+          elements.geometry.value =
+            `${state.display.pointWidth}x${state.display.pointHeight} pt @${state.display.scale}x`;
+          fitDeviceScreen();
+          renderEncodeSize();
+        }
+        setStreamMode("H.264");
+        applyCaptureSource(descriptor);
+        return;
       }
-      setStreamMode("H.264");
-      applyCaptureSource(descriptor);
-      return;
+      parser.push(new Uint8Array(event.data));
+    } catch (error) {
+      if (state.socket === socket) showStreamFailure(error);
     }
-    parser.push(new Uint8Array(event.data));
   });
   socket.addEventListener("open", () => {
     if (state.socket === socket) setStreamMode("H.264");
@@ -856,6 +963,14 @@ function startStream() {
       startPngFallback("PNG");
     }
   });
+}
+
+function showStreamFailure(error) {
+  stopStream();
+  showDeviceStatus("error", { detail: error.message || String(error) });
+  setStreamMode("offline");
+  setInputStatus("error", "Live view unavailable");
+  showError(error);
 }
 
 function stopStream() {
@@ -916,11 +1031,11 @@ class AnnexBDecoder {
    * Nothing about a paused stream is visible without this.
    *
    * A NAL unit ends where the next one begins, so the trailing slice always has to wait for more
-   * bytes to prove it is complete. idb also encodes B-frames, so its decoder holds output back until
-   * more input arrives. A gap in that stream is the only available signal that the producer is done,
-   * so it drains both. The native framebuffer, ScreenCaptureKit, and emulator encoders disable frame
-   * reordering; flushing those decoders would instead make WebKit require a new keyframe and reject
-   * the next delta frame. On a moving picture the timer is rearmed long before it can fire.
+   * bytes to prove it is complete. idb also encodes B-frames, and WebCodecs conservatively buffers
+   * the sparse emulator stream because VideoToolbox does not advertise a reorder limit. A gap is the
+   * only available signal that either producer is done, so it drains both. The Android encoder forces
+   * the first frame after an idle gap to be a keyframe because flush() requires one next. Continuous
+   * native iOS streams stay on the low-latency path without a flush.
    */
   armIdleFlush() {
     clearTimeout(this.idleTimer);
@@ -937,7 +1052,7 @@ class AnnexBDecoder {
       this.buffer = new Uint8Array();
       this.handleNal(nal);
     }
-    if (this.source === "idb") this.drainDecoder();
+    if (shouldDrainIdleDecoder(this.source)) this.drainDecoder();
   }
 
   drainDecoder() {
@@ -1006,8 +1121,8 @@ class AnnexBDecoder {
 }
 
 function clearScreen() {
-  elements.canvas.width = 300;
-  elements.canvas.height = 150;
+  elements.canvas.width = 180;
+  elements.canvas.height = 400;
   state.canvasContext = null;
 }
 
@@ -1030,7 +1145,7 @@ function drawVideoFrame(frame) {
     visible.height,
   );
   frame.close();
-  elements.overlay.classList.add("hidden");
+  hideDeviceStatus();
   if (!state.framePainted) {
     state.framePainted = true;
     renderLinkHealth();
@@ -1140,10 +1255,10 @@ function startPngFallback(label) {
       const bitmap = await createImageBitmap(await response.blob());
       drawScreenSource(bitmap, 0, 0, bitmap.width, bitmap.height);
       bitmap.close();
-      elements.overlay.classList.add("hidden");
+      hideDeviceStatus();
       countFrame();
     } catch (error) {
-      showOverlay(error.message);
+      showDeviceStatus("disconnected", { detail: error.message });
     } finally {
       if (
         state.panelVisible
@@ -1177,16 +1292,43 @@ async function lifecycle(action) {
   const label = action === "reveal" ? "Show device window" : formatAction(action);
   if (disruptive) {
     stopStream();
-    showOverlay(`${label} in progress`, { busy: true });
+    const statusKind = action === "boot"
+      ? "booting"
+      : action === "shutdown"
+        ? "shutting-down"
+        : "restarting";
+    const overrides = action === "reveal"
+      ? {
+        eyebrow: "Opening emulator",
+        title: `Opening ${device.name}`,
+        detail: "The emulator will restart in a visible window, then live view will reconnect.",
+      }
+      : {};
+    showDeviceStatus(statusKind, overrides);
   }
 
-  const response = await api(
-    `/api/v1/devices/${encodeURIComponent(device.id)}/${action}`,
-    { method: "POST" },
-  );
-  state.selected = await response.json();
-  await refresh();
-  showToast(`${label} complete`);
+  try {
+    const response = await api(
+      `/api/v1/devices/${encodeURIComponent(device.id)}/${action}`,
+      { method: "POST" },
+    );
+    state.selected = await response.json();
+    await refresh();
+    showToast(`${label} complete`);
+  } catch (error) {
+    if (disruptive) {
+      showDeviceStatus("error", {
+        title: `${label} failed`,
+        detail: error.message || String(error),
+        action: {
+          id: `lifecycle:${action}`,
+          label: "Try again",
+          icon: "#icon-refresh",
+        },
+      });
+    }
+    throw error;
+  }
 }
 
 function sendInput(kind, payload, label = formatAction(kind)) {
@@ -1780,7 +1922,30 @@ elements.canvas.addEventListener("paste", (event) => {
 });
 
 document.querySelector("#refresh-button").addEventListener("click", (event) => {
-  runBusy(event.currentTarget, refresh).catch(showError);
+  runBusy(event.currentTarget, refresh).catch(showCanvasError);
+});
+
+elements.overlayAction.addEventListener("click", () => {
+  runBusy(elements.overlayAction, async () => {
+    const action = elements.overlayAction.dataset.statusAction;
+    if (action === "boot") {
+      await lifecycle("boot");
+      return;
+    }
+    if (action === "retry-stream") {
+      startStream();
+      return;
+    }
+    if (action === "refresh") {
+      await refresh();
+      return;
+    }
+    if (action?.startsWith("lifecycle:")) {
+      await lifecycle(action.slice("lifecycle:".length));
+      return;
+    }
+    throw new Error("This device status has no recovery action.");
+  }).catch(showError);
 });
 
 elements.selector.addEventListener("click", () => {
@@ -1801,11 +1966,18 @@ document.addEventListener("keydown", (event) => {
   if (event.key === "Escape") closeDevicePopover();
 });
 
-for (const button of [document.querySelector("#create-button"), document.querySelector(".empty-create")]) {
-  button.addEventListener("click", () => {
-    closeDevicePopover();
-    elements.createDialog.showModal();
-  });
+document.querySelector("#create-button").addEventListener("click", openCreateDialog);
+elements.emptyAction.addEventListener("click", () => {
+  if (elements.emptyAction.dataset.emptyAction === "create") {
+    openCreateDialog();
+    return;
+  }
+  runBusy(elements.emptyAction, refresh).catch(showCanvasError);
+});
+
+function openCreateDialog() {
+  closeDevicePopover();
+  elements.createDialog.showModal();
 }
 
 document.querySelector("#create-close").addEventListener("click", () => elements.createDialog.close());
@@ -2178,6 +2350,33 @@ function showError(error) {
   showToast(error.message || String(error), true);
 }
 
+function showCanvasError(error) {
+  if (state.selected && !state.detached) {
+    stopStream();
+    showDeviceStatus("error", {
+      title: "Couldn't refresh the device",
+      detail: error.message || String(error),
+      action: { id: "refresh", label: "Refresh devices", icon: "#icon-refresh" },
+    });
+    setStreamMode("offline");
+    setInputStatus("error", "Device unavailable");
+  } else if (!state.detached) {
+    stopStream();
+    endAutomation();
+    elements.view.classList.add("hidden");
+    elements.detached.classList.add("hidden");
+    configureEmptyState({
+      tone: "danger",
+      icon: "#icon-alert",
+      title: "Couldn't load devices",
+      detail: error.message || String(error),
+      action: { id: "refresh", label: "Try again", icon: "#icon-refresh" },
+    });
+    elements.empty.classList.remove("hidden");
+  }
+  showError(error);
+}
+
 function formatAction(value) {
   return String(value)
     .replaceAll("-", " ")
@@ -2250,7 +2449,7 @@ function setPanelVisible(visible) {
         connectAutomationEvents();
       },
     }).catch((error) => {
-      if (isActive()) showError(error);
+      if (isActive()) showCanvasError(error);
     });
   }
 }
@@ -2260,7 +2459,7 @@ transport?.onVisibilityChanged?.(setPanelVisible);
 let transportRefresh = Promise.resolve();
 transport?.onRefreshRequested?.(() => {
   if (!state.detached) {
-    transportRefresh = transportRefresh.then(refresh).catch(showError);
+    transportRefresh = transportRefresh.then(refresh).catch(showCanvasError);
   }
 });
 transport?.onAutomationRequested?.((activity) => {
@@ -2293,4 +2492,4 @@ function findStartCodes(bytes) {
 bootstrap()
   .then(refresh)
   .then(connectAutomationEvents)
-  .catch(showError);
+  .catch(showCanvasError);

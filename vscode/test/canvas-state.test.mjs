@@ -1,12 +1,77 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import {
+  canBootDeviceState,
   clearStoredDeviceId,
+  deviceStatusPresentation,
+  formatDeviceState,
   organizeDiagnostics,
   readStoredDeviceId,
   resumeAuthenticatedPanel,
+  shouldDrainIdleDecoder,
   storeDeviceId,
 } from "../../web/canvas-state.js";
+
+test("drains codecs whose streams can stop with buffered frames", () => {
+  assert.equal(shouldDrainIdleDecoder("idb"), true);
+  assert.equal(shouldDrainIdleDecoder("emulator-grpc"), true);
+  assert.equal(shouldDrainIdleDecoder("framebuffer"), false);
+  assert.equal(shouldDrainIdleDecoder("screencapturekit"), false);
+});
+
+test("boots stable non-running states but not lifecycle transitions", () => {
+  assert.equal(canBootDeviceState("shutdown"), true);
+  assert.equal(canBootDeviceState("unknown"), true);
+  assert.equal(canBootDeviceState(undefined), true);
+  assert.equal(canBootDeviceState("booted"), false);
+  assert.equal(canBootDeviceState("booting"), false);
+  assert.equal(canBootDeviceState("shutting-down"), false);
+});
+
+test("presents readable device state labels", () => {
+  assert.equal(formatDeviceState("booted"), "Running");
+  assert.equal(formatDeviceState("shutdown"), "Powered off");
+  assert.equal(formatDeviceState("shutting-down"), "Powering off");
+  assert.equal(formatDeviceState("waiting-for-host"), "Waiting For Host");
+});
+
+test("presents actionable and progress device states", () => {
+  const offline = deviceStatusPresentation("offline", {
+    deviceName: "Pixel 6",
+    platform: "android",
+  });
+  assert.equal(offline.title, "Emulator is powered off");
+  assert.match(offline.detail, /Pixel 6/);
+  assert.deepEqual(offline.action, {
+    id: "boot",
+    label: "Start emulator",
+    icon: "#icon-play",
+  });
+
+  const connecting = deviceStatusPresentation("connecting", {
+    deviceName: "iPhone 16 Pro",
+    platform: "ios",
+  });
+  assert.equal(connecting.busy, true);
+  assert.equal(connecting.action, undefined);
+  assert.match(connecting.title, /iPhone 16 Pro/);
+
+  const disconnected = deviceStatusPresentation("disconnected", {
+    platform: "ios",
+    detail: "The stream closed unexpectedly.",
+  });
+  assert.equal(disconnected.tone, "warning");
+  assert.equal(disconnected.detail, "The stream closed unexpectedly.");
+  assert.equal(disconnected.action.id, "retry-stream");
+});
+
+test("falls back to a recoverable unavailable device state", () => {
+  const unavailable = deviceStatusPresentation("future-backend-state", {
+    platform: "android",
+  });
+  assert.equal(unavailable.title, "Emulator isn't available");
+  assert.equal(unavailable.action.id, "refresh");
+});
 
 test("persists and clears the selected device used after a host restart", () => {
   const values = new Map();

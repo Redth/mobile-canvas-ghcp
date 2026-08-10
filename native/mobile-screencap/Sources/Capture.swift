@@ -115,11 +115,14 @@ final class H264Encoder: @unchecked Sendable {
 		VTSessionSetProperty(session, key: key, value: value)
 	}
 
-	func encode(_ pixelBuffer: CVPixelBuffer) {
+	func encode(_ pixelBuffer: CVPixelBuffer, forceKeyFrame: Bool = false) {
 		guard let session else { return }
 		let timescale = CMTimeScale(options.framesPerSecond * 1000)
 		let pts = CMTime(value: frameIndex * 1000, timescale: timescale)
 		let duration = CMTime(value: 1000, timescale: timescale)
+		let frameProperties = forceKeyFrame
+			? [kVTEncodeFrameOptionKey_ForceKeyFrame: true] as CFDictionary
+			: nil
 		frameIndex += 1
 
 		VTCompressionSessionEncodeFrame(
@@ -127,7 +130,7 @@ final class H264Encoder: @unchecked Sendable {
 			imageBuffer: pixelBuffer,
 			presentationTimeStamp: pts,
 			duration: duration,
-			frameProperties: nil,
+			frameProperties: frameProperties,
 			infoFlagsOut: nil
 		) { [weak self] status, _, sampleBuffer in
 			guard status == noErr, let sampleBuffer else { return }
