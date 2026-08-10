@@ -3,12 +3,12 @@
     "darwin-arm64": {
       "rid": "osx-arm64",
       "executable": "mobile-canvas",
-      "id": "56f6df949b02ab55f425123eca4775f9e4b047fa65c46191933b6b3461bb5efd",
+      "id": "6fb1d491f6fc03d4b0d4bfbfe79e0b6006209524c9e04eb64e77469f51691964",
       "files": {
         "mobile-canvas": {
           "archive": "osx-arm64/mobile-canvas.gz",
-          "sha256": "56f6df949b02ab55f425123eca4775f9e4b047fa65c46191933b6b3461bb5efd",
-          "size": 31945440
+          "sha256": "6fb1d491f6fc03d4b0d4bfbfe79e0b6006209524c9e04eb64e77469f51691964",
+          "size": 31945456
         },
         "mobile-screencap": {
           "archive": "osx-arm64/mobile-screencap.gz",
@@ -20,11 +20,11 @@
     "darwin-x64": {
       "rid": "osx-x64",
       "executable": "mobile-canvas",
-      "id": "93c0da16c18003183fb6811bde5cbc163225bbd065bc8b518999045596942ee0",
+      "id": "0dbe8b44c171a6f51f8dc9186f5e32d2f9d70745e0b8f6f3bb7be474ff0e4005",
       "files": {
         "mobile-canvas": {
           "archive": "osx-x64/mobile-canvas.gz",
-          "sha256": "93c0da16c18003183fb6811bde5cbc163225bbd065bc8b518999045596942ee0",
+          "sha256": "0dbe8b44c171a6f51f8dc9186f5e32d2f9d70745e0b8f6f3bb7be474ff0e4005",
           "size": 33695592
         },
         "mobile-screencap": {
@@ -37,35 +37,35 @@
     "linux-arm64": {
       "rid": "linux-arm64",
       "executable": "mobile-canvas",
-      "id": "f4f6bf567e1f01eff8bf0958efe9d47b193a9474ebaa8688e2da0e02e39e5636",
+      "id": "4dd23750048520a7b31856b0a6766625672ee87c0f162847be04279199c3d82f",
       "files": {
         "mobile-canvas": {
           "archive": "linux-arm64/mobile-canvas.gz",
-          "sha256": "f4f6bf567e1f01eff8bf0958efe9d47b193a9474ebaa8688e2da0e02e39e5636",
-          "size": 34084608
+          "sha256": "4dd23750048520a7b31856b0a6766625672ee87c0f162847be04279199c3d82f",
+          "size": 34084624
         }
       }
     },
     "linux-x64": {
       "rid": "linux-x64",
       "executable": "mobile-canvas",
-      "id": "2a13114b03d7c14ef4327fada52469e14b6574ef8bf0a59d47e87586fa753bce",
+      "id": "b449de88779ca300a3e2c1c9ad9ad7489e1d4989e8d077f27f4571d4e7010aba",
       "files": {
         "mobile-canvas": {
           "archive": "linux-x64/mobile-canvas.gz",
-          "sha256": "2a13114b03d7c14ef4327fada52469e14b6574ef8bf0a59d47e87586fa753bce",
-          "size": 33375760
+          "sha256": "b449de88779ca300a3e2c1c9ad9ad7489e1d4989e8d077f27f4571d4e7010aba",
+          "size": 33375776
         }
       }
     },
     "win32-arm64": {
       "rid": "win-arm64",
       "executable": "mobile-canvas.exe",
-      "id": "e066ff8eba2d9a643dd3e3d5bfe23c1a2e99f5642937a276f768f5d8ac62dcad",
+      "id": "98e6c908598f42d7d93d3a7a56d2587a2a739d2e6042e65050e4aae92e79b1fd",
       "files": {
         "mobile-canvas.exe": {
           "archive": "win-arm64/mobile-canvas.exe.gz",
-          "sha256": "e066ff8eba2d9a643dd3e3d5bfe23c1a2e99f5642937a276f768f5d8ac62dcad",
+          "sha256": "98e6c908598f42d7d93d3a7a56d2587a2a739d2e6042e65050e4aae92e79b1fd",
           "size": 37666816
         }
       }
@@ -73,20 +73,20 @@
     "win32-x64": {
       "rid": "win-x64",
       "executable": "mobile-canvas.exe",
-      "id": "509bd48ec4e7a79ea4998452ca257fd0f1af579d1da5a54fd022d801dbd1d7d2",
+      "id": "d9ec0685c4f8392b18ca767202a72943de71cbf7aba599622f59ebf14d8cd437",
       "files": {
         "mobile-canvas.exe": {
           "archive": "win-x64/mobile-canvas.exe.gz",
-          "sha256": "509bd48ec4e7a79ea4998452ca257fd0f1af579d1da5a54fd022d801dbd1d7d2",
-          "size": 36985344
+          "sha256": "d9ec0685c4f8392b18ca767202a72943de71cbf7aba599622f59ebf14d8cd437",
+          "size": 36985856
         }
       }
     }
   },
-  "version": "0.1.10",
+  "version": "0.1.11",
   "distribution": {
     "repository": "Redth/mobile-canvas-ghcp",
-    "tag": "v0.1.10"
+    "tag": "v0.1.11"
   },
-  "sourceHash": "d207bc6b66d732e820636d436465e2bed365a2e602b241564e90a2ea4ff8f96e"
+  "sourceHash": "3bcfd13c1dbd188b2cccbad60a178ec143452cf639fd693eb2fb241d83fc1405"
 }
