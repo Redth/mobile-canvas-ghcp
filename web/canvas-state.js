@@ -19,9 +19,12 @@ export function clearStoredDeviceId(storage, instanceId) {
 export async function resumeAuthenticatedPanel({
   authenticate,
   isActive,
+  refresh = async () => {},
   resume,
 }) {
   await authenticate();
+  if (!isActive()) return false;
+  await refresh();
   if (!isActive()) return false;
   resume();
   return true;

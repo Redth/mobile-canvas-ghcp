@@ -590,7 +590,15 @@ public sealed partial class AndroidEmulatorBackend : IDeviceBackend, IAsyncDispo
 		CancellationToken cancellationToken = default)
 	{
 		var avdId = DeviceIdentity.GetNativeId(deviceId);
-		if (FindRunning(avdId) is not null)
+		var instance = FindRunning(avdId);
+		if (instance?.IsHeadless == false)
+		{
+			await WaitForBootAsync(avdId, cancellationToken).ConfigureAwait(false);
+			InvalidateCache(avdId);
+			return await GetDeviceAsync(deviceId, cancellationToken).ConfigureAwait(false);
+		}
+
+		if (instance is not null)
 			await ShutdownAsync(deviceId, cancellationToken).ConfigureAwait(false);
 
 		await LaunchEmulatorAsync(

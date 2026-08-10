@@ -25,6 +25,17 @@ internal sealed record EmulatorInstance
 	public bool HasGrpc => GrpcPort > 0;
 
 	/// <summary>
+	/// Whether the process was launched without a native emulator window. Null means the discovery
+	/// file did not record a command line, so callers cannot safely assume either mode.
+	/// </summary>
+	public bool? IsHeadless =>
+		CommandLine is { Length: > 0 } commandLine
+			? commandLine
+				.Split([' ', '\t'], StringSplitOptions.RemoveEmptyEntries)
+				.Any(argument => argument.Trim('"').Equals("-no-window", StringComparison.OrdinalIgnoreCase))
+			: null;
+
+	/// <summary>
 	/// Whether the emulator was launched with host GPU acceleration. Software rendering drops
 	/// <c>streamScreenshot</c> from ~50 FPS to ~3 FPS, so this is surfaced as a diagnostic rather
 	/// than left to look like a bug in the stream.
