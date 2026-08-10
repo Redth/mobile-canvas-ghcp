@@ -183,6 +183,7 @@ jobs:
       - name: Verify
         run: |
           node scripts/verify-bundle.mjs
+          node scripts/smoke-runtime.mjs
           dotnet test MobileCanvas.slnx -c Release
 
       - name: Package runtime release assets

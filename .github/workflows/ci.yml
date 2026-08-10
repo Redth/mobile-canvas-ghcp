@@ -46,7 +46,9 @@ jobs:
       # The bundled binaries are what a plugin install actually runs, so a
       # corrupt or mismatched archive is a shipping bug, not a packaging detail.
       - name: Verify bundled runtimes
-        run: node scripts/verify-bundle.mjs
+        run: |
+          node scripts/verify-bundle.mjs
+          node scripts/smoke-runtime.mjs
 
       # Catches runtimes/ drifting behind src/, which would leave a plugin
       # install running a stale binary. It compares a hash of the source the
