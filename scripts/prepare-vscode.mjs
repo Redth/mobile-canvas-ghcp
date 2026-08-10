@@ -3,7 +3,7 @@
 import { cpSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { runtimeAssetName, runtimeRelease } from "../lib/runtime-assets.mjs";
+import { remoteRuntimeManifest } from "../lib/runtime-assets.mjs";
 
 const root = join(dirname(fileURLToPath(import.meta.url)), "..");
 const extensionRoot = join(root, "vscode");
@@ -30,14 +30,7 @@ mkdirSync(output, { recursive: true });
 cpSync(join(root, "web"), join(output, "web"), { recursive: true });
 
 if (thin) {
-  const remoteManifest = structuredClone(runtimeManifest);
-  remoteManifest.distribution = runtimeRelease(remoteManifest);
-  for (const entry of Object.values(remoteManifest.runtimes ?? {})) {
-    for (const [fileName, file] of Object.entries(entry.files ?? {})) {
-      file.asset = runtimeAssetName(remoteManifest, entry, fileName);
-      delete file.archive;
-    }
-  }
+  const remoteManifest = remoteRuntimeManifest(runtimeManifest);
   mkdirSync(join(output, "runtimes"), { recursive: true });
   writeFileSync(
     join(output, "runtimes", "manifest.json"),
@@ -61,6 +54,11 @@ if (thin) {
     `${JSON.stringify(filteredManifest, null, 2)}\n`,
   );
   for (const file of Object.values(entry.files ?? {})) {
+    if (!file.archive) {
+      throw new Error(
+        `cannot package ${target}: its runtime is remote-only; build the release runtimes first`,
+      );
+    }
     const destination = join(output, "runtimes", file.archive);
     mkdirSync(dirname(destination), { recursive: true });
     cpSync(join(root, "runtimes", file.archive), destination);

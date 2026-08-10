@@ -43,23 +43,20 @@ jobs:
           npm run package:plugin
           node scripts/verify-plugin.mjs .build/copilot-plugin/mobile-canvas
 
-      # The bundled binaries are what a plugin install actually runs, so a
-      # corrupt or mismatched archive is a shipping bug, not a packaging detail.
-      - name: Verify bundled runtimes
+      - name: Verify runtime manifest
         run: |
           node scripts/verify-bundle.mjs
           node scripts/smoke-runtime.mjs
 
-      # Catches runtimes/ drifting behind src/, which would leave a plugin
-      # install running a stale binary. It compares a hash of the source the
-      # bundle was built from rather than rebuilding and diffing the result:
+      # Catches the published runtimes drifting behind src/. It compares a hash
+      # of the source the release was built from rather than rebuilding:
       # Native AOT is not bit-reproducible, so a rebuild of unchanged source
       # differs anyway, and a check that fires every time hides real drift.
-      - name: Check the bundle matches source
+      - name: Check published runtimes match source
         run: |
           node -e '
             const m = require("./runtimes/manifest.json");
-            console.log("bundled:", Object.keys(m.runtimes).join(", "));
+            console.log("published:", Object.keys(m.runtimes).join(", "));
           '
           node scripts/source-hash.mjs --check
 
@@ -72,9 +69,6 @@ jobs:
       - name: Package VS Code extension
         run: npm run package --prefix vscode
 
-      - name: Package platform-specific VS Code extensions
-        run: npm run package:targets --prefix vscode
-
       - uses: actions/upload-artifact@v4
         with:
           name: mobile-canvas-copilot-plugin-${{ github.sha }}
@@ -86,12 +80,5 @@ jobs:
         with:
           name: mobile-canvas-vscode-universal-${{ github.sha }}
           path: .build/mobile-canvas-vscode.vsix
-          include-hidden-files: true
-          if-no-files-found: error
-
-      - uses: actions/upload-artifact@v4
-        with:
-          name: mobile-canvas-vscode-platforms-${{ github.sha }}
-          path: .build/mobile-canvas-vscode-*.vsix
           include-hidden-files: true
           if-no-files-found: error

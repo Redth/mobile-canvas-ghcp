@@ -214,6 +214,8 @@ your app to that exact device → drive it with the input tools.
 
 ## VS Code integration
 
+The Marketplace installs a self-contained package on supported desktop targets;
+the universal fallback downloads and verifies its pinned runtime on first use.
 Agent actions select and animate the same device in the live Activity Bar view.
 The view follows the active VS Code theme while preserving the GitHub canvas
 appearance elsewhere. Attach the selected device, a fresh screenshot, or its
@@ -274,7 +276,7 @@ npm ci --prefix vscode --ignore-scripts
 npm test --prefix vscode
 npm run package --prefix vscode
 ./scripts/build.sh          # builds one architecture into .build/bin/<rid>
-./scripts/release.sh        # rebuilds every shipped arch and refreshes runtimes/
+./scripts/release.sh        # rebuilds macOS release assets for local validation
 ```
 
 Two things to know before you change anything:
