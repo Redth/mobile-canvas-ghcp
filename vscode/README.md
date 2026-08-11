@@ -1,45 +1,78 @@
-# Mobile Canvas for VS Code
+# Mobile Canvas
 
-Mobile Canvas adds a live iOS Simulator and Android emulator view to the VS Code
-Activity Bar. It also registers the bundled Mobile Canvas MCP server with
-Copilot Chat, so the editor and agent operate on the same local device.
+**Build, run, and test mobile apps without leaving VS Code.**
 
-## Install
+Mobile Canvas puts a live iOS Simulator or Android emulator in the Activity Bar.
+Control it yourself with mouse and keyboard input, or let GitHub Copilot boot,
+inspect, and drive the same device while you watch.
 
-Download `mobile-canvas-vscode.vsix` from the CI artifact for a release or pull
-request, then run:
+![Mobile Canvas showing live iOS and Android devices side by side](https://raw.githubusercontent.com/Redth/mobile-canvas-ghcp/main/assets/preview.png)
 
-```bash
-code --install-extension mobile-canvas-vscode.vsix
+## Your device lab, inside the editor
+
+- **See your app live.** Stream smooth H.264 video where supported, with automatic
+  screenshot polling everywhere else.
+- **Interact naturally.** Tap, drag, swipe, scroll, type, rotate, press device
+  buttons, capture screenshots, and record video.
+- **Manage the full lifecycle.** Discover, create, boot, restart, reveal, erase,
+  and delete local simulators and emulators from one view.
+- **Stay in your workspace.** Mobile Canvas runs locally even when your code is
+  open through Remote SSH, Dev Containers, or Codespaces.
+
+## Give Copilot hands and eyes
+
+Mobile Canvas automatically registers its device tools with Copilot Chat. Ask
+an agent to reproduce a bug, navigate a flow, capture evidence, or check the
+accessibility hierarchy without wiring up an MCP server yourself.
+
+```text
+Boot an iPhone simulator, install my app, and walk through sign in.
+Find the Settings button on the Android emulator and tap it.
+Take a screenshot of the current screen and describe any layout issues.
 ```
 
-Reload VS Code and open **Mobile** from the Activity Bar. No separate
-Mobile Canvas or .NET tool installation is required.
+Agent actions select the same device shown in the Activity Bar. An animated
+cursor and accent glow make automation visible, so you can follow every action
+and take over at any time.
 
-## Features
+<table>
+  <tr>
+    <td width="50%"><img src="https://raw.githubusercontent.com/Redth/mobile-canvas-ghcp/main/assets/agent-ios.png" alt="Copilot interacting with an iOS Simulator in Mobile Canvas"></td>
+    <td width="50%"><img src="https://raw.githubusercontent.com/Redth/mobile-canvas-ghcp/main/assets/agent-android.png" alt="Copilot interacting with an Android emulator in Mobile Canvas"></td>
+  </tr>
+</table>
 
-- Live H.264 video where supported, with PNG polling as a fallback.
-- Pointer, keyboard, lifecycle, screenshot, and recording controls.
-- Automatic `mobile_device_*` tool registration in Copilot Chat.
-- Attachable `#mobileDevice`, `#mobileScreenshot`, and `#mobileUiTree` chat tools
-  for the device selected in the Mobile view.
-- MCP actions automatically select the device shown in the VS Code view.
-- Live VS Code theme colors and a view title that follows the selected device.
-- Bundled native runtimes for macOS, Windows, and Linux.
+## Bring the selected device into chat
 
-The extension runs in the local UI extension host, including while the current
-workspace is remote. It is not supported in `vscode.dev`.
+Attach live device context to a prompt with built-in chat references:
 
-## Platform requirements
+| Reference | Adds to your prompt |
+|---|---|
+| `#mobileDevice` | The selected device record and deployment identifier |
+| `#mobileScreenshot` | A fresh screenshot from the selected device |
+| `#mobileUiTree` | The current accessibility hierarchy |
 
-- iOS requires macOS, Xcode Simulator runtimes, and `idb_companion`.
-- Android requires the Android SDK tools and `adb` on `PATH`.
-- macOS may request Screen Recording and Accessibility permission for live iOS
-  video and input.
+## Local by design
 
-All host traffic remains on loopback. The webview receives neither the host
-control token nor its authenticated cookie; VS Code's extension host relays the
-local HTTP and WebSocket traffic.
+Device control, video, and screenshots stay on your machine. All host traffic
+uses authenticated loopback connections, and the webview never receives the
+host control token or authenticated cookie.
 
-See the [project documentation](https://github.com/Redth/mobile-canvas-ghcp/blob/main/docs/vscode.md)
-for development, troubleshooting, and manual MCP setup.
+Native runtimes are included for macOS, Windows, and Linux. There is no separate
+Mobile Canvas or .NET tool to install.
+
+## Requirements
+
+| Platform | What you need |
+|---|---|
+| iOS | macOS, Xcode with Simulator runtimes, and [`idb_companion`](https://fbidb.io) for input |
+| Android | Android SDK tools and `adb` on `PATH` |
+
+VS Code 1.101 or newer is required. Browser-hosted `vscode.dev` is not supported
+because it cannot launch local native runtimes.
+
+[Documentation](https://github.com/Redth/mobile-canvas-ghcp/blob/main/docs/vscode.md)
+&nbsp;·&nbsp;
+[Source code](https://github.com/Redth/mobile-canvas-ghcp)
+&nbsp;·&nbsp;
+[Report an issue](https://github.com/Redth/mobile-canvas-ghcp/issues)

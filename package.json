@@ -1,7 +1,7 @@
 {
   "name": "mobile-canvas",
   "version": "0.1.12",
-  "description": "View, create, boot, and interact with local iOS simulators and Android emulators from a GitHub Copilot canvas.",
+  "description": "Run and control local iOS Simulators and Android emulators in a live Copilot canvas, with agent-ready device automation.",
   "main": "extension.mjs",
   "type": "module",
   "license": "MIT",
@@ -14,7 +14,9 @@
     "copilot-canvas",
     "canvas",
     "mobile",
-    "device-control"
+    "device-control",
+    "mobile-testing",
+    "device-automation"
   ],
   "scripts": {
     "icons": "node scripts/generate-icons.mjs",

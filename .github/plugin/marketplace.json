@@ -1,7 +1,7 @@
 {
   "name": "mobile-canvas-ghcp",
   "metadata": {
-    "description": "Mobile device canvas for GitHub Copilot.",
+    "description": "Live iOS and Android device control for developers and Copilot agents.",
     "version": "1.0.0"
   },
   "owner": {
@@ -11,7 +11,7 @@
   "plugins": [
     {
       "name": "mobile-canvas",
-      "description": "View, create, boot, and interact with local iOS simulators and Android emulators in a Copilot canvas.",
+      "description": "Run and control local iOS Simulators and Android emulators in a live Copilot canvas, with agent-ready device automation.",
       "version": "0.1.12",
       "author": {
         "name": "Jonathan Dick",
@@ -28,6 +28,8 @@
         "canvas",
         "mobile",
         "device-control",
+        "mobile-testing",
+        "device-automation",
         "mcp"
       ],
       "source": "."

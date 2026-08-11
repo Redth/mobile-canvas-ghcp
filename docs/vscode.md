@@ -4,13 +4,17 @@ The Mobile Canvas VS Code extension provides the live device view and registers
 the same MCP tools used by the GitHub Copilot canvas. It is self-contained: the
 VSIX includes the web UI and every supported native runtime.
 
-## Install the VSIX
+## Install
 
-The first distribution is CI-built VSIX packages rather than a Marketplace
-listing. Download the `mobile-canvas-vscode-platforms-*` artifact from a
-successful GitHub Actions run and select the VSIX matching the machine where the
-extension host runs. A larger `mobile-canvas-vscode-universal-*` artifact is also
-available. Install the selected VSIX with either:
+Install **Mobile Canvas** from the
+[Visual Studio Marketplace](https://marketplace.visualstudio.com/items?itemName=redth.mobile-canvas)
+or search for it in the VS Code Extensions view. The Marketplace selects the
+package matching the machine where the extension host runs.
+
+For prerelease testing, download the `mobile-canvas-vscode-platforms-*` artifact
+from a successful GitHub Actions run and select the matching VSIX. A larger
+`mobile-canvas-vscode-universal-*` artifact is also available. Install it with
+either:
 
 ```bash
 code --install-extension mobile-canvas-vscode.vsix
