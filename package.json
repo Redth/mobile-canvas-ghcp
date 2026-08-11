@@ -17,6 +17,7 @@
     "device-control"
   ],
   "scripts": {
+    "icons": "node scripts/generate-icons.mjs",
     "package:plugin": "node scripts/prepare-plugin.mjs",
     "package:plugin:thin": "node scripts/prepare-plugin.mjs --thin",
     "package:runtimes": "node scripts/package-runtime-assets.mjs"

@@ -5,6 +5,7 @@
   "version": "0.1.11",
   "publisher": "redth",
   "license": "MIT",
+  "icon": "media/icon.png",
   "repository": {
     "type": "git",
     "url": "https://github.com/Redth/mobile-canvas-ghcp"

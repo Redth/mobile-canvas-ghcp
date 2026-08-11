@@ -119,6 +119,17 @@ files, version agreement, local UI extension placement, and the absence of test
 and source-map files. Successful CI runs upload the Copilot plugin directory,
 the universal VSIX, and all six target-specific VSIXs as separate artifacts.
 
+### Icons
+
+`assets/icon.svg` is the only hand-drawn icon artwork. `npm run icons` renders it
+into the 128 px shared canvas icon at `assets/icon.png`, the byte-identical
+plugin copy at `extensions/mobile-canvas/assets/icon.png` that
+`scripts/verify-plugin.mjs` compares, and the 256 px Marketplace icon at
+`vscode/media/icon.png` that `vscode/package.json` declares and
+`scripts/verify-vsix.mjs` requires. Rendering uses `rsvg-convert` from librsvg.
+`vscode/media/activitybar.svg` is the hand-maintained monochrome `currentColor`
+version of the same mark, because the activity bar tints the icon itself.
+
 ### Why the cache is content-addressed
 
 The directory name embeds the executable's own SHA-256. A rebuilt binary
