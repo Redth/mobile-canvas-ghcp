@@ -43,6 +43,7 @@ function verifyExtracted(directory) {
     "extension/package.json",
     "extension/out/extension.js",
     "extension/media/activitybar.svg",
+    "extension/media/icon.png",
     "extension/media/vscode-theme.css",
     "extension/media/vscode-theme.js",
     "extension/media/vscode-transport.js",
@@ -92,6 +93,9 @@ function verifyExtracted(directory) {
   }
   if (!extensionPackage.extensionKind?.includes("ui")) {
     throw new Error("VSIX must run in the local UI extension host.");
+  }
+  if (extensionPackage.icon !== "media/icon.png") {
+    throw new Error("VSIX must declare the marketplace icon at media/icon.png.");
   }
   for (const name of [
     "mobileCanvas_selectedDevice",
