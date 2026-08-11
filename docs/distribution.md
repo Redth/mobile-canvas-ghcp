@@ -278,13 +278,63 @@ artifact cannot contain its own hash. Expect it to trail `git log` by one.
 4. CI packages bundled and thin Copilot plugins, bundled and thin universal
    VSIXs, and up to six target VSIXs.
 5. A `v*` tag publishes every file to the corresponding GitHub Release.
-6. A manual run can still open a PR refreshing the compatibility bundle.
+6. A `v*` tag then publishes the VS Code extension to the Marketplace.
+7. A manual run can still open a PR refreshing the compatibility bundle.
 
 Before merging a distribution change, manually dispatch the workflow with a new
 numeric `version`, a unique `prerelease_tag` matching `v*-rc.*`, and `commit`
 disabled. This creates an isolated GitHub prerelease from the branch so the thin
 Copilot plugin and thin VSIX can be installed against real release URLs. Delete
 the prerelease and tag after the smoke test.
+
+### Publishing to the VS Code Marketplace
+
+The `publish-vscode` job publishes `scripts/publish-vscode.mjs`, which uploads
+the six target VSIXs plus the **thin** universal VSIX built by the same run. The
+Marketplace serves each target package to the platform it matches and falls back
+to the package carrying no target, so the thin package is what reaches
+`linux-armhf`, Alpine, and the web — the bundled universal VSIX is not published
+because a version may carry only one untargeted package, and a 73 MiB download
+containing five unusable runtimes is a worse default than a first-use fetch.
+
+The job authenticates as an Entra ID workload identity rather than a personal
+access token, because Azure DevOps retires global PATs on 1 December 2026. Set
+three values in a `vscode-marketplace` environment — `AZURE_CLIENT_ID`,
+`AZURE_TENANT_ID`, and `AZURE_SUBSCRIPTION_ID` — for a user-assigned managed
+identity holding a federated credential that trusts this repository. Using an
+environment rather than repository secrets also allows a required reviewer on
+the publish without gating the rest of the release.
+
+Two details are easy to get wrong. The federated credential's **subject must be
+`repo:Redth/mobile-canvas-ghcp:environment:vscode-marketplace`**, because naming
+an environment is what GitHub puts in the token's subject — a credential scoped
+to a branch ref will not match. And the identity must be a **Contributor member
+of the `redth` publisher**, which is keyed on its *Azure DevOps profile id*, not
+its Entra client id. Run the **Marketplace identity** workflow to read that
+profile id; it signs in exactly as the release does and reports whether the
+identity can publish yet, so it is also the fastest way to tell a broken
+credential from a missing membership without cutting a release.
+
+`azure/login` does the OIDC exchange rather than the token being handed to
+`vsce` directly, because `vsce` resolves credentials through a chain that
+contains no workload-identity link. What it does contain is the Azure CLI, so
+signing the CLI in is what makes `vsce publish --azure-credential` work.
+`VSCE_PAT` still takes precedence if it is set, which keeps a local publish
+possible until PATs are gone.
+
+The job is skipped for `v*-rc.*` prereleases because the Marketplace accepts
+only `major.minor.patch` — semver prerelease tags are rejected — and
+`publish-vscode.mjs` fails with that explanation rather than letting `vsce`
+reject the upload after some targets have already shipped. Re-running the job is
+safe: it asks `vsce show` which version and target pairs already exist and
+publishes only the remainder, which is also how a partially failed publish
+recovers.
+
+`scripts/verify-vsix.mjs` enforces the Marketplace's image rules at packaging
+time: the icon and any badge may not be an SVG, and readme images must be
+non-SVG `https` URLs. The rules cover only the manifest icon, badges, and readme
+images, which is why `vscode/media/activitybar.svg` stays an SVG — a contributed
+icon is exempt, and the activity bar needs to tint it.
 
 `scripts/verify-bundle.mjs` checks every local archive on any host. CI also
 warns when the manifest source hash has drifted behind `src/`.

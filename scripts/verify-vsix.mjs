@@ -1,18 +1,9 @@
 #!/usr/bin/env node
 
-import { execFileSync } from "node:child_process";
-import {
-  copyFileSync,
-  existsSync,
-  mkdtempSync,
-  readFileSync,
-  readdirSync,
-  rmSync,
-  statSync,
-} from "node:fs";
-import { tmpdir } from "node:os";
-import { dirname, join, relative, resolve, sep } from "node:path";
+import { existsSync, readFileSync, statSync } from "node:fs";
+import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
+import { listFiles, verifyPublishableImages, withVsix } from "./vsix.mjs";
 
 const root = join(dirname(fileURLToPath(import.meta.url)), "..");
 const vsix = resolve(process.argv[2] ?? join(root, ".build", "mobile-canvas-vscode.vsix"));
@@ -21,13 +12,7 @@ if (!existsSync(vsix)) {
   throw new Error(`VSIX does not exist: ${vsix}`);
 }
 
-const extracted = mkdtempSync(join(tmpdir(), "mobile-canvas-vsix-"));
-try {
-  extractVsix(vsix, extracted);
-  verifyExtracted(extracted);
-} finally {
-  rmSync(extracted, { recursive: true, force: true });
-}
+withVsix(vsix, verifyExtracted);
 
 function verifyExtracted(directory) {
   const entries = new Set(listFiles(directory));
@@ -97,6 +82,7 @@ function verifyExtracted(directory) {
   if (extensionPackage.icon !== "media/icon.png") {
     throw new Error("VSIX must declare the marketplace icon at media/icon.png.");
   }
+  verifyPublishableImages(extensionPackage, readEntry("extension/readme.md"));
   for (const name of [
     "mobileCanvas_selectedDevice",
     "mobileCanvas_screenshot",
@@ -121,45 +107,4 @@ function verifyExtracted(directory) {
   );
 }
 
-function extractVsix(source, destination) {
-  if (process.platform === "win32") {
-    const archive = join(destination, "mobile-canvas-vsix.zip");
-    copyFileSync(source, archive);
-    try {
-      execFileSync(
-        "powershell.exe",
-        [
-          "-NoLogo",
-          "-NoProfile",
-          "-NonInteractive",
-          "-Command",
-          "Expand-Archive -LiteralPath $env:MC_VSIX -DestinationPath $env:MC_DEST -Force",
-        ],
-        {
-          env: { ...process.env, MC_VSIX: archive, MC_DEST: destination },
-          stdio: "inherit",
-        },
-      );
-    } finally {
-      rmSync(archive, { force: true });
-    }
-    return;
-  }
-  execFileSync("unzip", ["-q", source, "-d", destination]);
-}
 
-function listFiles(rootDirectory) {
-  const files = [];
-  const visit = (directory) => {
-    for (const entry of readdirSync(directory, { withFileTypes: true })) {
-      const path = join(directory, entry.name);
-      if (entry.isDirectory()) {
-        visit(path);
-      } else if (entry.isFile()) {
-        files.push(relative(rootDirectory, path).split(sep).join("/"));
-      }
-    }
-  };
-  visit(rootDirectory);
-  return files;
-}

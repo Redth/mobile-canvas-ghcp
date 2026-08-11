@@ -1,0 +1,92 @@
+# Reports who the Marketplace sees when the release workflow signs in, and
+# whether that identity is allowed to publish.
+#
+# Authorising the identity is a chicken-and-egg problem: a Marketplace publisher
+# grants access to an Azure DevOps profile id, and the only way to learn an
+# identity's profile id is to ask Azure DevOps while authenticated as it. That
+# needs a workflow, because the federated credential only trusts GitHub. So this
+# runs the lookup and prints the id to paste into the publisher's member list.
+#
+# It stays useful after that one-time setup: it is the same sign-in the release
+# uses, in the same environment, so it answers "is publishing broken because of
+# credentials?" without cutting a release to find out.
+name: Marketplace identity
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  id-token: write
+
+jobs:
+  identity:
+    name: Who can publish
+    runs-on: ubuntu-latest
+    # Must match the release job: an environment changes the subject GitHub puts
+    # in the OIDC token, so signing in from anywhere else would prove nothing
+    # about whether the release can sign in.
+    environment: vscode-marketplace
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: vscode/package-lock.json
+
+      - name: Install vsce
+        run: npm ci --prefix vscode --ignore-scripts
+
+      - name: Sign in to Azure
+        uses: azure/login@v2
+        with:
+          client-id: ${{ secrets.AZURE_CLIENT_ID }}
+          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+
+      # 499b84ac-1321-427f-aa17-267ca6975798 is Azure DevOps. The profile id it
+      # returns is the identity's name in Marketplace terms, and is what the
+      # publisher's member list is keyed on -- the Entra client id is not.
+      - name: Look up the Azure DevOps profile
+        id: profile
+        run: |
+          profile=$(az rest \
+            --url https://app.vssps.visualstudio.com/_apis/profile/profiles/me \
+            --resource 499b84ac-1321-427f-aa17-267ca6975798)
+          echo "$profile"
+          echo "id=$(echo "$profile" | jq -r .id)" >> "$GITHUB_OUTPUT"
+
+      # Reads the publisher's role assignments, which answers a different
+      # question than signing in did: the sign-in proves the identity exists,
+      # this proves the publisher has let it in. Not fatal, because reporting
+      # that it has not is the whole point of running this before setup.
+      - name: Check publish access
+        id: access
+        continue-on-error: true
+        run: npm exec --prefix vscode -- vsce verify-pat redth --azure-credential
+        env:
+          AZURE_TENANT_ID: ${{ secrets.AZURE_TENANT_ID }}
+
+      - name: Summarise
+        run: |
+          {
+            echo "## Marketplace identity"
+            echo
+            echo "| | |"
+            echo "|---|---|"
+            echo "| Entra client id | \`${{ secrets.AZURE_CLIENT_ID }}\` |"
+            echo "| Azure DevOps profile id | \`${{ steps.profile.outputs.id }}\` |"
+            echo "| Can publish as \`redth\` | ${{ steps.access.outcome == 'success' && 'yes' || 'no' }} |"
+            echo
+          } >> "$GITHUB_STEP_SUMMARY"
+
+          if [ "${{ steps.access.outcome }}" != "success" ]; then
+            {
+              echo "Add \`${{ steps.profile.outputs.id }}\` as a **Contributor**"
+              echo "member of the \`redth\` publisher at"
+              echo "<https://marketplace.visualstudio.com/manage/publishers/redth>,"
+              echo "then run this again."
+            } >> "$GITHUB_STEP_SUMMARY"
+          fi
