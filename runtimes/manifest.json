@@ -3,12 +3,12 @@
     "darwin-arm64": {
       "rid": "osx-arm64",
       "executable": "mobile-canvas",
-      "id": "6fb1d491f6fc03d4b0d4bfbfe79e0b6006209524c9e04eb64e77469f51691964",
+      "id": "fe8a0de1ea0cd6fa32e6397b2fe8aebcbec3d9a8e29ab4bb728eb624008aea4e",
       "files": {
         "mobile-canvas": {
           "archive": "osx-arm64/mobile-canvas.gz",
-          "sha256": "6fb1d491f6fc03d4b0d4bfbfe79e0b6006209524c9e04eb64e77469f51691964",
-          "size": 31945456
+          "sha256": "fe8a0de1ea0cd6fa32e6397b2fe8aebcbec3d9a8e29ab4bb728eb624008aea4e",
+          "size": 31962016
         },
         "mobile-screencap": {
           "archive": "osx-arm64/mobile-screencap.gz",
@@ -20,12 +20,12 @@
     "darwin-x64": {
       "rid": "osx-x64",
       "executable": "mobile-canvas",
-      "id": "0dbe8b44c171a6f51f8dc9186f5e32d2f9d70745e0b8f6f3bb7be474ff0e4005",
+      "id": "5665ff314ef0259555e5fe5d0feb26f8d8ba5a4b8d8351e690ab8916da0d7396",
       "files": {
         "mobile-canvas": {
           "archive": "osx-x64/mobile-canvas.gz",
-          "sha256": "0dbe8b44c171a6f51f8dc9186f5e32d2f9d70745e0b8f6f3bb7be474ff0e4005",
-          "size": 33695592
+          "sha256": "5665ff314ef0259555e5fe5d0feb26f8d8ba5a4b8d8351e690ab8916da0d7396",
+          "size": 33707928
         },
         "mobile-screencap": {
           "archive": "osx-x64/mobile-screencap.gz",
@@ -37,48 +37,48 @@
     "linux-arm64": {
       "rid": "linux-arm64",
       "executable": "mobile-canvas",
-      "id": "4dd23750048520a7b31856b0a6766625672ee87c0f162847be04279199c3d82f",
+      "id": "5e648cc2d9f774ed64806bd4f8f4de74c685c91fc22e2a48e1148b0f35b60409",
       "files": {
         "mobile-canvas": {
           "archive": "linux-arm64/mobile-canvas.gz",
-          "sha256": "4dd23750048520a7b31856b0a6766625672ee87c0f162847be04279199c3d82f",
-          "size": 34084624
+          "sha256": "5e648cc2d9f774ed64806bd4f8f4de74c685c91fc22e2a48e1148b0f35b60409",
+          "size": 34084760
         }
       }
     },
     "linux-x64": {
       "rid": "linux-x64",
       "executable": "mobile-canvas",
-      "id": "b449de88779ca300a3e2c1c9ad9ad7489e1d4989e8d077f27f4571d4e7010aba",
+      "id": "30d21dc3ec42c812eb9ecff3dd48842096978b52f922b485cfcf143207fef31e",
       "files": {
         "mobile-canvas": {
           "archive": "linux-x64/mobile-canvas.gz",
-          "sha256": "b449de88779ca300a3e2c1c9ad9ad7489e1d4989e8d077f27f4571d4e7010aba",
-          "size": 33375776
+          "sha256": "30d21dc3ec42c812eb9ecff3dd48842096978b52f922b485cfcf143207fef31e",
+          "size": 33384112
         }
       }
     },
     "win32-arm64": {
       "rid": "win-arm64",
       "executable": "mobile-canvas.exe",
-      "id": "98e6c908598f42d7d93d3a7a56d2587a2a739d2e6042e65050e4aae92e79b1fd",
+      "id": "e6cc702f0b192db271fe1dd19635b15cc1d5fe03214dea6b1fc55aa2e6e2935c",
       "files": {
         "mobile-canvas.exe": {
           "archive": "win-arm64/mobile-canvas.exe.gz",
-          "sha256": "98e6c908598f42d7d93d3a7a56d2587a2a739d2e6042e65050e4aae92e79b1fd",
-          "size": 37666816
+          "sha256": "e6cc702f0b192db271fe1dd19635b15cc1d5fe03214dea6b1fc55aa2e6e2935c",
+          "size": 37676032
         }
       }
     },
     "win32-x64": {
       "rid": "win-x64",
       "executable": "mobile-canvas.exe",
-      "id": "d9ec0685c4f8392b18ca767202a72943de71cbf7aba599622f59ebf14d8cd437",
+      "id": "66d4e53a1f4736caef7572040dca3898fada49e2094951f38d7ac2e1e05c24c0",
       "files": {
         "mobile-canvas.exe": {
           "archive": "win-x64/mobile-canvas.exe.gz",
-          "sha256": "d9ec0685c4f8392b18ca767202a72943de71cbf7aba599622f59ebf14d8cd437",
-          "size": 36985856
+          "sha256": "66d4e53a1f4736caef7572040dca3898fada49e2094951f38d7ac2e1e05c24c0",
+          "size": 36995072
         }
       }
     }
@@ -88,5 +88,5 @@
     "repository": "Redth/mobile-canvas-ghcp",
     "tag": "v0.1.11"
   },
-  "sourceHash": "3bcfd13c1dbd188b2cccbad60a178ec143452cf639fd693eb2fb241d83fc1405"
+  "sourceHash": "8d052fbd0418667b2379ba40417b26a41e327ef7c197115fdb61b55fa8929ea4"
 }
