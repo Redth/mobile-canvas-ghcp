@@ -76,3 +76,32 @@ test("the shipped extension satisfies the marketplace image rules", () => {
     "media/activitybar.svg",
   );
 });
+
+test("the marketplace listing leads with product features", () => {
+  const extensionPackage = JSON.parse(
+    readFileSync(join(root, "vscode", "package.json"), "utf8"),
+  );
+  const readme = readFileSync(join(root, "vscode", "README.md"), "utf8");
+
+  assert.match(extensionPackage.description, /Copilot-powered device automation/);
+  assert.match(readme, /assets\/preview\.png/);
+  assert.match(readme, /assets\/agent-ios\.png/);
+  assert.match(readme, /assets\/agent-android\.png/);
+  assert.doesNotMatch(readme, /code --install-extension/);
+  assert.doesNotMatch(readme, /CI artifact/);
+});
+
+test("the Copilot marketplace listing leads with product features", () => {
+  const marketplace = JSON.parse(
+    readFileSync(join(root, ".github", "plugin", "marketplace.json"), "utf8"),
+  );
+  const readme = readFileSync(join(root, "README.md"), "utf8");
+
+  assert.match(marketplace.plugins[0].description, /agent-ready device automation/);
+  assert.match(readme, /assets\/ios\.png/);
+  assert.match(readme, /assets\/android\.png/);
+  assert.match(readme, /assets\/agent-ios\.png/);
+  assert.match(readme, /assets\/agent-android\.png/);
+  assert.doesNotMatch(readme, /assets\/install-[123]\.png/);
+  assert.doesNotMatch(readme, /\/plugin marketplace add/);
+});

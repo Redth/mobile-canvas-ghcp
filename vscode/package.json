@@ -1,7 +1,7 @@
 {
   "name": "mobile-canvas",
   "displayName": "Mobile Canvas",
-  "description": "View and interact with local iOS Simulators and Android emulators from VS Code and Copilot Chat.",
+  "description": "Run and control iOS Simulators and Android emulators in VS Code, with live video and Copilot-powered device automation.",
   "version": "0.1.12",
   "publisher": "redth",
   "license": "MIT",
@@ -22,6 +22,7 @@
   ],
   "categories": [
     "Visualization",
+    "Testing",
     "Other"
   ],
   "keywords": [
@@ -30,8 +31,15 @@
     "simulator",
     "emulator",
     "copilot",
-    "mcp"
+    "mcp",
+    "mobile development",
+    "ui testing",
+    "device automation"
   ],
+  "galleryBanner": {
+    "color": "#0d1117",
+    "theme": "dark"
+  },
   "activationEvents": [
     "onStartupFinished",
     "onView:mobileCanvas.deviceView",

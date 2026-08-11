@@ -18,38 +18,35 @@ Live H.264 video at ~58 FPS (iOS) and ~50 FPS (Android), with real tap, drag,
 scroll, and keyboard input. Everything runs locally on loopback; nothing is
 uploaded anywhere.
 
-## Getting started
+## Give Copilot hands and eyes
 
-Install it from inside the GitHub Copilot app. The plugin ships the executable
-itself, so there is no build step, no download, and no Apple developer
-certificate.
+Mobile Canvas lets an agent work on the same device you see. Ask Copilot to
+reproduce a bug, navigate a flow, capture evidence, or inspect accessibility
+without switching tools or wiring up a separate MCP server.
 
-**1.** Open **Plugins**, then **Install ▸ Add marketplace**.
-
-![The Plugins dialog with the Install menu open and Add marketplace highlighted](assets/install-1.png)
-
-**2.** Enter `Redth/mobile-canvas-ghcp` and click **Add marketplace**.
-
-![The Add marketplace field filled in with Redth/mobile-canvas-ghcp](assets/install-2.png)
-
-**3.** Find **mobile-canvas** in the list and click **Install**.
-
-![The mobile-canvas plugin listed under the mobile-canvas-ghcp marketplace with an Install button](assets/install-3.png)
-
-That registers the canvas extension and the MCP server together. Reload Copilot,
-then ask it to open the **Mobile Device** canvas — or pick it from the canvas
-menu — and select a booted simulator or emulator.
-
-Prefer the keyboard? The same two steps:
-
+```text
+Boot an iPhone simulator, install my app, and walk through sign in.
+Find the Settings button on the Android emulator and tap it.
+Take a screenshot of the current screen and describe any layout issues.
 ```
-/plugin marketplace add Redth/mobile-canvas-ghcp
-/plugin install mobile-canvas
-```
+
+Agent actions automatically select the target device. An animated cursor and
+accent glow make every automated interaction visible, so you can follow along
+and take over at any time.
+
+<table>
+  <tr>
+    <td width="50%"><img src="assets/agent-ios.png" alt="Copilot interacting with an iOS Simulator in Mobile Canvas"></td>
+    <td width="50%"><img src="assets/agent-android.png" alt="Copilot interacting with an Android emulator in Mobile Canvas"></td>
+  </tr>
+</table>
+
+Install **mobile-canvas** from the Copilot plugin marketplace, reload Copilot,
+then open the **Mobile Device** canvas. The plugin registers the canvas and all
+device tools together, with no separate build or executable download.
 
 You still need Xcode for iOS or the Android SDK for Android; see
-[Requirements](#requirements). For how a plugin install ships a native binary,
-see [How the executable ships](docs/distribution.md).
+[Requirements](#requirements).
 
 ## What it does
 
@@ -76,13 +73,6 @@ see [How the executable ships](docs/distribution.md).
 - When an agent drives the device, the canvas shows an accent-coloured glow and
   an animated cursor so a human watching can tell automation from their own
   input.
-
-<table>
-  <tr>
-    <td width="50%"><img src="assets/agent-ios.png" alt="An agent tapping an iOS Simulator, with the canvas showing an accent glow and cursor"></td>
-    <td width="50%"><img src="assets/agent-android.png" alt="An agent tapping an Android emulator, with the canvas showing an accent glow and cursor"></td>
-  </tr>
-</table>
 
 ## Requirements
 
@@ -164,16 +154,10 @@ your app to that exact device → drive it with the input tools.
 
 ## VS Code
 
-Download the VSIX artifact from a successful CI run. Prefer the package matching
-your platform (`darwin-arm64`, `darwin-x64`, `linux-arm64`, `linux-x64`,
-`win32-arm64`, or `win32-x64`); the larger universal package remains available
-for environments where the target is not known in advance. Tagged releases also
-provide a tiny universal `-thin` package that downloads and verifies only the
-matching runtime on first use.
-
-```bash
-code --install-extension mobile-canvas-vscode.vsix
-```
+Install **Mobile Canvas** from the
+[Visual Studio Marketplace](https://marketplace.visualstudio.com/items?itemName=redth.mobile-canvas)
+or search for it in the VS Code Extensions view. The Marketplace automatically
+selects the package matching your platform.
 
 Reload VS Code and open **Mobile** from the Activity Bar. The extension
 contains all native runtimes and automatically registers the `mobile_device_*`
