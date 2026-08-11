@@ -297,17 +297,30 @@ to the package carrying no target, so the thin package is what reaches
 because a version may carry only one untargeted package, and a 73 MiB download
 containing five unusable runtimes is a worse default than a first-use fetch.
 
-The job needs one secret, `VSCE_PAT`, in a `vscode-marketplace` environment.
-That is an Azure DevOps personal access token created under the same Microsoft
-account that owns the `redth` publisher, with **Organization** set to *All
-accessible organizations* and **Scopes** set to *Marketplace → Manage*. Anything
-narrower fails at publish time. `vsce` reads `VSCE_PAT` from the environment;
-if it is missing, `vsce` prompts, so the script fails first rather than hanging
-the runner. Putting the secret in an environment rather than the repository also
-allows a required reviewer on the publish without gating the rest of the
-release. Azure DevOps caps token lifetime at one year, so the token needs
-rotating; workload identity federation is the longer-term alternative, but its
-documented setup targets Azure Pipelines.
+The job authenticates as an Entra ID workload identity rather than a personal
+access token, because Azure DevOps retires global PATs on 1 December 2026. Set
+three values in a `vscode-marketplace` environment — `AZURE_CLIENT_ID`,
+`AZURE_TENANT_ID`, and `AZURE_SUBSCRIPTION_ID` — for a user-assigned managed
+identity holding a federated credential that trusts this repository. Using an
+environment rather than repository secrets also allows a required reviewer on
+the publish without gating the rest of the release.
+
+Two details are easy to get wrong. The federated credential's **subject must be
+`repo:Redth/mobile-canvas-ghcp:environment:vscode-marketplace`**, because naming
+an environment is what GitHub puts in the token's subject — a credential scoped
+to a branch ref will not match. And the identity must be a **Contributor member
+of the `redth` publisher**, which is keyed on its *Azure DevOps profile id*, not
+its Entra client id. Run the **Marketplace identity** workflow to read that
+profile id; it signs in exactly as the release does and reports whether the
+identity can publish yet, so it is also the fastest way to tell a broken
+credential from a missing membership without cutting a release.
+
+`azure/login` does the OIDC exchange rather than the token being handed to
+`vsce` directly, because `vsce` resolves credentials through a chain that
+contains no workload-identity link. What it does contain is the Azure CLI, so
+signing the CLI in is what makes `vsce publish --azure-credential` work.
+`VSCE_PAT` still takes precedence if it is set, which keeps a local publish
+possible until PATs are gone.
 
 The job is skipped for `v*-rc.*` prereleases because the Marketplace accepts
 only `major.minor.patch` — semver prerelease tags are rejected — and

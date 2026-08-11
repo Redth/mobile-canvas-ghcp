@@ -303,9 +303,15 @@ jobs:
       (startsWith(github.ref, 'refs/tags/v') && !contains(github.ref_name, '-'))
       || (inputs.publish_marketplace && inputs.prerelease_tag == '')
     runs-on: ubuntu-latest
-    # Holds VSCE_PAT, and gives the publish a place to require an approval
-    # without gating the rest of the release behind one.
+    # Holds the Entra identity's ids, and gives the publish a place to require
+    # an approval without gating the rest of the release behind one.
     environment: vscode-marketplace
+    permissions:
+      # Mints the OIDC token azure/login exchanges for the identity. Declaring
+      # any permission here replaces the workflow's defaults, so contents has to
+      # be restated for checkout and `gh release view`.
+      contents: read
+      id-token: write
     env:
       # A tag run knows its own tag. A dispatch is normally re-running a publish
       # that failed, either from the tag itself or from a branch with the
@@ -335,6 +341,19 @@ jobs:
       - name: Install vsce
         run: npm ci --prefix vscode --ignore-scripts
 
+      # Azure DevOps retires global PATs on 1 December 2026, so the publish
+      # authenticates as an Entra identity instead. vsce resolves that token
+      # through a chained credential that has no workload-identity link in it,
+      # so the OIDC exchange cannot be handed to vsce directly -- azure/login
+      # performs the exchange and leaves a logged-in Azure CLI behind, which is
+      # the credential in that chain vsce does find.
+      - name: Sign in to Azure
+        uses: azure/login@v2
+        with:
+          client-id: ${{ secrets.AZURE_CLIENT_ID }}
+          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+
       # The thin VSIX downloads its runtime from the release assets on first
       # use, so publishing before those exist would ship an extension that
       # cannot start. `needs: bundle` covers the tag path; this also catches a
@@ -357,5 +376,9 @@ jobs:
 
       - name: Publish
         env:
-          VSCE_PAT: ${{ secrets.VSCE_PAT }}
+          # vsce asks its credential chain for a token in this tenant. Only the
+          # tenant is set: giving the chain a client id as well would send it
+          # down the environment-credential path first, which has no secret to
+          # go with it.
+          AZURE_TENANT_ID: ${{ secrets.AZURE_TENANT_ID }}
         run: node scripts/publish-vscode.mjs --version "$RELEASE_TAG"

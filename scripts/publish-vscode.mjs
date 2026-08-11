@@ -55,10 +55,31 @@ if (!RELEASABLE.test(version)) {
     `the marketplace does not accept prerelease versions, so ${version} cannot be published`,
   );
 }
-if (!dryRun && !process.env.VSCE_PAT) {
-  // vsce prompts for a token it cannot read, which on a runner is a job that
-  // hangs until it times out rather than one that fails.
-  throw new Error("VSCE_PAT is not set, so vsce would block prompting for it");
+// Azure DevOps retires global personal access tokens on 1 December 2026, so
+// Entra ID is the default and VSCE_PAT is the fallback that still works until
+// then. vsce reads VSCE_PAT from the environment on its own; --azure-credential
+// makes it resolve a token through a chained credential instead, which on a
+// runner is satisfied by the Azure CLI login that azure/login leaves behind.
+const authArguments = process.env.VSCE_PAT ? [] : ["--azure-credential"];
+
+if (!dryRun) {
+  // Publishing seven packages one call at a time means an unauthorised identity
+  // fails on the first and leaves nothing behind, but publishing is not the
+  // cheapest way to discover that. verify-pat reads the publisher's role
+  // assignments, so it separates "the credential did not resolve" from "the
+  // credential resolved but is not a member of this publisher" before anything
+  // is uploaded.
+  const publisher = id.split(".")[0];
+  console.log(`verifying publish access to ${publisher}`);
+  runVsce(["verify-pat", publisher, ...authArguments], {
+    onFailure: authArguments.length > 0
+      ? `could not publish as ${publisher}. Either the Entra identity did not `
+        + "resolve, or it resolved and is not a member of the publisher -- add "
+        + "its Azure DevOps profile id as a Contributor at "
+        + `https://marketplace.visualstudio.com/manage/publishers/${publisher} `
+        + "(run the Marketplace identity workflow to read that id)"
+      : `VSCE_PAT cannot publish as ${publisher}`,
+  });
 }
 
 const published = publishedPackages(id);
@@ -83,14 +104,33 @@ if (pending.length === 0) {
   );
 
   if (!dryRun) {
-    execFileSync(
-      npm,
-      ["exec", "--", "vsce", "publish", "--packagePath", ...pending.map((entry) => entry.path)],
-      { cwd: extensionRoot, stdio: "inherit" },
-    );
+    runVsce([
+      "publish",
+      ...authArguments,
+      "--packagePath",
+      ...pending.map((entry) => entry.path),
+    ], {
+      onFailure: "vsce could not publish. Anything already uploaded stays "
+        + "published, so re-running this job skips it and retries the rest",
+    });
   }
 
   summarise(packages, pending);
+}
+
+// vsce reports its own failures to stderr before exiting, so the value left to
+// add is what to do about it -- not a Node stack through child_process, which
+// is what an uncaught execFileSync error would print over the top of it.
+function runVsce(args, { onFailure }) {
+  try {
+    execFileSync(npm, ["exec", "--", "vsce", ...args], {
+      cwd: extensionRoot,
+      stdio: "inherit",
+    });
+  } catch {
+    console.error(`\n${onFailure}`);
+    process.exit(1);
+  }
 }
 
 // The release job uploads one artifact holding every VSIX it built, so the set
