@@ -193,12 +193,56 @@ public sealed class IosSimulatorBackend : IDeviceBackend, IAsyncDisposable
 	public async Task<DeviceTarget> RevealAsync(string deviceId, CancellationToken cancellationToken = default)
 	{
 		var device = await BootAsync(deviceId, cancellationToken).ConfigureAwait(false);
+		// `--args` are only handed to Simulator.app when `open` launches it, so a reveal against an
+		// already-running instance just activates the app and leaves the requested device unfocused.
+		// Sample the state before activating so the follow-up only runs when it is actually needed.
+		var wasRunning = await IsSimulatorRunningAsync(cancellationToken).ConfigureAwait(false);
 		var arguments = new[] { "-a", "Simulator", "--args", "-CurrentDeviceUDID", device.NativeId };
 		var result = await _processRunner.RunAsync(
 			new ProcessRequest("open", arguments),
 			cancellationToken).ConfigureAwait(false);
 		EnsureSuccess("open", arguments, result);
+		if (wasRunning)
+			await FocusSimulatorWindowAsync(device, cancellationToken).ConfigureAwait(false);
 		return device;
+	}
+
+	private async Task<bool> IsSimulatorRunningAsync(CancellationToken cancellationToken)
+	{
+		try
+		{
+			var result = await _processRunner.RunAsync(
+				new ProcessRequest("pgrep", ["-x", "Simulator"]),
+				cancellationToken).ConfigureAwait(false);
+			return result.ExitCode == 0;
+		}
+		catch (Exception exception) when (exception is not OperationCanceledException)
+		{
+			// Treat an unusable pgrep as "not running" so reveal falls back to plain `open`.
+			return false;
+		}
+	}
+
+	/// <summary>
+	/// Best-effort focus of an already-running Simulator.app, which needs Accessibility. Reveal has
+	/// already activated the app by this point, so a denied permission degrades to the old behaviour
+	/// rather than failing the call.
+	/// </summary>
+	private async Task FocusSimulatorWindowAsync(DeviceTarget device, CancellationToken cancellationToken)
+	{
+		if (string.IsNullOrWhiteSpace(device.Name) || string.IsNullOrWhiteSpace(device.RuntimeName))
+			return;
+		var script = SimulatorWindowFocus.BuildScript(device.Name, device.RuntimeName);
+		try
+		{
+			await _processRunner.RunAsync(
+				new ProcessRequest("osascript", ["-e", script]),
+				cancellationToken).ConfigureAwait(false);
+		}
+		catch (Exception exception) when (exception is not OperationCanceledException)
+		{
+			// Ignored: the window simply stays where it was.
+		}
 	}
 
 	public async Task TapAsync(
