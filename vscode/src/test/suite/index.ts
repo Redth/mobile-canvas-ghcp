@@ -356,6 +356,45 @@ if (args[0] === "canvas" && args[1] === "open") {
       assert.equal(payload.detail, undefined);
     }
 
+    // Switching devices closes the previous video socket while it is usually still
+    // connecting. `ws` reports that aborted handshake as an error, which used to be
+    // mistaken for a dead host and tore down every other socket plus the session cookie.
+    const bootstrapsBeforeSwitch = bootstrapBodies.length;
+    await bridge.handleMessage({
+      type: "socket-open",
+      id: "video-switch",
+      channel: "video",
+    });
+    await bridge.handleMessage({ type: "socket-close", id: "video-switch" });
+    await bridge.handleMessage({
+      type: "socket-open",
+      id: "video-next",
+      channel: "video",
+    });
+    const nextFrame = await waitForMessage(
+      messages,
+      (message) => message.type === "socket-message" && message.id === "video-next",
+    );
+    assert.equal(nextFrame.type, "socket-message");
+    assert.equal(
+      bootstrapBodies.length,
+      bootstrapsBeforeSwitch,
+      "closing a connecting socket must not re-open the canvas",
+    );
+    assert.ok(
+      !messages.some(
+        (message) => message.type === "socket-closed" && message.id === "activities",
+      ),
+      "closing a connecting socket must not drop the events socket",
+    );
+    assert.ok(
+      !messages.some(
+        (message) => message.type === "socket-error" && message.id === "video-switch",
+      ),
+      "a socket we closed on purpose must not surface as an error",
+    );
+    await bridge.handleMessage({ type: "socket-close", id: "video-next" });
+
     await bridge.setVisible(false);
     assert.ok(messages.some(
       (message) => message.type === "visibility" && !message.visible,
