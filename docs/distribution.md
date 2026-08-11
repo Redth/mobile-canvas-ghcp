@@ -306,14 +306,25 @@ environment rather than repository secrets also allows a required reviewer on
 the publish without gating the rest of the release.
 
 Two details are easy to get wrong. The federated credential's **subject must be
-`repo:Redth/mobile-canvas-ghcp:environment:vscode-marketplace`**, because naming
-an environment is what GitHub puts in the token's subject — a credential scoped
-to a branch ref will not match. And the identity must be a **Contributor member
-of the `redth` publisher**, which is keyed on its *Azure DevOps profile id*, not
-its Entra client id. Run the **Marketplace identity** workflow to read that
-profile id; it signs in exactly as the release does and reports whether the
-identity can publish yet, so it is also the fastest way to tell a broken
-credential from a missing membership without cutting a release.
+`repo:Redth@271950/mobile-canvas-ghcp@1317634669:environment:vscode-marketplace`**,
+because naming an environment is what GitHub puts in the token's subject — a
+credential scoped to a branch ref will not match. Those numbers are the owner and
+repository IDs: this repository emits GitHub's immutable subject format, so the
+familiar `repo:owner/name:environment:x` spelling is *not* what arrives. And the
+identity must be a **Contributor member of the `redth` publisher**, which is keyed
+on its *Azure DevOps profile id*, not its Entra client id. Run the **Marketplace
+identity** workflow to read that profile id; it signs in exactly as the release
+does and reports whether the identity can publish yet, so it is also the fastest
+way to tell a broken credential from a missing membership without cutting a
+release.
+
+Subject matching is **case-sensitive**, and the owner segment is `Redth`. Entra
+reports a mismatch here as `AADSTS7002138`, which helpfully says the subject
+"matches with case-insensitive comparison, but not with case-sensitive
+comparison". If that error persists against a subject you have already corrected
+and can see is byte-identical, the stored record is stale: **delete the federated
+credential and recreate it** rather than editing it in place, which is what
+actually clears it.
 
 `azure/login` does the OIDC exchange rather than the token being handed to
 `vsce` directly, because `vsce` resolves credentials through a chain that
