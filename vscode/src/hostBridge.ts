@@ -42,6 +42,11 @@ export interface SelectedDeviceContext {
 
 export class HostBridge implements vscode.Disposable {
   private readonly sockets = new Map<string, WebSocket>();
+  // Sockets we tore down on purpose. `ws` aborts a still-connecting handshake by emitting
+  // `error` before `close`, and switching devices closes the previous video socket while it
+  // is usually still connecting. Without this set our own teardown is indistinguishable from
+  // the host going away, so it would invalidate the connection every device switch.
+  private readonly discarded = new WeakSet<WebSocket>();
   private connection: HostConnection | undefined;
   private connectPromise: Promise<HostConnection> | undefined;
   private disposed = false;
@@ -367,6 +372,13 @@ export class HostBridge implements vscode.Disposable {
     if (channel !== "video" && channel !== "events") {
       throw new Error(`Unsupported Mobile Canvas socket channel: ${String(channel)}`);
     }
+    // The connection can be retired while we await it. Its cookie is already dead, so
+    // opening against it would only earn a 401 handshake failure that then invalidates
+    // whatever connection replaced it. Report the close and let the canvas reopen.
+    if (this.connection !== connection) {
+      void this.post({ type: "socket-closed", id, code: 1006, reason: "" });
+      return;
+    }
     this.closeSocket(id);
     const url = this.apiUrl(`/ws/${channel}`, connection);
     url.search = query ?? "";
@@ -391,6 +403,11 @@ export class HostBridge implements vscode.Disposable {
       void this.post({ type: "socket-message", id, data: payload });
     });
     socket.on("error", (error) => {
+      // A socket we retired reports the aborted handshake as an error. That is our doing,
+      // not a failed connection, and the canvas already moved on from it.
+      if (this.discarded.has(socket)) {
+        return;
+      }
       if (!opened) {
         this.invalidateConnection(connection);
       }
@@ -415,13 +432,20 @@ export class HostBridge implements vscode.Disposable {
     if (!socket) {
       return;
     }
-    socket.terminate();
+    this.discard(socket);
   }
 
   private closeSockets(): void {
     for (const socket of this.sockets.values()) {
-      socket.terminate();
+      this.discard(socket);
     }
+  }
+
+  // The map entry stays until `close` fires so the canvas still receives `socket-closed`
+  // and can settle its own socket state.
+  private discard(socket: WebSocket): void {
+    this.discarded.add(socket);
+    socket.terminate();
   }
 
   private async save(
