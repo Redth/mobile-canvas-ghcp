@@ -42,6 +42,8 @@ export interface SelectedDeviceContext {
 
 export class HostBridge implements vscode.Disposable {
   private readonly sockets = new Map<string, WebSocket>();
+  private readonly openingSockets = new Set<string>();
+  private readonly cancelledSockets = new Set<string>();
   // Sockets we tore down on purpose. `ws` aborts a still-connecting handshake by emitting
   // `error` before `close`, and switching devices closes the previous video socket while it
   // is usually still connecting. Without this set our own teardown is indistinguishable from
@@ -101,7 +103,10 @@ export class HostBridge implements vscode.Disposable {
       }
     } catch (error) {
       const text = errorMessage(error);
-      if ("id" in message) {
+      if (message.type === "socket-open") {
+        await this.post({ type: "socket-error", id: message.id, message: text });
+        await this.post({ type: "socket-closed", id: message.id, code: 1006, reason: "" });
+      } else if ("id" in message) {
         await this.post({ type: "operation-error", id: message.id, message: text });
       } else {
         await this.post({ type: "fatal", message: text });
@@ -368,74 +373,90 @@ export class HostBridge implements vscode.Disposable {
     channel: SocketChannel,
     query?: string,
   ): Promise<void> {
-    const connection = await this.connect();
     if (channel !== "video" && channel !== "events") {
       throw new Error(`Unsupported Mobile Canvas socket channel: ${String(channel)}`);
     }
-    // The connection can be retired while we await it. Its cookie is already dead, so
-    // opening against it would only earn a 401 handshake failure that then invalidates
-    // whatever connection replaced it. Report the close and let the canvas reopen.
-    if (this.connection !== connection) {
-      void this.post({ type: "socket-closed", id, code: 1006, reason: "" });
-      return;
-    }
-    this.closeSocket(id);
-    const url = this.apiUrl(`/ws/${channel}`, connection);
-    url.search = query ?? "";
-    url.protocol = "ws:";
-    const socket = new WebSocket(url, { headers: { Cookie: connection.cookie } });
-    this.sockets.set(id, socket);
-    let opened = false;
+    this.openingSockets.add(id);
+    try {
+      const connection = await this.connect();
+      if (this.cancelledSockets.delete(id)) {
+        await this.post({ type: "socket-closed", id, code: 1000, reason: "" });
+        return;
+      }
+      // The connection can be retired while we await it. Its cookie is already dead, so
+      // opening against it would only earn a 401 handshake failure that then invalidates
+      // whatever connection replaced it. Report the close and let the canvas reopen.
+      if (this.connection !== connection) {
+        await this.post({ type: "socket-closed", id, code: 1006, reason: "" });
+        return;
+      }
+      this.closeSocket(id);
+      const url = this.apiUrl(`/ws/${channel}`, connection);
+      url.search = query ?? "";
+      url.protocol = "ws:";
+      const socket = new WebSocket(url, { headers: { Cookie: connection.cookie } });
+      this.sockets.set(id, socket);
+      let opened = false;
 
-    socket.on("open", () => {
-      opened = true;
-      void this.post({ type: "socket-opened", id });
-    });
-    socket.on("message", (data, isBinary) => {
-      if (
-        channel === "events"
-        && (
-          isBinary
-          || !isEventForCanvas(data.toString(), this.sessionId, this.instanceId)
-        )
-      ) return;
-      const payload = isBinary ? toArrayBuffer(data) : data.toString();
-      void this.post({ type: "socket-message", id, data: payload });
-    });
-    socket.on("error", (error) => {
-      // A socket we retired reports the aborted handshake as an error. That is our doing,
-      // not a failed connection, and the canvas already moved on from it.
-      if (this.discarded.has(socket)) {
-        return;
-      }
-      if (!opened) {
-        this.invalidateConnection(connection);
-      }
-      void this.post({ type: "socket-error", id, message: error.message });
-    });
-    socket.on("close", (code, reason) => {
-      if (this.sockets.get(id) !== socket) {
-        return;
-      }
-      this.sockets.delete(id);
-      void this.post({
-        type: "socket-closed",
-        id,
-        code,
-        reason: reason.toString(),
+      socket.on("open", () => {
+        opened = true;
+        void this.post({ type: "socket-opened", id });
       });
-    });
+      socket.on("message", (data, isBinary) => {
+        if (
+          channel === "events"
+          && (
+            isBinary
+            || !isEventForCanvas(data.toString(), this.sessionId, this.instanceId)
+          )
+        ) return;
+        const payload = isBinary ? toArrayBuffer(data) : data.toString();
+        void this.post({ type: "socket-message", id, data: payload });
+      });
+      socket.on("error", (error) => {
+        // A socket we retired reports the aborted handshake as an error. That is our doing,
+        // not a failed connection, and the canvas already moved on from it.
+        if (this.discarded.has(socket)) {
+          return;
+        }
+        if (!opened) {
+          this.invalidateConnection(connection);
+        }
+        void this.post({ type: "socket-error", id, message: error.message });
+      });
+      socket.on("close", (code, reason) => {
+        if (this.sockets.get(id) !== socket) {
+          return;
+        }
+        this.sockets.delete(id);
+        void this.post({
+          type: "socket-closed",
+          id,
+          code,
+          reason: reason.toString(),
+        });
+      });
+    } finally {
+      this.openingSockets.delete(id);
+      this.cancelledSockets.delete(id);
+    }
   }
 
   private closeSocket(id: string): void {
     const socket = this.sockets.get(id);
     if (!socket) {
+      if (this.openingSockets.has(id)) {
+        this.cancelledSockets.add(id);
+      }
       return;
     }
     this.discard(socket);
   }
 
   private closeSockets(): void {
+    for (const id of this.openingSockets) {
+      this.cancelledSockets.add(id);
+    }
     for (const socket of this.sockets.values()) {
       this.discard(socket);
     }
