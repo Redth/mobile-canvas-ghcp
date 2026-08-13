@@ -356,16 +356,22 @@ if (args[0] === "canvas" && args[1] === "open") {
       assert.equal(payload.detail, undefined);
     }
 
-    // Switching devices closes the previous video socket while it is usually still
-    // connecting. `ws` reports that aborted handshake as an error, which used to be
-    // mistaken for a dead host and tore down every other socket plus the session cookie.
+    // VS Code dispatches webview messages without awaiting the previous one. Switching devices can
+    // therefore close the previous video socket while the bridge is still awaiting its connection.
+    // The pending open must be cancelled before it creates an abandoned native video stream.
     const bootstrapsBeforeSwitch = bootstrapBodies.length;
-    await bridge.handleMessage({
+    const abandonedOpen = bridge.handleMessage({
       type: "socket-open",
       id: "video-switch",
       channel: "video",
     });
     await bridge.handleMessage({ type: "socket-close", id: "video-switch" });
+    await abandonedOpen;
+    const abandonedClose = await waitForMessage(
+      messages,
+      (message) => message.type === "socket-closed" && message.id === "video-switch",
+    );
+    assert.equal(abandonedClose.type, "socket-closed");
     await bridge.handleMessage({
       type: "socket-open",
       id: "video-next",
@@ -389,9 +395,11 @@ if (args[0] === "canvas" && args[1] === "open") {
     );
     assert.ok(
       !messages.some(
-        (message) => message.type === "socket-error" && message.id === "video-switch",
+        (message) =>
+          (message.type === "socket-opened" || message.type === "socket-message")
+          && message.id === "video-switch",
       ),
-      "a socket we closed on purpose must not surface as an error",
+      "a socket closed while awaiting the host must never be opened",
     );
     await bridge.handleMessage({ type: "socket-close", id: "video-next" });
 
@@ -433,6 +441,31 @@ if (args[0] === "canvas" && args[1] === "open") {
     assert.deepEqual(readJsonPart(uiToolResult.content[1]), {
       root: { role: "button", label: "Continue" },
     });
+
+    const failedMessages: ExtensionMessage[] = [];
+    const failedBridge = new HostBridge(
+      join(directory, "missing-mobile-canvas"),
+      "failed-session",
+      "failed-view",
+      {
+        postMessage: async (message) => {
+          failedMessages.push(message);
+          return true;
+        },
+      },
+      { appendLine: () => {} },
+    );
+    try {
+      await failedBridge.handleMessage({
+        type: "socket-open",
+        id: "failed-video",
+        channel: "video",
+      });
+      assert.equal(failedMessages[0]?.type, "socket-error");
+      assert.equal(failedMessages[1]?.type, "socket-closed");
+    } finally {
+      failedBridge.dispose();
+    }
   } finally {
     bridge.dispose();
     delete process.env.MOBILE_CANVAS_COMMAND;
