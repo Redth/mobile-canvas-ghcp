@@ -116,9 +116,31 @@ and take over at any time.
 
 | | Requirement |
 |---|---|
-| **iOS** | macOS, Xcode with Simulator runtimes, and [`idb_companion`](https://fbidb.io) (`brew install facebook/fb/idb-companion`) for input |
+| **iOS** | macOS, Xcode with Simulator runtimes, and [`idb_companion`](https://fbidb.io) for input |
 | **Android** | Android SDK with `emulator`, `avdmanager`, and `adb` on `PATH` |
 | **Optional iOS fallback** | Screen Recording and Accessibility permission for ScreenCaptureKit |
+
+For iOS input, install `idb_companion` from its Homebrew tap. Current Homebrew
+versions require explicitly trusting third-party formulae:
+
+```bash
+brew tap facebook/fb
+brew trust --formula facebook/fb/idb-companion
+brew install facebook/fb/idb-companion
+```
+
+Then add the installed executable to your shell environment. For zsh:
+
+```bash
+echo "export IDB_COMPANION_PATH=\"$(brew --prefix idb-companion)/bin/idb_companion\"" >> ~/.zshrc
+source ~/.zshrc
+```
+
+Confirm that the configured path points to the executable:
+
+```bash
+test -x "$IDB_COMPANION_PATH" && "$IDB_COMPANION_PATH" --version
+```
 
 Android emulators must be started with `-gpu host`. A software-rendered AVD
 drops video from ~50 FPS to ~3 FPS.
