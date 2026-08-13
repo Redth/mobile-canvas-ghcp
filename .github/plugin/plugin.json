@@ -1,7 +1,7 @@
 {
   "name": "mobile-canvas",
   "description": "Run and control local iOS Simulators and Android emulators in a live Copilot canvas, with agent-ready device automation.",
-  "version": "0.1.13",
+  "version": "0.1.14",
   "author": {
     "name": "Jonathan Dick",
     "url": "https://github.com/Redth"
