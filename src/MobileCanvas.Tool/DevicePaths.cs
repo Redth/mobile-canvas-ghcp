@@ -9,18 +9,27 @@ internal static class DevicePaths
 		Environment.GetFolderPath(Environment.SpecialFolder.UserProfile),
 		".mobile-canvas");
 
-	public static string Metadata => Path.Combine(Home, "host.json");
-	public static string Lock => Path.Combine(Home, "host.lock");
+	public static string HostHome { get; } = HostDirectoryFor(Home, MobileCanvasProtocol.Version);
+	public static string Metadata => Path.Combine(HostHome, "host.json");
+	public static string Lock => Path.Combine(HostHome, "host.lock");
+
+	internal static string HostDirectoryFor(string home, string protocolVersion) =>
+		Path.Combine(home, "hosts", $"v{protocolVersion}");
 
 	public static void EnsureHome()
 	{
-		Directory.CreateDirectory(Home);
+		EnsurePrivateDirectory(Home);
+		EnsurePrivateDirectory(Path.Combine(Home, "hosts"));
+		EnsurePrivateDirectory(HostHome);
+	}
+
+	private static void EnsurePrivateDirectory(string path)
+	{
+		Directory.CreateDirectory(path);
 		if (!OperatingSystem.IsWindows())
-		{
 			File.SetUnixFileMode(
-				Home,
+				path,
 				UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute);
-		}
 	}
 }
 

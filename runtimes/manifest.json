@@ -3,11 +3,11 @@
     "darwin-arm64": {
       "rid": "osx-arm64",
       "executable": "mobile-canvas",
-      "id": "6a718d094b572e5c33fa65b0561aa71c5aee0d549779f75c9eaf1457e8760623",
+      "id": "b68e41d61497f1c46fffa8febb3a68d7a0e5d167b59ae5a4587eadc5759b3c8d",
       "files": {
         "mobile-canvas": {
           "archive": "osx-arm64/mobile-canvas.gz",
-          "sha256": "6a718d094b572e5c33fa65b0561aa71c5aee0d549779f75c9eaf1457e8760623",
+          "sha256": "b68e41d61497f1c46fffa8febb3a68d7a0e5d167b59ae5a4587eadc5759b3c8d",
           "size": 31962016
         },
         "mobile-screencap": {
@@ -20,12 +20,12 @@
     "darwin-x64": {
       "rid": "osx-x64",
       "executable": "mobile-canvas",
-      "id": "5c419bf4ce1f204b923b2f6948dbecb92044897ad8ad74c87d88b5ba0f1cbda5",
+      "id": "2cc0de63a61564e0c66f173344f18491da4be1511bb8fc719138cd022a87052e",
       "files": {
         "mobile-canvas": {
           "archive": "osx-x64/mobile-canvas.gz",
-          "sha256": "5c419bf4ce1f204b923b2f6948dbecb92044897ad8ad74c87d88b5ba0f1cbda5",
-          "size": 33707928
+          "sha256": "2cc0de63a61564e0c66f173344f18491da4be1511bb8fc719138cd022a87052e",
+          "size": 33707936
         },
         "mobile-screencap": {
           "archive": "osx-x64/mobile-screencap.gz",
@@ -37,11 +37,11 @@
     "linux-arm64": {
       "rid": "linux-arm64",
       "executable": "mobile-canvas",
-      "id": "1dc6ac7531e19f7188c2e7dc7ee25c5de7ca575cc9762232b09dd33cf1b37c6d",
+      "id": "967ba41acc73972c693b3ecb2be45a7cc34df7f33bcd1347d270412a2c95d997",
       "files": {
         "mobile-canvas": {
           "archive": "linux-arm64/mobile-canvas.gz",
-          "sha256": "1dc6ac7531e19f7188c2e7dc7ee25c5de7ca575cc9762232b09dd33cf1b37c6d",
+          "sha256": "967ba41acc73972c693b3ecb2be45a7cc34df7f33bcd1347d270412a2c95d997",
           "size": 34084760
         }
       }
@@ -49,44 +49,44 @@
     "linux-x64": {
       "rid": "linux-x64",
       "executable": "mobile-canvas",
-      "id": "3f1a74e5d888dc51b15f8c1c5ab4b57547d9607a38fe7bf9f8301673a8c7e251",
+      "id": "ed9f6075e0f4d469a06d18e8a7c9ae20aef673be391dd09757d7c91e99517cdd",
       "files": {
         "mobile-canvas": {
           "archive": "linux-x64/mobile-canvas.gz",
-          "sha256": "3f1a74e5d888dc51b15f8c1c5ab4b57547d9607a38fe7bf9f8301673a8c7e251",
-          "size": 33384112
+          "sha256": "ed9f6075e0f4d469a06d18e8a7c9ae20aef673be391dd09757d7c91e99517cdd",
+          "size": 33388208
         }
       }
     },
     "win32-arm64": {
       "rid": "win-arm64",
       "executable": "mobile-canvas.exe",
-      "id": "6d15e6e866f62f32b4e2fac1fc1afe7d2e75e802376da418d29551a3197c8512",
+      "id": "95e2a6781568b2d993f1afc0f7794b2f8ca840aec5b2928b4ddf38f25df051fe",
       "files": {
         "mobile-canvas.exe": {
           "archive": "win-arm64/mobile-canvas.exe.gz",
-          "sha256": "6d15e6e866f62f32b4e2fac1fc1afe7d2e75e802376da418d29551a3197c8512",
-          "size": 37676032
+          "sha256": "95e2a6781568b2d993f1afc0f7794b2f8ca840aec5b2928b4ddf38f25df051fe",
+          "size": 37677568
         }
       }
     },
     "win32-x64": {
       "rid": "win-x64",
       "executable": "mobile-canvas.exe",
-      "id": "60a3b881432055154df9af914043293094d95432072c0b9cf97b206d0c71891b",
+      "id": "92c54a3385348370d140f42999083df7134261765668c4ac07362f7ef25007ce",
       "files": {
         "mobile-canvas.exe": {
           "archive": "win-x64/mobile-canvas.exe.gz",
-          "sha256": "60a3b881432055154df9af914043293094d95432072c0b9cf97b206d0c71891b",
-          "size": 36994560
+          "sha256": "92c54a3385348370d140f42999083df7134261765668c4ac07362f7ef25007ce",
+          "size": 36996096
         }
       }
     }
   },
-  "version": "0.1.14",
+  "version": "0.1.15",
   "distribution": {
     "repository": "Redth/mobile-canvas-ghcp",
-    "tag": "v0.1.14"
+    "tag": "v0.1.15"
   },
-  "sourceHash": "0151bf8c6731ac93b1f44bb564b0141f098e3ad9b7bbad82d0c4cb9536abcb1a"
+  "sourceHash": "b4e92f5d4ce30e6adab3b7b16b0aff36fe460a14a09302c3917500ce61820105"
 }
