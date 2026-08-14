@@ -84,7 +84,7 @@ test("the marketplace listing leads with product features", () => {
   const readme = readFileSync(join(root, "vscode", "README.md"), "utf8");
 
   assert.match(extensionPackage.description, /Copilot-powered device automation/);
-  assert.match(readme, /assets\/preview\.png/);
+  assert.match(readme, /assets\/vscode-extension\.png/);
   assert.match(readme, /assets\/agent-ios\.png/);
   assert.match(readme, /assets\/agent-android\.png/);
   assert.doesNotMatch(readme, /code --install-extension/);
@@ -98,10 +98,11 @@ test("the Copilot marketplace listing leads with product features", () => {
   const readme = readFileSync(join(root, "README.md"), "utf8");
 
   assert.match(marketplace.plugins[0].description, /agent-ready device automation/);
-  assert.match(readme, /assets\/ios\.png/);
-  assert.match(readme, /assets\/android\.png/);
+  assert.match(readme, /assets\/preview\.png/);
+  assert.match(readme, /assets\/github-copilot-canvas\.png/);
+  assert.match(readme, /assets\/vscode-extension\.png/);
   assert.match(readme, /assets\/agent-ios\.png/);
   assert.match(readme, /assets\/agent-android\.png/);
   assert.doesNotMatch(readme, /assets\/install-[123]\.png/);
-  assert.doesNotMatch(readme, /\/plugin marketplace add/);
+  assert.match(readme, /\/plugin marketplace add/);
 });

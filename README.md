@@ -1,22 +1,67 @@
 # Mobile Canvas
 
+<p align="center">
+  <a href="#github-copilot-app"><img alt="Install the GitHub Copilot plugin" src="https://img.shields.io/badge/GitHub_Copilot-install_plugin-24292f?logo=githubcopilot&logoColor=white"></a>
+  <a href="https://marketplace.visualstudio.com/items?itemName=redth.mobile-canvas"><img alt="Install from the Visual Studio Marketplace" src="https://img.shields.io/visual-studio-marketplace/v/redth.mobile-canvas?label=VS%20Marketplace&logo=visualstudiocode"></a>
+  <a href="https://marketplace.visualstudio.com/items?itemName=redth.mobile-canvas"><img alt="Visual Studio Marketplace installs" src="https://img.shields.io/visual-studio-marketplace/i/redth.mobile-canvas?logo=visualstudiocode"></a>
+  <a href="https://github.com/Redth/mobile-canvas-ghcp/actions/workflows/ci.yml"><img alt="CI status" src="https://github.com/Redth/mobile-canvas-ghcp/actions/workflows/ci.yml/badge.svg"></a>
+  <a href="LICENSE"><img alt="MIT license" src="https://img.shields.io/badge/license-MIT-blue.svg"></a>
+</p>
+
 View, create, boot, and **interact with** local iOS Simulators and Android
-emulators from a GitHub Copilot canvas or the VS Code Activity Bar — and give
-your agent the same controls through MCP.
+emulators without leaving GitHub Copilot or VS Code. Mobile Canvas gives your
+agent the same controls through MCP, so it can deploy, navigate, inspect, and
+capture evidence on the device you are watching.
 
-<table>
-  <tr>
-    <td width="50%"><img src="assets/ios.png" alt="The Mobile Canvas panel showing a live iOS Simulator"></td>
-    <td width="50%"><img src="assets/android.png" alt="The Mobile Canvas panel showing a live Android emulator"></td>
-  </tr>
-</table>
+<p align="center">
+  <img src="assets/preview.png" width="920" alt="Mobile Canvas showing live iOS and Android devices side by side">
+</p>
 
-https://github.com/user-attachments/assets/bedf866a-331b-463d-971e-b3aae82019ed
-
-
-Live H.264 video at ~58 FPS (iOS) and ~50 FPS (Android), with real tap, drag,
+Live H.264 video at ~58 FPS on iOS and ~50 FPS on Android, with real tap, drag,
 scroll, and keyboard input. Everything runs locally on loopback; nothing is
 uploaded anywhere.
+
+## Install
+
+### GitHub Copilot app
+
+Add this repository as a Copilot plugin marketplace, install **mobile-canvas**,
+then open the **Mobile Device** canvas:
+
+```text
+/plugin marketplace add Redth/mobile-canvas-ghcp
+/plugin install mobile-canvas@mobile-canvas-ghcp
+```
+
+Reload Copilot after installation. The plugin registers the canvas and all
+`mobile_device_*` tools together; there is no separate executable download.
+
+<p align="center">
+  <img src="assets/github-copilot-canvas.png" width="1100" alt="Mobile Canvas running as a maximized canvas in the GitHub Copilot app">
+</p>
+
+### VS Code
+
+<p>
+  <a href="https://marketplace.visualstudio.com/items?itemName=redth.mobile-canvas"><img alt="Install Mobile Canvas from the Visual Studio Marketplace" src="https://img.shields.io/badge/Visual_Studio_Marketplace-Install_Mobile_Canvas-007ACC?logo=visualstudiocode&logoColor=white"></a>
+</p>
+
+Install **Mobile Canvas** from the
+[Visual Studio Marketplace](https://marketplace.visualstudio.com/items?itemName=redth.mobile-canvas),
+reload VS Code, and open **Mobile** from the Activity Bar. The Marketplace
+automatically selects the package matching your platform.
+
+<p align="center">
+  <img src="assets/vscode-extension.png" width="900" alt="Mobile Canvas running in the VS Code Activity Bar with a live iOS Simulator">
+</p>
+
+The extension includes the native runtimes and registers the
+`mobile_device_*` tools with Copilot Chat automatically. No global tool or
+`mcp.json` is required. See the [VS Code guide](docs/vscode.md) for remote
+workspace behavior, manual MCP setup, and development commands.
+
+Both hosts still require Xcode for iOS or the Android SDK for Android; see
+[Requirements](#requirements).
 
 ## Give Copilot hands and eyes
 
@@ -40,13 +85,6 @@ and take over at any time.
     <td width="50%"><img src="assets/agent-android.png" alt="Copilot interacting with an Android emulator in Mobile Canvas"></td>
   </tr>
 </table>
-
-Install **mobile-canvas** from the Copilot plugin marketplace, reload Copilot,
-then open the **Mobile Device** canvas. The plugin registers the canvas and all
-device tools together, with no separate build or executable download.
-
-You still need Xcode for iOS or the Android SDK for Android; see
-[Requirements](#requirements).
 
 ## What it does
 
@@ -78,9 +116,31 @@ You still need Xcode for iOS or the Android SDK for Android; see
 
 | | Requirement |
 |---|---|
-| **iOS** | macOS, Xcode with Simulator runtimes, and [`idb_companion`](https://fbidb.io) (`brew install facebook/fb/idb-companion`) for input |
+| **iOS** | macOS, Xcode with Simulator runtimes, and [`idb_companion`](https://fbidb.io) for input |
 | **Android** | Android SDK with `emulator`, `avdmanager`, and `adb` on `PATH` |
 | **Optional iOS fallback** | Screen Recording and Accessibility permission for ScreenCaptureKit |
+
+For iOS input, install `idb_companion` from its Homebrew tap. Current Homebrew
+versions require explicitly trusting third-party formulae:
+
+```bash
+brew tap facebook/fb
+brew trust --formula facebook/fb/idb-companion
+brew install facebook/fb/idb-companion
+```
+
+Then add the installed executable to your shell environment. For zsh:
+
+```bash
+echo "export IDB_COMPANION_PATH=\"$(brew --prefix idb-companion)/bin/idb_companion\"" >> ~/.zshrc
+source ~/.zshrc
+```
+
+Confirm that the configured path points to the executable:
+
+```bash
+test -x "$IDB_COMPANION_PATH" && "$IDB_COMPANION_PATH" --version
+```
 
 Android emulators must be started with `-gpu host`. A software-rendered AVD
 drops video from ~50 FPS to ~3 FPS.
@@ -95,7 +155,7 @@ iOS control requires `simctl` and `idb`, so it is macOS-only. Android works
 everywhere; hardware H.264 encoding currently runs through a macOS helper, so
 elsewhere the canvas falls back to screenshot polling.
 
-## Other ways to install
+## CLI and source installs
 
 ### From source
 
@@ -152,24 +212,16 @@ All 24 tools are available both as canvas actions and as MCP tools named
 A typical agent flow is `list` → `select` → read `udid` from the result → deploy
 your app to that exact device → drive it with the input tools.
 
-## VS Code
+## VS Code integration
 
-Install **Mobile Canvas** from the
-[Visual Studio Marketplace](https://marketplace.visualstudio.com/items?itemName=redth.mobile-canvas)
-or search for it in the VS Code Extensions view. The Marketplace automatically
-selects the package matching your platform.
-
-Reload VS Code and open **Mobile** from the Activity Bar. The extension
-contains all native runtimes and automatically registers the `mobile_device_*`
-tools with Copilot Chat; no global tool or `mcp.json` is required. Agent actions
-also select and animate the same device in the live view. The view follows the
-active VS Code theme while preserving the GitHub canvas appearance elsewhere.
-The selected device, a current screenshot, or its accessibility tree can be
-attached to chat as `#mobileDevice`, `#mobileScreenshot`, or `#mobileUiTree`.
+Agent actions select and animate the same device in the live Activity Bar view.
+The view follows the active VS Code theme while preserving the GitHub canvas
+appearance elsewhere. Attach the selected device, a fresh screenshot, or its
+accessibility tree to chat with `#mobileDevice`, `#mobileScreenshot`, or
+`#mobileUiTree`.
 
 The extension runs locally for Remote SSH, Dev Containers, and Codespaces.
-`vscode.dev` is unsupported. See [the VS Code guide](docs/vscode.md) for artifact
-downloads, manual MCP configuration, security details, and development commands.
+`vscode.dev` is unsupported.
 
 ## Architecture
 

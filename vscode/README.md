@@ -6,7 +6,7 @@ Mobile Canvas puts a live iOS Simulator or Android emulator in the Activity Bar.
 Control it yourself with mouse and keyboard input, or let GitHub Copilot boot,
 inspect, and drive the same device while you watch.
 
-![Mobile Canvas showing live iOS and Android devices side by side](https://raw.githubusercontent.com/Redth/mobile-canvas-ghcp/main/assets/preview.png)
+![Mobile Canvas running in the VS Code Activity Bar with a live iOS Simulator](https://raw.githubusercontent.com/Redth/mobile-canvas-ghcp/main/assets/vscode-extension.png)
 
 ## Your device lab, inside the editor
 
