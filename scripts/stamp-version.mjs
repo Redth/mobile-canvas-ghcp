@@ -3,8 +3,9 @@
 // silently: package.json is the plugin version, vscode/package*.json describe
 // the VS Code package,
 // Directory.Build.props is what the binary reports from `mobile-canvas
-// --version`, and the two files under .github/plugin are what someone browsing
-// the marketplace sees. Drift means a bug report names a version that never
+// --version`, and the manifests under .github/plugin (Copilot) and
+// .claude-plugin (Claude Code) are what someone browsing a marketplace sees.
+// Drift means a bug report names a version that never
 // shipped -- which had already happened, with the marketplace manifests left a
 // whole release behind at 0.1.0 while the binary shipped 0.1.1.
 //
@@ -98,6 +99,8 @@ const files = [
 	},
 	jsonFile(".github/plugin/plugin.json", (document) => document),
 	jsonFile(".github/plugin/marketplace.json", marketplacePlugin),
+	jsonFile(".claude-plugin/plugin.json", (document) => document),
+	jsonFile(".claude-plugin/marketplace.json", marketplacePlugin),
 	{
 		relative: "Directory.Build.props",
 		read: () => {

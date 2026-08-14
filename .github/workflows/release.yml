@@ -293,6 +293,8 @@ jobs:
             Directory.Build.props
             .github/plugin/plugin.json
             .github/plugin/marketplace.json
+            .claude-plugin/plugin.json
+            .claude-plugin/marketplace.json
 
   publish-vscode:
     name: VS Code Marketplace

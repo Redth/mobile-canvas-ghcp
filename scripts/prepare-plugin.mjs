@@ -21,6 +21,7 @@ rmSync(output, { recursive: true, force: true });
 mkdirSync(output, { recursive: true });
 
 for (const relative of [
+  ".claude-plugin",
   ".github/plugin",
   ".mcp.json",
   "assets",
