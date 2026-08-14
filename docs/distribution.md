@@ -297,9 +297,8 @@ the source inputs used by that build.
 5. A `v*` tag publishes every file to the corresponding GitHub Release.
 6. A `v*` tag then publishes the VS Code extension to the Marketplace.
 7. The tagged build opens a follow-up PR with the exact published hashes, which
-   differ between Native AOT builds even when their source is identical. A
-   manual run can also refresh the manifest and version metadata; generated
-   archives remain ignored.
+   differ between Native AOT builds even when their source is identical.
+   Generated archives remain ignored.
 
 Before merging a distribution change, manually dispatch the workflow with a new
 numeric `version`, a unique `prerelease_tag` matching `v*-rc.*`, and `commit`

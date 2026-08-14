@@ -19,10 +19,6 @@ on:
       prerelease_tag:
         description: Publish a prerelease tag (for example v0.1.7-rc.1) for end-to-end testing
         required: false
-      commit:
-        description: Open a PR with the refreshed runtime manifest
-        type: boolean
-        default: true
       publish_marketplace:
         description: Publish the VS Code extension to the Marketplace
         type: boolean
@@ -279,7 +275,7 @@ jobs:
         run: node scripts/prepare-remote-runtime-manifest.mjs
 
       - uses: peter-evans/create-pull-request@v7
-        if: (inputs.commit && inputs.prerelease_tag == '') || startsWith(github.ref, 'refs/tags/v')
+        if: startsWith(github.ref, 'refs/tags/v')
         with:
           base: main
           branch: release/runtimes
