@@ -80,6 +80,22 @@ SHA-256, and marks them executable.
 
 Measured: **56 ms** on a cold start, **0 ms** once extracted.
 
+### How installed versions coexist
+
+Runtime extraction is already content-addressed, so the GitHub Copilot and VS
+Code packages can each retain their matching executable. Their background hosts
+are coordinated separately under
+`~/.mobile-canvas/hosts/v<MobileCanvasProtocol.Version>/`.
+
+Releases with the same protocol share one host and converge on the newest
+installed compatible executable. Different protocol versions use different
+metadata and lock files and can run concurrently. The protocol version must be
+bumped for a backwards-incompatible API or transport change; the package version
+must not be used as the host key, because that would duplicate hosts for every
+ordinary patch release. Versions predating protocol-scoped hosts continue using
+the legacy `~/.mobile-canvas/host.json` and `host.lock`, so upgrading one product
+host no longer interrupts an older installation in the other.
+
 ### Why gzip
 
 - 26 MB becomes 9.9 MB, so both macOS architectures cost ~21 MB instead of 52 MB.

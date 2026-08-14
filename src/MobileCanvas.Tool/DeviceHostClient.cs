@@ -926,7 +926,7 @@ public sealed class DeviceHostClient
 			RedirectStandardOutput = true,
 			RedirectStandardError = true,
 			CreateNoWindow = true,
-			WorkingDirectory = DevicePaths.Home,
+			WorkingDirectory = DevicePaths.HostHome,
 		};
 		if (Path.GetFileNameWithoutExtension(executable).Equals("dotnet", StringComparison.OrdinalIgnoreCase))
 		{

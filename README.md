@@ -179,7 +179,7 @@ GitHub Copilot app        VS Code extension          CLI / other agent
        │ canvas actions     └─ MCP context proxy              │
        └──────────────────┬───────────────┬────────────────────┘
                           ▼
-                  mobile-canvas host     (per-user singleton, loopback only)
+                  mobile-canvas host     (per-user, per-protocol singleton)
                     ├─ HTTP + WebSocket UI transport
                     ├─ per-panel selected-device state
                     └─ platform backends
@@ -193,6 +193,13 @@ The grant remains in the URL fragment so a host-restored renderer can reconnect
 without exposing the credential in an HTTP request.
 It exits after an idle grace period and **never** shuts down a device
 implicitly, so detaching a panel is always safe.
+
+GitHub Copilot and VS Code releases using the same host protocol share the newest
+compatible host. Hosts are isolated under `~/.mobile-canvas/hosts/v<protocol>/`,
+so an older installation using the legacy location and future incompatible
+protocol versions can run at the same time without replacing each other's
+process. A release that makes a backwards-incompatible host API change must bump
+`MobileCanvasProtocol.Version`; package versions alone do not create extra hosts.
 
 Video is deliberately split from input on both platforms:
 
