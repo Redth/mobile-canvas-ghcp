@@ -50,22 +50,17 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Verify tag matches package version
-        if: startsWith(github.ref, 'refs/tags/v')
-        shell: bash
-        run: |
-          expected="v$(node -p 'require("./package.json").version')"
-          test "$GITHUB_REF_NAME" = "$expected" || {
-            echo "tag $GITHUB_REF_NAME does not match package version $expected" >&2
-            exit 1
-          }
-
       - uses: actions/setup-dotnet@v4
         with:
           global-json-file: global.json
 
       # The binary bakes its version in at compile time, so this has to happen
       # before the build rather than alongside the bundling.
+      - name: Stamp tag version
+        if: startsWith(github.ref, 'refs/tags/v')
+        shell: bash
+        run: node scripts/stamp-version.mjs "${GITHUB_REF_NAME#v}"
+
       - name: Stamp version
         if: inputs.version != ''
         shell: bash
@@ -119,6 +114,10 @@ jobs:
               exit 1
             }
           done
+
+      - name: Stamp tag version
+        if: startsWith(github.ref, 'refs/tags/v')
+        run: node scripts/stamp-version.mjs "${GITHUB_REF_NAME#v}"
 
       - name: Stamp version
         if: inputs.version != ''
