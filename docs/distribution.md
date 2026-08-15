@@ -34,9 +34,9 @@ The consequences are strict:
 
 ## The approach
 
-`runtimes/manifest.json` pins every executable by version, RID, uncompressed
-size, and SHA-256. Release CI publishes each gzip stream as a GitHub Release
-asset:
+`runtimes/manifest.json` pins every executable by version, RID, release asset,
+uncompressed size, and SHA-256. Release CI publishes each gzip stream as a
+GitHub Release asset:
 
 ```
 mobile-canvas-v0.1.7-osx-arm64.gz
@@ -46,14 +46,12 @@ mobile-canvas-runtime-manifest-v0.1.7.json
 SHA256SUMS
 ```
 
-The resolver first uses an archive bundled beside the manifest when one exists.
-If a thin distribution omits that archive, it downloads the versioned asset from
-the pinned release, verifies the uncompressed size and SHA-256, and writes it to
-the same content-addressed cache. It never follows a mutable `latest` URL.
-
-The current release keeps local archives as a compatibility bridge. Once a
-release containing the remote assets is published, later plugin revisions can
-omit those archives without changing the resolver or cache format.
+The repository stores only the manifest, not the archives. The resolver
+downloads the versioned asset from the pinned release, verifies the uncompressed
+size and SHA-256, and writes it to a content-addressed cache. It never follows a
+mutable `latest` URL. Release CI may still place an archive beside the manifest
+while creating a self-contained package; the same resolver prefers that local
+copy without changing the cache format.
 
 `manifest.json` is keyed by `${process.platform}-${process.arch}` so the
 resolver does a direct lookup with no platform mapping table at runtime:
@@ -67,7 +65,11 @@ resolver does a direct lookup with no platform mapping table at runtime:
       "executable": "mobile-canvas",
       "id": "<sha256 of mobile-canvas>",
       "files": {
-        "mobile-canvas": { "archive": "...", "sha256": "...", "size": 26260560 }
+        "mobile-canvas": {
+          "asset": "mobile-canvas-v0.1.11-osx-arm64.gz",
+          "sha256": "...",
+          "size": 26260560
+        }
       }
     }
   }
@@ -108,22 +110,21 @@ host no longer interrupts an older installation in the other.
 
 ### What the size actually costs
 
-The legacy universal bundle is roughly 62 MB compressed. Release assets avoid
-adding another copy of that data to Git history and let thin packages fetch only
-the matching 10-13 MB archive. The cache expands only the current RID.
+The legacy universal bundle is roughly 62 MB compressed. Release assets keep
+that data out of Git history and let universal packages fetch only the matching
+10-13 MB archive. The cache expands only the current RID.
 
 ### VS Code packaging
 
-The universal downloadable VSIX includes the same six compressed archives.
 `scripts/prepare-vscode.mjs` stages the shared web UI, runtime resolver, MCP
-proxy, and `runtimes/` under `vscode/dist/`; `@vscode/vsce` then produces a
-self-contained package of approximately 73 MiB.
+proxy, and remote-only manifest under `vscode/dist/`; `@vscode/vsce` then
+produces a small universal package that uses the verified first-use download
+path.
 
-CI also runs `vsce package --target` for all six supported VS Code targets.
-Those packages contain only their matching runtime, and VS Code Marketplace
-automatically selects the correct target package. A future thin universal VSIX
-is also produced at release time: it omits every archive, is about 0.1 MiB, and
-uses the same verified first-use download path.
+Release CI also runs `vsce package --target` for all six supported VS Code
+targets after building the native assets. Those self-contained packages contain
+only their matching runtime, and VS Code Marketplace automatically selects the
+correct target package.
 
 Installing the VSIX does not extract all binaries. On first use, the shared
 resolver verifies and expands only the current platform into the same
@@ -165,7 +166,7 @@ MCP server so both always run the same build:
 1. `$MOBILE_CANVAS_COMMAND`
 2. `<extension>/bin/mobile-canvas` — a local build, so contributors do not have
    to re-bundle to test a change
-3. the bundled `runtimes/` archive for this platform
+3. an optional packaged `runtimes/` archive for this platform
 4. `~/.local/bin`, then `~/.dotnet/tools`
 5. the matching versioned GitHub Release asset, verified against the manifest
 6. bare `mobile-canvas` on `PATH`
@@ -173,8 +174,8 @@ MCP server so both always run the same build:
 `MOBILE_CANVAS_RUNTIME_BASE_URL` can point first-use downloads at an enterprise
 mirror. `MOBILE_CANVAS_CACHE_DIR` can relocate the content-addressed cache.
 
-If the platform is not bundled, the error names the platform, lists what the
-build does ship, and points at the global tool.
+If the platform is not declared, the error names the platform, lists what the
+manifest supports, and points at the global tool.
 
 ### MCP goes through a shim
 
@@ -218,9 +219,10 @@ so the executable is clean even when every shipped archive is quarantined. That
 was verified by setting a Safari-style quarantine attribute on the archives and
 confirming the extracted binaries carried none and ran.
 
-The Copilot plugin installer does not currently quarantine anything, but a user
-downloading a source ZIP would be, and that is an install path we do not
-control. Shipping raw binaries would hand those users a `SIGKILL`.
+The Copilot plugin installer does not currently quarantine anything. Gzip also
+keeps self-contained release packages safe when they are downloaded through a
+path that applies quarantine; shipping raw binaries would hand those users a
+`SIGKILL`.
 
 ### Direct framebuffer capture and fallback permissions
 
@@ -280,9 +282,8 @@ mobile-canvas 0.1.0-preview.1+04d869a665085a68f6bc7a8257348b09ba2f927c (osx-arm6
 ```
 
 Source Link appends the commit, so a user can identify exactly which build a
-bundled binary came from. That commit is the one the binary was **built from**,
-which is necessarily the parent of the commit that adds it to `runtimes/` — an
-artifact cannot contain its own hash. Expect it to trail `git log` by one.
+published binary came from. The manifest also records a deterministic hash of
+the source inputs used by that build.
 
 ## Releasing
 
@@ -291,17 +292,19 @@ artifact cannot contain its own hash. Expect it to trail `git log` by one.
 1. Native OS runners build all six RIDs.
 2. The bundle job merges and verifies their manifests.
 3. `package-runtime-assets.mjs` creates versioned gzip assets and `SHA256SUMS`.
-4. CI packages bundled and thin Copilot plugins, bundled and thin universal
-   VSIXs, and up to six target VSIXs.
+4. CI packages remote and self-contained Copilot plugins and universal VSIXs,
+   plus up to six self-contained target VSIXs.
 5. A `v*` tag publishes every file to the corresponding GitHub Release.
 6. A `v*` tag then publishes the VS Code extension to the Marketplace.
-7. A manual run can still open a PR refreshing the compatibility bundle.
+7. The tagged build opens a follow-up PR with the exact published hashes, which
+   differ between Native AOT builds even when their source is identical.
+   Generated archives remain ignored.
 
 Before merging a distribution change, manually dispatch the workflow with a new
 numeric `version`, a unique `prerelease_tag` matching `v*-rc.*`, and `commit`
-disabled. This creates an isolated GitHub prerelease from the branch so the thin
-Copilot plugin and thin VSIX can be installed against real release URLs. Delete
-the prerelease and tag after the smoke test.
+disabled. This creates an isolated GitHub prerelease from the branch so the
+remote Copilot plugin and VSIX can be installed against real release URLs.
+Delete the prerelease and tag after the smoke test.
 
 ### Publishing to the VS Code Marketplace
 
@@ -363,5 +366,6 @@ non-SVG `https` URLs. The rules cover only the manifest icon, badges, and readme
 images, which is why `vscode/media/activitybar.svg` stays an SVG — a contributed
 icon is exempt, and the activity bar needs to tint it.
 
-`scripts/verify-bundle.mjs` checks every local archive on any host. CI also
-warns when the manifest source hash has drifted behind `src/`.
+`scripts/verify-bundle.mjs` checks release asset names in a remote manifest and
+fully verifies local archives during release packaging. CI also warns when the
+manifest source hash has drifted behind `src/`.

@@ -6,7 +6,10 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
 import { gzipSync } from "node:zlib";
-import { runtimeAssetName } from "../../lib/runtime-assets.mjs";
+import {
+  remoteRuntimeManifest,
+  runtimeAssetName,
+} from "../../lib/runtime-assets.mjs";
 import { materializeRuntime } from "../../lib/runtime.mjs";
 
 function fixture(expectedHash) {
@@ -41,6 +44,19 @@ test("runtime asset names are pinned to version and RID", () => {
     runtimeAssetName(manifest, entry, "mobile-canvas.exe"),
     "mobile-canvas-v9.8.7-test-rid.gz",
   );
+});
+
+test("remote manifests replace local archive paths with pinned release assets", () => {
+  const { manifest, entry } = fixture();
+  entry.files["mobile-canvas"].asset = "stale-release.gz";
+  manifest.runtimes["test-platform"] = entry;
+
+  const remote = remoteRuntimeManifest(manifest);
+  const file = remote.runtimes["test-platform"].files["mobile-canvas"];
+
+  assert.equal(file.archive, undefined);
+  assert.equal(file.asset, "mobile-canvas-v9.8.7-test-rid.gz");
+  assert.equal(entry.files["mobile-canvas"].archive, "test-rid/mobile-canvas.gz");
 });
 
 test("downloads, verifies, and reuses a cached runtime", async () => {

@@ -1,15 +1,16 @@
 #!/usr/bin/env node
-// Verifies every bundled runtime, on any host platform.
+// Verifies every locally bundled runtime and every remote-only manifest entry.
 //
-// The resolver checksums only the architecture it is extracting, so a corrupt
-// or stale archive for another platform would stay invisible until a user on
-// that platform hit it. This checks all of them, which is what CI needs.
+// The resolver checksums only the architecture it is extracting, so release
+// packaging needs to verify every local archive. For source checkouts, this
+// validates that every remote entry names the expected immutable release asset.
 
 import { createHash } from "node:crypto";
 import { existsSync, readFileSync } from "node:fs";
 import { gunzipSync } from "node:zlib";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
+import { defaultRuntimeAssetName } from "../lib/runtime-assets.mjs";
 
 const packageRoot = dirname(dirname(fileURLToPath(import.meta.url)));
 const runtimesDir = join(packageRoot, "runtimes");
@@ -31,6 +32,19 @@ if (entries.length === 0) {
 
 for (const [platformKey, entry] of entries) {
   for (const [name, file] of Object.entries(entry.files)) {
+    if (!file.archive) {
+      const expected = defaultRuntimeAssetName(manifest, entry, name);
+      if (file.asset !== expected) {
+        console.error(
+          `FAIL ${platformKey}/${name}: expected release asset ${expected}, got ${file.asset ?? "none"}`,
+        );
+        failures += 1;
+      } else {
+        console.log(`ok   ${platformKey}/${name} (${file.asset})`);
+      }
+      continue;
+    }
+
     const archive = join(runtimesDir, file.archive);
     if (!existsSync(archive)) {
       console.error(`FAIL ${platformKey}/${name}: missing ${file.archive}`);

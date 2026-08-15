@@ -1,8 +1,9 @@
 # Using Mobile Canvas from VS Code
 
 The Mobile Canvas VS Code extension provides the live device view and registers
-the same MCP tools used by the GitHub Copilot canvas. It is self-contained: the
-VSIX includes the web UI and every supported native runtime.
+the same MCP tools used by the GitHub Copilot canvas. Marketplace target packages
+include the matching native runtime; the universal fallback downloads and
+verifies its pinned runtime on first use.
 
 ## Install
 
@@ -77,7 +78,7 @@ screenshot, and UI-tree data remains available through canvas actions and MCP.
 The extension declares `extensionKind: ["ui"]`. It therefore runs on the local
 machine even when the current workspace is connected through Remote SSH,
 Dev Containers, or Codespaces. This is intentional: Xcode, Android emulators,
-and the bundled native executable are local-machine resources.
+and the downloaded native executable are local-machine resources.
 
 `vscode.dev` is unsupported because a browser extension host cannot launch the
 native runtime or reach local simulators.
@@ -120,10 +121,11 @@ npm run package --prefix vscode
 ```
 
 The package command writes `.build/mobile-canvas-vscode.vsix` and verifies that
-it contains all six platform runtimes and their archives, the production web
-assets, and no test or source-map files. `npm run package:targets --prefix
-vscode` additionally creates six platform-specific packages containing only the
-matching runtime. VS Code Marketplace selects these packages automatically.
+it contains the checksummed runtime manifest, production web assets, and no test
+or source-map files. It downloads the matching release asset on first use.
+Release CI additionally creates six self-contained platform packages after
+building the native runtimes; VS Code Marketplace selects these packages
+automatically.
 
 To debug interactively, run **Run Mobile Canvas VS Code Extension** from the
 repository's Run and Debug view. The pre-launch task compiles TypeScript and
@@ -144,8 +146,8 @@ vscode/dist/
 ```
 
 The extension imports the same content-addressed runtime resolver as the Copilot
-plugin. The matching archive is extracted and checksum-verified on first use;
-the other platform archives remain compressed.
+plugin. The matching archive is downloaded, extracted, and checksum-verified on
+first use.
 
 The MCP definition uses the positional VS Code API constructor:
 

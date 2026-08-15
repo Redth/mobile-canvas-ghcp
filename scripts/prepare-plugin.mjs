@@ -4,7 +4,7 @@ import { execFileSync } from "node:child_process";
 import { cpSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { runtimeAssetName, runtimeRelease } from "../lib/runtime-assets.mjs";
+import { remoteRuntimeManifest } from "../lib/runtime-assets.mjs";
 
 const root = join(dirname(fileURLToPath(import.meta.url)), "..");
 const thin = process.argv.includes("--thin");
@@ -42,17 +42,11 @@ for (const relative of [
 
 if (thin) {
   const manifest = JSON.parse(readFileSync(join(root, "runtimes", "manifest.json"), "utf8"));
-  manifest.distribution = runtimeRelease(manifest);
-  for (const entry of Object.values(manifest.runtimes ?? {})) {
-    for (const [fileName, file] of Object.entries(entry.files ?? {})) {
-      file.asset = runtimeAssetName(manifest, entry, fileName);
-      delete file.archive;
-    }
-  }
+  const remoteManifest = remoteRuntimeManifest(manifest);
   mkdirSync(join(output, "runtimes"), { recursive: true });
   writeFileSync(
     join(output, "runtimes", "manifest.json"),
-    `${JSON.stringify(manifest, null, 2)}\n`,
+    `${JSON.stringify(remoteManifest, null, 2)}\n`,
   );
 } else {
   cpSync(join(root, "runtimes"), join(output, "runtimes"), { recursive: true });

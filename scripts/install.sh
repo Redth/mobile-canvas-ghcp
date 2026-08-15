@@ -28,8 +28,8 @@ mkdir -p "${DESTINATION}/assets"
 install -m 600 "${REPO_ROOT}/assets/icon.png" "${DESTINATION}/assets/icon.png"
 
 # A locally built binary wins so a contributor testing a change does not have to
-# re-bundle first. Otherwise the checked-in runtimes/ bundle is copied and the
-# resolver extracts the right architecture on first use.
+# publish first. Otherwise the checked-in manifest is copied and the resolver
+# downloads the right architecture on first use.
 BUILD_DIR="${REPO_ROOT}/.build/bin/${HOST_RID}"
 if [[ -x "${BUILD_DIR}/mobile-canvas" ]]; then
   rm -rf "${DESTINATION}/runtimes"

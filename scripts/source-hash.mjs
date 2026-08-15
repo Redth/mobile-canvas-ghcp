@@ -1,12 +1,11 @@
 #!/usr/bin/env node
-// Hashes the source that produces the bundled binaries, so runtimes/ can be
-// checked against src/ without rebuilding.
+// Hashes the source that produced the published binaries, so the runtime
+// manifest can be checked against src/ without rebuilding.
 //
-// The obvious check -- rebuild and diff the result against what is committed --
-// does not work here: Native AOT output is not bit-reproducible, so a fresh
-// build of unchanged source still differs. A check like that fires on every run
-// and therefore says nothing, which is worse than no check, because real drift
-// hides in the noise.
+// Rebuilding and comparing against published bytes does not work: Native AOT
+// output is not bit-reproducible, so a fresh build of unchanged source still
+// differs. A check like that fires on every run and therefore says nothing,
+// which is worse than no check because real drift hides in the noise.
 //
 // Hashing the inputs instead is deterministic. bundle.mjs records the hash it
 // built from; CI recomputes it and compares. Same source, same hash, no rebuild
@@ -97,11 +96,11 @@ if (import.meta.url === `file://${process.argv[1]}`) {
 
 	if (recorded !== hash) {
 		console.error(
-			"\nruntimes/ was built from different source than what is here, so a plugin install"
-			+ "\nwould run a stale binary. Dispatch the 'Release runtimes' workflow to rebuild it.",
+			"\nThe published runtime was built from different source than what is here, so a plugin"
+			+ "\ninstall would run a stale binary. Dispatch the 'Release runtimes' workflow.",
 		);
 		process.exit(1);
 	}
 
-	console.log("\nruntimes/ matches src/");
+	console.log("\nPublished runtimes match src/");
 }
