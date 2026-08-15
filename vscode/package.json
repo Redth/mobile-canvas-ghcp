@@ -2,7 +2,7 @@
   "name": "mobile-canvas",
   "displayName": "Mobile Canvas",
   "description": "Run and control iOS Simulators and Android emulators in VS Code, with live video and Copilot-powered device automation.",
-  "version": "0.1.15",
+  "version": "0.1.16",
   "publisher": "redth",
   "license": "MIT",
   "icon": "media/icon.png",

@@ -1,6 +1,6 @@
 {
   "name": "mobile-canvas",
-  "version": "0.1.15",
+  "version": "0.1.16",
   "description": "Run and control local iOS Simulators and Android emulators in a live Copilot canvas, with agent-ready device automation.",
   "main": "extension.mjs",
   "type": "module",
