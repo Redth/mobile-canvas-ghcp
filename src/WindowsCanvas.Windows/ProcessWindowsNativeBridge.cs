@@ -18,6 +18,7 @@ namespace WindowsCanvas.Windows;
 public sealed class ProcessWindowsNativeBridge : IWindowsNativeBridge
 {
 	internal const string HelperFileName = "windows-app-helper.exe";
+	internal static Encoding HelperInputEncoding { get; } = new UTF8Encoding(encoderShouldEmitUTF8Identifier: false);
 
 	/// <summary>
 	/// Enough for a very large machine's app catalog, small enough that a runaway helper cannot
@@ -206,7 +207,7 @@ public sealed class ProcessWindowsNativeBridge : IWindowsNativeBridge
 			RedirectStandardError = true,
 			CreateNoWindow = true,
 			StandardErrorEncoding = Encoding.UTF8,
-			StandardInputEncoding = Encoding.UTF8,
+			StandardInputEncoding = HelperInputEncoding,
 		};
 		startInfo.ArgumentList.Add("screenshot");
 		startInfo.ArgumentList.Add("--json");
@@ -335,9 +336,10 @@ public sealed class ProcessWindowsNativeBridge : IWindowsNativeBridge
 
 	internal static string? DefaultHelperDirectory()
 	{
-		var executable = Environment.ProcessPath;
-		var directory = executable is null ? null : Path.GetDirectoryName(executable);
-		return string.IsNullOrEmpty(directory) ? AppContext.BaseDirectory : directory;
+		// AppContext follows the entry assembly for framework-dependent development runs and the
+		// executable for Native AOT releases. Environment.ProcessPath points at dotnet.exe in the
+		// former case, which would make the host look for its companion in the SDK installation.
+		return AppContext.BaseDirectory;
 	}
 
 	private Task<T> RunAsync<T>(
@@ -364,20 +366,7 @@ public sealed class ProcessWindowsNativeBridge : IWindowsNativeBridge
 		string? input,
 		CancellationToken cancellationToken)
 	{
-		var startInfo = new ProcessStartInfo
-		{
-			FileName = RequireHelperPath(),
-			UseShellExecute = false,
-			RedirectStandardOutput = true,
-			RedirectStandardError = true,
-			RedirectStandardInput = input is not null,
-			CreateNoWindow = true,
-			StandardOutputEncoding = Encoding.UTF8,
-			StandardErrorEncoding = Encoding.UTF8,
-			StandardInputEncoding = Encoding.UTF8,
-		};
-		foreach (var argument in arguments)
-			startInfo.ArgumentList.Add(argument);
+		var startInfo = CreateJsonStartInfo(RequireHelperPath(), arguments, input is not null);
 
 		var process = Start(startInfo);
 
@@ -394,6 +383,7 @@ public sealed class ProcessWindowsNativeBridge : IWindowsNativeBridge
 					await process.StandardInput.FlushAsync(timeout.Token).ConfigureAwait(false);
 					process.StandardInput.Close();
 				}
+
 				catch (OperationCanceledException)
 				{
 					TryKill(process);
@@ -408,6 +398,29 @@ public sealed class ProcessWindowsNativeBridge : IWindowsNativeBridge
 			return await ReadAsync(process, timeout, arguments, typeInfo, cancellationToken)
 				.ConfigureAwait(false);
 		}
+	}
+
+	internal static ProcessStartInfo CreateJsonStartInfo(
+		string helperPath,
+		IEnumerable<string> arguments,
+		bool redirectInput)
+	{
+		var startInfo = new ProcessStartInfo
+		{
+			FileName = helperPath,
+			UseShellExecute = false,
+			RedirectStandardOutput = true,
+			RedirectStandardError = true,
+			RedirectStandardInput = redirectInput,
+			CreateNoWindow = true,
+			StandardOutputEncoding = Encoding.UTF8,
+			StandardErrorEncoding = Encoding.UTF8,
+		};
+		if (redirectInput)
+			startInfo.StandardInputEncoding = HelperInputEncoding;
+		foreach (var argument in arguments)
+			startInfo.ArgumentList.Add(argument);
+		return startInfo;
 	}
 
 	/// <summary>

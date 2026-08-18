@@ -49,8 +49,10 @@ public sealed partial class Win32WindowController : IWindowsWindowController
 			ShowWindow(window, SwShow);
 
 		// Windows deliberately refuses foreground changes from a process the user is not
-		// interacting with. That is a normal outcome, not a host failure, so it is reported.
-		return SetForegroundWindow(window)
+		// interacting with. First ask normally, then temporarily join the foreground and target
+		// input queues. The latter is the documented way for an explicit user/agent reveal request
+		// to transfer focus without posting private input messages to the target.
+		return TrySetForeground(window)
 			? WindowsWindowActionOutcome.Ok
 			: WindowsWindowActionOutcome.Refused(
 				"Windows declined to bring the window to the foreground. It was shown and " +
@@ -73,6 +75,40 @@ public sealed partial class Win32WindowController : IWindowsWindowController
 			: WindowsWindowActionOutcome.Refused("Windows declined to restore the window.");
 	}
 
+	private static bool TrySetForeground(nint window)
+	{
+		if (SetForegroundWindow(window) || GetForegroundWindow() == window)
+			return true;
+
+		var currentThread = GetCurrentThreadId();
+		var foreground = GetForegroundWindow();
+		var foregroundThread = foreground == 0
+			? 0
+			: GetWindowThreadProcessId(foreground, out _);
+		var targetThread = GetWindowThreadProcessId(window, out _);
+		var attachedForeground = false;
+		var attachedTarget = false;
+		try
+		{
+			if (foregroundThread != 0 && foregroundThread != currentThread)
+				attachedForeground = AttachThreadInput(currentThread, foregroundThread, true);
+			if (targetThread != 0 && targetThread != currentThread && targetThread != foregroundThread)
+				attachedTarget = AttachThreadInput(currentThread, targetThread, true);
+
+			BringWindowToTop(window);
+			SetForegroundWindow(window);
+			SetFocus(window);
+			return GetForegroundWindow() == window;
+		}
+		finally
+		{
+			if (attachedTarget)
+				AttachThreadInput(currentThread, targetThread, false);
+			if (attachedForeground)
+				AttachThreadInput(currentThread, foregroundThread, false);
+		}
+	}
+
 	[SupportedOSPlatform("windows")]
 	[LibraryImport("user32.dll")]
 	[return: MarshalAs(UnmanagedType.Bool)]
@@ -92,4 +128,30 @@ public sealed partial class Win32WindowController : IWindowsWindowController
 	[LibraryImport("user32.dll")]
 	[return: MarshalAs(UnmanagedType.Bool)]
 	private static partial bool SetForegroundWindow(nint handle);
+
+	[SupportedOSPlatform("windows")]
+	[LibraryImport("user32.dll")]
+	private static partial nint GetForegroundWindow();
+
+	[SupportedOSPlatform("windows")]
+	[LibraryImport("kernel32.dll")]
+	private static partial uint GetCurrentThreadId();
+
+	[SupportedOSPlatform("windows")]
+	[LibraryImport("user32.dll")]
+	private static partial uint GetWindowThreadProcessId(nint handle, out uint processId);
+
+	[SupportedOSPlatform("windows")]
+	[LibraryImport("user32.dll")]
+	[return: MarshalAs(UnmanagedType.Bool)]
+	private static partial bool AttachThreadInput(uint attachThreadId, uint attachToThreadId, [MarshalAs(UnmanagedType.Bool)] bool attach);
+
+	[SupportedOSPlatform("windows")]
+	[LibraryImport("user32.dll")]
+	[return: MarshalAs(UnmanagedType.Bool)]
+	private static partial bool BringWindowToTop(nint handle);
+
+	[SupportedOSPlatform("windows")]
+	[LibraryImport("user32.dll")]
+	private static partial nint SetFocus(nint handle);
 }

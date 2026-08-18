@@ -1379,21 +1379,34 @@ Tree BuildTree(uintptr_t handle, const Limits& limits) {
 		return tree;
 	}
 
-	ComPtr<IUIAutomation2> automation;
-	const HRESULT created = CoCreateInstance(
-		CLSID_CUIAutomation,
+	ComPtr<IUIAutomation> automation;
+	HRESULT created = CoCreateInstance(
+		CLSID_CUIAutomation8,
 		nullptr,
 		CLSCTX_INPROC_SERVER,
-		__uuidof(IUIAutomation2),
+		__uuidof(IUIAutomation),
 		reinterpret_cast<void**>(automation.Put()));
+	if (FAILED(created)) {
+		created = CoCreateInstance(
+			CLSID_CUIAutomation,
+			nullptr,
+			CLSCTX_INPROC_SERVER,
+			__uuidof(IUIAutomation),
+			reinterpret_cast<void**>(automation.Put()));
+	}
 	if (FAILED(created)) {
 		throw FatalError(
 			"uia_unavailable",
 			"Could not create the Windows UI Automation client.",
 			created);
 	}
-	(void)automation->put_ConnectionTimeout(limits.timeout_milliseconds);
-	(void)automation->put_TransactionTimeout(limits.timeout_milliseconds);
+	ComPtr<IUIAutomation2> automation2;
+	if (SUCCEEDED(automation->QueryInterface(
+			__uuidof(IUIAutomation2),
+			reinterpret_cast<void**>(automation2.Put())))) {
+		(void)automation2->put_ConnectionTimeout(limits.timeout_milliseconds);
+		(void)automation2->put_TransactionTimeout(limits.timeout_milliseconds);
+	}
 
 	ComPtr<IUIAutomationElement> raw_root;
 	const HRESULT root_result = automation->ElementFromHandle(

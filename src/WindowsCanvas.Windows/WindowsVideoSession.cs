@@ -103,7 +103,7 @@ internal sealed class ProcessWindowsVideoSession : IWindowsVideoSession
 			RedirectStandardError = true,
 			CreateNoWindow = true,
 			StandardErrorEncoding = Encoding.UTF8,
-			StandardInputEncoding = Encoding.UTF8,
+			StandardInputEncoding = ProcessWindowsNativeBridge.HelperInputEncoding,
 		};
 		startInfo.ArgumentList.Add("capture");
 		startInfo.ArgumentList.Add("--json");

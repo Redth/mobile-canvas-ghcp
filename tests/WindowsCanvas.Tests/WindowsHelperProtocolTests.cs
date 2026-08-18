@@ -12,6 +12,31 @@ namespace WindowsCanvas.Tests;
 public sealed class WindowsHelperProtocolTests
 {
 	[Fact]
+	public void ReadOnlyHelperCommand_DoesNotConfigureUnredirectedStandardInput()
+	{
+		var startInfo = ProcessWindowsNativeBridge.CreateJsonStartInfo(
+			"windows-app-helper.exe",
+			["catalog", "--json"],
+			redirectInput: false);
+
+		Assert.False(startInfo.RedirectStandardInput);
+		Assert.Null(startInfo.StandardInputEncoding);
+		Assert.Equal(["catalog", "--json"], startInfo.ArgumentList);
+	}
+
+	[Fact]
+	public void HelperJsonInput_UsesUtf8WithoutABom()
+	{
+		var startInfo = ProcessWindowsNativeBridge.CreateJsonStartInfo(
+			"windows-app-helper.exe",
+			["uia-find", "--json"],
+			redirectInput: true);
+
+		Assert.True(startInfo.RedirectStandardInput);
+		Assert.Empty(startInfo.StandardInputEncoding!.GetPreamble());
+	}
+
+	[Fact]
 	public void Capabilities_BindEveryFieldTheHelperDocuments()
 	{
 		const string payload = """
