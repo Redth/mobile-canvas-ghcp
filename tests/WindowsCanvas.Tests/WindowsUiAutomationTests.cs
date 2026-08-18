@@ -34,7 +34,41 @@ public sealed class WindowsUiAutomationTests
 		Assert.Equal(
 			WindowsUiSelectorPrecedence.QualifiedFallback,
 			WindowsUiSelectorPrecedence.Classify(new WindowsUiSelector { Path = [2, 1] }));
-		Assert.Null(WindowsUiSelectorPrecedence.Classify(new WindowsUiSelector { Name = "Save" }));
+		Assert.Equal(
+			WindowsUiSelectorPrecedence.SemanticConstraint,
+			WindowsUiSelectorPrecedence.Classify(new WindowsUiSelector { Name = "Save" }));
+		Assert.Equal(
+			WindowsUiSelectorPrecedence.SemanticConstraint,
+			WindowsUiSelectorPrecedence.Classify(new WindowsUiSelector
+			{
+				ControlType = WindowsUiControlTypes.Button,
+			}));
+	}
+
+	[Theory]
+	[InlineData("save", null, null, null)]
+	[InlineData(null, "button", null, null)]
+	[InlineData(null, null, "Save", null)]
+	[InlineData(null, null, null, "draft")]
+	public void Selector_AllowsOneFriendlySemanticConstraint(
+		string? automationId,
+		string? controlType,
+		string? name,
+		string? value)
+	{
+		var selector = WindowsUiAutomationNormalizer.Selector(new WindowsUiSelector
+		{
+			AutomationId = automationId,
+			ControlType = controlType,
+			Name = name,
+			Value = value,
+			Exact = false,
+		});
+
+		Assert.Equal(automationId, selector.AutomationId);
+		Assert.Equal(controlType, selector.ControlType);
+		Assert.Equal(name, selector.Name);
+		Assert.Equal(value, selector.Value);
 	}
 
 	[Fact]

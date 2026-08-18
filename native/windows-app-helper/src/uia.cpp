@@ -544,41 +544,22 @@ struct Selector : SelectorAtom {
 	std::optional<int> index;
 };
 
-enum class SelectorStrategy {
-	AutomationIdAndControlType,
-	ControlTypeAndNameOrValue,
-	QualifiedFallback,
-};
-
 bool HasType(const SelectorAtom& selector) {
 	return selector.control_type.has_value() || selector.role.has_value();
-}
-
-SelectorStrategy StrategyFor(const Selector& selector) {
-	if (selector.automation_id.has_value() && HasType(selector)) {
-		return SelectorStrategy::AutomationIdAndControlType;
-	}
-	if (HasType(selector) && (selector.name.has_value() || selector.value.has_value())) {
-		return SelectorStrategy::ControlTypeAndNameOrValue;
-	}
-	return SelectorStrategy::QualifiedFallback;
 }
 
 void ValidateSelector(const Selector& selector) {
 	const bool qualified = !selector.ancestors.empty() || !selector.path.empty() ||
 		selector.index.has_value();
-	if (!(selector.automation_id.has_value() && HasType(selector)) &&
-		!(HasType(selector) && (selector.name.has_value() || selector.value.has_value())) &&
+	if (!selector.automation_id.has_value() &&
+		!HasType(selector) &&
+		!selector.name.has_value() &&
+		!selector.value.has_value() &&
 		!qualified) {
 		throw FatalError(
 			kUiInvalidSelector,
-			"A selector must use automationId plus controlType/role, controlType/role plus " +
-				std::string("name/value, or an explicit ancestry, index, or path."));
-	}
-	if (selector.automation_id.has_value() && !HasType(selector)) {
-		throw FatalError(
-			kUiInvalidSelector,
-			"An automationId selector requires controlType or role.");
+			"A selector needs an automation ID, control type, role, name, value, ancestry, "
+			"index, or path.");
 	}
 }
 
@@ -1468,7 +1449,7 @@ Tree BuildTree(uintptr_t handle, const Limits& limits) {
 bool MatchesAtom(const Node& node, const SelectorAtom& selector) {
 	if (selector.automation_id.has_value() &&
 		(!node.automation_id.has_value() ||
-			!EqualNoCase(*node.automation_id, *selector.automation_id))) {
+			!MatchesText(*node.automation_id, selector.automation_id, selector.exact))) {
 		return false;
 	}
 	if (selector.control_type.has_value() &&
@@ -1506,20 +1487,6 @@ bool MatchesType(const Node& node, const SelectorAtom& selector) {
 }
 
 bool MatchesSelector(const Node& node, const Selector& selector) {
-	const SelectorStrategy strategy = StrategyFor(selector);
-	if (strategy == SelectorStrategy::AutomationIdAndControlType) {
-		return node.automation_id.has_value() &&
-			EqualNoCase(*node.automation_id, *selector.automation_id) &&
-			MatchesType(node, selector);
-	}
-	if (strategy == SelectorStrategy::ControlTypeAndNameOrValue) {
-		return MatchesType(node, selector) &&
-			MatchesText(node.name.value_or(L""), selector.name, selector.exact) &&
-			(!selector.value.has_value() ||
-				(node.password == false &&
-					MatchesText(node.value.value_or(L""), selector.value, selector.exact)));
-	}
-
 	if (!MatchesAtom(node, selector) ||
 		(selector.value.has_value() &&
 			(node.password != false ||
@@ -1557,8 +1524,7 @@ std::vector<Node*> FindMatches(Tree& tree, const Selector& selector) {
 	if (!tree.root) {
 		return matches;
 	}
-	const SelectorStrategy strategy = StrategyFor(selector);
-	if (strategy == SelectorStrategy::QualifiedFallback && !selector.path.empty()) {
+	if (!selector.path.empty()) {
 		Node* current = tree.root.get();
 		for (const int index : selector.path) {
 			if (index < 0 || static_cast<size_t>(index) >= current->children.size()) {
@@ -1572,7 +1538,7 @@ std::vector<Node*> FindMatches(Tree& tree, const Selector& selector) {
 	} else {
 		CollectMatches(tree.root.get(), selector, matches);
 	}
-	if (strategy == SelectorStrategy::QualifiedFallback && selector.index.has_value()) {
+	if (selector.index.has_value()) {
 		if (static_cast<size_t>(*selector.index) >= matches.size()) {
 			return {};
 		}

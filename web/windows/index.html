@@ -54,6 +54,10 @@
       <path d="M8 1.75 14.25 13H1.75z"></path>
       <path d="M8 5.25v3.5M8 11.35h.01"></path>
     </symbol>
+    <symbol id="icon-help" viewBox="0 0 16 16">
+      <circle cx="8" cy="8" r="5.75"></circle>
+      <path d="M6.35 6.25a1.75 1.75 0 1 1 2.8 1.4C8.4 8.2 8 8.55 8 9.4M8 11.75h.01"></path>
+    </symbol>
     <symbol id="icon-close" viewBox="0 0 16 16">
       <path d="m3.25 3.25 9.5 9.5M12.75 3.25l-9.5 9.5"></path>
     </symbol>
@@ -185,48 +189,113 @@
 
     <aside id="inspector" class="inspector hidden" aria-label="UI Automation inspector">
       <header class="inspector-head">
-        <h2>UI Automation</h2>
+        <div class="inspector-heading">
+          <h2>Inspect UI</h2>
+        </div>
         <button id="inspector-close" class="icon-button" type="button" aria-label="Close inspector">
           <svg class="icon"><use href="#icon-close"></use></svg>
         </button>
       </header>
 
       <div class="inspector-body">
-        <section class="inspector-section">
-          <div class="field-row">
-            <label class="field"><span>Automation ID</span>
-              <input id="selector-automation-id" type="text" autocomplete="off" spellcheck="false"></label>
-            <label class="field"><span>Control type</span>
-              <input id="selector-control-type" type="text" autocomplete="off" spellcheck="false"
-                     placeholder="button, edit, listItem"></label>
+        <section class="inspector-query" aria-labelledby="query-label">
+          <form id="ui-query-form" class="query-form">
+            <label id="query-label" class="visually-hidden" for="ui-query-input">
+              Filter UI Automation elements
+            </label>
+            <div class="query-shell">
+              <svg class="icon query-icon" aria-hidden="true"><use href="#icon-search"></use></svg>
+              <input id="ui-query-input" class="query-input" type="text" role="combobox"
+                     aria-autocomplete="list" aria-expanded="false"
+                     aria-controls="ui-query-suggestions" aria-describedby="query-hint"
+                     autocomplete="off" spellcheck="false"
+                     placeholder="Search by name, ID, type, role, or value">
+              <button id="ui-query-clear" class="query-clear hidden" type="button"
+                      aria-label="Clear query">
+                <svg class="icon" aria-hidden="true"><use href="#icon-close"></use></svg>
+              </button>
+              <button id="ui-query-help" class="query-help-button" type="button"
+                      aria-label="Query syntax help" aria-expanded="false"
+                      aria-controls="ui-query-help-popover">
+                <svg class="icon" aria-hidden="true"><use href="#icon-help"></use></svg>
+              </button>
+              <button id="find-button" class="query-submit" type="submit">Find</button>
+            </div>
+            <ul id="ui-query-suggestions" class="query-suggestions hidden" role="listbox"
+                aria-label="Query suggestions"></ul>
+          </form>
+          <div id="ui-query-chips" class="query-chips hidden" aria-label="Parsed query"></div>
+          <span id="query-hint" class="visually-hidden">
+            Plain text searches names. Open query syntax help for fields and operators.
+          </span>
+          <div id="ui-query-help-popover" class="query-help-popover hidden">
+            <strong>Query syntax</strong>
+            <p>Plain text searches element names. Join filters with <code>and</code>.</p>
+            <dl>
+              <div><dt>Fields</dt><dd><code>name</code> <code>id</code> <code>type</code>
+                <code>role</code> <code>value</code> <code>index</code></dd></div>
+              <div><dt>Operators</dt><dd><code>=</code> exact, <code>contains</code> substring</dd></div>
+            </dl>
+            <div class="query-help-examples">
+              <button class="query-example" type="button" data-query='name contains "save"'>
+                name contains "save"
+              </button>
+              <button class="query-example" type="button" data-query="type=button and name=Save">
+                type=button and name=Save
+              </button>
+              <button class="query-example" type="button" data-query="id=SAVE and type=button">
+                id=SAVE and type=button
+              </button>
+            </div>
           </div>
-          <div class="field-row">
-            <label class="field"><span>Name</span>
-              <input id="selector-name" type="text" autocomplete="off" spellcheck="false"></label>
-            <label class="field"><span>Value</span>
-              <input id="selector-value" type="text" autocomplete="off" spellcheck="false"></label>
+          <p id="find-status" class="inspector-note query-status hidden" role="status"
+             aria-live="polite"></p>
+        </section>
+
+        <div class="inspector-viewbar">
+          <div class="inspector-view-tabs" role="tablist" aria-label="Inspector view">
+            <button id="inspector-results-tab" class="inspector-view-tab is-active" type="button"
+                    role="tab" aria-selected="true" aria-controls="inspector-results-panel"
+                    tabindex="0">
+              Matches <span id="match-count" class="count-badge hidden"></span>
+            </button>
+            <button id="inspector-tree-tab" class="inspector-view-tab" type="button"
+                    role="tab" aria-selected="false" aria-controls="inspector-tree-panel"
+                    tabindex="-1">Tree</button>
           </div>
-          <div class="field-row compact">
-            <label class="checkbox"><input id="selector-exact" type="checkbox" checked> Exact match</label>
-            <label class="field narrow"><span>Index</span>
-              <input id="selector-index" type="number" min="0" step="1" placeholder="any"></label>
-            <button id="find-button" class="button primary" type="button">Find</button>
+          <details id="scope-details" class="scope-details">
+            <summary>Scope</summary>
+            <div class="scope-popover">
+              <label class="field narrow"><span>Depth</span>
+                <input id="snapshot-depth" type="number" min="1" max="32" value="12"></label>
+              <label class="field narrow"><span>Nodes</span>
+                <input id="snapshot-nodes" type="number" min="1" max="5000" value="500"></label>
+              <label class="field narrow"><span>Timeout (ms)</span>
+                <input id="snapshot-timeout" type="number" min="100" max="30000" step="100"
+                       value="5000"></label>
+            </div>
+          </details>
+        </div>
+
+        <section id="inspector-results-panel" class="inspector-panel" role="tabpanel"
+                 aria-labelledby="inspector-results-tab" tabindex="0">
+          <div id="inspector-query-empty" class="inspector-empty">
+            <svg class="icon" aria-hidden="true"><use href="#icon-search"></use></svg>
+            <strong>Search accessible elements</strong>
+            <p>Type a name, or combine fields such as <code>type=button</code>.</p>
           </div>
-          <p id="find-status" class="inspector-note hidden"></p>
           <ul id="find-results" class="match-list"></ul>
         </section>
 
-        <section class="inspector-section">
-          <div class="field-row compact">
-            <label class="field narrow"><span>Depth</span>
-              <input id="snapshot-depth" type="number" min="1" max="32" value="12"></label>
-            <label class="field narrow"><span>Nodes</span>
-              <input id="snapshot-nodes" type="number" min="1" max="5000" value="500"></label>
-            <label class="field narrow"><span>Timeout</span>
-              <input id="snapshot-timeout" type="number" min="100" max="30000" step="100" value="5000"></label>
-            <button id="snapshot-button" class="button" type="button">Dump tree</button>
+        <section id="inspector-tree-panel" class="inspector-panel hidden" role="tabpanel"
+                 aria-labelledby="inspector-tree-tab" tabindex="0">
+          <div class="tree-toolbar">
+            <div>
+              <strong>Accessibility tree</strong>
+              <p id="snapshot-status" class="inspector-note">Load a bounded snapshot of this window.</p>
+            </div>
+            <button id="snapshot-button" class="button" type="button">Load tree</button>
           </div>
-          <p id="snapshot-status" class="inspector-note hidden"></p>
           <div id="snapshot-tree" class="tree" role="tree"></div>
         </section>
       </div>

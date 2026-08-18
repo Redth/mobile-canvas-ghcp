@@ -713,6 +713,273 @@ export function inputErrorMessage(error) {
  * UI Automation
  * ------------------------------------------------------------------------------------------ */
 
+const UI_QUERY_FIELDS = {
+  name: { key: "name", label: "Name", operators: ["=", "contains"] },
+  id: { key: "automationId", label: "Automation ID", operators: ["=", "contains"] },
+  automationid: { key: "automationId", label: "Automation ID", operators: ["=", "contains"] },
+  type: { key: "controlType", label: "Control type", operators: ["="] },
+  controltype: { key: "controlType", label: "Control type", operators: ["="] },
+  role: { key: "role", label: "Role", operators: ["="] },
+  value: { key: "value", label: "Value", operators: ["=", "contains"] },
+  index: { key: "index", label: "Index", operators: ["="] },
+};
+
+function uiQueryField(name) {
+  return Object.hasOwn(UI_QUERY_FIELDS, name) ? UI_QUERY_FIELDS[name] : null;
+}
+
+const UI_CONTROL_TYPES = [
+  "button", "checkBox", "comboBox", "custom", "document", "edit", "group", "image",
+  "list", "listItem", "menu", "menuItem", "pane", "radioButton", "scrollBar", "slider",
+  "tab", "tabItem", "text", "titleBar", "tree", "treeItem", "window",
+];
+
+const UI_ROLES = [
+  "button", "checkbox", "combobox", "container", "dialog", "field", "image", "link",
+  "list", "listItem", "menu", "menuItem", "radio", "scrollbar", "slider", "tab", "tabItem",
+  "text", "tree", "treeItem", "window",
+];
+
+export const UI_QUERY_EXAMPLES = [
+  'name contains "save"',
+  "type=button",
+  'id=SAVE and type=button',
+  'role=field and value contains "draft"',
+];
+
+function tokenizeUiQuery(source) {
+  const tokens = [];
+  let position = 0;
+  while (position < source.length) {
+    while (/\s/.test(source[position] ?? "")) position += 1;
+    if (position >= source.length) break;
+    const start = position;
+    const quote = source[position] === '"' || source[position] === "'" ? source[position++] : null;
+    let value = "";
+    if (quote) {
+      let closed = false;
+      while (position < source.length) {
+        const character = source[position++];
+        if (character === "\\" && position < source.length) {
+          value += source[position++];
+        } else if (character === quote) {
+          closed = true;
+          break;
+        } else {
+          value += character;
+        }
+      }
+      if (!closed) throw new Error("Close the quoted value before searching.");
+      tokens.push({ value, lower: value.toLocaleLowerCase(), start, end: position, quoted: true });
+      continue;
+    }
+    if (source[position] === "=" || source[position] === "~") {
+      value = source[position++];
+    } else {
+      while (position < source.length && !/[\s=~]/.test(source[position])) {
+        value += source[position++];
+      }
+    }
+    tokens.push({ value, lower: value.toLocaleLowerCase(), start, end: position, quoted: false });
+  }
+  return tokens;
+}
+
+/** Parse the compact, AND-only inspector grammar. Plain text is a name substring search. */
+export function parseUiQuery(source) {
+  const query = String(source ?? "").trim();
+  if (!query) return { query, clauses: [], error: null };
+
+  let tokens;
+  try {
+    tokens = tokenizeUiQuery(query);
+  } catch (error) {
+    return { query, clauses: [], error: error.message };
+  }
+  const explicit = tokens.some((token) => ["=", "~", "contains"].includes(token.lower));
+  if (!explicit) {
+    return {
+      query,
+      clauses: [{ field: "name", label: "Name", operator: "contains", value: query }],
+      error: null,
+    };
+  }
+
+  const clauses = [];
+  for (let index = 0; index < tokens.length;) {
+    if (tokens[index].lower === "and") {
+      index += 1;
+      continue;
+    }
+    const definition = uiQueryField(tokens[index].lower);
+    if (!definition) {
+      return {
+        query,
+        clauses: [],
+        error: `Unknown field “${tokens[index].value}”. Use name, id, type, role, value, or index.`,
+      };
+    }
+    const operatorToken = tokens[index + 1];
+    const operator = operatorToken?.lower === "~" ? "contains" : operatorToken?.lower;
+    if (!definition.operators.includes(operator)) {
+      return {
+        query,
+        clauses: [],
+        error: `${definition.label} supports ${definition.operators.join(" or ")}.`,
+      };
+    }
+    const valueToken = tokens[index + 2];
+    if (!valueToken || valueToken.lower === "and") {
+      return { query, clauses: [], error: `Add a value after ${tokens[index].value} ${operator}.` };
+    }
+    let value = valueToken.value;
+    if (definition.key === "index") {
+      value = Number(value);
+      if (!Number.isInteger(value) || value < 0) {
+        return { query, clauses: [], error: "Index must be a whole number, zero or greater." };
+      }
+    }
+    clauses.push({
+      field: definition.key,
+      label: definition.label,
+      operator,
+      value,
+    });
+    index += 3;
+  }
+  return { query, clauses, error: null };
+}
+
+/**
+ * Compile a rich query onto the native selector's one exactness switch. Exact clauses are sent to
+ * the host first; any substring clauses are refined client-side from those bounded matches.
+ */
+export function compileUiQuery(source) {
+  const parsed = parseUiQuery(source);
+  if (parsed.error || parsed.clauses.length === 0) return { ...parsed, selector: null, filters: [] };
+
+  const structural = parsed.clauses.filter((clause) => (
+    clause.field === "controlType" || clause.field === "role"
+  ));
+  const indexClause = parsed.clauses.find((clause) => clause.field === "index");
+  const text = parsed.clauses.filter((clause) => (
+    clause.field !== "controlType" && clause.field !== "role" && clause.field !== "index"
+  ));
+  const exact = text.filter((clause) => clause.operator === "=");
+  const contains = text.filter((clause) => clause.operator === "contains");
+  const serverText = exact.length > 0 ? exact : contains;
+  const filters = exact.length > 0 ? [...contains] : [];
+  const selector = {
+    automationId: null,
+    controlType: null,
+    role: null,
+    name: null,
+    value: null,
+    exact: exact.length > 0 || contains.length === 0,
+    index: filters.length === 0 ? indexClause?.value ?? null : null,
+    ancestors: [],
+    path: [],
+  };
+  const assigned = new Set();
+  for (const clause of [...structural, ...serverText]) {
+    if (assigned.has(clause.field)) filters.push(clause);
+    else {
+      selector[clause.field] = clause.value;
+      assigned.add(clause.field);
+    }
+  }
+  if (filters.length > 0) selector.index = null;
+  return { ...parsed, selector, filters, index: indexClause?.value ?? null };
+}
+
+function uiMatchValue(match, field) {
+  const element = match?.element ?? {};
+  if (field === "automationId") return element.properties?.automationId ?? "";
+  if (field === "controlType") return element.controlType ?? "";
+  if (field === "role") return element.role ?? "";
+  if (field === "value") return element.properties?.password ? "" : element.properties?.value ?? "";
+  return element.properties?.name ?? "";
+}
+
+/** Finish mixed exact/contains queries without weakening exact clauses on the native side. */
+export function refineUiQueryResult(result, compiled) {
+  if (!compiled || compiled.error) return result;
+  let matches = [...(result?.matches ?? [])];
+  for (const clause of compiled.filters ?? []) {
+    const expected = String(clause.value).toLocaleLowerCase();
+    matches = matches.filter((match) => (
+      String(uiMatchValue(match, clause.field)).toLocaleLowerCase().includes(expected)
+    ));
+  }
+  if (Number.isInteger(compiled.index) && (compiled.filters?.length ?? 0) > 0) {
+    matches = matches[compiled.index] ? [matches[compiled.index]] : [];
+  }
+  return {
+    ...result,
+    matches,
+    totalMatches: matches.length,
+    sourceTotalMatches: result?.totalMatches ?? matches.length,
+    sourceReturnedMatches: result?.matches?.length ?? matches.length,
+    filterIncomplete: (compiled.filters?.length ?? 0) > 0
+      && (result?.totalMatches ?? 0) > (result?.matches?.length ?? 0),
+  };
+}
+
+export function uiQueryChips(compiled) {
+  return (compiled?.clauses ?? []).map((clause) => ({
+    field: clause.label,
+    operator: clause.operator,
+    value: String(clause.value),
+  }));
+}
+
+/**
+ * Contextual autocomplete. Suggestions replace only the active fragment, so accepting one never
+ * destroys a query the user has already built.
+ */
+export function uiQuerySuggestions(source, cursor = String(source ?? "").length) {
+  const query = String(source ?? "");
+  const before = query.slice(0, cursor);
+  const start = Math.max(before.lastIndexOf(" ") + 1, 0);
+  const fragment = before.slice(start);
+  const lower = fragment.toLocaleLowerCase();
+  const make = (label, insertText, detail) => ({ label, insertText, detail, start, end: cursor });
+
+  const valueMatch = lower.match(/^(type|controltype|role)=(.*)$/);
+  if (valueMatch) {
+    const values = valueMatch[1] === "role" ? UI_ROLES : UI_CONTROL_TYPES;
+    return values
+      .filter((value) => value.toLocaleLowerCase().startsWith(valueMatch[2]))
+      .slice(0, 8)
+      .map((value) => make(value, `${valueMatch[1]}=${value}`, "Known UI Automation value"));
+  }
+  const field = uiQueryField(lower);
+  if (field) {
+    return field.operators.map((operator) => make(
+      `${field.label} ${operator}`,
+      `${fragment}${operator === "=" ? "=" : " contains "}`,
+      operator === "=" ? "Exact match" : "Substring match",
+    ));
+  }
+  const fieldSuggestions = [
+    make("Name contains…", "name contains ", "Visible or accessible name"),
+    make("Automation ID =", "id=", "Stable automation identifier"),
+    make("Control type =", "type=", "button, edit, listItem…"),
+    make("Role =", "role=", "button, field, container…"),
+    make("Value contains…", "value contains ", "Current non-password value"),
+    make("Index =", "index=", "Zero-based match index"),
+  ];
+  return fieldSuggestions.filter((suggestion) => (
+    !lower || suggestion.insertText.toLocaleLowerCase().startsWith(lower)
+  ));
+}
+
+export function applyUiQuerySuggestion(source, suggestion) {
+  const query = String(source ?? "");
+  const value = query.slice(0, suggestion.start) + suggestion.insertText + query.slice(suggestion.end);
+  return { value, cursor: suggestion.start + suggestion.insertText.length };
+}
+
 /** Which semantic actions an element currently offers, in a stable presentation order. */
 export function availableUiActions(element) {
   const supported = element?.supportedActions ?? {};
@@ -774,10 +1041,18 @@ export function snapshotWarnings(metadata) {
 export function findResultPresentation(result) {
   const matches = result?.matches ?? [];
   const total = result?.totalMatches ?? matches.length;
+  if (result?.filterIncomplete) {
+    return {
+      tone: "warning",
+      message: `Found ${total} matches in the first ${result.sourceReturnedMatches ?? 0} candidates. Add another exact clause to search the full result set safely.`,
+      ambiguous: total !== 1,
+      matches,
+    };
+  }
   if (total === 0) {
     return {
       tone: "warning",
-      message: "No element matched. Loosen the selector or dump the tree to see what is there.",
+      message: "No element matched. Broaden the query or inspect the Tree view.",
       ambiguous: false,
       matches,
     };
@@ -785,7 +1060,7 @@ export function findResultPresentation(result) {
   if (total > 1) {
     return {
       tone: "warning",
-      message: `${total} elements match. Add an automation ID, name, or explicit index before acting.`,
+      message: `${total} elements match. Add id=…, another field, or index=… before acting.`,
       ambiguous: true,
       matches,
     };

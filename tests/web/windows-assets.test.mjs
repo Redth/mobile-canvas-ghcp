@@ -60,6 +60,23 @@ test("the app picker starts with visual open-window cards and keeps launch paths
   assert.match(indexHtml, /id="executable-dialog"/);
 });
 
+test("the UI Automation inspector is a single rich query surface with progressive disclosure", () => {
+  assert.match(indexHtml, /id="ui-query-input"[\s\S]*role="combobox"[\s\S]*aria-autocomplete="list"/);
+  assert.match(indexHtml, /id="ui-query-suggestions"[\s\S]*role="listbox"/);
+  assert.match(indexHtml, /id="ui-query-help"[\s\S]*aria-controls="ui-query-help-popover"/);
+  assert.match(indexHtml, /data-query='name contains "save"'/);
+  assert.match(indexHtml, /id="inspector-results-tab"[\s\S]*id="inspector-tree-tab"/);
+  assert.match(indexHtml, /id="scope-details"[\s\S]*<summary>Scope<\/summary>/);
+  assert.doesNotMatch(indexHtml, /id="selector-(automation-id|control-type|name|value|exact|index)"/);
+  assert.match(renderer, /compileUiQuery\(elements\.queryInput\.value\)/);
+  assert.match(renderer, /uiQuerySuggestions\(/);
+  assert.match(renderer, /refineUiQueryResult\(/);
+  assert.match(renderer, /event\.key === "ArrowDown" \|\| event\.key === "ArrowUp"/);
+  assert.match(renderer, /state\.querySuggestionIndex >= 0/);
+  assert.match(renderer, /row\.setAttribute\("role", "treeitem"\)/);
+  assert.match(renderer, /row\.setAttribute\("aria-selected", "true"\)/);
+});
+
 test("the stylesheet themes everything through semantic tokens", () => {
   const css = read("web", "windows", "windows-canvas.css");
   for (const token of [

@@ -1,12 +1,14 @@
 import { AnnexBParser } from "../annexb.js";
 import {
   activityLabel,
+  applyUiQuerySuggestion,
   availableUiActions,
   captureFromClientPoint,
   captureSourceLabel,
   candidateCardPresentation,
   catalogSourceWarning,
   correlationLabel,
+  compileUiQuery,
   defaultPickerSection,
   describeStreamEnd,
   filterWindowCandidates,
@@ -22,6 +24,7 @@ import {
   isCurrentThumbnailGeneration,
   nextThumbnailGeneration,
   preflightPresentation,
+  refineUiQueryResult,
   requiresSessionRefresh,
   requiresWindowRefresh,
   resolveSelectedTab,
@@ -34,6 +37,8 @@ import {
   stageStatusPresentation,
   uiElementLabel,
   uiElementValue,
+  uiQueryChips,
+  uiQuerySuggestions,
   wheelNotches,
   windowThumbnailUrl,
   WINDOWS_SURFACE,
@@ -84,15 +89,25 @@ const elements = {
   automationLabel: document.querySelector("#automation-label"),
   inspector: document.querySelector("#inspector"),
   inspectorClose: document.querySelector("#inspector-close"),
-  selectorAutomationId: document.querySelector("#selector-automation-id"),
-  selectorControlType: document.querySelector("#selector-control-type"),
-  selectorName: document.querySelector("#selector-name"),
-  selectorValue: document.querySelector("#selector-value"),
-  selectorExact: document.querySelector("#selector-exact"),
-  selectorIndex: document.querySelector("#selector-index"),
+  queryForm: document.querySelector("#ui-query-form"),
+  queryInput: document.querySelector("#ui-query-input"),
+  queryClear: document.querySelector("#ui-query-clear"),
+  queryHelpButton: document.querySelector("#ui-query-help"),
+  queryHelpPopover: document.querySelector("#ui-query-help-popover"),
+  querySuggestions: document.querySelector("#ui-query-suggestions"),
+  queryChips: document.querySelector("#ui-query-chips"),
+  queryHint: document.querySelector("#query-hint"),
+  queryExamples: [...document.querySelectorAll(".query-example")],
   findButton: document.querySelector("#find-button"),
   findStatus: document.querySelector("#find-status"),
   findResults: document.querySelector("#find-results"),
+  queryEmpty: document.querySelector("#inspector-query-empty"),
+  resultsTab: document.querySelector("#inspector-results-tab"),
+  treeTab: document.querySelector("#inspector-tree-tab"),
+  resultsPanel: document.querySelector("#inspector-results-panel"),
+  treePanel: document.querySelector("#inspector-tree-panel"),
+  matchCount: document.querySelector("#match-count"),
+  scopeDetails: document.querySelector("#scope-details"),
   snapshotDepth: document.querySelector("#snapshot-depth"),
   snapshotNodes: document.querySelector("#snapshot-nodes"),
   snapshotTimeout: document.querySelector("#snapshot-timeout"),
@@ -193,6 +208,11 @@ const state = {
   toastTimer: null,
   match: null,
   inspectorOpen: false,
+  inspectorView: "results",
+  snapshotRoot: null,
+  queryCompiled: null,
+  querySuggestions: [],
+  querySuggestionIndex: -1,
   automationTimer: null,
   activitySocket: null,
   activityRetry: null,
@@ -396,9 +416,11 @@ function openPopover() {
 }
 
 function closePopover() {
+  const restoreFocus = elements.popover.contains(document.activeElement);
   clearCandidateThumbnails();
   elements.popover.classList.add("hidden");
   elements.selector.setAttribute("aria-expanded", "false");
+  if (restoreFocus) requestAnimationFrame(() => elements.selector.focus());
 }
 
 function showPopoverPanel(which) {
@@ -1779,54 +1801,194 @@ function endAutomation() {
  * ------------------------------------------------------------------------------------------ */
 
 function toggleInspector(open) {
-  state.inspectorOpen = open ?? !state.inspectorOpen;
+  const next = open ?? !state.inspectorOpen;
+  const restoreFocus = !next
+    && elements.inspector.contains(document.activeElement)
+    && !elements.inspectButton.disabled;
+  state.inspectorOpen = next;
   elements.inspector.classList.toggle("hidden", !state.inspectorOpen);
   elements.inspectButton.setAttribute("aria-pressed", String(state.inspectorOpen));
   fitStage();
+  if (state.inspectorOpen) {
+    requestAnimationFrame(() => elements.queryInput.focus());
+  } else {
+    closeQuerySuggestions();
+    toggleQueryHelp(false);
+    if (restoreFocus) requestAnimationFrame(() => elements.inspectButton.focus());
+  }
 }
 
 function uiPath(suffix) {
   return `${API}/session/windows/${encodeURIComponent(state.selectedWindowId)}/ui/${suffix}`;
 }
 
-function selectorFromForm() {
-  const index = elements.selectorIndex.value.trim();
-  return {
-    automationId: elements.selectorAutomationId.value.trim() || null,
-    controlType: elements.selectorControlType.value.trim() || null,
-    name: elements.selectorName.value.trim() || null,
-    value: elements.selectorValue.value.trim() || null,
-    exact: elements.selectorExact.checked,
-    index: index === "" ? null : Number(index),
-    ancestors: [],
-    path: [],
-  };
+function setInspectorView(view) {
+  state.inspectorView = view === "tree" ? "tree" : "results";
+  const tree = state.inspectorView === "tree";
+  elements.resultsTab.classList.toggle("is-active", !tree);
+  elements.resultsTab.setAttribute("aria-selected", String(!tree));
+  elements.resultsTab.tabIndex = tree ? -1 : 0;
+  elements.treeTab.classList.toggle("is-active", tree);
+  elements.treeTab.setAttribute("aria-selected", String(tree));
+  elements.treeTab.tabIndex = tree ? 0 : -1;
+  elements.resultsPanel.classList.toggle("hidden", tree);
+  elements.treePanel.classList.toggle("hidden", !tree);
+  if (tree && elements.snapshotTree.childElementCount === 0) void dumpTree();
+}
+
+function toggleQueryHelp(open) {
+  const visible = open ?? elements.queryHelpPopover.classList.contains("hidden");
+  elements.queryHelpPopover.classList.toggle("hidden", !visible);
+  elements.queryHelpButton.setAttribute("aria-expanded", String(visible));
+}
+
+function updateQueryDraft({ suggest = true, clearResults = true } = {}) {
+  const compiled = compileUiQuery(elements.queryInput.value);
+  state.queryCompiled = compiled;
+  elements.queryClear.classList.toggle("hidden", elements.queryInput.value.length === 0);
+  elements.queryChips.replaceChildren(...uiQueryChips(compiled).map((chip) => {
+    const element = document.createElement("span");
+    element.className = "query-chip";
+    const field = document.createElement("strong");
+    field.textContent = chip.field;
+    const operator = document.createElement("span");
+    operator.textContent = chip.operator;
+    const value = document.createElement("code");
+    value.textContent = chip.value;
+    element.append(field, operator, value);
+    return element;
+  }));
+  elements.queryChips.classList.toggle("hidden", compiled.clauses.length === 0);
+
+  if (compiled.error) setNote(elements.findStatus, compiled.error, "danger");
+  else if (clearResults) setNote(elements.findStatus, "", "");
+  if (clearResults) {
+    elements.findResults.replaceChildren();
+    elements.queryEmpty.classList.toggle("hidden", elements.queryInput.value.length > 0);
+    elements.matchCount.classList.add("hidden");
+    state.match = null;
+    elements.actionBar.classList.add("hidden");
+  }
+  if (suggest) updateQuerySuggestions();
+  return compiled;
+}
+
+function updateQuerySuggestions() {
+  state.querySuggestions = uiQuerySuggestions(
+    elements.queryInput.value,
+    elements.queryInput.selectionStart ?? elements.queryInput.value.length,
+  );
+  state.querySuggestionIndex = -1;
+  renderQuerySuggestions();
+}
+
+function renderQuerySuggestions() {
+  elements.querySuggestions.replaceChildren(...state.querySuggestions.map((suggestion, index) => {
+    const item = document.createElement("li");
+    item.setAttribute("role", "option");
+    item.id = `ui-query-suggestion-${index}`;
+    item.setAttribute("aria-selected", String(index === state.querySuggestionIndex));
+    const button = document.createElement("button");
+    button.type = "button";
+    button.className = "query-suggestion";
+    button.tabIndex = -1;
+    const label = document.createElement("code");
+    label.textContent = suggestion.label;
+    const detail = document.createElement("span");
+    detail.textContent = suggestion.detail;
+    button.append(label, detail);
+    button.addEventListener("pointerdown", (event) => event.preventDefault());
+    button.addEventListener("click", () => acceptQuerySuggestion(index));
+    item.append(button);
+    return item;
+  }));
+  const open = state.querySuggestions.length > 0 && document.activeElement === elements.queryInput;
+  elements.querySuggestions.classList.toggle("hidden", !open);
+  elements.queryInput.setAttribute("aria-expanded", String(open));
+  if (open && state.querySuggestionIndex >= 0) {
+    elements.queryInput.setAttribute(
+      "aria-activedescendant",
+      `ui-query-suggestion-${state.querySuggestionIndex}`,
+    );
+  } else {
+    elements.queryInput.removeAttribute("aria-activedescendant");
+  }
+}
+
+function moveQuerySuggestion(direction) {
+  if (state.querySuggestions.length === 0) updateQuerySuggestions();
+  if (state.querySuggestions.length === 0) return;
+  state.querySuggestionIndex = (
+    state.querySuggestionIndex + direction + state.querySuggestions.length
+  ) % state.querySuggestions.length;
+  renderQuerySuggestions();
+  elements.querySuggestions.children[state.querySuggestionIndex]?.scrollIntoView({ block: "nearest" });
+}
+
+function acceptQuerySuggestion(index = state.querySuggestionIndex) {
+  const suggestion = state.querySuggestions[index < 0 ? 0 : index];
+  if (!suggestion) return false;
+  const accepted = applyUiQuerySuggestion(elements.queryInput.value, suggestion);
+  elements.queryInput.value = accepted.value;
+  elements.queryInput.setSelectionRange(accepted.cursor, accepted.cursor);
+  updateQueryDraft();
+  return true;
+}
+
+function closeQuerySuggestions() {
+  state.querySuggestions = [];
+  state.querySuggestionIndex = -1;
+  elements.querySuggestions.replaceChildren();
+  elements.querySuggestions.classList.add("hidden");
+  elements.queryInput.setAttribute("aria-expanded", "false");
+  elements.queryInput.removeAttribute("aria-activedescendant");
 }
 
 async function findElements() {
   if (!state.selectedWindowId) return;
+  const compiled = updateQueryDraft({ suggest: false, clearResults: true });
+  closeQuerySuggestions();
+  if (compiled.error) return;
+  if (!compiled.selector) {
+    setNote(elements.findStatus, "Type a name or add a field filter to search.", "warning");
+    return;
+  }
+  setInspectorView("results");
   setNote(elements.findStatus, "Searching…", "");
+  elements.queryForm.setAttribute("aria-busy", "true");
+  elements.findButton.disabled = true;
   try {
-    const result = await postJson(uiPath("find"), {
-      selector: selectorFromForm(),
-      limit: 25,
+    const raw = await postJson(uiPath("find"), {
+      selector: compiled.selector,
+      limit: compiled.filters.length > 0 ? 100 : 50,
       maximumDepth: numberValue(elements.snapshotDepth, 12),
       maximumNodes: numberValue(elements.snapshotNodes, 500),
       timeoutMilliseconds: numberValue(elements.snapshotTimeout, 5000),
     });
-    renderFindResult(result);
+    renderFindResult(refineUiQueryResult(raw, compiled));
   } catch (error) {
     setNote(elements.findStatus, error.message, "danger");
     elements.findResults.replaceChildren();
+  } finally {
+    elements.queryForm.removeAttribute("aria-busy");
+    elements.findButton.disabled = false;
   }
 }
 
 function renderFindResult(result) {
   const presentation = findResultPresentation(result);
-  setNote(elements.findStatus, presentation.message, presentation.tone);
-  for (const warning of snapshotWarnings(result?.metadata)) {
-    setNote(elements.findStatus, `${presentation.message} ${warning}`, "warning");
-  }
+  elements.queryEmpty.classList.add("hidden");
+  const sourceTotal = result?.sourceTotalMatches ?? result?.totalMatches ?? presentation.matches.length;
+  elements.matchCount.textContent = sourceTotal === presentation.matches.length
+    ? String(sourceTotal)
+    : `${presentation.matches.length}/${sourceTotal}`;
+  elements.matchCount.classList.toggle("hidden", presentation.matches.length === 0);
+  const warnings = snapshotWarnings(result?.metadata);
+  setNote(
+    elements.findStatus,
+    [presentation.message, ...warnings].join(" "),
+    warnings.length > 0 ? "warning" : presentation.tone,
+  );
   elements.findResults.replaceChildren(...presentation.matches.map((match) => {
     const item = document.createElement("li");
     const button = document.createElement("button");
@@ -1862,7 +2024,12 @@ function renderFindResult(result) {
     item.append(button);
     return item;
   }));
-  if (presentation.matches.length === 0) elements.actionBar.classList.add("hidden");
+  if (presentation.matches.length === 1 && !presentation.ambiguous) {
+    elements.findResults.querySelector(".match")?.setAttribute("aria-pressed", "true");
+    selectMatch(presentation.matches[0], false);
+  } else if (presentation.matches.length === 0) {
+    elements.actionBar.classList.add("hidden");
+  }
 }
 
 function describeSelector(selector) {
@@ -1895,7 +2062,7 @@ function selectMatch(match, ambiguous) {
   elements.actionButtons.replaceChildren(...actions.map((action) => {
     const button = document.createElement("button");
     button.type = "button";
-    button.className = "button";
+    button.className = action.id === "invoke" ? "button primary" : "button";
     button.textContent = action.label;
     button.addEventListener("click", () => void runUiAction(action.id));
     return button;
@@ -1958,6 +2125,7 @@ async function dumpTree() {
   });
   try {
     const snapshot = await getJson(`${uiPath("snapshot")}?${search}`);
+    state.snapshotRoot = snapshot?.root ?? null;
     const warnings = snapshotWarnings(snapshot?.metadata);
     setNote(
       elements.snapshotStatus,
@@ -1965,7 +2133,11 @@ async function dumpTree() {
       warnings.length > 0 ? "warning" : "ok",
     );
     elements.snapshotTree.replaceChildren();
-    if (snapshot?.root) elements.snapshotTree.append(renderTreeNode(snapshot.root, 0));
+    if (snapshot?.root) {
+      elements.snapshotTree.append(renderTreeNode(snapshot.root, 0));
+      const first = elements.snapshotTree.querySelector(".tree-node");
+      if (first) first.tabIndex = 0;
+    }
     else {
       setNote(
         elements.snapshotStatus,
@@ -1980,10 +2152,15 @@ async function dumpTree() {
 
 function renderTreeNode(element, depth) {
   const container = document.createElement("div");
-  const row = document.createElement("div");
+  const row = document.createElement("button");
+  row.type = "button";
   row.className = "tree-node";
   row.style.paddingLeft = `${depth * 12}px`;
   row.setAttribute("role", "treeitem");
+  row.setAttribute("aria-level", String(depth + 1));
+  row.setAttribute("aria-selected", "false");
+  row.tabIndex = -1;
+  if ((element.children?.length ?? 0) > 0) row.setAttribute("aria-expanded", "true");
   if (isPasswordElement(element)) row.classList.add("is-password");
   const role = document.createElement("span");
   role.className = "tree-role";
@@ -1998,15 +2175,62 @@ function renderTreeNode(element, depth) {
     badge.textContent = element.properties.automationId;
     row.append(badge);
   }
-  row.addEventListener("click", () => selectMatch(
-    { element, selector: selectorForElement(element) },
-    false,
-  ));
+  row.addEventListener("click", () => {
+    for (const other of elements.snapshotTree.querySelectorAll(".tree-node")) {
+      other.setAttribute("aria-selected", "false");
+      other.tabIndex = -1;
+    }
+    row.setAttribute("aria-selected", "true");
+    row.tabIndex = 0;
+    const selector = selectorForElement(element);
+    selectMatch(
+      { element, selector },
+      countTreeSelectorMatches(state.snapshotRoot, selector) !== 1,
+    );
+  });
+  row.addEventListener("keydown", (event) => {
+    const items = [...elements.snapshotTree.querySelectorAll(".tree-node")];
+    const current = items.indexOf(row);
+    let next = null;
+    if (event.key === "ArrowDown") next = items[current + 1];
+    else if (event.key === "ArrowUp") next = items[current - 1];
+    else if (event.key === "Home") next = items[0];
+    else if (event.key === "End") next = items.at(-1);
+    else if (event.key === "Enter" || event.key === " ") row.click();
+    if (next) {
+      event.preventDefault();
+      row.tabIndex = -1;
+      next.tabIndex = 0;
+      next.focus();
+    }
+  });
   container.append(row);
-  for (const child of element.children ?? []) {
-    container.append(renderTreeNode(child, depth + 1));
+  if ((element.children?.length ?? 0) > 0) {
+    const group = document.createElement("div");
+    group.setAttribute("role", "group");
+    for (const child of element.children) group.append(renderTreeNode(child, depth + 1));
+    container.append(group);
   }
   return container;
+}
+
+function countTreeSelectorMatches(root, selector) {
+  if (!root) return 0;
+  const expected = (value) => String(value ?? "").toLocaleLowerCase();
+  let count = 0;
+  const visit = (element) => {
+    const properties = element.properties ?? {};
+    const matches = (
+      (!selector.automationId || expected(properties.automationId) === expected(selector.automationId))
+      && (!selector.controlType || expected(element.controlType) === expected(selector.controlType))
+      && (!selector.role || expected(element.role) === expected(selector.role))
+      && (!selector.name || expected(properties.name) === expected(selector.name))
+    );
+    if (matches) count += 1;
+    for (const child of element.children ?? []) visit(child);
+  };
+  visit(root);
+  return count;
 }
 
 /**
@@ -2133,9 +2357,18 @@ function attachChrome() {
       && !elements.popover.contains(event.target)
       && !elements.selector.contains(event.target)
     ) closePopover();
+    if (
+      !elements.queryHelpPopover.classList.contains("hidden")
+      && !elements.queryHelpPopover.contains(event.target)
+      && !elements.queryHelpButton.contains(event.target)
+    ) toggleQueryHelp(false);
   });
   document.addEventListener("keydown", (event) => {
     if (event.key === "Escape" && !elements.popover.classList.contains("hidden")) closePopover();
+    if (event.key === "Escape" && !elements.queryHelpPopover.classList.contains("hidden")) {
+      toggleQueryHelp(false);
+      elements.queryHelpButton.focus();
+    }
   });
 
   elements.tabCatalog.addEventListener("click", () => showPopoverPanel("catalog"));
@@ -2181,7 +2414,64 @@ function attachChrome() {
   elements.screenshotButton.addEventListener("click", () => void saveScreenshot());
   elements.inspectButton.addEventListener("click", () => toggleInspector());
   elements.inspectorClose.addEventListener("click", () => toggleInspector(false));
-  elements.findButton.addEventListener("click", () => void findElements());
+  elements.queryForm.addEventListener("submit", (event) => {
+    event.preventDefault();
+    void findElements();
+  });
+  elements.queryInput.addEventListener("input", () => updateQueryDraft());
+  elements.queryInput.addEventListener("focus", () => updateQuerySuggestions());
+  elements.queryInput.addEventListener("blur", () => {
+    setTimeout(() => {
+      if (!elements.querySuggestions.contains(document.activeElement)) closeQuerySuggestions();
+    }, 0);
+  });
+  elements.queryInput.addEventListener("keydown", (event) => {
+    if (event.key === "ArrowDown" || event.key === "ArrowUp") {
+      event.preventDefault();
+      moveQuerySuggestion(event.key === "ArrowDown" ? 1 : -1);
+    } else if (
+      event.key === "Tab"
+      && !event.shiftKey
+      && state.querySuggestionIndex >= 0
+    ) {
+      event.preventDefault();
+      acceptQuerySuggestion();
+    } else if (event.key === "Enter" && state.querySuggestionIndex >= 0) {
+      event.preventDefault();
+      acceptQuerySuggestion();
+    } else if (event.key === "Escape") {
+      event.stopPropagation();
+      closeQuerySuggestions();
+    }
+  });
+  elements.queryClear.addEventListener("click", () => {
+    elements.queryInput.value = "";
+    updateQueryDraft();
+    elements.queryInput.focus();
+  });
+  elements.queryHelpButton.addEventListener("click", () => {
+    closeQuerySuggestions();
+    toggleQueryHelp();
+  });
+  for (const example of elements.queryExamples) {
+    example.addEventListener("click", () => {
+      elements.queryInput.value = example.dataset.query ?? "";
+      toggleQueryHelp(false);
+      updateQueryDraft({ suggest: false });
+      void findElements();
+    });
+  }
+  elements.resultsTab.addEventListener("click", () => setInspectorView("results"));
+  elements.treeTab.addEventListener("click", () => setInspectorView("tree"));
+  for (const [index, tab] of [elements.resultsTab, elements.treeTab].entries()) {
+    tab.addEventListener("keydown", (event) => {
+      if (event.key !== "ArrowLeft" && event.key !== "ArrowRight") return;
+      event.preventDefault();
+      const next = index === 0 ? elements.treeTab : elements.resultsTab;
+      setInspectorView(index === 0 ? "tree" : "results");
+      next.focus();
+    });
+  }
   elements.snapshotButton.addEventListener("click", () => void dumpTree());
   elements.preflightDetails.addEventListener("click", () => showPreflightDetails());
 

@@ -3,6 +3,7 @@ import test from "node:test";
 
 import {
   activityLabel,
+  applyUiQuerySuggestion,
   availableUiActions,
   buildWindowTabs,
   captureFromClientPoint,
@@ -17,6 +18,7 @@ import {
   diffWindowTabs,
   filterWindowCandidates,
   findResultPresentation,
+  compileUiQuery,
   inputErrorMessage,
   inputFrame,
   isActivityForWindow,
@@ -28,6 +30,7 @@ import {
   isCurrentThumbnailGeneration,
   nextThumbnailGeneration,
   preflightPresentation,
+  refineUiQueryResult,
   requiresSessionRefresh,
   requiresWindowRefresh,
   resolveSelectedTab,
@@ -36,6 +39,8 @@ import {
   stageStatusPresentation,
   uiElementLabel,
   uiElementValue,
+  uiQueryChips,
+  uiQuerySuggestions,
   wheelNotches,
   windowThumbnailUrl,
   WINDOWS_ERROR_CODES,
@@ -535,6 +540,89 @@ const password = {
   supportedActions: { setValue: true, focus: true },
 };
 
+test("plain inspector text is a friendly name substring query", () => {
+  const compiled = compileUiQuery("save");
+  assert.equal(compiled.error, null);
+  assert.deepEqual(compiled.selector, {
+    automationId: null,
+    controlType: null,
+    role: null,
+    name: "save",
+    value: null,
+    exact: false,
+    index: null,
+    ancestors: [],
+    path: [],
+  });
+  assert.deepEqual(uiQueryChips(compiled), [
+    { field: "Name", operator: "contains", value: "save" },
+  ]);
+});
+
+test("rich inspector syntax mixes exact server clauses with local contains refinement", () => {
+  const compiled = compileUiQuery('id=SAVE and type=button and name contains "draft" and index=1');
+  assert.equal(compiled.error, null);
+  assert.equal(compiled.selector.automationId, "SAVE");
+  assert.equal(compiled.selector.controlType, "button");
+  assert.equal(compiled.selector.exact, true);
+  assert.equal(compiled.selector.index, null);
+  assert.deepEqual(compiled.filters, [
+    { field: "name", label: "Name", operator: "contains", value: "draft" },
+  ]);
+
+  const result = refineUiQueryResult({
+    totalMatches: 3,
+    matches: [
+      { element: { properties: { name: "Draft one" } } },
+      { element: { properties: { name: "Draft two" } } },
+      { element: { properties: { name: "Other" } } },
+    ],
+  }, compiled);
+  assert.equal(result.totalMatches, 1);
+  assert.equal(result.matches[0].element.properties.name, "Draft two");
+});
+
+test("inspector query errors explain the grammar without losing the typed query", () => {
+  assert.match(compileUiQuery("colour=red").error, /Unknown field/);
+  assert.match(compileUiQuery("constructor=red").error, /Unknown field/);
+  assert.match(compileUiQuery("__proto__=red").error, /Unknown field/);
+  assert.match(compileUiQuery("type contains button").error, /supports =/);
+  assert.match(compileUiQuery("index=-1").error, /zero or greater/);
+  assert.match(compileUiQuery('name="unterminated').error, /Close the quoted value/);
+});
+
+test("repeated query fields are refined instead of silently overwritten", () => {
+  const compiled = compileUiQuery("name contains save and name contains draft");
+  assert.equal(compiled.selector.name, "save");
+  assert.deepEqual(compiled.filters, [
+    { field: "name", label: "Name", operator: "contains", value: "draft" },
+  ]);
+  const refined = refineUiQueryResult({
+    totalMatches: 2,
+    matches: [
+      { element: { properties: { name: "Save draft" } } },
+      { element: { properties: { name: "Save final" } } },
+    ],
+  }, compiled);
+  assert.equal(refined.totalMatches, 1);
+  assert.equal(refined.matches[0].element.properties.name, "Save draft");
+});
+
+test("inspector autocomplete teaches fields, operators, and known values", () => {
+  assert.equal(uiQuerySuggestions("na")[0].insertText, "name contains ");
+  assert.deepEqual(
+    uiQuerySuggestions("name").map((suggestion) => suggestion.insertText),
+    ["name=", "name contains "],
+  );
+  assert.equal(uiQuerySuggestions("type=but")[0].insertText, "type=button");
+  const accepted = applyUiQuerySuggestion(
+    "role=field and na",
+    uiQuerySuggestions("role=field and na")[0],
+  );
+  assert.equal(accepted.value, "role=field and name contains ");
+  assert.equal(accepted.cursor, accepted.value.length);
+});
+
 test("only the actions an element actually supports are offered", () => {
   assert.deepEqual(availableUiActions(button).map((action) => action.id), ["invoke", "focus"]);
   assert.deepEqual(availableUiActions({}).map((action) => action.id), []);
@@ -559,7 +647,7 @@ test("truncated and timed-out traversals say so instead of looking complete", ()
 test("multiple matches are an ambiguity to resolve, never a list to act on", () => {
   const many = findResultPresentation({ matches: [{ element: button }, { element: button }], totalMatches: 2 });
   assert.equal(many.ambiguous, true);
-  assert.match(many.message, /Add an automation ID/);
+  assert.match(many.message, /Add id=/);
 
   const one = findResultPresentation({ matches: [{ element: button }], totalMatches: 1 });
   assert.equal(one.ambiguous, false);
@@ -568,6 +656,16 @@ test("multiple matches are an ambiguity to resolve, never a list to act on", () 
   const none = findResultPresentation({ matches: [], totalMatches: 0 });
   assert.equal(none.tone, "warning");
   assert.match(none.message, /No element matched/);
+});
+
+test("client-refined results disclose when the bounded server result may be incomplete", () => {
+  const presentation = findResultPresentation({
+    matches: [{ element: button }],
+    totalMatches: 1,
+    filterIncomplete: true,
+  });
+  assert.equal(presentation.tone, "warning");
+  assert.match(presentation.message, /exact clause/);
 });
 
 /* --------------------------------------------------------------------------------------------

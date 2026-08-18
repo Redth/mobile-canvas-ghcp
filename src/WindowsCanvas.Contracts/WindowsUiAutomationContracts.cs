@@ -228,6 +228,7 @@ public static class WindowsUiSelectorPrecedence
 {
 	public const string AutomationIdAndControlType = "automationIdAndControlType";
 	public const string ControlTypeAndNameOrValue = "controlTypeAndNameOrValue";
+	public const string SemanticConstraint = "semanticConstraint";
 	public const string QualifiedFallback = "qualifiedFallback";
 
 	public static string? Classify(WindowsUiSelector? selector)
@@ -243,6 +244,13 @@ public static class WindowsUiSelectorPrecedence
 				!string.IsNullOrWhiteSpace(selector.Value)))
 		{
 			return ControlTypeAndNameOrValue;
+		}
+		if (hasType ||
+			!string.IsNullOrWhiteSpace(selector.AutomationId) ||
+			!string.IsNullOrWhiteSpace(selector.Name) ||
+			!string.IsNullOrWhiteSpace(selector.Value))
+		{
+			return SemanticConstraint;
 		}
 		return (selector.Ancestors?.Length ?? 0) > 0 ||
 			(selector.Path?.Length ?? 0) > 0 ||

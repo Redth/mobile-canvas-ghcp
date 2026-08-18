@@ -210,11 +210,9 @@ internal static class WindowsUiAutomationNormalizer
 		if (WindowsUiSelectorPrecedence.Classify(normalizedSelector) is null)
 		{
 			throw Invalid(
-				"A selector must use automationId plus controlType/role, controlType/role plus " +
-				"name/value, or an explicit ancestry, index, or path.");
+				"A selector needs an automation ID, control type, role, name, value, ancestry, " +
+				"index, or path.");
 		}
-		if (automationId is not null && controlType is null && role is null)
-			throw Invalid("automationId selectors require controlType or role.");
 		if (ancestors.Length > MaximumAncestors)
 			throw Invalid($"A selector accepts at most {MaximumAncestors} ancestors.");
 		if (path.Length > WindowsUiAutomationLimits.MaximumDepth)
