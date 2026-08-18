@@ -159,6 +159,7 @@ public sealed class WindowsVisualInputTests
 	{
 		var harness = await Harness.AttachedAsync();
 		harness.Input.Foreground = 99;
+		harness.Input.WindowProcesses[12] = 100;
 		harness.Controller.OnReveal = handle => harness.Input.Foreground = handle;
 		harness.Bridge.OnSnapshot = (_, _) => new WindowsUiSnapshot
 		{
@@ -181,7 +182,7 @@ public sealed class WindowsVisualInputTests
 			_ = Task.Run(async () =>
 			{
 				await Task.Delay(60);
-				harness.Input.Foreground = 11;
+				harness.Input.Foreground = 12;
 			});
 			return new WindowsUiActionResult { Success = true, Action = request.Action };
 		};

@@ -1283,6 +1283,7 @@ public sealed class WindowsAppService(
 			var focusDetail = await RestorePreviousForegroundAsync(
 				previousForeground,
 				window.Handle,
+				window.ProcessId,
 				cancellationToken).ConfigureAwait(false);
 			return Describe(
 				target,
@@ -1396,6 +1397,7 @@ public sealed class WindowsAppService(
 	private async Task<string?> RestorePreviousForegroundAsync(
 		long previousForeground,
 		long target,
+		int targetProcessId,
 		CancellationToken cancellationToken)
 	{
 		if (previousForeground == 0 || previousForeground == target)
@@ -1404,8 +1406,12 @@ public sealed class WindowsAppService(
 		for (var attempt = 0; attempt < 6; attempt++)
 		{
 			var foreground = _input.ForegroundWindow;
-			if (foreground == target)
+			if (foreground == target ||
+				(targetProcessId != 0 &&
+					_input.ProcessIdForWindow(foreground) == targetProcessId))
+			{
 				break;
+			}
 			if (foreground != previousForeground)
 				return null;
 			if (attempt == 5)
@@ -1413,13 +1419,28 @@ public sealed class WindowsAppService(
 			await Task.Delay(40, cancellationToken).ConfigureAwait(false);
 		}
 
-		var outcome = windowController.Reveal(previousForeground);
-		return _input.ForegroundWindow == previousForeground
-			? null
-			: outcome.Detail is null
-				? "The semantic action completed, but the app took foreground and Windows would not " +
-					"restore the previously active window."
-				: $"The semantic action completed, but the app took foreground. {outcome.Detail}";
+		WindowsWindowActionOutcome outcome = default;
+		for (var attempt = 0; attempt < 5; attempt++)
+		{
+			await Task.Delay(attempt == 0 ? 80 : 60, cancellationToken).ConfigureAwait(false);
+			var foreground = _input.ForegroundWindow;
+			if (foreground == previousForeground)
+				return null;
+			if (foreground != target &&
+				_input.ProcessIdForWindow(foreground) != targetProcessId)
+			{
+				return null;
+			}
+
+			outcome = windowController.Reveal(previousForeground);
+			if (_input.ForegroundWindow == previousForeground)
+				return null;
+		}
+
+		return outcome.Detail is null
+			? "The semantic action completed, but the app took foreground and Windows would not " +
+				"restore the previously active window."
+			: $"The semantic action completed, but the app took foreground. {outcome.Detail}";
 	}
 
 	/// <summary>

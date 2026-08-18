@@ -298,6 +298,10 @@ internal sealed class FakeInputController : IWindowsInputController
 
 	public long ForegroundWindow => Foreground;
 
+	public Dictionary<long, int> WindowProcesses { get; } = new() { [11] = 100 };
+
+	public int ProcessIdForWindow(long handle) => WindowProcesses.GetValueOrDefault(handle);
+
 	public long WindowAtPoint(int screenX, int screenY) => Covering ?? Foreground;
 
 	public WindowsInputOutcome MovePointer(int screenX, int screenY) =>

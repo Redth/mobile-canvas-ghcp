@@ -31,6 +31,9 @@ public interface IWindowsInputController
 	/// <summary>The current foreground HWND, used only to preserve the user's active window.</summary>
 	long ForegroundWindow { get; }
 
+	/// <summary>The owning process for an HWND, or 0 when Windows cannot resolve it.</summary>
+	int ProcessIdForWindow(long handle);
+
 	/// <summary>
 	/// The top-level window whose pixel is at a physical desktop point, or 0 when Windows would not
 	/// say. It is what proves the pixel a click is aimed at still belongs to the target window
@@ -114,6 +117,14 @@ public sealed partial class Win32InputController : IWindowsInputController
 
 	public long ForegroundWindow =>
 		OperatingSystem.IsWindows() ? GetForegroundWindow() : 0;
+
+	public int ProcessIdForWindow(long handle)
+	{
+		if (!OperatingSystem.IsWindows() || handle == 0)
+			return 0;
+		GetWindowThreadProcessId((nint)handle, out var processId);
+		return unchecked((int)processId);
+	}
 
 	public long WindowAtPoint(int screenX, int screenY)
 	{
@@ -321,6 +332,10 @@ public sealed partial class Win32InputController : IWindowsInputController
 	[SupportedOSPlatform("windows")]
 	[LibraryImport("user32.dll")]
 	private static partial nint GetForegroundWindow();
+
+	[SupportedOSPlatform("windows")]
+	[LibraryImport("user32.dll")]
+	private static partial uint GetWindowThreadProcessId(nint handle, out uint processId);
 
 	[SupportedOSPlatform("windows")]
 	[LibraryImport("user32.dll")]
