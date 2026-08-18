@@ -499,33 +499,16 @@ public:
 			sample = ready.Get();
 		}
 
-		if (!async_) {
-			const HRESULT result = transform_->ProcessInput(0, sample, 0);
-			if (result == MF_E_NOTACCEPTING) {
-				// The encoder still owes output. Draining first is the documented way to make
-				// room, and it is also what keeps the queue bounded to a single frame.
-				DrainOutputs(false);
-				Check(transform_->ProcessInput(0, sample, 0), "The encoder refused a frame.");
-			} else {
-				Check(result, "The encoder refused a frame.");
-			}
+		const HRESULT result = transform_->ProcessInput(0, sample, 0);
+		if (result == MF_E_NOTACCEPTING) {
+			// The encoder still owes output. Draining first is the documented way to make
+			// room, and it is also what keeps the queue bounded to a single frame.
 			DrainOutputs(false);
-			return;
+			Check(transform_->ProcessInput(0, sample, 0), "The encoder refused a frame.");
+		} else {
+			Check(result, "The encoder refused a frame.");
 		}
-
-		for (;;) {
-			ComPtr<IMFMediaEvent> event;
-			Check(events_->GetEvent(0, event.Put()), "The encoder stopped reporting events.");
-			MediaEventType type = MEUnknown;
-			Check(event->GetType(&type), "The encoder reported an unreadable event.");
-			if (type == METransformNeedInput) {
-				Check(transform_->ProcessInput(0, sample, 0), "The encoder refused a frame.");
-				return;
-			}
-			if (type == METransformHaveOutput) {
-				WriteOutput();
-			}
-		}
+		DrainOutputs(false);
 	}
 
 	void Drain() {
@@ -533,23 +516,7 @@ public:
 			return;
 		}
 		transform_->ProcessMessage(MFT_MESSAGE_COMMAND_DRAIN, 0);
-		if (!async_) {
-			DrainOutputs(true);
-			return;
-		}
-		for (;;) {
-			ComPtr<IMFMediaEvent> event;
-			if (FAILED(events_->GetEvent(0, event.Put()))) {
-				return;
-			}
-			MediaEventType type = MEUnknown;
-			if (FAILED(event->GetType(&type)) || type == METransformDrainComplete) {
-				return;
-			}
-			if (type == METransformHaveOutput) {
-				WriteOutput();
-			}
-		}
+		DrainOutputs(true);
 	}
 
 private:
@@ -561,16 +528,13 @@ private:
 		int frames_per_second,
 		std::int64_t average_bitrate) {
 		ComPtr<IMFAttributes> attributes;
-		bool async = false;
 		if (SUCCEEDED(transform->GetAttributes(attributes.Put())) && attributes) {
 			UINT32 value = 0;
 			if (SUCCEEDED(attributes->GetUINT32(MF_TRANSFORM_ASYNC, &value)) && value != 0) {
-				// A hardware encoder is asynchronous and stays locked until a client says it can
-				// handle the event protocol.
-				if (FAILED(attributes->SetUINT32(MF_TRANSFORM_ASYNC_UNLOCK, TRUE))) {
-					return false;
-				}
-				async = true;
+				// Async hardware MFTs need an independent event/output pump. The capture loop is
+				// intentionally synchronous and bounded, so select the software MFT rather than
+				// accepting a hardware encoder that can stall a static window before its first frame.
+				return false;
 			}
 			attributes->SetUINT32(MF_LOW_LATENCY, TRUE);
 		}
@@ -620,15 +584,6 @@ private:
 			SetCodecBoolean(codec, CODECAPI_AVLowLatencyMode, true);
 			SetCodecBoolean(codec, CODECAPI_AVEncCommonRealTime, true);
 		}
-
-		if (async) {
-			if (FAILED(transform->QueryInterface(
-					__uuidof(IMFMediaEventGenerator),
-					reinterpret_cast<void**>(events_.Put())))) {
-				return false;
-			}
-		}
-		async_ = async;
 
 		ComPtr<IMFMediaType> current;
 		if (SUCCEEDED(transform->GetOutputCurrentType(0, current.Put())) && current) {
@@ -795,9 +750,7 @@ private:
 
 	GraphicsDevice* device_ = nullptr;
 	ComPtr<IMFTransform> transform_;
-	ComPtr<IMFMediaEventGenerator> events_;
 	std::vector<UINT8> sequence_header_;
-	bool async_ = false;
 	bool hardware_ = false;
 	bool wrote_header_ = false;
 	int width_ = 0;
