@@ -81,13 +81,15 @@ ComPtr<IMFMediaType> VideoType(
 	Check(
 		MFSetAttributeSize(type.Get(), MF_MT_FRAME_SIZE, static_cast<UINT32>(width), static_cast<UINT32>(height)),
 		"Could not set the frame size.");
-	Check(
-		MFSetAttributeRatio(
-			type.Get(),
-			MF_MT_FRAME_RATE,
-			static_cast<UINT32>(frames_per_second),
-			1),
-		"Could not set the frame rate.");
+	if (frames_per_second > 0) {
+		Check(
+			MFSetAttributeRatio(
+				type.Get(),
+				MF_MT_FRAME_RATE,
+				static_cast<UINT32>(frames_per_second),
+				1),
+			"Could not set the frame rate.");
+	}
 	Check(
 		MFSetAttributeRatio(type.Get(), MF_MT_PIXEL_ASPECT_RATIO, 1, 1),
 		"Could not set the pixel aspect ratio.");
@@ -148,28 +150,36 @@ public:
 				reinterpret_cast<void**>(transform_.Put())),
 			"Could not create the video processor.");
 
+		ComPtr<IMFAttributes> attributes;
+		Check(
+			transform_->GetAttributes(attributes.Put()),
+			"Could not read video processor attributes.");
+		Check(
+			attributes->SetUINT32(MF_XVP_DISABLE_FRC, TRUE),
+			"Could not disable video processor frame-rate conversion.");
+		Check(
+			attributes->SetUINT32(MF_XVP_CALLER_ALLOCATES_OUTPUT, TRUE),
+			"Could not select caller-owned video processor output.");
+		attributes->SetUINT32(MF_LOW_LATENCY, TRUE);
+
 		if (manager != nullptr) {
-			transform_->ProcessMessage(
-				MFT_MESSAGE_SET_D3D_MANAGER,
-				reinterpret_cast<ULONG_PTR>(manager));
+			Check(
+				transform_->ProcessMessage(
+					MFT_MESSAGE_SET_D3D_MANAGER,
+					reinterpret_cast<ULONG_PTR>(manager)),
+				"Could not connect the video processor to the Direct3D device.");
 		}
 
 		const ComPtr<IMFMediaType> input =
-			VideoType(MFVideoFormat_ARGB32, source_width, source_height, frames_per_second);
+			VideoType(MFVideoFormat_ARGB32, source_width, source_height, 0);
 		Check(
 			transform_->SetInputType(0, input.Get(), 0),
 			"The video processor refused the captured frame format.");
 		const ComPtr<IMFMediaType> output =
-			VideoType(MFVideoFormat_NV12, target_width, target_height, frames_per_second);
+			VideoType(MFVideoFormat_NV12, target_width, target_height, 0);
 		Check(
 			transform_->SetOutputType(0, output.Get(), 0),
 			"The video processor refused the NV12 output format.");
-
-		MFT_OUTPUT_STREAM_INFO info = {};
-		if (SUCCEEDED(transform_->GetOutputStreamInfo(0, &info))) {
-			provides_samples_ = (info.dwFlags
-				& (MFT_OUTPUT_STREAM_PROVIDES_SAMPLES | MFT_OUTPUT_STREAM_CAN_PROVIDE_SAMPLES)) != 0;
-		}
 
 		transform_->ProcessMessage(MFT_MESSAGE_NOTIFY_BEGIN_STREAMING, 0);
 		transform_->ProcessMessage(MFT_MESSAGE_NOTIFY_START_OF_STREAM, 0);
@@ -196,6 +206,12 @@ public:
 		return outputs;
 	}
 
+	void Recycle(ComPtr<IMFSample> sample) {
+		if (sample && output_pool_.size() < 3) {
+			output_pool_.push_back(std::move(sample));
+		}
+	}
+
 private:
 	void DrainOutputs(
 		std::int64_t fallback_time,
@@ -219,38 +235,33 @@ private:
 
 	ComPtr<IMFSample> TakeOutput(std::int64_t fallback_time, std::int64_t fallback_duration) {
 		MFT_OUTPUT_DATA_BUFFER output = {};
-		ComPtr<IMFSample> allocated;
-		if (!provides_samples_) {
-			if (spare_output_) {
-				allocated = std::move(spare_output_);
-			} else {
-				allocated = AllocateOutput();
-			}
-			output.pSample = allocated.Get();
-		}
+		ComPtr<IMFSample> allocated = AllocateOutput();
+		output.pSample = allocated.Get();
 
 		DWORD status = 0;
 		const HRESULT result = transform_->ProcessOutput(0, 1, &output, &status);
-		ComPtr<IMFSample> produced;
-		if (output.pSample != nullptr && output.pSample != allocated.Get()) {
-			produced.Attach(output.pSample);
-			if (allocated) {
-				spare_output_ = std::move(allocated);
-			}
-		} else if (allocated) {
-			produced = std::move(allocated);
-		}
 		if (output.pEvents != nullptr) {
 			output.pEvents->Release();
 		}
 		if (result == MF_E_TRANSFORM_NEED_MORE_INPUT) {
-			if (allocated) {
-				spare_output_ = std::move(allocated);
-			}
+			Recycle(std::move(allocated));
 			return {};
+		}
+		if (FAILED(result)) {
+			if (output.pSample != nullptr && output.pSample != allocated.Get()) {
+				output.pSample->Release();
+			}
+			Recycle(std::move(allocated));
 		}
 		Check(result, "The video processor produced no NV12 frame.");
 
+		ComPtr<IMFSample> produced;
+		if (output.pSample != nullptr && output.pSample != allocated.Get()) {
+			produced.Attach(output.pSample);
+			Recycle(std::move(allocated));
+		} else if (allocated) {
+			produced = std::move(allocated);
+		}
 		if (produced) {
 			LONGLONG output_time = 0;
 			if (FAILED(produced->GetSampleTime(&output_time))
@@ -274,6 +285,11 @@ private:
 	int TargetHeight() const noexcept { return target_height_; }
 
 	ComPtr<IMFSample> AllocateOutput() {
+		if (!output_pool_.empty()) {
+			ComPtr<IMFSample> sample = std::move(output_pool_.back());
+			output_pool_.pop_back();
+			return sample;
+		}
 		D3D11_TEXTURE2D_DESC description = {};
 		description.Width = static_cast<UINT>(target_width_);
 		description.Height = static_cast<UINT>(target_height_);
@@ -293,8 +309,7 @@ private:
 
 	GraphicsDevice* device_ = nullptr;
 	ComPtr<IMFTransform> transform_;
-	ComPtr<IMFSample> spare_output_;
-	bool provides_samples_ = false;
+	std::vector<ComPtr<IMFSample>> output_pool_;
 	int target_width_ = 0;
 	int target_height_ = 0;
 	std::int64_t last_output_time_ = -1;
@@ -513,7 +528,10 @@ public:
 		width_ = width;
 		height_ = height;
 
-		for (const bool hardware : { true, false }) {
+		// This implementation drains transforms synchronously and recycles each caller-owned NV12
+		// surface after Submit returns. Hardware MFTs require an asynchronous event pump before that
+		// lifetime is safe, so the production synchronous path deliberately selects software only.
+		for (const bool hardware : { false }) {
 			for (const auto& activation : EnumerateEncoders(device.Adapter(), hardware)) {
 				ComPtr<IMFTransform> transform;
 				if (FAILED(activation->ActivateObject(
@@ -618,6 +636,14 @@ private:
 
 		const ComPtr<IMFMediaType> input =
 			VideoType(MFVideoFormat_NV12, width, height, frames_per_second);
+		const std::uint64_t sample_size =
+			static_cast<std::uint64_t>(width) * static_cast<std::uint64_t>(height) * 3 / 2;
+		if (sample_size > (std::numeric_limits<UINT32>::max)()) {
+			return false;
+		}
+		input->SetUINT32(MF_MT_FIXED_SIZE_SAMPLES, TRUE);
+		input->SetUINT32(MF_MT_SAMPLE_SIZE, static_cast<UINT32>(sample_size));
+		input->SetUINT32(MF_MT_DEFAULT_STRIDE, static_cast<UINT32>(width));
 		if (FAILED(transform->SetInputType(0, input.Get(), 0))) {
 			return false;
 		}
@@ -970,6 +996,7 @@ int RunCaptureLoop(
 		for (auto& nv12 : converter.Convert(initial.Get(), 0, duration)) {
 			encoder.Submit(nv12.Get());
 			++emitted;
+			converter.Recycle(std::move(nv12));
 		}
 		frame.Close();
 
@@ -1013,6 +1040,7 @@ int RunCaptureLoop(
 				for (auto& nv12 : converter.Convert(cropped.Get(), time, duration)) {
 					encoder.Submit(nv12.Get());
 					++emitted;
+					converter.Recycle(std::move(nv12));
 				}
 			}
 
@@ -1032,6 +1060,9 @@ int RunCaptureLoop(
 	} catch (const CaptureError& error) {
 		reason = kEndEncoderFailed;
 		detail = error.what();
+		if (error.HasHresult()) {
+			detail += " (" + HresultHex(error.Hresult()) + ")";
+		}
 	}
 
 	try {

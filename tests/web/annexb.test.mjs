@@ -172,5 +172,6 @@ test("the Windows canvas decodes through the same shared parser", () => {
   assert.match(windows, /import \{ AnnexBParser \} from "\.\.\/annexb\.js"/);
   assert.match(windows, /new AnnexBParser\(\{/);
   assert.match(windows, /avc: \{ format: "annexb" \}/);
+  assert.match(windows, /state\.descriptor\?\.framesPerSecond \|\| 30/);
   assert.doesNotMatch(windows, /function findStartCodes/);
 });

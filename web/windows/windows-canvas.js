@@ -1076,7 +1076,7 @@ function configureDecoder(codec) {
 
 function decodeAccessUnit({ type, data }) {
   if (!state.decoder) return;
-  const duration = Math.round(1_000_000 / 30);
+  const duration = Math.round(1_000_000 / (state.descriptor?.framesPerSecond || 30));
   try {
     state.decoder.decode(new EncodedVideoChunk({
       type,
