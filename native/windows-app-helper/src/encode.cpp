@@ -175,19 +175,57 @@ public:
 		transform_->ProcessMessage(MFT_MESSAGE_NOTIFY_START_OF_STREAM, 0);
 	}
 
-	ComPtr<IMFSample> Convert(
+	std::vector<ComPtr<IMFSample>> Convert(
 		ID3D11Texture2D* texture,
 		std::int64_t time,
 		std::int64_t duration) {
+		std::vector<ComPtr<IMFSample>> outputs;
 		ComPtr<IMFSample> input = WrapTexture(texture, 0);
 		Check(input->SetSampleTime(time), "Could not timestamp a frame.");
 		Check(input->SetSampleDuration(duration), "Could not set a frame duration.");
-		Check(transform_->ProcessInput(0, input.Get(), 0), "The video processor refused a frame.");
+		HRESULT input_result = transform_->ProcessInput(0, input.Get(), 0);
+		if (input_result == MF_E_NOTACCEPTING) {
+			// The video processor still has converted frames waiting. Drain every one, then offer
+			// this same input again: MF_E_NOTACCEPTING consumes nothing, and a change-driven window
+			// may never produce a replacement for a frame dropped here.
+			DrainOutputs(time - duration, duration, outputs);
+			input_result = transform_->ProcessInput(0, input.Get(), 0);
+		}
+		Check(input_result, "The video processor refused a frame.");
+		DrainOutputs(time, duration, outputs);
+		return outputs;
+	}
 
+private:
+	void DrainOutputs(
+		std::int64_t fallback_time,
+		std::int64_t fallback_duration,
+		std::vector<ComPtr<IMFSample>>& outputs) {
+		for (int count = 0; count <= 16; ++count) {
+			ComPtr<IMFSample> output = TakeOutput(fallback_time, fallback_duration);
+			if (!output) {
+				return;
+			}
+			if (count == 16) {
+				throw CaptureError(
+					kStatusError,
+					"capture_converter_backlog",
+					"The video processor produced more than 16 queued frames.");
+			}
+			outputs.push_back(std::move(output));
+			fallback_time += fallback_duration;
+		}
+	}
+
+	ComPtr<IMFSample> TakeOutput(std::int64_t fallback_time, std::int64_t fallback_duration) {
 		MFT_OUTPUT_DATA_BUFFER output = {};
 		ComPtr<IMFSample> allocated;
 		if (!provides_samples_) {
-			allocated = AllocateOutput();
+			if (spare_output_) {
+				allocated = std::move(spare_output_);
+			} else {
+				allocated = AllocateOutput();
+			}
 			output.pSample = allocated.Get();
 		}
 
@@ -196,6 +234,9 @@ public:
 		ComPtr<IMFSample> produced;
 		if (output.pSample != nullptr && output.pSample != allocated.Get()) {
 			produced.Attach(output.pSample);
+			if (allocated) {
+				spare_output_ = std::move(allocated);
+			}
 		} else if (allocated) {
 			produced = std::move(allocated);
 		}
@@ -203,13 +244,28 @@ public:
 			output.pEvents->Release();
 		}
 		if (result == MF_E_TRANSFORM_NEED_MORE_INPUT) {
+			if (allocated) {
+				spare_output_ = std::move(allocated);
+			}
 			return {};
 		}
 		Check(result, "The video processor produced no NV12 frame.");
 
 		if (produced) {
-			produced->SetSampleTime(time);
-			produced->SetSampleDuration(duration);
+			LONGLONG output_time = 0;
+			if (FAILED(produced->GetSampleTime(&output_time))
+				|| output_time <= last_output_time_) {
+				const std::int64_t minimum = last_output_time_ < 0
+					? 0
+					: last_output_time_ + (std::max<std::int64_t>)(fallback_duration, 1);
+				output_time = (std::max)(fallback_time, minimum);
+				produced->SetSampleTime(output_time);
+			}
+			last_output_time_ = output_time;
+			LONGLONG output_duration = 0;
+			if (FAILED(produced->GetSampleDuration(&output_duration))) {
+				produced->SetSampleDuration(fallback_duration);
+			}
 		}
 		return produced;
 	}
@@ -217,7 +273,6 @@ public:
 	int TargetWidth() const noexcept { return target_width_; }
 	int TargetHeight() const noexcept { return target_height_; }
 
-private:
 	ComPtr<IMFSample> AllocateOutput() {
 		D3D11_TEXTURE2D_DESC description = {};
 		description.Width = static_cast<UINT>(target_width_);
@@ -238,9 +293,11 @@ private:
 
 	GraphicsDevice* device_ = nullptr;
 	ComPtr<IMFTransform> transform_;
+	ComPtr<IMFSample> spare_output_;
 	bool provides_samples_ = false;
 	int target_width_ = 0;
 	int target_height_ = 0;
+	std::int64_t last_output_time_ = -1;
 };
 
 /// Copies a GPU NV12 sample into system memory, for the software encoder fallback.
@@ -910,7 +967,7 @@ int RunCaptureLoop(
 		// may ever produce. Encode it before waiting for a change, then return its pooled WGC surface.
 		const ComPtr<ID3D11Texture2D> initial =
 			CropFrame(device, frame, layout, /*cpu_readable=*/false);
-		if (ComPtr<IMFSample> nv12 = converter.Convert(initial.Get(), 0, duration)) {
+		for (auto& nv12 : converter.Convert(initial.Get(), 0, duration)) {
 			encoder.Submit(nv12.Get());
 			++emitted;
 		}
@@ -953,7 +1010,7 @@ int RunCaptureLoop(
 					CropFrame(device, next_frame, layout, /*cpu_readable=*/false);
 				const std::int64_t time =
 					(std::max)(next_frame.system_relative_time - origin, emitted * duration);
-				if (ComPtr<IMFSample> nv12 = converter.Convert(cropped.Get(), time, duration)) {
+				for (auto& nv12 : converter.Convert(cropped.Get(), time, duration)) {
 					encoder.Submit(nv12.Get());
 					++emitted;
 				}
