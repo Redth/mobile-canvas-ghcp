@@ -816,6 +816,7 @@ public sealed class WindowsApiSurfaceTests : IAsyncLifetime
 			JsonContent.Create(
 				new WindowsClickRequest
 				{
+					Mode = WindowsInputModes.Foreground,
 					TransformVersion = geometry!.TransformVersion,
 					X = 12,
 					Y = 34,

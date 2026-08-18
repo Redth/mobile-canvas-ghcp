@@ -792,8 +792,19 @@ textarea {
 }
 
 .viewport[data-status="automating"] {
-  border-color: var(--accent-emphasis);
-  box-shadow: 0 0 0 3px var(--accent-muted), var(--shadow-device);
+  border-color: transparent;
+  background:
+    linear-gradient(var(--canvas-default), var(--canvas-default)) padding-box,
+    linear-gradient(
+      135deg,
+      var(--focus),
+      var(--accent-emphasis),
+      color-mix(in srgb, var(--focus) 35%, var(--canvas-default))
+    ) border-box;
+  box-shadow:
+    0 0 0 3px var(--accent-muted),
+    0 4px 20px color-mix(in srgb, var(--focus) 30%, transparent),
+    var(--shadow-device);
 }
 
 .screen {
@@ -895,18 +906,54 @@ textarea {
 
 .automation-cursor {
   position: absolute;
-  width: 18px;
-  height: 18px;
-  margin: -9px 0 0 -9px;
-  border: 2px solid var(--accent-emphasis);
-  border-radius: 50%;
-  background: var(--accent-muted);
-  transition: transform 180ms ease-out;
+  top: 0;
+  left: 0;
+  z-index: 2;
+  width: 0;
+  height: 0;
+  transition: transform 260ms cubic-bezier(0.33, 0, 0.2, 1);
+  will-change: transform;
 }
 
-.automation-cursor[data-pressed="true"] {
-  background: var(--accent-emphasis);
-  transform: scale(0.7);
+.automation-pointer {
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 34px;
+  height: 34px;
+  fill: var(--canvas-default);
+  stroke: color-mix(in srgb, var(--focus) 70%, var(--fg-default));
+  stroke-width: 1.1;
+  filter:
+    drop-shadow(0 1px 1px color-mix(in srgb, var(--fg-default) 25%, transparent))
+    drop-shadow(0 4px 10px color-mix(in srgb, var(--focus) 65%, transparent));
+  transition: transform 110ms ease;
+}
+
+.automation-cursor[data-pressed="true"] .automation-pointer {
+  transform: scale(0.86);
+}
+
+.automation-ripple {
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 46px;
+  height: 46px;
+  margin: -23px 0 0 -23px;
+  border: 2px solid var(--focus);
+  border-radius: 50%;
+  opacity: 0;
+  background: color-mix(in srgb, var(--focus) 22%, transparent);
+}
+
+.automation-ripple.is-clicking {
+  animation: automation-click 460ms ease-out;
+}
+
+@keyframes automation-click {
+  0% { opacity: 0.95; transform: scale(0.25); }
+  100% { opacity: 0; transform: scale(1.5); }
 }
 
 .automation-label {
@@ -921,6 +968,21 @@ textarea {
   font-weight: 600;
   transform: translateX(-50%);
   white-space: nowrap;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .automation-cursor {
+    transition: none;
+  }
+
+  .automation-ripple.is-clicking {
+    animation: automation-click-static 460ms steps(1, end);
+  }
+
+  @keyframes automation-click-static {
+    0% { opacity: 0.9; }
+    100% { opacity: 0; }
+  }
 }
 
 /* ---------------------------------------------------------------------------------------------
@@ -1609,6 +1671,45 @@ textarea {
   font-weight: 600;
 }
 
+.interaction-mode {
+  display: inline-flex;
+  flex: none;
+  align-items: center;
+  gap: 5px;
+  min-width: 0;
+  padding: 1px 7px;
+  border: 0;
+  border-radius: 999px;
+  background: var(--success-muted);
+  color: var(--success-fg);
+  font: inherit;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.interaction-mode:hover {
+  filter: brightness(0.97);
+}
+
+.interaction-mode:active {
+  transform: translateY(1px);
+}
+
+.interaction-mode:focus-visible {
+  outline: 2px solid var(--focus);
+  outline-offset: 1px;
+}
+
+.interaction-mode[data-mode="foreground"] {
+  background: var(--attention-muted);
+  color: var(--attention-fg);
+}
+
+.interaction-mode .icon {
+  width: 12px;
+  height: 12px;
+}
+
 .status-pill[data-status="pending"] {
   background: var(--accent-muted);
   color: var(--accent-fg);
@@ -1622,6 +1723,11 @@ textarea {
 .status-pill[data-status="error"] {
   background: var(--danger-muted);
   color: var(--danger-fg);
+}
+
+.status-pill[data-status="warning"] {
+  background: var(--attention-muted);
+  color: var(--attention-fg);
 }
 
 .status-pill[data-status="agent"] {
@@ -1745,6 +1851,11 @@ textarea {
 .toast[data-tone="ok"] {
   border-color: var(--success-emphasis);
   color: var(--success-fg);
+}
+
+.toast[data-tone="attention"] {
+  border-color: var(--attention-fg);
+  color: var(--attention-fg);
 }
 
 @media (max-width: 720px) {

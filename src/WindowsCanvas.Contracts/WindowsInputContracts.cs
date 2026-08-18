@@ -47,6 +47,26 @@ public static class WindowsInputLimits
 		value < 0 ? fallback : Math.Min(value, MaximumDurationMilliseconds);
 }
 
+public static class WindowsInputModes
+{
+	public const string Background = "background";
+	public const string Foreground = "foreground";
+
+	public static readonly string[] All = [Background, Foreground];
+
+	public static string Normalize(string? mode)
+	{
+		if (string.IsNullOrWhiteSpace(mode))
+			return Background;
+		var normalized = mode.Trim().ToLowerInvariant();
+		return Array.Exists(All, known => known.Equals(normalized, StringComparison.Ordinal))
+			? normalized
+			: throw new WindowsCanvasException(
+				WindowsErrorCodes.InvalidRequest,
+				$"'{mode}' is not an input mode. Use background or foreground.");
+	}
+}
+
 public static class WindowsPointerButtons
 {
 	public const string Left = "left";
@@ -298,6 +318,7 @@ public sealed record WindowsClickRequest
 {
 	public string? WindowId { get; init; }
 	public string TransformVersion { get; init; } = "";
+	public string Mode { get; init; } = WindowsInputModes.Background;
 	public int CaptureWidth { get; init; }
 	public int CaptureHeight { get; init; }
 	public double X { get; init; }
@@ -315,6 +336,7 @@ public sealed record WindowsPointerRequest
 {
 	public string? WindowId { get; init; }
 	public string TransformVersion { get; init; } = "";
+	public string Mode { get; init; } = WindowsInputModes.Background;
 	public int CaptureWidth { get; init; }
 	public int CaptureHeight { get; init; }
 	public double X { get; init; }
@@ -330,6 +352,7 @@ public sealed record WindowsDragRequest
 {
 	public string? WindowId { get; init; }
 	public string TransformVersion { get; init; } = "";
+	public string Mode { get; init; } = WindowsInputModes.Background;
 	public int CaptureWidth { get; init; }
 	public int CaptureHeight { get; init; }
 	public double StartX { get; init; }
@@ -347,6 +370,7 @@ public sealed record WindowsWheelRequest
 {
 	public string? WindowId { get; init; }
 	public string TransformVersion { get; init; } = "";
+	public string Mode { get; init; } = WindowsInputModes.Background;
 	public int CaptureWidth { get; init; }
 	public int CaptureHeight { get; init; }
 	public double X { get; init; }
@@ -364,6 +388,7 @@ public sealed record WindowsKeyRequest
 {
 	public string? WindowId { get; init; }
 	public string TransformVersion { get; init; } = "";
+	public string Mode { get; init; } = WindowsInputModes.Background;
 
 	/// <summary>
 	/// Keys to act on, in order. For <c>press</c> they are held in order and released in reverse,
@@ -382,6 +407,7 @@ public sealed record WindowsTypeTextRequest
 {
 	public string? WindowId { get; init; }
 	public string TransformVersion { get; init; } = "";
+	public string Mode { get; init; } = WindowsInputModes.Background;
 
 	/// <summary>
 	/// UTF-16 text to type as Unicode key events. Sending a long string this way is the supported

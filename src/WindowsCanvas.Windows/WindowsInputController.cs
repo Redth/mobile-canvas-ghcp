@@ -28,6 +28,9 @@ public interface IWindowsInputController
 	/// <summary>Whether the given window currently owns the foreground.</summary>
 	bool IsForeground(long handle);
 
+	/// <summary>The current foreground HWND, used only to preserve the user's active window.</summary>
+	long ForegroundWindow { get; }
+
 	/// <summary>
 	/// The top-level window whose pixel is at a physical desktop point, or 0 when Windows would not
 	/// say. It is what proves the pixel a click is aimed at still belongs to the target window
@@ -108,6 +111,9 @@ public sealed partial class Win32InputController : IWindowsInputController
 
 	public bool IsForeground(long handle) =>
 		OperatingSystem.IsWindows() && GetForegroundWindow() == (nint)handle;
+
+	public long ForegroundWindow =>
+		OperatingSystem.IsWindows() ? GetForegroundWindow() : 0;
 
 	public long WindowAtPoint(int screenX, int screenY)
 	{

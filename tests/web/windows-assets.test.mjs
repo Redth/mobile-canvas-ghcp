@@ -275,6 +275,28 @@ test("coordinate input carries the transform token and the capture size, never r
   assert.doesNotMatch(renderer, /y: event\.clientY/);
 });
 
+test("the canvas defaults to focus-free interaction and makes global input explicit", () => {
+  assert.match(indexHtml, /id="interaction-mode"[\s\S]*data-mode="background"/);
+  assert.match(indexHtml, />Focus-free<\/span>/);
+  assert.match(renderer, /interactionMode: INTERACTION_MODES\.background/);
+  assert.match(renderer, /mode: payload\.mode \?\? state\.interactionMode/);
+  assert.match(renderer, /Dragging needs Foreground control/);
+  assert.match(renderer, /Pasting needs Foreground control/);
+  assert.match(renderer, /Right, middle, and modified clicks need Foreground control/);
+  assert.match(renderer, /Raw input may activate the app and move your real cursor/);
+});
+
+test("Windows automation reuses the Mobile pointer and blue active-window outline", () => {
+  const css = read("web", "windows", "windows-canvas.css");
+  const pointerPath =
+    "M5.4 2 18.4 13.35c.78.68.33 1.96-.68 2.07l-5.22.63a1.2 1.2 0 0 0-.88.63l-2.4 4.6c-.45.86-1.75.58-1.82-.4L5.4 2z";
+  assert.ok(indexHtml.includes(pointerPath));
+  assert.match(indexHtml, /class="automation-ripple"/);
+  assert.match(css, /\.automation-pointer \{[\s\S]*drop-shadow/);
+  assert.match(css, /\.viewport\[data-status="automating"\] \{[\s\S]*linear-gradient\(/);
+  assert.match(renderer, /elements\.automationRipple\.classList\.add\("is-clicking"\)/);
+});
+
 test("a refused coordinate request re-measures instead of retrying the old point", () => {
   assert.match(renderer, /async function recoverFromInputError\(error\)/);
   assert.match(renderer, /requiresWindowRefresh\(error\)/);
@@ -299,7 +321,7 @@ test("the stream handles descriptors, ends, reconnects, and falls back to screen
 test("a held pointer is always released, and moves are coalesced", () => {
   assert.match(renderer, /function cancelPointer\(\)/);
   assert.match(renderer, /state\.heldButtons/);
-  assert.match(renderer, /queuePointer\("up", point, \{ button, modifiers: \[\] \}\)/);
+  assert.match(renderer, /queuePointer\("up", point, \{[\s\S]*mode: INTERACTION_MODES\.foreground/);
   assert.match(renderer, /pointercancel/);
   assert.match(renderer, /lostpointercapture/);
   assert.match(renderer, /function queueMove\(point, pointer\)/);

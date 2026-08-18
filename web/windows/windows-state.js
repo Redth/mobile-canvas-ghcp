@@ -22,6 +22,7 @@ export const WINDOWS_ERROR_CODES = {
   transformStale: "windows_input_transform_stale",
   outOfBounds: "windows_input_out_of_bounds",
   foregroundRefused: "windows_input_foreground_refused",
+  backgroundUnavailable: "windows_input_background_unavailable",
   minimized: "windows_window_minimized",
   windowNotFound: "windows_window_not_found",
   identityChanged: "windows_window_identity_changed",
@@ -697,7 +698,9 @@ export function inputErrorMessage(error) {
     case WINDOWS_ERROR_CODES.outOfBounds:
       return "That point is outside the window.";
     case WINDOWS_ERROR_CODES.foregroundRefused:
-      return "Windows refused to bring the window forward, so nothing was sent.";
+      return error?.message || "Windows refused to bring the window forward, so nothing was sent.";
+    case WINDOWS_ERROR_CODES.backgroundUnavailable:
+      return "That action is not available focus-free. Use UI Automation or switch to Foreground control.";
     case WINDOWS_ERROR_CODES.minimized:
       return "The window is minimized. Restore it first.";
     case WINDOWS_ERROR_CODES.elevated:

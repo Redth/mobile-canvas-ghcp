@@ -757,20 +757,26 @@ internal static class DeviceCli
 		                                    --x <px> --y <px> [--button <left|right|middle>]
 		                                    [--capture-width <n>] [--capture-height <n>]
 		                                    [--modifier <ctrl|alt|shift|win> ...]
+		                                    [--mode <background|foreground>]
 		                                    --session <id> --instance <id>
 		  mobile-canvas windows pointer --window <id> --transform <token> --pointer-action <down|move|up>
 		                                    --x <px> --y <px> [--button <left|right|middle>]
+		                                    [--mode <background|foreground>]
 		                                    --session <id> --instance <id>
 		  mobile-canvas windows drag --window <id> --transform <token> --x <px> --y <px>
 		                                    --end-x <px> --end-y <px> [--duration <ms>] [--steps <n>]
+		                                    [--mode <background|foreground>]
 		                                    --session <id> --instance <id>
 		  mobile-canvas windows wheel --window <id> --transform <token> --x <px> --y <px>
 		                                    [--delta-y <notches>] [--delta-x <notches>]
+		                                    [--mode <background|foreground>]
 		                                    --session <id> --instance <id>
 		  mobile-canvas windows key --window <id> --transform <token> --key <name> [--key <name> ...]
 		                                    [--key-action <down|up|press>] [--modifier <name> ...]
+		                                    [--mode <background|foreground>]
 		                                    --session <id> --instance <id>
 		  mobile-canvas windows type --window <id> --transform <token> --text <text> [--delay <ms>]
+		                                    [--mode <background|foreground>]
 		                                    --session <id> --instance <id>
 		  mobile-canvas windows release --session <id> --instance <id>
 		  mobile-canvas mcp

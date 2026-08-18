@@ -131,6 +131,14 @@ public sealed record WindowsUiProperties
 	public string? State { get; init; }
 }
 
+public static class WindowsUiStates
+{
+	public const string Expanded = "expanded";
+	public const string Collapsed = "collapsed";
+	public const string PartiallyExpanded = "partiallyExpanded";
+	public const string Leaf = "leaf";
+}
+
 /// <summary>Whether an element currently supports a semantic UI Automation operation.</summary>
 public sealed record WindowsUiSupportedActions
 {

@@ -169,7 +169,12 @@
           <canvas id="screen" class="screen" width="16" height="16" tabindex="0"
                   role="application" aria-label="Live window contents"></canvas>
           <div id="automation" class="automation hidden" aria-hidden="true">
-            <div id="automation-cursor" class="automation-cursor"></div>
+            <div id="automation-cursor" class="automation-cursor">
+              <div class="automation-ripple"></div>
+              <svg class="automation-pointer" viewBox="0 0 24 24" aria-hidden="true">
+                <path d="M5.4 2 18.4 13.35c.78.68.33 1.96-.68 2.07l-5.22.63a1.2 1.2 0 0 0-.88.63l-2.4 4.6c-.45.86-1.75.58-1.82-.4L5.4 2z"></path>
+              </svg>
+            </div>
             <div id="automation-label" class="automation-label"></div>
           </div>
         </div>
@@ -322,6 +327,12 @@
     </aside>
 
     <footer class="statusbar">
+      <button id="interaction-mode" class="interaction-mode" type="button" data-mode="background"
+              aria-pressed="false"
+              title="Focus-free: semantic clicks and scrolling preserve your active window and cursor">
+        <svg class="icon" aria-hidden="true"><use id="interaction-mode-icon" href="#icon-lock"></use></svg>
+        <span id="interaction-mode-label">Focus-free</span>
+      </button>
       <span id="input-status" class="status-pill" data-status="idle">Ready</span>
       <span class="status-fields">
         <span class="status-field" title="Live view transport"><span class="status-label">Mode</span>

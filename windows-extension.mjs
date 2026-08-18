@@ -125,6 +125,14 @@ const selectorProperties = {
   },
 };
 
+const inputModeProperty = {
+  type: "string",
+  enum: ["background", "foreground"],
+  default: "background",
+  description:
+    "background preserves the active window and real cursor by using semantic UI Automation where possible; foreground explicitly allows global keyboard and pointer input.",
+};
+
 const canvas = createCanvas({
   id: canvasId,
   displayName: canvasName,
@@ -631,7 +639,7 @@ const canvas = createCanvas({
     {
       name: "click_windows_app",
       description:
-        "Click at a window-relative physical capture pixel in an authorized window. Prefer act_on_windows_ui_element: it re-resolves a real control, while this acts on a place. transformVersion must come from the most recent screenshot, stream descriptor, or geometry read; a stale token from a window that moved, resized, changed DPI, or was minimized is refused rather than clicked.",
+        "Click at a window-relative physical capture pixel in an authorized window. Background mode is the default: it hit-tests UI Automation, preserves the prior foreground, and never moves the real cursor. Foreground mode is an explicit raw-input fallback that may activate the app and move the cursor. transformVersion must come from the most recent screenshot, stream descriptor, or geometry read.",
       inputSchema: {
         type: "object",
         properties: {
@@ -655,13 +663,13 @@ const canvas = createCanvas({
           button: {
             type: "string",
             enum: ["left", "right", "middle"],
-            description: "Pointer button. Defaults to left.",
+            description: "Pointer button. Right and middle require foreground mode.",
           },
           count: {
             type: "integer",
             minimum: 1,
             maximum: 2,
-            description: "1 for a single click, 2 for a double click.",
+            description: "1 for a single click, 2 for a double click. Double click requires foreground mode.",
           },
           captureWidth: {
             type: "integer",
@@ -676,8 +684,9 @@ const canvas = createCanvas({
           modifiers: {
             type: "array",
             items: { type: "string" },
-            description: "Modifier keys held for the click, such as ctrl, alt, shift, or win.",
+            description: "Modifier keys held for the click; modifiers require foreground mode.",
           },
+          mode: inputModeProperty,
         },
         required: ["windowId", "transformVersion", "x", "y"],
       },
@@ -698,13 +707,15 @@ const canvas = createCanvas({
           ...optional("--capture-width", ctx.input.captureWidth),
           ...optional("--capture-height", ctx.input.captureHeight),
           ...repeated("--modifier", ctx.input.modifiers),
+          "--mode",
+          ctx.input.mode ?? "background",
           ...contextArgs(ctx),
         ]),
     },
     {
       name: "drag_windows_app",
       description:
-        "Press, move along an interpolated path, and release in an authorized window. Prefer act_on_windows_ui_element where the target exposes a pattern. Coordinates are window-relative physical capture pixels and require the current transformVersion; a stale token is refused rather than dragged. The button is always released, including on a partial failure.",
+        "Press, move along an interpolated path, and release in an authorized window. Raw dragging has no universal focus-free Windows API, so mode foreground is required and may activate the app and move the real cursor. Background mode refuses without sending input. Coordinates require the current transformVersion.",
       inputSchema: {
         type: "object",
         properties: {
@@ -753,6 +764,7 @@ const canvas = createCanvas({
             items: { type: "string" },
             description: "Modifier keys held for the drag.",
           },
+          mode: inputModeProperty,
         },
         required: ["windowId", "transformVersion", "x", "y", "endX", "endY"],
       },
@@ -778,13 +790,15 @@ const canvas = createCanvas({
           ...optional("--capture-width", ctx.input.captureWidth),
           ...optional("--capture-height", ctx.input.captureHeight),
           ...repeated("--modifier", ctx.input.modifiers),
+          "--mode",
+          ctx.input.mode ?? "background",
           ...contextArgs(ctx),
         ]),
     },
     {
       name: "scroll_windows_app",
       description:
-        "Scroll with the mouse wheel over a point in an authorized window. Prefer the act_on_windows_ui_element scroll action when the control exposes a scroll pattern. Deltas are wheel notches: positive deltaY scrolls up and positive deltaX scrolls right. Requires the current transformVersion; a stale token is refused.",
+        "Scroll over a point in an authorized window. Background mode is the default and invokes a UI Automation scroll pattern while preserving the prior foreground. Foreground mode uses the global real pointer and may move it. Deltas are wheel notches; requires the current transformVersion.",
       inputSchema: {
         type: "object",
         properties: {
@@ -820,8 +834,9 @@ const canvas = createCanvas({
           modifiers: {
             type: "array",
             items: { type: "string" },
-            description: "Modifier keys held for the scroll.",
+            description: "Modifier keys held for the scroll; modifiers require foreground mode.",
           },
+          mode: inputModeProperty,
         },
         required: ["windowId", "transformVersion", "x", "y"],
       },
@@ -842,13 +857,15 @@ const canvas = createCanvas({
           ...optional("--capture-width", ctx.input.captureWidth),
           ...optional("--capture-height", ctx.input.captureHeight),
           ...repeated("--modifier", ctx.input.modifiers),
+          "--mode",
+          ctx.input.mode ?? "background",
           ...contextArgs(ctx),
         ]),
     },
     {
       name: "press_windows_app_key",
       description:
-        "Press, hold, or release keys in an authorized window. Prefer act_on_windows_ui_element for buttons and fields; use this for shortcuts and content with no UI Automation tree. Key names are documented lowercase names such as enter, tab, escape, f5, or a, or an explicit virtual-key code such as vk:0x2F. A press holds keys in order and releases them in reverse to form a chord. Requires the current transformVersion.",
+        "Press, hold, or release keys in an authorized window. Raw keyboard input has no universal focus-free Windows API, so mode foreground is required and may activate the app. Background mode refuses without sending input. Prefer act_on_windows_ui_element for buttons and fields. Requires the current transformVersion.",
       inputSchema: {
         type: "object",
         properties: {
@@ -876,6 +893,7 @@ const canvas = createCanvas({
             items: { type: "string" },
             description: "Modifier keys held around the whole request, such as ctrl, alt, shift, or win.",
           },
+          mode: inputModeProperty,
         },
         required: ["windowId", "transformVersion", "keys"],
       },
@@ -890,13 +908,15 @@ const canvas = createCanvas({
           ...repeated("--key", ctx.input.keys),
           ...optional("--key-action", ctx.input.action),
           ...repeated("--modifier", ctx.input.modifiers),
+          "--mode",
+          ctx.input.mode ?? "background",
           ...contextArgs(ctx),
         ]),
     },
     {
       name: "type_windows_app_text",
       description:
-        "Type text into whichever control has focus in an authorized window, as Unicode key events. Prefer the act_on_windows_ui_element setValue action when the field exposes a value pattern. Nothing is ever placed on the clipboard, and the text is never echoed back into results or panel activity; only its length is. Requires the current transformVersion.",
+        "Type text into whichever control has focus in an authorized window. Raw typing has no universal focus-free Windows API, so mode foreground is required and may activate the app. Background mode refuses without sending input; prefer act_on_windows_ui_element setValue. Text is never echoed back. Requires the current transformVersion.",
       inputSchema: {
         type: "object",
         properties: {
@@ -919,6 +939,7 @@ const canvas = createCanvas({
             maximum: 100,
             description: "Optional per-character delay in milliseconds for apps that drop fast synthetic input.",
           },
+          mode: inputModeProperty,
         },
         required: ["windowId", "transformVersion", "text"],
       },
@@ -933,6 +954,8 @@ const canvas = createCanvas({
           "--text",
           ctx.input.text,
           ...optional("--delay", ctx.input.delayMilliseconds),
+          "--mode",
+          ctx.input.mode ?? "background",
           ...contextArgs(ctx),
         ]),
     },

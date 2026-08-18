@@ -161,6 +161,9 @@ internal static class WindowsCli
 				new WindowsClickRequest
 				{
 					TransformVersion = options.Required("transform"),
+					Mode = options.Value("mode") ?? (action == "click"
+						? WindowsInputModes.Background
+						: WindowsInputModes.Foreground),
 					CaptureWidth = options.Int("capture-width", 0),
 					CaptureHeight = options.Int("capture-height", 0),
 					X = options.Double("x", 0),
@@ -178,6 +181,7 @@ internal static class WindowsCli
 				new WindowsPointerRequest
 				{
 					TransformVersion = options.Required("transform"),
+					Mode = options.Value("mode") ?? WindowsInputModes.Background,
 					CaptureWidth = options.Int("capture-width", 0),
 					CaptureHeight = options.Int("capture-height", 0),
 					X = options.Double("x", 0),
@@ -193,6 +197,7 @@ internal static class WindowsCli
 				new WindowsDragRequest
 				{
 					TransformVersion = options.Required("transform"),
+					Mode = options.Value("mode") ?? WindowsInputModes.Background,
 					CaptureWidth = options.Int("capture-width", 0),
 					CaptureHeight = options.Int("capture-height", 0),
 					StartX = options.Double("x", 0),
@@ -213,6 +218,7 @@ internal static class WindowsCli
 				new WindowsWheelRequest
 				{
 					TransformVersion = options.Required("transform"),
+					Mode = options.Value("mode") ?? WindowsInputModes.Background,
 					CaptureWidth = options.Int("capture-width", 0),
 					CaptureHeight = options.Int("capture-height", 0),
 					X = options.Double("x", 0),
@@ -228,6 +234,7 @@ internal static class WindowsCli
 				new WindowsKeyRequest
 				{
 					TransformVersion = options.Required("transform"),
+					Mode = options.Value("mode") ?? WindowsInputModes.Background,
 					Keys = options.Values("key"),
 					Action = options.Value("key-action") ?? WindowsKeyActions.Press,
 					Modifiers = options.Values("modifier"),
@@ -239,6 +246,7 @@ internal static class WindowsCli
 				new WindowsTypeTextRequest
 				{
 					TransformVersion = options.Required("transform"),
+					Mode = options.Value("mode") ?? WindowsInputModes.Background,
 					Text = options.Required("text"),
 					DelayMilliseconds = options.Int("delay", 0),
 				},

@@ -519,6 +519,10 @@ test("refusals a person will hit are worded for a person", () => {
     inputErrorMessage({ code: WINDOWS_ERROR_CODES.foregroundRefused }),
     /refused to bring the window forward/,
   );
+  assert.match(
+    inputErrorMessage({ code: WINDOWS_ERROR_CODES.backgroundUnavailable }),
+    /not available focus-free/,
+  );
   assert.match(inputErrorMessage({ code: WINDOWS_ERROR_CODES.elevated }), /elevated/);
   assert.equal(inputErrorMessage({ message: "boom" }), "boom");
 });

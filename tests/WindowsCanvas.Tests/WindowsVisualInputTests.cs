@@ -7,15 +7,22 @@ namespace WindowsCanvas.Tests;
 /// <summary>
 /// Screenshot-guided pointer and keyboard control.
 ///
-/// This is the riskiest surface in the product: it drives the user's real mouse and keyboard. The
-/// tests here are about the guards rather than the gestures — a stale coordinate is refused, a
-/// covered point is refused, a window that is not in front is refused, and nothing is ever left
-/// held down.
+/// Focus-free requests resolve UI Automation patterns without touching global input. Explicit
+/// foreground requests retain the strict desktop guards: stale or covered coordinates are refused,
+/// and nothing is ever left held down.
 /// </summary>
 public sealed class WindowsVisualInputTests
 {
 	private static readonly CanvasContextKey Panel =
 		new("session", "panel", CanvasSurfaces.Windows);
+
+	[Fact]
+	public void InputMode_DefaultsToBackgroundAtTheContractBoundary()
+	{
+		Assert.Equal(WindowsInputModes.Background, WindowsInputModes.Normalize(null));
+		Assert.Equal(WindowsInputModes.Background, new WindowsClickRequest().Mode);
+		Assert.Equal(WindowsInputModes.Background, new WindowsTypeTextRequest().Mode);
+	}
 
 	[Fact]
 	public async Task Click_MapsCaptureCoordinatesOntoTheDesktopAndReleasesEverything()
@@ -26,6 +33,7 @@ public sealed class WindowsVisualInputTests
 			Panel,
 			new WindowsClickRequest
 			{
+				Mode = WindowsInputModes.Foreground,
 				TransformVersion = await harness.TokenAsync(),
 				X = 100,
 				Y = 50,
@@ -60,6 +68,7 @@ public sealed class WindowsVisualInputTests
 			Panel,
 			new WindowsClickRequest
 			{
+				Mode = WindowsInputModes.Foreground,
 				TransformVersion = await harness.TokenAsync(),
 				X = 50,
 				Y = 25,
@@ -75,6 +84,269 @@ public sealed class WindowsVisualInputTests
 	}
 
 	[Fact]
+	public async Task BackgroundClick_InvokesTheDeepestSemanticControlWithoutTakingForeground()
+	{
+		var harness = await Harness.AttachedAsync();
+		harness.Input.Foreground = 99;
+		harness.Bridge.OnSnapshot = (_, _) => new WindowsUiSnapshot
+		{
+			Root = new WindowsUiElement
+			{
+				ControlType = WindowsUiControlTypes.Window,
+				Children =
+				[
+					new WindowsUiElement
+					{
+						ControlType = WindowsUiControlTypes.Button,
+						Bounds = new WindowsUiPhysicalPixelRect
+						{
+							Left = -1920,
+							Top = -200,
+							Width = 100,
+							Height = 100,
+						},
+						Properties = new WindowsUiProperties { Name = "Save", Enabled = true },
+						SupportedActions = new WindowsUiSupportedActions { Invoke = true },
+					},
+				],
+			},
+		};
+
+		var result = await harness.Service.ClickAsync(
+			Panel,
+			new WindowsClickRequest
+			{
+				TransformVersion = await harness.TokenAsync(),
+				X = 10,
+				Y = 10,
+			});
+
+		Assert.Equal("click:background:invoke", result.Operation);
+		Assert.False(result.Foreground);
+		Assert.Empty(harness.Input.Operations);
+		Assert.Empty(harness.Controller.Calls);
+		var action = Assert.Single(harness.Bridge.UiActions);
+		Assert.Equal(WindowsUiActionKinds.Invoke, action.Action);
+		Assert.Equal([0], action.Selector.Path);
+		Assert.Equal("Save", action.Selector.Name);
+	}
+
+	[Fact]
+	public async Task BackgroundClick_RefusesRawContentInsteadOfTakingForeground()
+	{
+		var harness = await Harness.AttachedAsync();
+		harness.Input.Foreground = 99;
+		var token = await harness.TokenAsync();
+
+		var failure = await Assert.ThrowsAsync<WindowsCanvasException>(
+			() => harness.Service.ClickAsync(
+				Panel,
+				new WindowsClickRequest
+				{
+					Mode = WindowsInputModes.Background,
+					TransformVersion = token,
+					X = 10,
+					Y = 10,
+				}));
+
+		Assert.Equal(WindowsErrorCodes.InputBackgroundUnavailable, failure.Code);
+		Assert.Empty(harness.Input.Operations);
+		Assert.Empty(harness.Controller.Calls);
+	}
+
+	[Fact]
+	public async Task BackgroundClick_RestoresTheUsersWindowWhenAProviderTakesForeground()
+	{
+		var harness = await Harness.AttachedAsync();
+		harness.Input.Foreground = 99;
+		harness.Controller.OnReveal = handle => harness.Input.Foreground = handle;
+		harness.Bridge.OnSnapshot = (_, _) => new WindowsUiSnapshot
+		{
+			Root = new WindowsUiElement
+			{
+				ControlType = WindowsUiControlTypes.Button,
+				Bounds = new WindowsUiPhysicalPixelRect
+				{
+					Left = -1920,
+					Top = -200,
+					Width = 100,
+					Height = 100,
+				},
+				Properties = new WindowsUiProperties { Name = "Zoom in", Enabled = true },
+				SupportedActions = new WindowsUiSupportedActions { Invoke = true },
+			},
+		};
+		harness.Bridge.OnAction = (target, request) =>
+		{
+			_ = Task.Run(async () =>
+			{
+				await Task.Delay(60);
+				harness.Input.Foreground = 11;
+			});
+			return new WindowsUiActionResult { Success = true, Action = request.Action };
+		};
+
+		var result = await harness.Service.ClickAsync(
+			Panel,
+			new WindowsClickRequest
+			{
+				Mode = WindowsInputModes.Background,
+				TransformVersion = await harness.TokenAsync(),
+				X = 10,
+				Y = 10,
+			});
+
+		Assert.False(result.Foreground);
+		Assert.Equal(99, harness.Input.Foreground);
+		Assert.Equal([("reveal", 99L)], harness.Controller.Calls);
+		Assert.Empty(harness.Input.Operations);
+	}
+
+	[Fact]
+	public async Task BackgroundClick_ExpandsACollapsedControl()
+	{
+		var harness = await Harness.AttachedAsync();
+		harness.Bridge.OnSnapshot = (_, _) => new WindowsUiSnapshot
+		{
+			Root = new WindowsUiElement
+			{
+				ControlType = WindowsUiControlTypes.ComboBox,
+				Bounds = new WindowsUiPhysicalPixelRect
+				{
+					Left = -1920,
+					Top = -200,
+					Width = 100,
+					Height = 100,
+				},
+				Properties = new WindowsUiProperties
+				{
+					Name = "Brush size",
+					Enabled = true,
+					State = WindowsUiStates.Collapsed,
+				},
+				SupportedActions = new WindowsUiSupportedActions
+				{
+					Expand = true,
+					Collapse = true,
+				},
+			},
+		};
+
+		await harness.Service.ClickAsync(
+			Panel,
+			new WindowsClickRequest
+			{
+				TransformVersion = await harness.TokenAsync(),
+				X = 10,
+				Y = 10,
+			});
+
+		Assert.Equal(WindowsUiActionKinds.Expand, Assert.Single(harness.Bridge.UiActions).Action);
+	}
+
+	[Fact]
+	public async Task BackgroundClick_ReportsFocusRestoreFailureWithoutInvitingARetry()
+	{
+		var harness = await Harness.AttachedAsync();
+		harness.Input.Foreground = 99;
+		harness.Controller.RevealOutcome = WindowsWindowActionOutcome.Refused("Restore was refused.");
+		harness.Bridge.OnSnapshot = (_, _) => new WindowsUiSnapshot
+		{
+			Root = new WindowsUiElement
+			{
+				ControlType = WindowsUiControlTypes.Button,
+				Bounds = new WindowsUiPhysicalPixelRect
+				{
+					Left = -1920,
+					Top = -200,
+					Width = 100,
+					Height = 100,
+				},
+				Properties = new WindowsUiProperties { Name = "Save", Enabled = true },
+				SupportedActions = new WindowsUiSupportedActions { Invoke = true },
+			},
+		};
+		harness.Bridge.OnAction = (_, request) =>
+		{
+			harness.Input.Foreground = 11;
+			return new WindowsUiActionResult { Success = true, Action = request.Action };
+		};
+
+		var result = await harness.Service.ClickAsync(
+			Panel,
+			new WindowsClickRequest
+			{
+				TransformVersion = await harness.TokenAsync(),
+				X = 10,
+				Y = 10,
+			});
+
+		Assert.True(result.Success);
+		Assert.True(result.Foreground);
+		Assert.Null(result.Code);
+		Assert.Contains("action completed", result.Detail, StringComparison.OrdinalIgnoreCase);
+	}
+
+	[Fact]
+	public async Task BackgroundWheel_UsesTheScrollPatternWithoutMovingThePointer()
+	{
+		var harness = await Harness.AttachedAsync();
+		harness.Input.Foreground = 99;
+		harness.Bridge.OnSnapshot = (_, _) => new WindowsUiSnapshot
+		{
+			Root = new WindowsUiElement
+			{
+				ControlType = WindowsUiControlTypes.Pane,
+				Bounds = new WindowsUiPhysicalPixelRect
+				{
+					Left = -1920,
+					Top = -200,
+					Width = 800,
+					Height = 600,
+				},
+				SupportedActions = new WindowsUiSupportedActions { Scroll = true },
+				Children =
+				[
+					new WindowsUiElement
+					{
+						ControlType = WindowsUiControlTypes.Pane,
+						Bounds = new WindowsUiPhysicalPixelRect
+						{
+							Left = -1920,
+							Top = -200,
+							Width = 100,
+							Height = 100,
+						},
+						Properties = new WindowsUiProperties { Enabled = false },
+						SupportedActions = new WindowsUiSupportedActions { Scroll = true },
+					},
+				],
+			},
+		};
+
+		var result = await harness.Service.WheelAsync(
+			Panel,
+			new WindowsWheelRequest
+			{
+				Mode = WindowsInputModes.Background,
+				TransformVersion = await harness.TokenAsync(),
+				X = 10,
+				Y = 10,
+				DeltaY = -1,
+			});
+
+		Assert.Equal("wheel:background:scroll", result.Operation);
+		Assert.False(result.Foreground);
+		Assert.Empty(harness.Input.Operations);
+		Assert.Empty(harness.Controller.Calls);
+		var action = Assert.Single(harness.Bridge.UiActions);
+		Assert.Equal(WindowsUiActionKinds.Scroll, action.Action);
+		Assert.Equal(0, action.Selector.Index);
+		Assert.Equal(WindowsUiScrollDirections.Down, action.Scroll!.Direction);
+		Assert.Equal(WindowsUiScrollAmounts.Small, action.Scroll.Amount);
+	}
+
+	[Fact]
 	public async Task DoubleClick_SendsTwoPressesWithoutLeavingAButtonDown()
 	{
 		var harness = await Harness.AttachedAsync();
@@ -83,6 +355,7 @@ public sealed class WindowsVisualInputTests
 			Panel,
 			new WindowsClickRequest
 			{
+				Mode = WindowsInputModes.Foreground,
 				TransformVersion = await harness.TokenAsync(),
 				X = 10,
 				Y = 10,
@@ -106,7 +379,13 @@ public sealed class WindowsVisualInputTests
 		var failure = await Assert.ThrowsAsync<WindowsCanvasException>(
 			() => harness.Service.ClickAsync(
 				Panel,
-				new WindowsClickRequest { TransformVersion = token, X = 10, Y = 10 }));
+				new WindowsClickRequest
+				{
+					Mode = WindowsInputModes.Foreground,
+					TransformVersion = token,
+					X = 10,
+					Y = 10,
+				}));
 
 		Assert.Equal(WindowsErrorCodes.InputTransformStale, failure.Code);
 		Assert.Empty(harness.Input.Operations);
@@ -177,7 +456,13 @@ public sealed class WindowsVisualInputTests
 		var failure = await Assert.ThrowsAsync<WindowsCanvasException>(
 			() => harness.Service.ClickAsync(
 				Panel,
-				new WindowsClickRequest { TransformVersion = token, X = 10, Y = 10 }));
+				new WindowsClickRequest
+				{
+					Mode = WindowsInputModes.Foreground,
+					TransformVersion = token,
+					X = 10,
+					Y = 10,
+				}));
 
 		Assert.Equal(WindowsErrorCodes.InputForegroundRefused, failure.Code);
 		Assert.Contains("declined", failure.Message, StringComparison.OrdinalIgnoreCase);
@@ -194,7 +479,13 @@ public sealed class WindowsVisualInputTests
 		var failure = await Assert.ThrowsAsync<WindowsCanvasException>(
 			() => harness.Service.ClickAsync(
 				Panel,
-				new WindowsClickRequest { TransformVersion = token, X = 10, Y = 10 }));
+				new WindowsClickRequest
+				{
+					Mode = WindowsInputModes.Foreground,
+					TransformVersion = token,
+					X = 10,
+					Y = 10,
+				}));
 
 		Assert.Equal(WindowsErrorCodes.InputForegroundRefused, failure.Code);
 		Assert.Empty(harness.Input.Operations);
@@ -214,6 +505,7 @@ public sealed class WindowsVisualInputTests
 				Panel,
 				new WindowsClickRequest
 				{
+					Mode = WindowsInputModes.Foreground,
 					TransformVersion = token,
 					X = 10,
 					Y = 10,
@@ -239,6 +531,7 @@ public sealed class WindowsVisualInputTests
 			Panel,
 			new WindowsPointerRequest
 			{
+				Mode = WindowsInputModes.Foreground,
 				TransformVersion = token,
 				Action = WindowsPointerActions.Down,
 				X = 10,
@@ -261,6 +554,7 @@ public sealed class WindowsVisualInputTests
 			Panel,
 			new WindowsKeyRequest
 			{
+				Mode = WindowsInputModes.Foreground,
 				TransformVersion = token,
 				Keys = ["ctrl"],
 				Action = WindowsKeyActions.Down,
@@ -281,6 +575,7 @@ public sealed class WindowsVisualInputTests
 			Panel,
 			new WindowsPointerRequest
 			{
+				Mode = WindowsInputModes.Foreground,
 				TransformVersion = token,
 				Action = WindowsPointerActions.Down,
 				X = 10,
@@ -302,6 +597,7 @@ public sealed class WindowsVisualInputTests
 			Panel,
 			new WindowsDragRequest
 			{
+				Mode = WindowsInputModes.Foreground,
 				TransformVersion = await harness.TokenAsync(),
 				StartX = 10,
 				StartY = 10,
@@ -327,12 +623,19 @@ public sealed class WindowsVisualInputTests
 		var empty = await Assert.ThrowsAsync<WindowsCanvasException>(
 			() => harness.Service.WheelAsync(
 				Panel,
-				new WindowsWheelRequest { TransformVersion = token, X = 10, Y = 10 }));
+				new WindowsWheelRequest
+				{
+					Mode = WindowsInputModes.Foreground,
+					TransformVersion = token,
+					X = 10,
+					Y = 10,
+				}));
 		var huge = await Assert.ThrowsAsync<WindowsCanvasException>(
 			() => harness.Service.WheelAsync(
 				Panel,
 				new WindowsWheelRequest
 				{
+					Mode = WindowsInputModes.Foreground,
 					TransformVersion = token,
 					X = 10,
 					Y = 10,
@@ -342,6 +645,7 @@ public sealed class WindowsVisualInputTests
 			Panel,
 			new WindowsWheelRequest
 			{
+				Mode = WindowsInputModes.Foreground,
 				TransformVersion = token,
 				X = 10,
 				Y = 10,
@@ -364,6 +668,7 @@ public sealed class WindowsVisualInputTests
 			Panel,
 			new WindowsKeyRequest
 			{
+				Mode = WindowsInputModes.Foreground,
 				TransformVersion = await harness.TokenAsync(),
 				Keys = ["ctrl", "shift", "p"],
 			});
@@ -411,6 +716,7 @@ public sealed class WindowsVisualInputTests
 			Panel,
 			new WindowsTypeTextRequest
 			{
+				Mode = WindowsInputModes.Foreground,
 				TransformVersion = await harness.TokenAsync(),
 				Text = "hi\r\n\tok",
 			});
@@ -514,7 +820,13 @@ public sealed class WindowsVisualInputTests
 			{
 				await harness.Service.ClickAsync(
 					Panel,
-					new WindowsClickRequest { TransformVersion = token, X = 10, Y = 10 });
+					new WindowsClickRequest
+					{
+						Mode = WindowsInputModes.Foreground,
+						TransformVersion = token,
+						X = 10,
+						Y = 10,
+					});
 			}
 			catch (WindowsCanvasException exception)
 			{

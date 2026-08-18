@@ -789,6 +789,17 @@ public sealed class WindowsAppService(
 		var button = WindowsPointerButtons.Normalize(request.Button);
 		var count = WindowsInputLimits.ClickCount(request.Count);
 		var modifiers = ResolveModifiers(request.Modifiers);
+		var mode = WindowsInputModes.Normalize(request.Mode);
+		if (mode == WindowsInputModes.Background)
+		{
+			return BackgroundClickAsync(
+				key,
+				request,
+				button,
+				count,
+				modifiers,
+				cancellationToken);
+		}
 		return RunInputAsync(
 			key,
 			request.WindowId,
@@ -842,6 +853,7 @@ public sealed class WindowsAppService(
 		var action = WindowsPointerActions.Normalize(request.Action);
 		var button = WindowsPointerButtons.Normalize(request.Button);
 		var modifiers = ResolveModifiers(request.Modifiers);
+		RequireForegroundMode(request.Mode, "Pointer gestures");
 		return RunInputAsync(
 			key,
 			request.WindowId,
@@ -902,6 +914,7 @@ public sealed class WindowsAppService(
 			request.DurationMilliseconds,
 			WindowsInputLimits.DefaultDragDurationMilliseconds);
 		var modifiers = ResolveModifiers(request.Modifiers);
+		RequireForegroundMode(request.Mode, "Dragging");
 		return RunInputAsync(
 			key,
 			request.WindowId,
@@ -971,6 +984,17 @@ public sealed class WindowsAppService(
 				"A wheel request needs a non-zero deltaX or deltaY, in wheel notches.");
 		}
 		var modifiers = ResolveModifiers(request.Modifiers);
+		var mode = WindowsInputModes.Normalize(request.Mode);
+		if (mode == WindowsInputModes.Background)
+		{
+			return BackgroundWheelAsync(
+				key,
+				request,
+				vertical,
+				horizontal,
+				modifiers,
+				cancellationToken);
+		}
 		return RunInputAsync(
 			key,
 			request.WindowId,
@@ -1016,6 +1040,7 @@ public sealed class WindowsAppService(
 		var action = WindowsKeyActions.Normalize(request.Action);
 		var strokes = ResolveKeys(request.Keys);
 		var modifiers = ResolveModifiers(request.Modifiers);
+		RequireForegroundMode(request.Mode, "Keyboard input");
 		return RunInputAsync(
 			key,
 			request.WindowId,
@@ -1091,6 +1116,7 @@ public sealed class WindowsAppService(
 		}
 		var delay = TimeSpan.FromMilliseconds(
 			Math.Clamp(request.DelayMilliseconds, 0, WindowsInputLimits.MaximumTextDelayMilliseconds));
+		RequireForegroundMode(request.Mode, "Typing");
 
 		return RunInputAsync(
 			key,
@@ -1126,6 +1152,274 @@ public sealed class WindowsAppService(
 				};
 			},
 			cancellationToken);
+	}
+
+	private Task<WindowsInputResult> BackgroundClickAsync(
+		CanvasContextKey key,
+		WindowsClickRequest request,
+		string button,
+		int count,
+		WindowsKeyStroke[] modifiers,
+		CancellationToken cancellationToken)
+	{
+		if (button != WindowsPointerButtons.Left || count != 1 || modifiers.Length != 0)
+		{
+			throw BackgroundUnavailable(
+				"Focus-free clicks support one unmodified left click on a semantic control.");
+		}
+
+		return RunBackgroundUiAsync(
+			key,
+			request.WindowId,
+			request.TransformVersion,
+			request.X,
+			request.Y,
+			request.CaptureWidth,
+			request.CaptureHeight,
+			BackgroundClickAction,
+			"click",
+			scroll: null,
+			cancellationToken);
+	}
+
+	private Task<WindowsInputResult> BackgroundWheelAsync(
+		CanvasContextKey key,
+		WindowsWheelRequest request,
+		int vertical,
+		int horizontal,
+		WindowsKeyStroke[] modifiers,
+		CancellationToken cancellationToken)
+	{
+		if (modifiers.Length != 0)
+			throw BackgroundUnavailable("Focus-free scrolling does not support modifier keys.");
+
+		var horizontalWins = Math.Abs(horizontal) > Math.Abs(vertical);
+		var delta = horizontalWins ? horizontal : vertical;
+		var direction = horizontalWins
+			? delta > 0 ? WindowsUiScrollDirections.Right : WindowsUiScrollDirections.Left
+			: delta > 0 ? WindowsUiScrollDirections.Up : WindowsUiScrollDirections.Down;
+		var amount = Math.Abs(delta) >= 3
+			? WindowsUiScrollAmounts.Large
+			: WindowsUiScrollAmounts.Small;
+
+		return RunBackgroundUiAsync(
+			key,
+			request.WindowId,
+			request.TransformVersion,
+			request.X,
+			request.Y,
+			request.CaptureWidth,
+			request.CaptureHeight,
+			BackgroundScrollAction,
+			"scroll",
+			new WindowsUiScrollRequest { Direction = direction, Amount = amount },
+			cancellationToken);
+	}
+
+	private async Task<WindowsInputResult> RunBackgroundUiAsync(
+		CanvasContextKey key,
+		string? windowId,
+		string transformVersion,
+		double x,
+		double y,
+		int captureWidth,
+		int captureHeight,
+		Func<WindowsUiElement, string?> actionFor,
+		string operation,
+		WindowsUiScrollRequest? scroll,
+		CancellationToken cancellationToken)
+	{
+		var panel = Panel(key);
+		await panel.Gate.WaitAsync(cancellationToken).ConfigureAwait(false);
+		try
+		{
+			var session = RequireSession(panel);
+			var live = await RefreshAsync(panel, cancellationToken).ConfigureAwait(false);
+			var record = RequireWindow(session, windowId ?? session.SelectedWindowId);
+			var window = Resolve(live, record.Key);
+			RequireInputRate(panel);
+
+			var geometry = RequireGeometry(record, window);
+			RequireTransform(transformVersion, geometry);
+			var point = RequirePoint(x, y, captureWidth, captureHeight, geometry);
+			var (screenX, screenY) = WindowsInputMapper.ToScreen(point, geometry);
+			var target = new InputTarget(session.Id, record, window, geometry);
+			var snapshotRequest = new WindowsUiSnapshotRequest { TimeoutMilliseconds = 2_000 };
+			var snapshot = WindowsUiAutomationNormalizer.Snapshot(
+				await bridge.GetUiSnapshotAsync(
+					new WindowsNativeWindowTarget(window),
+					snapshotRequest,
+					cancellationToken).ConfigureAwait(false),
+				snapshotRequest);
+			var hit = FindBackgroundTarget(snapshot.Root, screenX, screenY, actionFor);
+			if (hit is null)
+			{
+				throw BackgroundUnavailable(
+					$"That point has no semantic {operation} action. Nothing was sent.");
+			}
+
+			var actionRequest = WindowsUiAutomationNormalizer.Action(
+				new WindowsUiActionRequest
+				{
+					Action = hit.Action,
+					Selector = SelectorFor(hit.Element, hit.Path),
+					Scroll = scroll,
+					TimeoutMilliseconds = 2_000,
+				});
+			var previousForeground = _input.ForegroundWindow;
+			var result = WindowsUiAutomationNormalizer.ActionResult(
+				await bridge.ActUiAsync(
+					new WindowsNativeWindowTarget(window),
+					actionRequest,
+					cancellationToken).ConfigureAwait(false),
+				actionRequest);
+			if (!result.Success)
+			{
+				throw new WindowsCanvasException(
+					result.Code ?? WindowsErrorCodes.UiActionFailed,
+					result.Detail ?? "The semantic background action failed.");
+			}
+
+			var focusDetail = await RestorePreviousForegroundAsync(
+				previousForeground,
+				window.Handle,
+				cancellationToken).ConfigureAwait(false);
+			return Describe(
+				target,
+				$"{(operation == "scroll" ? "wheel" : "click")}:background:{hit.Action}",
+				point,
+				screenX,
+				screenY,
+				foreground: _input.IsForeground(window.Handle)) with
+			{
+				Detail = focusDetail,
+			};
+		}
+		finally
+		{
+			panel.Gate.Release();
+		}
+	}
+
+	private static string? BackgroundClickAction(WindowsUiElement element)
+	{
+		if (element.Properties.Enabled == false || element.Properties.Offscreen == true)
+			return null;
+		if (element.SupportedActions.Invoke)
+			return WindowsUiActionKinds.Invoke;
+		if (element.SupportedActions.Toggle)
+			return WindowsUiActionKinds.Toggle;
+		if (element.SupportedActions.Select)
+			return WindowsUiActionKinds.Select;
+		if (element.SupportedActions.Collapse &&
+			element.Properties.State == WindowsUiStates.Expanded)
+		{
+			return WindowsUiActionKinds.Collapse;
+		}
+		if (element.SupportedActions.Expand)
+			return WindowsUiActionKinds.Expand;
+		return element.SupportedActions.Collapse ? WindowsUiActionKinds.Collapse : null;
+	}
+
+	private static string? BackgroundScrollAction(WindowsUiElement element) =>
+		element.Properties.Enabled != false &&
+		element.Properties.Offscreen != true &&
+		element.SupportedActions.Scroll
+			? WindowsUiActionKinds.Scroll
+			: null;
+
+	private static BackgroundUiTarget? FindBackgroundTarget(
+		WindowsUiElement? root,
+		int screenX,
+		int screenY,
+		Func<WindowsUiElement, string?> actionFor)
+	{
+		BackgroundUiTarget? best = null;
+
+		void Visit(WindowsUiElement element, int[] path, int depth)
+		{
+			var bounds = element.Bounds;
+			var contains = bounds is not null &&
+				bounds.Width > 0 &&
+				bounds.Height > 0 &&
+				screenX >= bounds.Left &&
+				screenX < bounds.Left + bounds.Width &&
+				screenY >= bounds.Top &&
+				screenY < bounds.Top + bounds.Height;
+			if (contains)
+			{
+				var action = actionFor(element);
+				if (action is not null && (best is null || depth >= best.Depth))
+					best = new BackgroundUiTarget(element, path, action, depth);
+			}
+
+			for (var index = 0; index < element.Children.Length; index++)
+				Visit(element.Children[index], [.. path, index], depth + 1);
+		}
+
+		if (root is not null)
+			Visit(root, [], 0);
+		return best;
+	}
+
+	private static WindowsUiSelector SelectorFor(WindowsUiElement element, int[] path) =>
+		new()
+		{
+			AutomationId = NullIfEmpty(element.Properties.AutomationId),
+			ControlType = element.ControlType == WindowsUiControlTypes.Unknown
+				? null
+				: element.ControlType,
+			Name = NullIfEmpty(element.Properties.Name),
+			Exact = true,
+			Path = path,
+			Index = path.Length == 0 ? 0 : null,
+		};
+
+	private static string? NullIfEmpty(string? value) =>
+		string.IsNullOrWhiteSpace(value) ? null : value;
+
+	private static void RequireForegroundMode(string? mode, string operation)
+	{
+		if (WindowsInputModes.Normalize(mode) != WindowsInputModes.Foreground)
+		{
+			throw BackgroundUnavailable(
+				$"{operation} has no universal focus-free Windows API. Nothing was sent.");
+		}
+	}
+
+	private static WindowsCanvasException BackgroundUnavailable(string detail) =>
+		WindowsCanvasException.Conflict(
+			WindowsErrorCodes.InputBackgroundUnavailable,
+			$"{detail} Use UI Automation, or explicitly switch to foreground control to use the " +
+			"real keyboard and pointer.");
+
+	private async Task<string?> RestorePreviousForegroundAsync(
+		long previousForeground,
+		long target,
+		CancellationToken cancellationToken)
+	{
+		if (previousForeground == 0 || previousForeground == target)
+			return null;
+
+		for (var attempt = 0; attempt < 6; attempt++)
+		{
+			var foreground = _input.ForegroundWindow;
+			if (foreground == target)
+				break;
+			if (foreground != previousForeground)
+				return null;
+			if (attempt == 5)
+				return null;
+			await Task.Delay(40, cancellationToken).ConfigureAwait(false);
+		}
+
+		var outcome = windowController.Reveal(previousForeground);
+		return _input.ForegroundWindow == previousForeground
+			? null
+			: outcome.Detail is null
+				? "The semantic action completed, but the app took foreground and Windows would not " +
+					"restore the previously active window."
+				: $"The semantic action completed, but the app took foreground. {outcome.Detail}";
 	}
 
 	/// <summary>
@@ -1518,7 +1812,8 @@ public sealed class WindowsAppService(
 		string operation,
 		WindowsInputPoint? point,
 		int screenX,
-		int screenY) =>
+		int screenY,
+		bool foreground = true) =>
 		new()
 		{
 			Success = true,
@@ -1530,7 +1825,7 @@ public sealed class WindowsAppService(
 			ScreenPoint = point is null
 				? null
 				: new WindowsInputPoint { X = screenX, Y = screenY },
-			Foreground = true,
+			Foreground = foreground,
 			Geometry = target.Geometry,
 		};
 
@@ -1540,6 +1835,12 @@ public sealed class WindowsAppService(
 		WindowsAuthorizedRecord Record,
 		WindowsHelperWindow Window,
 		WindowsCaptureGeometry Geometry);
+
+	private sealed record BackgroundUiTarget(
+		WindowsUiElement Element,
+		int[] Path,
+		string Action,
+		int Depth);
 
 	private async Task<WindowsOperationResult> ActAsync(
 		CanvasContextKey key,

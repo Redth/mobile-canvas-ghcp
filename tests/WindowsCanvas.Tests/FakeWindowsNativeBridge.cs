@@ -296,6 +296,8 @@ internal sealed class FakeInputController : IWindowsInputController
 
 	public bool IsForeground(long handle) => Foreground == handle;
 
+	public long ForegroundWindow => Foreground;
+
 	public long WindowAtPoint(int screenX, int screenY) => Covering ?? Foreground;
 
 	public WindowsInputOutcome MovePointer(int screenX, int screenY) =>
@@ -332,9 +334,12 @@ internal sealed class FakeWindowController : IWindowsWindowController
 
 	public WindowsWindowActionOutcome RestoreOutcome { get; set; } = WindowsWindowActionOutcome.Ok;
 
+	public Action<long>? OnReveal { get; set; }
+
 	public WindowsWindowActionOutcome Reveal(long handle)
 	{
 		Calls.Add(("reveal", handle));
+		OnReveal?.Invoke(handle);
 		return RevealOutcome;
 	}
 

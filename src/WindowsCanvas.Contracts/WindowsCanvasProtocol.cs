@@ -76,6 +76,12 @@ public static class WindowsErrorCodes
 	/// <summary>Windows declined to give the target window the foreground, so input was not sent.</summary>
 	public const string InputForegroundRefused = "windows_input_foreground_refused";
 
+	/// <summary>
+	/// Focus-free input could not represent this operation through UI Automation. The caller may
+	/// explicitly opt into foreground control, but the host never does that implicitly.
+	/// </summary>
+	public const string InputBackgroundUnavailable = "windows_input_background_unavailable";
+
 	public const string InputFailed = "windows_input_failed";
 	public const string InputRateLimited = "windows_input_rate_limited";
 }

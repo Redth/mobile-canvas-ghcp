@@ -148,7 +148,14 @@ canvas, its own view, its own `/api/v1/windows/` surface, and its own
   change reconnects for a fresh keyframe.
 - **UI Automation first.** Dump a bounded tree, search it, and invoke, set,
   select, toggle, expand, collapse, scroll, or focus a real control. Screenshot
-  and coordinate control is the fallback for content with no semantic tree.
+  clicks and scrolling default to **Focus-free** mode: the captured point is
+  hit-tested against UI Automation and acted on without moving the real cursor.
+  If an app's UIA provider takes foreground anyway, the host restores the
+  previously active window before completing the action.
+- Raw dragging, drawing, shortcuts, and typing have no universal HWND-targeted
+  Windows API. They are refused in Focus-free mode; **Foreground control** is an
+  explicit opt-in that uses global input and may activate the app and move the
+  real cursor. Prefer semantic actions whenever the app exposes them.
 - Coordinates are window-relative physical capture pixels and always travel with
   the transform token they were measured against. A window that moved, resized,
   changed DPI, or minimized invalidates the token, and the request is refused

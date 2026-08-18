@@ -86,6 +86,7 @@ const elements = {
   overlayActionText: document.querySelector("#overlay-action-text"),
   automation: document.querySelector("#automation"),
   automationCursor: document.querySelector("#automation-cursor"),
+  automationRipple: document.querySelector(".automation-ripple"),
   automationLabel: document.querySelector("#automation-label"),
   inspector: document.querySelector("#inspector"),
   inspectorClose: document.querySelector("#inspector-close"),
@@ -125,6 +126,9 @@ const elements = {
   actionAmount: document.querySelector("#action-amount"),
   actionButtons: document.querySelector("#action-buttons"),
   actionStatus: document.querySelector("#action-status"),
+  interactionMode: document.querySelector("#interaction-mode"),
+  interactionModeIcon: document.querySelector("#interaction-mode-icon"),
+  interactionModeLabel: document.querySelector("#interaction-mode-label"),
   inputStatus: document.querySelector("#input-status"),
   streamMode: document.querySelector("#stream-mode"),
   streamFps: document.querySelector("#stream-fps"),
@@ -165,6 +169,10 @@ const WHEEL_FLUSH_MS = 60;
 const AUTOMATION_IDLE_MS = 2600;
 const TOAST_MS = 4000;
 const THUMBNAIL_CONCURRENCY = 4;
+const INTERACTION_MODES = {
+  background: "background",
+  foreground: "foreground",
+};
 
 const state = {
   preflight: null,
@@ -205,6 +213,7 @@ const state = {
   heldButtons: new Set(),
   wheel: null,
   wheelTimer: null,
+  interactionMode: INTERACTION_MODES.background,
   inputStatusTimer: null,
   toastTimer: null,
   match: null,
@@ -1382,9 +1391,21 @@ async function sendInput(kind, payload, label) {
   if (!state.selectedWindowId) return null;
   setInputStatus("pending", label);
   try {
-    const result = await postJson(inputPath(kind), payload);
+    const result = await postJson(inputPath(kind), {
+      ...payload,
+      mode: payload.mode ?? state.interactionMode,
+    });
     if (result && result.success === false) {
       setInputStatus("error", inputErrorMessage({ code: result.code, message: result.detail }));
+      return result;
+    }
+    if (result?.code) {
+      setInputStatus("error", inputErrorMessage({ code: result.code, message: result.detail }));
+      return result;
+    }
+    if (result?.detail) {
+      setInputStatus("warning", result.detail);
+      showToast(result.detail, "attention");
       return result;
     }
     setInputStatus("ok", label);
@@ -1440,6 +1461,7 @@ function attachStageInput() {
       start: point,
       dragging: false,
       modifiers: modifiersFrom(event),
+      mode: state.interactionMode,
     };
   });
 
@@ -1450,6 +1472,16 @@ function attachStageInput() {
     if (!pointer.dragging) {
       const distance = Math.hypot(point.x - pointer.start.x, point.y - pointer.start.y);
       if (distance < DRAG_THRESHOLD_PX) return;
+      if (state.interactionMode === INTERACTION_MODES.background) {
+        state.pointer = null;
+        if (canvas.hasPointerCapture?.(event.pointerId)) {
+          canvas.releasePointerCapture(event.pointerId);
+        }
+        const message = "Dragging needs Foreground control; focus-free mode never moves your real pointer.";
+        setInputStatus("error", message);
+        showToast(message, "attention");
+        return;
+      }
       pointer.dragging = true;
       state.heldButtons.add(pointer.button);
       queuePointer("down", pointer.start, pointer);
@@ -1470,6 +1502,15 @@ function attachStageInput() {
       state.heldButtons.delete(pointer.button);
       return;
     }
+    if (
+      pointer.mode === INTERACTION_MODES.background
+      && (pointer.button !== "left" || pointer.modifiers.length > 0)
+    ) {
+      const message = "Right, middle, and modified clicks need Foreground control.";
+      setInputStatus("warning", message);
+      showToast(message, "attention");
+      return;
+    }
     // Windows composes a double click from two real clicks inside its own double-click time, exactly
     // as a mouse does. The count: 2 form of this request exists for an agent that only gets one shot.
     const frame = requireFrame();
@@ -1483,6 +1524,7 @@ function attachStageInput() {
         button: pointer.button,
         count: 1,
         modifiers: pointer.modifiers,
+        mode: pointer.mode,
       },
       pointer.button === "right" ? "Right click" : "Click",
     );
@@ -1515,6 +1557,7 @@ function attachStageInput() {
     if (!canInteract()) return;
     const key = mapKey(event);
     if (!key) return;
+    if (state.interactionMode === INTERACTION_MODES.background) return;
     event.preventDefault();
     const frame = requireFrame();
     if (!frame) return;
@@ -1534,6 +1577,12 @@ function attachStageInput() {
     const text = event.clipboardData?.getData("text");
     if (!text) return;
     event.preventDefault();
+    if (state.interactionMode === INTERACTION_MODES.background) {
+      const message = "Pasting needs Foreground control; use UI Automation Set value to stay focus-free.";
+      setInputStatus("error", message);
+      showToast(message, "attention");
+      return;
+    }
     const frame = requireFrame();
     if (!frame) return;
     void sendInput("text", { ...frame, text }, "Paste");
@@ -1621,6 +1670,7 @@ function queuePointer(action, point, pointer) {
         action,
         button: pointer.button,
         modifiers: pointer.modifiers,
+        mode: pointer.mode,
       },
       action === "down" ? "Press" : action === "up" ? "Release" : "Drag",
     );
@@ -1652,6 +1702,7 @@ function queueMove(point, pointer) {
         action: "move",
         button: pending.pointer.button,
         modifiers: pending.pointer.modifiers,
+        mode: pending.pointer.mode,
       },
       "Drag",
     );
@@ -1673,7 +1724,11 @@ function cancelPointer() {
   if (held.length === 0 || !state.selectedWindowId) return;
   const point = pointer?.start ?? { x: 0, y: 0 };
   for (const button of held) {
-    queuePointer("up", point, { button, modifiers: [] });
+    queuePointer("up", point, {
+      button,
+      modifiers: [],
+      mode: INTERACTION_MODES.foreground,
+    });
   }
 }
 
@@ -1702,11 +1757,31 @@ function roundNotches(value) {
   return Math.round(value * 100) / 100;
 }
 
+function setInteractionMode(mode, announce = false) {
+  const foreground = mode === INTERACTION_MODES.foreground;
+  if (!foreground && state.interactionMode === INTERACTION_MODES.foreground) cancelPointer();
+  state.interactionMode = foreground ? INTERACTION_MODES.foreground : INTERACTION_MODES.background;
+  elements.interactionMode.dataset.mode = state.interactionMode;
+  elements.interactionMode.setAttribute("aria-pressed", String(foreground));
+  elements.interactionModeIcon.setAttribute("href", foreground ? "#icon-front" : "#icon-lock");
+  setText(elements.interactionModeLabel, foreground ? "Foreground control" : "Focus-free");
+  elements.interactionMode.title = foreground
+    ? "Foreground control can activate the app and move your real cursor"
+    : "Focus-free: semantic clicks and scrolling preserve your active window and cursor";
+  if (!announce) return;
+  showToast(
+    foreground
+      ? "Foreground control is on. Raw input may activate the app and move your real cursor."
+      : "Focus-free is on. Semantic clicks and scrolling preserve your active window and cursor.",
+    foreground ? "attention" : "ok",
+  );
+}
+
 function setInputStatus(status, message) {
   elements.inputStatus.dataset.status = status;
   setText(elements.inputStatus, message);
   clearTimeout(state.inputStatusTimer);
-  if (status === "ok" || status === "error") {
+  if (status === "ok" || status === "warning" || status === "error") {
     state.inputStatusTimer = setTimeout(() => {
       elements.inputStatus.dataset.status = "idle";
       setText(elements.inputStatus, "Ready");
@@ -1782,9 +1857,14 @@ function showAutomation(activity) {
   } else {
     elements.automationCursor.classList.add("hidden");
   }
-  elements.automationCursor.dataset.pressed = String(
-    activity.kind === "tap" || activity.kind === "pointer" || activity.kind === "drag",
-  );
+  const pressed =
+    activity.kind === "tap" || activity.kind === "pointer" || activity.kind === "drag";
+  elements.automationCursor.dataset.pressed = String(pressed);
+  if (pressed) {
+    elements.automationRipple.classList.remove("is-clicking");
+    void elements.automationRipple.offsetWidth;
+    elements.automationRipple.classList.add("is-clicking");
+  }
   setInputStatus("agent", activityLabel(activity));
   clearTimeout(state.automationTimer);
   state.automationTimer = setTimeout(endAutomation, AUTOMATION_IDLE_MS);
@@ -2480,6 +2560,14 @@ function attachChrome() {
   elements.releaseButton.addEventListener("click", () => void releaseSession());
   elements.revealButton.addEventListener("click", () => void windowAction("reveal"));
   elements.screenshotButton.addEventListener("click", () => void saveScreenshot());
+  elements.interactionMode.addEventListener("click", () => {
+    setInteractionMode(
+      state.interactionMode === INTERACTION_MODES.background
+        ? INTERACTION_MODES.foreground
+        : INTERACTION_MODES.background,
+      true,
+    );
+  });
   elements.inspectButton.addEventListener("click", () => toggleInspector());
   elements.inspectorClose.addEventListener("click", () => toggleInspector(false));
   elements.queryForm.addEventListener("submit", (event) => {
@@ -2588,6 +2676,7 @@ function debounce(callback, delay) {
 
 attachChrome();
 attachStageInput();
+setInteractionMode(INTERACTION_MODES.background);
 // Say what the panel is doing before the first request answers, so it is never briefly blank.
 renderPreflight();
 
