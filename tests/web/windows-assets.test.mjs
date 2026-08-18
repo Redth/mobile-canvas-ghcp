@@ -259,6 +259,10 @@ test("the stream handles descriptors, ends, reconnects, and falls back to screen
   assert.match(renderer, /message\?\.type === "end"/);
   assert.match(renderer, /describeStreamEnd\(end\)/);
   assert.match(renderer, /outcome\.reconnect && state\.panelVisible/);
+  assert.match(
+    renderer,
+    /outcome\.kind === "capture-failed" \|\| outcome\.kind === "encoder-failed"[\s\S]*startPngFallback\("PNG"\)/,
+  );
   assert.match(renderer, /if \(!\("VideoDecoder" in window\)\) \{\s*startPngFallback/);
   assert.match(renderer, /x-windows-capture-descriptor/);
   assert.match(renderer, /function startPngFallback\(label\)/);

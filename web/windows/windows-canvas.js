@@ -1030,6 +1030,19 @@ function handleStreamEnd(end) {
     return;
   }
 
+  if (
+    (outcome.kind === "capture-failed" || outcome.kind === "encoder-failed")
+    && state.panelVisible
+    && !state.released
+  ) {
+    stopStream();
+    showStage("connecting", {
+      detail: `${outcome.message || "The video stream stopped."} Switching to screenshot polling.`,
+    });
+    startPngFallback("PNG");
+    return;
+  }
+
   stopStream();
   if (outcome.kind === "minimized" || outcome.kind === "closed") {
     void refreshSession({ restartStream: false });
