@@ -74,7 +74,11 @@ internal static class WindowsWindowCorrelator
 	{
 		if (string.IsNullOrWhiteSpace(processPath))
 			return false;
-		var name = Path.GetFileName(processPath);
+		// These are Windows paths even when portable unit tests run on macOS/Linux. Path.GetFileName
+		// follows the host OS and therefore treats a backslash as an ordinary character off Windows.
+		var trimmed = processPath.Trim().TrimEnd('\\', '/');
+		var separator = trimmed.LastIndexOfAny(['\\', '/']);
+		var name = separator >= 0 ? trimmed[(separator + 1)..] : trimmed;
 		return Array.Exists(
 			SharedHostProcesses,
 			known => known.Equals(name, StringComparison.OrdinalIgnoreCase));
