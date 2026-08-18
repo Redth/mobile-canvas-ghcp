@@ -233,6 +233,37 @@ public sealed class WindowsHostClient(DeviceHostClient host)
 		if (parameters.Count > 0)
 			path += "?" + string.Join('&', parameters);
 
+		return await ImageAsync(path, context, cancellationToken).ConfigureAwait(false);
+	}
+
+	/// <summary>
+	/// Captures one bounded PNG preview of a window this panel was offered but has not attached, so
+	/// a picker can show what a window looks like before anybody grants anything.
+	///
+	/// The identifier is a candidate ID from <see cref="ListWindowsAsync"/>, and it is what the
+	/// returned descriptor names: this is a picture of a window that was offered, not of one this
+	/// canvas may drive.
+	/// </summary>
+	public Task<WindowsScreenshot> CandidateThumbnailAsync(
+		CanvasContextKey context,
+		string candidateId,
+		int maximumDimension = 0,
+		CancellationToken cancellationToken = default)
+	{
+		if (string.IsNullOrWhiteSpace(candidateId))
+			throw new ArgumentException("A Windows candidate ID is required.", nameof(candidateId));
+
+		var path = "/api/v1/windows/windows/" + Uri.EscapeDataString(candidateId) + "/thumbnail";
+		if (maximumDimension > 0)
+			path += $"?maximumDimension={maximumDimension}";
+		return ImageAsync(path, context, cancellationToken);
+	}
+
+	private async Task<WindowsScreenshot> ImageAsync(
+		string path,
+		CanvasContextKey context,
+		CancellationToken cancellationToken)
+	{
 		using var response = await _host.SendAsync(
 			HttpMethod.Get,
 			Address(path, context),

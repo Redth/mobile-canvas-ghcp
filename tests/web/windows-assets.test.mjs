@@ -46,6 +46,20 @@ test("the shell has no inline script and no hardcoded unthemed colour", () => {
   assert.doesNotMatch(indexHtml, /style="[^"]*(#[0-9a-f]{3,8}|rgb\()/i);
 });
 
+test("the app picker starts with visual open-window cards and keeps launch paths secondary", () => {
+  const tabs = [...indexHtml.matchAll(/<button id="(tab-[^"]+)"[^>]*>([^<]+)<\/button>/g)]
+    .map((match) => [match[1], match[2].trim()]);
+  assert.deepEqual(tabs.slice(0, 2), [
+    ["tab-running", "Open windows"],
+    ["tab-catalog", "Apps"],
+  ]);
+  assert.match(indexHtml, /id="tab-running" class="popover-tab is-active"[\s\S]*aria-selected="true"/);
+  assert.match(indexHtml, /id="panel-running" class="popover-panel"/);
+  assert.match(indexHtml, /id="window-list" class="window-grid"/);
+  assert.match(indexHtml, /id="open-executable"/);
+  assert.match(indexHtml, /id="executable-dialog"/);
+});
+
 test("the stylesheet themes everything through semantic tokens", () => {
   const css = read("web", "windows", "windows-canvas.css");
   for (const token of [
@@ -72,6 +86,16 @@ test("the stylesheet themes everything through semantic tokens", () => {
     ["#ffffff"],
     "only button-on-accent white may be literal, because it pairs with a themed accent",
   );
+});
+
+test("open-window cards use responsive semantic grid and state styling", () => {
+  const css = read("web", "windows", "windows-canvas.css");
+  assert.match(css, /\.window-grid \{[\s\S]*grid-template-columns: repeat\(auto-fit, minmax\(150px, 1fr\)\)/);
+  assert.match(css, /\.window-card:hover:not\(\[data-disabled="true"\]\)/);
+  assert.match(css, /\.window-card\[aria-pressed="true"\]/);
+  assert.match(css, /\.window-card:focus-visible/);
+  assert.match(css, /\.window-thumbnail-placeholder/);
+  assert.match(css, /object-fit: contain/);
 });
 
 test("the host serves exactly the public Windows asset paths, as complete paths", () => {
@@ -170,6 +194,28 @@ test("the renderer only ever addresses its own product's API", () => {
   );
   assert.doesNotMatch(renderer, /\/api\/v1\/devices/);
   assert.doesNotMatch(renderer, /\/api\/v1\/selection/);
+});
+
+test("candidate thumbnails load after metadata with bounded, cancellable object URL cleanup", () => {
+  assert.match(renderer, /const THUMBNAIL_CONCURRENCY = 4/);
+  assert.match(renderer, /await getJson\(`\$\{API\}\/windows`, \{ signal: controller\.signal \}\)/);
+  assert.match(renderer, /loadCandidateThumbnails\(/);
+  assert.match(renderer, /loadCandidateThumbnailWorker\(/);
+  assert.match(renderer, /windowThumbnailUrl\(candidate\.id\)/);
+  assert.match(renderer, /URL\.createObjectURL\(blob\)/);
+  assert.match(renderer, /URL\.revokeObjectURL\(thumbnail\.url\)/);
+  assert.match(renderer, /state\.candidateAbortController\?\.abort\(\)/);
+  assert.match(renderer, /isCurrentThumbnailGeneration\(state\.candidateGeneration, generation\)/);
+});
+
+test("candidate cards use safe text nodes, retain unavailable explanations, and attach through sessions", () => {
+  assert.match(renderer, /label\.textContent = presentation\.title/);
+  assert.match(renderer, /detail\.textContent = presentation\.identity/);
+  assert.match(renderer, /status\.textContent = presentation\.status/);
+  assert.match(renderer, /button\.setAttribute\("aria-disabled", String\(!presentation\.attachable\)\)/);
+  assert.match(renderer, /if \(presentation\.attachable\) void attachCandidate\(window\)/);
+  assert.match(renderer, /postJson\(`\$\{API\}\/session\/attach`, \{ candidateId: candidate\.id \}\)/);
+  assert.doesNotMatch(renderer, /\.innerHTML\s*=/);
 });
 
 test("the renderer refuses a grant issued for another surface", () => {

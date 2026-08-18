@@ -57,6 +57,64 @@ public static class WindowsCaptureLimits
 		value <= 0 ? DefaultBitrate : Math.Clamp(value, MinimumBitrate, MaximumBitrate);
 }
 
+/// <summary>
+/// Bounds for candidate-window thumbnails, which are a different job from a screenshot and so have
+/// their own limits.
+///
+/// A thumbnail is a preview of a window a panel has been *offered* but has not attached: it exists
+/// so a person can recognise a window before granting anything. That makes it both cheaper and more
+/// dangerous than a screenshot — cheaper because nobody needs pixel fidelity in a picker card, and
+/// more dangerous because a picker fires one per open window at once. Every number here exists to
+/// keep a grid of cards from turning into a desktop-sized capture storm.
+/// </summary>
+public static class WindowsThumbnailLimits
+{
+	/// <summary>Smallest useful card. Below this a window is unrecognisable, which defeats the point.</summary>
+	public const int MinimumDimension = 96;
+
+	/// <summary>What a picker gets when it does not ask, sized for a retina card.</summary>
+	public const int DefaultDimension = 320;
+
+	/// <summary>
+	/// Largest longest-edge a thumbnail may deliver. A caller that wants more pixels than this
+	/// wants a screenshot of a window it attached, not a preview of one it was offered.
+	/// </summary>
+	public const int MaximumDimension = 640;
+
+	/// <summary>
+	/// Largest PNG a thumbnail may be. Far above anything a 640-pixel image needs, and far below
+	/// what would let a wall of picker cards exhaust host memory.
+	/// </summary>
+	public const int MaximumBytes = 4 * 1024 * 1024;
+
+	/// <summary>
+	/// How long one thumbnail capture may take before it is reported as failed. A picker showing a
+	/// placeholder is a better answer than a card that never resolves.
+	/// </summary>
+	public const int TimeoutMilliseconds = 8_000;
+
+	/// <summary>
+	/// How many thumbnail captures one panel may have in flight. Each one is a helper process
+	/// negotiating a Direct3D adapter, so a twenty-window desktop must not become twenty of them.
+	/// </summary>
+	public const int MaximumConcurrentCaptures = 2;
+
+	/// <summary>
+	/// How long a captured thumbnail may be served again. Short enough that a picker refresh shows
+	/// the window as it is now, long enough that re-rendering a grid does not re-capture it.
+	/// Identity and geometry are part of the cache key regardless, so a moved, resized, or replaced
+	/// window is never served from here.
+	/// </summary>
+	public const int CacheSeconds = 3;
+
+	/// <summary>Most cached thumbnails one panel may hold, so a long-lived panel stays bounded.</summary>
+	public const int MaximumCacheEntries = 48;
+
+	/// <summary>The longest delivered edge a request of <paramref name="value"/> actually gets.</summary>
+	public static int Dimension(int value) =>
+		value <= 0 ? DefaultDimension : Math.Clamp(value, MinimumDimension, MaximumDimension);
+}
+
 /// <summary>A point in the canonical capture coordinate space, in whole physical pixels.</summary>
 public sealed record WindowsCapturePoint
 {
@@ -259,6 +317,13 @@ public sealed record WindowsScreenshotRequest
 public sealed record WindowsScreenshotDescriptor
 {
 	public string SchemaVersion { get; init; } = WindowsCanvasProtocol.Version;
+
+	/// <summary>
+	/// The opaque identifier the image belongs to. For a screenshot of an attached window this is
+	/// the authorized window ID; for a candidate-window thumbnail it is the candidate ID that was
+	/// offered to this panel. Both are panel-scoped capabilities, never an operating-system handle,
+	/// so one field carries either without widening what a caller may name.
+	/// </summary>
 	public string WindowId { get; init; } = "";
 	public string Format { get; init; } = "png";
 	public string Status { get; init; } = WindowsCaptureStatuses.Ok;

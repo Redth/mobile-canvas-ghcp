@@ -106,6 +106,32 @@ internal static class WindowsApi
 				windows.ListWindowCandidatesAsync(
 					CanvasScope.RequireContext(context),
 					cancellationToken)).WindowsSurface();
+
+		// A preview of a window the panel was offered, so a picker can show what a window looks
+		// like before anybody attaches it. It lives under the discovery path rather than the
+		// session path on purpose: there is no session yet, and nothing here creates one. The image
+		// travels as an image and its descriptor travels beside it in the same header a screenshot
+		// uses, except that the identifier it names is the candidate ID, not an authorized window.
+		app.MapGet(
+			"/api/v1/windows/windows/{candidateId}/thumbnail",
+			async (
+				string candidateId,
+				int? maximumDimension,
+				HttpContext context,
+				WindowsAppService windows,
+				CancellationToken cancellationToken) =>
+			{
+				var thumbnail = await windows.CaptureCandidateThumbnailAsync(
+					CanvasScope.RequireContext(context),
+					candidateId,
+					maximumDimension ?? 0,
+					cancellationToken).ConfigureAwait(false);
+
+				// Deliberately no activity event: looking at a picker card is not an agent driving
+				// somebody's desktop, and lighting the automation overlay for it would say it was.
+				context.Response.Headers[DescriptorHeader] = EncodeDescriptor(thumbnail.Descriptor);
+				return Results.File(thumbnail.Png, "image/png");
+			}).WindowsSurface();
 	}
 
 	private static void MapSession(WebApplication app)

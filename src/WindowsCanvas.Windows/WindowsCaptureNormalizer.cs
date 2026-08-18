@@ -34,6 +34,61 @@ internal static class WindowsCaptureNormalizer
 		};
 	}
 
+	/// <summary>
+	/// The longest edge a thumbnail request actually gets, refusing a negative one outright. A
+	/// caller learns its request was nonsense before any window is enumerated on its behalf.
+	/// </summary>
+	public static int ThumbnailDimension(int maximumDimension)
+	{
+		if (maximumDimension < 0)
+		{
+			throw new WindowsCanvasException(
+				WindowsErrorCodes.InvalidRequest,
+				"maximumDimension cannot be negative.");
+		}
+		return WindowsThumbnailLimits.Dimension(maximumDimension);
+	}
+
+	/// <summary>
+	/// Turns a picker's requested card size into a capture request for one candidate window.
+	///
+	/// The scale is derived from the window's own content size rather than asked for, so the
+	/// longest delivered edge lands at or under the caller's bound whatever size the window is, and
+	/// the bound travels along as a hard clamp too: a window that resized between measuring and
+	/// capturing must still not deliver a desktop-sized image into a picker card.
+	/// </summary>
+	public static WindowsScreenshotRequest Thumbnail(
+		int maximumDimension,
+		int contentWidth,
+		int contentHeight)
+	{
+		var bounded = ThumbnailDimension(maximumDimension);
+		var longest = Math.Max(contentWidth, contentHeight);
+		var scale = longest <= 0
+			? WindowsCaptureLimits.DefaultScale
+			: Math.Min(WindowsCaptureLimits.MaximumScale, (double)bounded / longest);
+		return new WindowsScreenshotRequest
+		{
+			Scale = WindowsCaptureLimits.CaptureScale(scale),
+			MaximumDimension = bounded,
+			// A preview of a window nobody attached never draws the user's cursor into somebody
+			// else's picture.
+			IncludeCursor = false,
+		};
+	}
+
+	/// <summary>Refuses a thumbnail that came back too large to hand to a picker.</summary>
+	public static void RequireThumbnailSize(int byteCount)
+	{
+		if (byteCount <= WindowsThumbnailLimits.MaximumBytes)
+			return;
+
+		throw WindowsCanvasException.Gateway(
+			WindowsErrorCodes.CaptureFailed,
+			$"That window's thumbnail came back as {byteCount} bytes, past the " +
+			$"{WindowsThumbnailLimits.MaximumBytes}-byte limit a window preview may occupy.");
+	}
+
 	public static WindowsStreamRequest Stream(WindowsStreamRequest? request)
 	{
 		request ??= new WindowsStreamRequest();

@@ -105,6 +105,7 @@ public sealed class WindowsApiSurfaceTests : IAsyncLifetime
 	[InlineData("GET", "/api/v1/windows/capabilities")]
 	[InlineData("GET", "/api/v1/windows/apps")]
 	[InlineData("GET", "/api/v1/windows/windows")]
+	[InlineData("GET", "/api/v1/windows/windows/cand_other/thumbnail")]
 	[InlineData("GET", "/api/v1/windows/session")]
 	[InlineData("GET", "/api/v1/windows/session/windows")]
 	[InlineData("GET", "/api/v1/windows/session/windows/win_other/ui/snapshot")]
@@ -646,6 +647,130 @@ public sealed class WindowsApiSurfaceTests : IAsyncLifetime
 		Assert.Equal(windowId, descriptor.WindowId);
 		Assert.StartsWith("wct1_", descriptor.Geometry.TransformVersion, StringComparison.Ordinal);
 		Assert.Equal(800, descriptor.Geometry.ContentWidth);
+	}
+
+	/// <summary>
+	/// The picker's preview of a window nobody has attached. It is served from the discovery path
+	/// rather than the session path because there is no session yet, and it carries the same
+	/// descriptor header a screenshot does so one client decoder handles both.
+	/// </summary>
+	[Fact]
+	public async Task Thumbnail_ReturnsPngBytesNamingTheCandidate()
+	{
+		var cookie = await SignInAsync("panel", CanvasSurfaces.Windows);
+		var candidateId = await CandidateAsync(cookie);
+
+		using var response = await SendAsync(
+			HttpMethod.Get,
+			$"/api/v1/windows/windows/{candidateId}/thumbnail?maximumDimension=320",
+			cookie);
+
+		Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+		Assert.Equal("image/png", response.Content.Headers.ContentType?.MediaType);
+		Assert.Equal(Fixtures.PngBytes, await response.Content.ReadAsByteArrayAsync());
+
+		var descriptor = WindowsHostClient.DecodeDescriptor(response, Fixtures.PngBytes.Length);
+		Assert.Equal(candidateId, descriptor.WindowId);
+		Assert.StartsWith("wct1_", descriptor.Geometry.TransformVersion, StringComparison.Ordinal);
+	}
+
+	[Fact]
+	public async Task Thumbnail_DefaultsItsSizeWhenNobodyAsks()
+	{
+		var cookie = await SignInAsync("panel", CanvasSurfaces.Windows);
+		var candidateId = await CandidateAsync(cookie);
+
+		using var response = await SendAsync(
+			HttpMethod.Get,
+			$"/api/v1/windows/windows/{candidateId}/thumbnail",
+			cookie);
+
+		Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+		var requested = Assert.Single(bridge.Screenshots);
+		Assert.Equal(WindowsThumbnailLimits.DefaultDimension, requested.MaximumDimension);
+	}
+
+	[Fact]
+	public async Task Thumbnail_RefusesANegativeSizeOverHttp()
+	{
+		var cookie = await SignInAsync("panel", CanvasSurfaces.Windows);
+		var candidateId = await CandidateAsync(cookie);
+
+		using var response = await SendAsync(
+			HttpMethod.Get,
+			$"/api/v1/windows/windows/{candidateId}/thumbnail?maximumDimension=-1",
+			cookie);
+
+		Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
+		Assert.Equal(WindowsErrorCodes.InvalidRequest, await ErrorCodeAsync(response));
+	}
+
+	[Fact]
+	public async Task Thumbnail_IsNotReachableWithAnotherPanelsCandidate()
+	{
+		var mine = await SignInAsync("panel", CanvasSurfaces.Windows);
+		var theirs = await SignInAsync("other-panel", CanvasSurfaces.Windows);
+		var candidateId = await CandidateAsync(mine);
+		await CandidateAsync(theirs);
+
+		using var response = await SendAsync(
+			HttpMethod.Get,
+			$"/api/v1/windows/windows/{candidateId}/thumbnail",
+			theirs);
+
+		Assert.Equal(HttpStatusCode.NotFound, response.StatusCode);
+		Assert.Equal(WindowsErrorCodes.CandidateNotFound, await ErrorCodeAsync(response));
+	}
+
+	/// <summary>
+	/// Drawing a picker card is not an agent driving somebody's desktop. Publishing activity for it
+	/// would light the automation overlay on a panel that has attached nothing at all.
+	/// </summary>
+	[Fact]
+	public async Task Thumbnail_PublishesNoAutomationActivity()
+	{
+		var cookie = await SignInAsync("panel", CanvasSurfaces.Windows);
+		var candidateId = await CandidateAsync(cookie);
+		var hub = app.Services.GetRequiredService<AutomationActivityHub>();
+		using var subscription = hub.Subscribe(
+			new CanvasContextKey("session", "panel", CanvasSurfaces.Windows),
+			out var reader);
+
+		using var response = await SendAsync(
+			HttpMethod.Get,
+			$"/api/v1/windows/windows/{candidateId}/thumbnail",
+			cookie);
+
+		Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+		Assert.False(reader.TryRead(out _));
+	}
+
+	/// <summary>Looking at a candidate must not leave the panel holding a session.</summary>
+	[Fact]
+	public async Task Thumbnail_LeavesThePanelWithoutASession()
+	{
+		var cookie = await SignInAsync("panel", CanvasSurfaces.Windows);
+		var candidateId = await CandidateAsync(cookie);
+
+		using var thumbnail = await SendAsync(
+			HttpMethod.Get,
+			$"/api/v1/windows/windows/{candidateId}/thumbnail",
+			cookie);
+		using var selection = await SendAsync(HttpMethod.Get, "/api/v1/windows/session", cookie);
+
+		Assert.Equal(HttpStatusCode.OK, thumbnail.StatusCode);
+		var selected = await selection.Content.ReadFromJsonAsync(
+			WindowsJsonContext.Default.WindowsAppSelection);
+		Assert.False(selected!.HasSelection);
+	}
+
+	private async Task<string> CandidateAsync(string cookie)
+	{
+		using var candidates = await SendAsync(HttpMethod.Get, "/api/v1/windows/windows", cookie);
+		candidates.EnsureSuccessStatusCode();
+		var listed = await candidates.Content.ReadFromJsonAsync(
+			WindowsJsonContext.Default.WindowsWindowCandidateList);
+		return listed!.Windows[0].Id;
 	}
 
 	[Fact]

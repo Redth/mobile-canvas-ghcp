@@ -4,9 +4,12 @@ import {
   availableUiActions,
   captureFromClientPoint,
   captureSourceLabel,
+  candidateCardPresentation,
   catalogSourceWarning,
   correlationLabel,
+  defaultPickerSection,
   describeStreamEnd,
+  filterWindowCandidates,
   findResultPresentation,
   inputErrorMessage,
   inputFrame,
@@ -16,6 +19,8 @@ import {
   isStaleTransformError,
   letterboxRect,
   organizeCatalog,
+  isCurrentThumbnailGeneration,
+  nextThumbnailGeneration,
   preflightPresentation,
   requiresSessionRefresh,
   requiresWindowRefresh,
@@ -30,6 +35,7 @@ import {
   uiElementLabel,
   uiElementValue,
   wheelNotches,
+  windowThumbnailUrl,
   WINDOWS_SURFACE,
 } from "./windows-state.js";
 
@@ -142,6 +148,7 @@ const DRAG_THRESHOLD_PX = 3;
 const WHEEL_FLUSH_MS = 60;
 const AUTOMATION_IDLE_MS = 2600;
 const TOAST_MS = 4000;
+const THUMBNAIL_CONCURRENCY = 4;
 
 const state = {
   preflight: null,
@@ -171,6 +178,10 @@ const state = {
   candidates: null,
   catalogQuery: "",
   candidateQuery: "",
+  candidateGeneration: 0,
+  candidateAbortController: null,
+  candidateThumbnails: new Map(),
+  candidateCards: new Map(),
   pointer: null,
   pointerQueue: Promise.resolve(),
   pendingMove: null,
@@ -232,8 +243,8 @@ async function requireSuccessfulResponse(response) {
   return response;
 }
 
-async function getJson(path) {
-  const response = await api(path);
+async function getJson(path, options) {
+  const response = await api(path, options);
   return response ? await response.json() : null;
 }
 
@@ -379,12 +390,13 @@ function showPreflightDetails() {
 function openPopover() {
   elements.popover.classList.remove("hidden");
   elements.selector.setAttribute("aria-expanded", "true");
-  elements.catalogSearch.focus();
+  showPopoverPanel(defaultPickerSection(state.session));
   void loadCatalog();
   void loadCandidates();
 }
 
 function closePopover() {
+  clearCandidateThumbnails();
   elements.popover.classList.add("hidden");
   elements.selector.setAttribute("aria-expanded", "false");
 }
@@ -465,66 +477,170 @@ function renderCatalog() {
 }
 
 async function loadCandidates() {
+  const generation = clearCandidateThumbnails();
+  const controller = new AbortController();
+  state.candidateAbortController = controller;
+  // This synchronous render replaces revoked URLs before the browser has a chance to repaint.
+  renderCandidates();
   elements.windowList.setAttribute("aria-busy", "true");
   try {
-    state.candidates = await getJson(`${API}/windows`);
+    const candidates = await getJson(`${API}/windows`, { signal: controller.signal });
+    if (!isCurrentThumbnailGeneration(state.candidateGeneration, generation)) return;
+    state.candidates = candidates;
     renderCandidates();
+    void loadCandidateThumbnails(
+      filterWindowCandidates(state.candidates?.windows, elements.windowSearch.value),
+      generation,
+    );
   } catch (error) {
-    showToast(error.message, "danger");
+    if (error.name !== "AbortError") showToast(error.message, "danger");
   } finally {
-    elements.windowList.setAttribute("aria-busy", "false");
+    if (isCurrentThumbnailGeneration(state.candidateGeneration, generation)) {
+      elements.windowList.setAttribute("aria-busy", "false");
+    }
   }
 }
 
 function renderCandidates() {
-  const query = elements.windowSearch.value.trim().toLowerCase();
-  const all = state.candidates?.windows ?? [];
-  const windows = query
-    ? all.filter((window) => `${window.title} ${window.processName ?? ""}`.toLowerCase().includes(query))
-    : all;
+  const windows = filterWindowCandidates(state.candidates?.windows, elements.windowSearch.value);
   elements.windowEmpty.classList.toggle("hidden", windows.length > 0);
-
+  state.candidateCards.clear();
   elements.windowList.replaceChildren(...windows.map((window) => {
+    const thumbnail = state.candidateThumbnails.get(window.id);
+    const presentation = candidateCardPresentation(window, thumbnail?.state);
     const item = document.createElement("li");
     const button = document.createElement("button");
     button.type = "button";
-    button.className = "entry";
-    button.disabled = !window.attachable;
+    button.className = "window-card";
+    button.setAttribute("aria-pressed", String(presentation.attached));
+    button.setAttribute("aria-disabled", String(!presentation.attachable));
+    button.dataset.disabled = String(!presentation.attachable);
+    button.setAttribute(
+      "aria-label",
+      [presentation.title, presentation.identity, presentation.status].filter(Boolean).join(". "),
+    );
+    const media = document.createElement("span");
+    media.className = "window-card-media";
+    renderCandidateThumbnail(media, presentation, thumbnail?.url);
+    const content = document.createElement("span");
+    content.className = "window-card-content";
     const title = document.createElement("span");
-    title.className = "entry-title";
+    title.className = "window-card-title";
     const label = document.createElement("span");
-    label.textContent = window.title || "Untitled window";
+    label.textContent = presentation.title;
     title.append(label);
-    if (window.attached) {
+    for (const badgePresentation of presentation.badges) {
       const badge = document.createElement("span");
-      badge.className = "badge accent";
-      badge.textContent = "attached";
-      title.append(badge);
-    }
-    if (window.elevated) {
-      const badge = document.createElement("span");
-      badge.className = "badge warning";
-      badge.textContent = "elevated";
-      title.append(badge);
-    }
-    if (!window.attachable) {
-      const badge = document.createElement("span");
-      badge.className = "badge danger";
-      badge.textContent = window.unattachableCode ?? "unavailable";
+      badge.className = `badge ${badgePresentation.tone}`;
+      badge.textContent = badgePresentation.label;
       title.append(badge);
     }
     const detail = document.createElement("span");
-    detail.className = "entry-detail";
-    detail.textContent = window.unattachableDetail
-      || [window.processName, window.appUserModelId ?? window.processPath].filter(Boolean).join(" · ");
-    detail.title = detail.textContent;
-    button.append(title, detail);
-    if (window.attachable) {
-      button.addEventListener("click", () => void attachCandidate(window));
-    }
+    detail.className = "window-card-detail";
+    detail.textContent = presentation.identity;
+    detail.title = presentation.identity;
+    const status = document.createElement("span");
+    status.className = "window-card-status";
+    status.textContent = presentation.status;
+    content.append(title, detail, status);
+    button.append(media, content);
+    button.addEventListener("click", () => {
+      if (presentation.attachable) void attachCandidate(window);
+    });
+    state.candidateCards.set(window.id, { media, window });
     item.append(button);
     return item;
   }));
+}
+
+function createPickerIcon(iconName) {
+  const icon = document.createElementNS("http://www.w3.org/2000/svg", "svg");
+  icon.classList.add("icon");
+  icon.setAttribute("aria-hidden", "true");
+  const use = document.createElementNS("http://www.w3.org/2000/svg", "use");
+  use.setAttribute("href", `#icon-${iconName}`);
+  icon.append(use);
+  return icon;
+}
+
+function renderCandidateThumbnail(media, presentation, url) {
+  media.replaceChildren();
+  media.dataset.state = presentation.thumbnail.state;
+  if (presentation.thumbnail.state === "ready" && url) {
+    const image = document.createElement("img");
+    image.src = url;
+    image.alt = "";
+    media.append(image);
+    return;
+  }
+  const placeholder = document.createElement("span");
+  placeholder.className = "window-thumbnail-placeholder";
+  placeholder.append(createPickerIcon(presentation.thumbnail.icon));
+  const label = document.createElement("span");
+  label.textContent = presentation.thumbnail.label;
+  placeholder.append(label);
+  media.append(placeholder);
+}
+
+function clearCandidateThumbnails() {
+  state.candidateGeneration = nextThumbnailGeneration(state.candidateGeneration);
+  state.candidateAbortController?.abort();
+  state.candidateAbortController = null;
+  for (const thumbnail of state.candidateThumbnails.values()) {
+    if (thumbnail.url) URL.revokeObjectURL(thumbnail.url);
+  }
+  state.candidateThumbnails.clear();
+  state.candidateCards.clear();
+  return state.candidateGeneration;
+}
+
+async function loadCandidateThumbnails(candidates, generation) {
+  const loadable = candidates.filter((candidate) => (
+    candidateCardPresentation(candidate).attachable && !state.candidateThumbnails.has(candidate.id)
+  ));
+  for (const candidate of loadable) state.candidateThumbnails.set(candidate.id, { state: "loading" });
+  renderCandidates();
+  const workers = Array.from(
+    { length: Math.min(THUMBNAIL_CONCURRENCY, loadable.length) },
+    () => loadCandidateThumbnailWorker(loadable, generation),
+  );
+  await Promise.all(workers);
+}
+
+async function loadCandidateThumbnailWorker(queue, generation) {
+  while (queue.length > 0 && isCurrentThumbnailGeneration(state.candidateGeneration, generation)) {
+    const candidate = queue.shift();
+    if (!candidate) return;
+    try {
+      const response = await api(windowThumbnailUrl(candidate.id), {
+        signal: state.candidateAbortController?.signal,
+      });
+      const blob = await response.blob();
+      if (!isCurrentThumbnailGeneration(state.candidateGeneration, generation)) continue;
+      const url = URL.createObjectURL(blob);
+      if (!isCurrentThumbnailGeneration(state.candidateGeneration, generation)) {
+        URL.revokeObjectURL(url);
+        continue;
+      }
+      state.candidateThumbnails.set(candidate.id, { state: "ready", url });
+    } catch (error) {
+      if (!isCurrentThumbnailGeneration(state.candidateGeneration, generation)) return;
+      if (error.name === "AbortError") return;
+      state.candidateThumbnails.set(candidate.id, { state: "error" });
+    }
+    updateCandidateThumbnail(candidate.id);
+  }
+}
+
+function updateCandidateThumbnail(candidateId) {
+  const card = state.candidateCards.get(candidateId);
+  if (!card) return;
+  const thumbnail = state.candidateThumbnails.get(candidateId);
+  renderCandidateThumbnail(
+    card.media,
+    candidateCardPresentation(card.window, thumbnail?.state),
+    thumbnail?.url,
+  );
 }
 
 /* ---------------------------------------------------------------------------------------------
@@ -2012,7 +2128,13 @@ function attachChrome() {
   elements.tabCatalog.addEventListener("click", () => showPopoverPanel("catalog"));
   elements.tabRunning.addEventListener("click", () => showPopoverPanel("running"));
   elements.catalogSearch.addEventListener("input", debounce(() => void loadCatalog(), 180));
-  elements.windowSearch.addEventListener("input", () => renderCandidates());
+  elements.windowSearch.addEventListener("input", () => {
+    renderCandidates();
+    void loadCandidateThumbnails(
+      filterWindowCandidates(state.candidates?.windows, elements.windowSearch.value),
+      state.candidateGeneration,
+    );
+  });
 
   elements.openExecutable.addEventListener("click", () => {
     closePopover();

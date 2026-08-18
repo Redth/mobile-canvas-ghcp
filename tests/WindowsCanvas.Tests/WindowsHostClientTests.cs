@@ -46,6 +46,30 @@ public sealed class WindowsHostClientTests
 	}
 
 	[Fact]
+	public void ThumbnailRequests_NameTheCandidateAndTheWindowsSurface()
+	{
+		var query = DeviceHostClient.WithContextQuery(
+			"/api/v1/windows/windows/cand%2F1/thumbnail?maximumDimension=320",
+			new CanvasContextKey("session", "panel", CanvasSurfaces.Windows));
+
+		Assert.Equal(
+			"/api/v1/windows/windows/cand%2F1/thumbnail?maximumDimension=320" +
+			"&sessionId=session&instanceId=panel&surface=windows",
+			query);
+	}
+
+	[Fact]
+	public async Task Thumbnail_RequiresACandidateIdentifier()
+	{
+		var client = new WindowsHostClient();
+
+		await Assert.ThrowsAsync<ArgumentException>(
+			() => client.CandidateThumbnailAsync(
+				new CanvasContextKey("session", "panel", CanvasSurfaces.Windows),
+				"  "));
+	}
+
+	[Fact]
 	public void ScreenshotWithoutADescriptor_IsRefusedRatherThanReturnedWithEmptyGeometry()
 	{
 		using var bare = new HttpResponseMessage();

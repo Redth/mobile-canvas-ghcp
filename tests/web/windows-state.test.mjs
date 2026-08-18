@@ -7,10 +7,15 @@ import {
   buildWindowTabs,
   captureFromClientPoint,
   captureSourceLabel,
+  candidateCardPresentation,
+  candidateSearchText,
+  candidateThumbnailState,
   catalogEntryDetail,
   catalogSourceWarning,
+  defaultPickerSection,
   describeStreamEnd,
   diffWindowTabs,
+  filterWindowCandidates,
   findResultPresentation,
   inputErrorMessage,
   inputFrame,
@@ -20,6 +25,8 @@ import {
   isStaleTransformError,
   letterboxRect,
   organizeCatalog,
+  isCurrentThumbnailGeneration,
+  nextThumbnailGeneration,
   preflightPresentation,
   requiresSessionRefresh,
   requiresWindowRefresh,
@@ -30,6 +37,7 @@ import {
   uiElementLabel,
   uiElementValue,
   wheelNotches,
+  windowThumbnailUrl,
   WINDOWS_ERROR_CODES,
   WINDOWS_SURFACE,
 } from "../../web/windows/windows-state.js";
@@ -153,6 +161,102 @@ test("a source that could not answer is reported so 'not installed' is never gue
   assert.match(warning, /startMenu/);
   assert.match(warning, /launched by path/);
   assert.equal(catalogSourceWarning(organizeCatalog({ entries: [] })), null);
+});
+
+/* --------------------------------------------------------------------------------------------
+ * Open-window picker
+ * ------------------------------------------------------------------------------------------ */
+
+const pickerCandidates = [
+  {
+    id: "notepad",
+    title: "notes.txt - Notepad",
+    processName: "notepad.exe",
+    attachable: true,
+  },
+  {
+    id: "admin",
+    title: "Administrator: Terminal",
+    processName: "WindowsTerminal.exe",
+    elevated: true,
+    attachable: true,
+  },
+  {
+    id: "minimized",
+    title: "Mail",
+    appUserModelId: "Microsoft.WindowsMail_8wekyb3d8bbwe!App",
+    minimized: true,
+    attachable: true,
+  },
+  {
+    id: "protected",
+    title: "Vault",
+    processPath: "C:\\Program Files\\Vault\\vault.exe",
+    attachable: false,
+    unattachableCode: "captureProtected",
+    unattachableDetail: "Windows does not permit this window to be captured.",
+  },
+];
+
+test("the picker always starts with open windows, including while a session is attached", () => {
+  assert.equal(defaultPickerSection(null), "running");
+  assert.equal(defaultPickerSection(session), "running");
+});
+
+test("window picker filtering matches title, process, and app identity without mutating source order", () => {
+  assert.deepEqual(
+    filterWindowCandidates(pickerCandidates, "windowsmail").map((candidate) => candidate.id),
+    ["minimized"],
+  );
+  assert.deepEqual(
+    filterWindowCandidates(pickerCandidates, "notepad").map((candidate) => candidate.id),
+    ["notepad"],
+  );
+  assert.equal(candidateSearchText(pickerCandidates[3]).includes("vault.exe"), true);
+  assert.deepEqual(pickerCandidates.map((candidate) => candidate.id), [
+    "notepad", "admin", "minimized", "protected",
+  ]);
+});
+
+test("candidate cards give unavailable windows useful placeholders and keyboard-readable reasons", () => {
+  const minimized = candidateCardPresentation(pickerCandidates[2]);
+  assert.equal(minimized.attachable, true);
+  assert.equal(minimized.thumbnail.state, "placeholder");
+  assert.equal(minimized.thumbnail.label, "Minimized");
+  assert.match(minimized.status, /Attach.*restore/i);
+
+  const protectedWindow = candidateCardPresentation(pickerCandidates[3], "error");
+  assert.equal(protectedWindow.attachable, false);
+  assert.match(protectedWindow.status, /does not permit/);
+  assert.ok(protectedWindow.badges.some((badge) => badge.label === "captureProtected"));
+
+  assert.deepEqual(candidateThumbnailState(pickerCandidates[0], "error"), {
+    state: "placeholder",
+    icon: "alert",
+    label: "Preview unavailable",
+  });
+});
+
+test("candidate text stays data and thumbnail paths encode opaque IDs", () => {
+  const presentation = candidateCardPresentation({
+    id: 'candidate/"<tag>',
+    title: '<img src=x onerror="bad">',
+    processName: "safe.exe",
+    attachable: true,
+  });
+  assert.equal(presentation.title, '<img src=x onerror="bad">');
+  assert.equal(presentation.identity, "safe.exe");
+  assert.equal(
+    windowThumbnailUrl('candidate/"<tag>'),
+    "/api/v1/windows/windows/candidate%2F%22%3Ctag%3E/thumbnail?maximumDimension=320",
+  );
+});
+
+test("thumbnail generations reject stale work after a refresh or picker close", () => {
+  const first = nextThumbnailGeneration();
+  const refreshed = nextThumbnailGeneration(first);
+  assert.equal(isCurrentThumbnailGeneration(refreshed, first), false);
+  assert.equal(isCurrentThumbnailGeneration(refreshed, refreshed), true);
 });
 
 /* --------------------------------------------------------------------------------------------

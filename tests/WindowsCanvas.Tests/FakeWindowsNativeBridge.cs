@@ -161,13 +161,20 @@ internal sealed class FakeWindowsNativeBridge : IWindowsNativeBridge
 	public List<WindowsScreenshotRequest> Screenshots { get; } = [];
 	public List<WindowsStreamRequest> Streams { get; } = [];
 
+	private readonly Lock _captureLock = new();
+
 	public Task<WindowsScreenshot> CaptureScreenshotAsync(
 		WindowsNativeWindowTarget target,
 		WindowsScreenshotRequest request,
 		CancellationToken cancellationToken = default)
 	{
-		Screenshots.Add(request);
-		UiTargets.Add(target.Handle);
+		// Thumbnail capture is deliberately concurrent, so the fixture's own bookkeeping has to
+		// survive being called from several threads at once.
+		lock (_captureLock)
+		{
+			Screenshots.Add(request);
+			UiTargets.Add(target.Handle);
+		}
 		return Task.FromResult(
 			OnScreenshot?.Invoke(target, request)
 			?? new WindowsScreenshot

@@ -197,6 +197,127 @@ export function catalogSourceWarning(organized) {
 }
 
 /* --------------------------------------------------------------------------------------------
+ * Open-window picker
+ * ------------------------------------------------------------------------------------------ */
+
+/** The attach view is the useful first step whether the panel has a session or not. */
+export function defaultPickerSection() {
+  return "running";
+}
+
+export function candidateTitle(candidate) {
+  const title = String(candidate?.title ?? "").trim();
+  return title || "Untitled window";
+}
+
+export function candidateIdentity(candidate) {
+  const process = String(candidate?.processName ?? "").trim();
+  if (process) return process;
+  const app = String(candidate?.appUserModelId ?? "").trim();
+  if (app) return app;
+  const path = String(candidate?.processPath ?? "").trim();
+  return path || "Windows app";
+}
+
+export function candidateSearchText(candidate) {
+  return [
+    candidateTitle(candidate),
+    candidate?.processName,
+    candidate?.appUserModelId,
+    candidate?.processPath,
+  ].filter(Boolean).join(" ").toLocaleLowerCase();
+}
+
+function candidateUnavailableReason(candidate) {
+  if (candidate?.minimized) return "This window is minimized. Restore it before attaching.";
+  if (candidate?.elevated) return "This elevated window cannot be attached from this panel.";
+  return candidate?.unattachableDetail || "This window is unavailable to attach.";
+}
+
+/**
+ * Filters by every useful identity, then keeps attachable windows first. The opaque candidate ID is
+ * deliberately not part of search or ordering: it is transport identity, not a person-facing name.
+ */
+export function filterWindowCandidates(candidates, query = "") {
+  const normalized = String(query).trim().toLocaleLowerCase();
+  return [...(candidates ?? [])]
+    .filter((candidate) => !normalized || candidateSearchText(candidate).includes(normalized))
+    .sort((left, right) => {
+      const leftAttachable = candidateAttachable(left) ? 0 : 1;
+      const rightAttachable = candidateAttachable(right) ? 0 : 1;
+      if (leftAttachable !== rightAttachable) return leftAttachable - rightAttachable;
+      return candidateTitle(left).localeCompare(candidateTitle(right), undefined, { sensitivity: "base" })
+        || candidateIdentity(left).localeCompare(candidateIdentity(right), undefined, { sensitivity: "base" });
+    });
+}
+
+export function candidateAttachable(candidate) {
+  // Minimized windows cannot produce a preview, but the host deliberately allows attaching them
+  // so the resulting session can restore the authorized window.
+  return candidate?.attachable === true && !candidate.elevated;
+}
+
+/**
+ * Decides the media state before DOM creation. A thumbnail is only requested for an attachable,
+ * visible candidate; known impossible captures are always represented by an explanatory placeholder.
+ */
+export function candidateThumbnailState(candidate, loadedState = "idle") {
+  if (candidate?.minimized) return { state: "placeholder", icon: "window", label: "Minimized" };
+  if (candidate?.elevated) return { state: "placeholder", icon: "shield", label: "Elevated" };
+  if (!candidateAttachable(candidate)) {
+    return { state: "placeholder", icon: "alert", label: candidate?.unattachableCode || "Unavailable" };
+  }
+  if (loadedState === "ready") return { state: "ready", icon: "camera", label: "Window preview" };
+  if (loadedState === "error") return { state: "placeholder", icon: "alert", label: "Preview unavailable" };
+  return { state: "loading", icon: "camera", label: "Loading preview" };
+}
+
+/** Safe, fixed API route for a candidate thumbnail; the only dynamic segment is URL encoded. */
+export function windowThumbnailUrl(candidateId, maximumDimension = 320) {
+  const dimension = Math.max(96, Math.min(640, Math.round(Number(maximumDimension) || 320)));
+  return `/api/v1/windows/windows/${encodeURIComponent(String(candidateId ?? ""))}`
+    + `/thumbnail?maximumDimension=${dimension}`;
+}
+
+/** A generation token lets asynchronous image work prove it still belongs to the visible picker. */
+export function nextThumbnailGeneration(generation = 0) {
+  return Number.isSafeInteger(generation) && generation >= 0 ? generation + 1 : 1;
+}
+
+export function isCurrentThumbnailGeneration(activeGeneration, requestGeneration) {
+  return activeGeneration === requestGeneration;
+}
+
+/**
+ * All copy and states for one card. Renderer code consumes this data with textContent, never HTML.
+ */
+export function candidateCardPresentation(candidate, thumbnailState = "idle") {
+  const attachable = candidateAttachable(candidate);
+  const badges = [];
+  if (candidate?.attached) badges.push({ tone: "accent", label: "Attached" });
+  if (candidate?.minimized) badges.push({ tone: "warning", label: "Minimized" });
+  if (candidate?.elevated) badges.push({ tone: "warning", label: "Elevated" });
+  if (!attachable && !candidate?.minimized && !candidate?.elevated) {
+    badges.push({ tone: "danger", label: candidate?.unattachableCode || "Unavailable" });
+  }
+  const status = attachable
+    ? candidate?.minimized
+      ? "Attach to this minimized window, then restore it"
+      : "Attach to this window"
+    : candidateUnavailableReason(candidate);
+  return {
+    id: candidate?.id ?? "",
+    title: candidateTitle(candidate),
+    identity: candidateIdentity(candidate),
+    attachable,
+    attached: candidate?.attached === true,
+    badges,
+    status,
+    thumbnail: candidateThumbnailState(candidate, thumbnailState),
+  };
+}
+
+/* --------------------------------------------------------------------------------------------
  * App session and window tabs
  * ------------------------------------------------------------------------------------------ */
 

@@ -27,6 +27,7 @@ public sealed class WindowsAppService(
 	/// closed without detaching must not leave an app authorized indefinitely.
 	/// </summary>
 	private static readonly TimeSpan PanelLifetime = TimeSpan.FromHours(4);
+	private static readonly TimeSpan ThumbnailEnumerationLifetime = TimeSpan.FromMilliseconds(250);
 
 	private static readonly TimeSpan CorrelationPollInterval = TimeSpan.FromMilliseconds(250);
 	private const double MaximumCorrelationTimeoutSeconds = 60;
@@ -564,6 +565,134 @@ public sealed class WindowsAppService(
 		finally
 		{
 			panel.Gate.Release();
+		}
+	}
+
+	/// <summary>
+	/// Captures one bounded PNG preview of a window this panel was *offered* but has not attached,
+	/// so a person can recognise a window before granting anything.
+	///
+	/// This is read-only in the strongest sense the product has: it authorizes nothing, selects
+	/// nothing, gives no window the foreground, and leaves the panel's app session exactly as it
+	/// found it. The only thing it accepts is a candidate identifier this panel was handed by
+	/// <see cref="ListWindowCandidatesAsync"/>, and that identifier is re-proved against the live
+	/// desktop — handle, process ID, process creation time, packaged identity, logon session, and
+	/// integrity — immediately before a single pixel is read. A candidate whose window closed, was
+	/// replaced through a reused handle, or now runs above this host is refused with the same codes
+	/// every other window operation uses, so a picker can draw an honest placeholder instead of a
+	/// stale picture.
+	/// </summary>
+	public async Task<WindowsScreenshot> CaptureCandidateThumbnailAsync(
+		CanvasContextKey key,
+		string candidateId,
+		int maximumDimension = 0,
+		CancellationToken cancellationToken = default)
+	{
+		// Refused before any window is enumerated on this caller's behalf: a nonsense request
+		// should not cost a desktop walk to find out about.
+		var bounded = WindowsCaptureNormalizer.ThumbnailDimension(maximumDimension);
+		var panel = Panel(key);
+		var id = candidateId?.Trim() ?? "";
+		WindowsWindowKey identity;
+		WindowsHelperWindow window;
+		WindowsScreenshotRequest request;
+		string? signature;
+
+		await panel.Gate.WaitAsync(cancellationToken).ConfigureAwait(false);
+		try
+		{
+			identity = RequireCandidate(panel, id);
+
+			// A picker asks for every card at once. Coalesce that burst to one short-lived desktop
+			// snapshot instead of spawning one enumeration helper per card. This remains the plain,
+			// non-reconciling path: previewing candidates must never adopt them into the session.
+			if (!panel.TryReadThumbnailWindows(
+					DateTimeOffset.UtcNow,
+					ThumbnailEnumerationLifetime,
+					out var live))
+			{
+				live = await ListLiveAsync(cancellationToken).ConfigureAwait(false);
+				panel.StoreThumbnailWindows(live, DateTimeOffset.UtcNow);
+			}
+			window = Resolve(live, identity);
+			if (!WindowsWindowCorrelator.IsCandidate(window))
+			{
+				throw WindowsCanvasException.NotFound(
+					WindowsErrorCodes.CandidateNotFound,
+					"That window is no longer one this canvas is being offered. List windows " +
+					"again to see what is open now.");
+			}
+			RequireCapturable(window);
+
+			var geometry = _geometry.Read(window.Handle);
+			request = WindowsCaptureNormalizer.Thumbnail(
+				bounded,
+				geometry?.ContentWidth ?? window.Bounds?.Width ?? 0,
+				geometry?.ContentHeight ?? window.Bounds?.Height ?? 0);
+
+			// The transform token fingerprints identity *and* geometry, which is exactly what a
+			// cached picture stops being true about. A window that moved, resized, changed DPI, or
+			// had its handle recycled produces a different signature and is captured again.
+			signature = geometry is null
+				? null
+				: WindowsCaptureTransform.Version(identity, geometry);
+			if (panel.TryReadThumbnail(id, request.MaximumDimension, signature, out var cached))
+				return cached;
+		}
+		finally
+		{
+			panel.Gate.Release();
+		}
+
+		// Captured outside the panel gate so a grid of picker cards does not serialize behind one
+		// another's helper startup, but behind a small per-panel limit so it cannot become one
+		// Direct3D capture process per open window either.
+		await panel.ThumbnailGate.WaitAsync(cancellationToken).ConfigureAwait(false);
+		try
+		{
+			using var attempt = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+			attempt.CancelAfter(WindowsThumbnailLimits.TimeoutMilliseconds);
+
+			WindowsScreenshot captured;
+			try
+			{
+				captured = await bridge.CaptureScreenshotAsync(
+					new WindowsNativeWindowTarget(window),
+					request,
+					attempt.Token).ConfigureAwait(false);
+			}
+			catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested)
+			{
+				throw WindowsCanvasException.Gateway(
+					WindowsErrorCodes.CaptureFailed,
+					"That window did not produce a preview frame within " +
+					$"{WindowsThumbnailLimits.TimeoutMilliseconds}ms, so the picker was given a " +
+					"failure rather than a hang.");
+			}
+
+			WindowsCaptureNormalizer.RequireThumbnailSize(captured.Png.Length);
+			var thumbnail = captured with
+			{
+				Descriptor = captured.Descriptor with
+				{
+					// The candidate ID takes the descriptor's identifier slot: this image is of a
+					// window that was offered, not of one that was authorized, and saying so keeps
+					// a caller from mistaking it for a window it may drive.
+					WindowId = id,
+					ByteCount = captured.Png.Length,
+					Geometry = WindowsCaptureTransform.Stamp(
+						captured.Descriptor.Geometry,
+						identity),
+				},
+			};
+
+			if (signature is not null)
+				panel.StoreThumbnail(id, request.MaximumDimension, signature, thumbnail);
+			return thumbnail;
+		}
+		finally
+		{
+			panel.ThumbnailGate.Release();
 		}
 	}
 
@@ -1846,6 +1975,33 @@ public sealed class WindowsAppService(
 			WindowsErrorCodes.SessionNotFound,
 			"This canvas has no Windows app session. Launch or attach an app first.");
 
+	/// <summary>
+	/// Turns a candidate identifier back into the window identity this panel was offered.
+	///
+	/// Both dictionaries are panel-scoped, so an identifier minted for another canvas means nothing
+	/// here. The session's authorized windows are accepted too because a window this panel already
+	/// attached is still listed as a candidate under its authorized ID, and a picker that can draw
+	/// every other card should not go blank on the one it is already driving.
+	/// </summary>
+	private static WindowsWindowKey RequireCandidate(PanelState panel, string candidateId)
+	{
+		if (!string.IsNullOrEmpty(candidateId))
+		{
+			if (panel.Candidates.TryGetValue(candidateId, out var offered))
+				return offered;
+
+			var authorized = panel.Session?.Windows.Find(
+				record => record.Id.Equals(candidateId, StringComparison.Ordinal));
+			if (authorized is not null)
+				return authorized.Key;
+		}
+
+		throw WindowsCanvasException.NotFound(
+			WindowsErrorCodes.CandidateNotFound,
+			"That window is not one this canvas was offered. List windows again and use one of " +
+			"the identifiers it returns.");
+	}
+
 	private static WindowsAuthorizedRecord RequireWindow(WindowsSessionState session, string? windowId)
 	{
 		if (string.IsNullOrWhiteSpace(windowId))
@@ -1925,10 +2081,127 @@ public sealed class WindowsAppService(
 	private sealed class PanelState
 	{
 		public SemaphoreSlim Gate { get; } = new(1, 1);
+
+		/// <summary>
+		/// How many candidate thumbnails this panel may capture at once. A picker asks for every
+		/// open window the moment it opens, and each capture is a helper process negotiating a
+		/// Direct3D adapter, so the grid is bounded here rather than by whatever the browser
+		/// happened to request in parallel.
+		/// </summary>
+		public SemaphoreSlim ThumbnailGate { get; } = new(
+			WindowsThumbnailLimits.MaximumConcurrentCaptures,
+			WindowsThumbnailLimits.MaximumConcurrentCaptures);
+
 		public Dictionary<string, WindowsWindowKey> Candidates { get; } = new(StringComparer.Ordinal);
 		public Dictionary<WindowsWindowKey, string> CandidateIds { get; } = new();
 		public WindowsSessionState? Session { get; set; }
 		public DateTimeOffset LastTouchedAt { get; set; } = DateTimeOffset.UtcNow;
+
+		/// <summary>
+		/// Recently captured candidate thumbnails, so re-rendering a picker grid does not
+		/// re-capture every window on the desktop. Each entry carries the transform signature it
+		/// was captured under, and a signature covers identity and geometry together: a window that
+		/// moved, resized, changed DPI, closed, or had its handle recycled can never be answered
+		/// from here.
+		///
+		/// Guarded by its own lock rather than by the panel gate, because thumbnails are captured
+		/// with the gate released so a grid of cards does not serialize behind one another.
+		/// </summary>
+		private Dictionary<string, ThumbnailEntry> Thumbnails { get; } = new(StringComparer.Ordinal);
+
+		private readonly Lock _thumbnails = new();
+		private WindowsHelperWindowList? _thumbnailWindows;
+		private DateTimeOffset _thumbnailWindowsAt;
+
+		public bool TryReadThumbnail(
+			string candidateId,
+			int maximumDimension,
+			string? signature,
+			out WindowsScreenshot thumbnail)
+		{
+			thumbnail = null!;
+			if (signature is null)
+				return false;
+
+			var now = DateTimeOffset.UtcNow;
+			lock (_thumbnails)
+			{
+				if (!Thumbnails.TryGetValue(
+						ThumbnailKey(candidateId, maximumDimension),
+						out var entry) ||
+					entry.ExpiresAt <= now ||
+					!entry.Signature.Equals(signature, StringComparison.Ordinal))
+				{
+					return false;
+				}
+
+				thumbnail = entry.Thumbnail;
+				return true;
+			}
+		}
+
+		/// <summary>
+		/// Reuses one desktop enumeration only across the tight burst produced by opening the picker.
+		/// Capture still verifies the helper's echoed process identity, and a later refresh performs a
+		/// new enumeration, so this cannot turn an old HWND into authority over a replacement.
+		/// Called while the panel gate is held.
+		/// </summary>
+		public bool TryReadThumbnailWindows(
+			DateTimeOffset now,
+			TimeSpan lifetime,
+			out WindowsHelperWindowList windows)
+		{
+			if (_thumbnailWindows is not null && now - _thumbnailWindowsAt <= lifetime)
+			{
+				windows = _thumbnailWindows;
+				return true;
+			}
+			windows = null!;
+			return false;
+		}
+
+		/// <summary>Called while the panel gate is held.</summary>
+		public void StoreThumbnailWindows(WindowsHelperWindowList windows, DateTimeOffset capturedAt)
+		{
+			_thumbnailWindows = windows;
+			_thumbnailWindowsAt = capturedAt;
+		}
+
+		public void StoreThumbnail(
+			string candidateId,
+			int maximumDimension,
+			string signature,
+			WindowsScreenshot thumbnail)
+		{
+			var now = DateTimeOffset.UtcNow;
+			lock (_thumbnails)
+			{
+				foreach (var (key, entry) in Thumbnails.ToArray())
+				{
+					if (entry.ExpiresAt <= now)
+						Thumbnails.Remove(key);
+				}
+
+				// A panel that walked a very long window list must not accumulate pictures forever.
+				// Everything here is at most a few seconds old, so dropping the lot is honest: the
+				// next request captures again rather than being served something stale.
+				if (Thumbnails.Count >= WindowsThumbnailLimits.MaximumCacheEntries)
+					Thumbnails.Clear();
+
+				Thumbnails[ThumbnailKey(candidateId, maximumDimension)] = new ThumbnailEntry(
+					signature,
+					now.AddSeconds(WindowsThumbnailLimits.CacheSeconds),
+					thumbnail);
+			}
+		}
+
+		private static string ThumbnailKey(string candidateId, int maximumDimension) =>
+			$"{candidateId}|{maximumDimension}";
+
+		private sealed record ThumbnailEntry(
+			string Signature,
+			DateTimeOffset ExpiresAt,
+			WindowsScreenshot Thumbnail);
 
 		/// <summary>
 		/// Pointer buttons and keys this panel currently holds down on the real desktop. They are

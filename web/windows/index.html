@@ -86,13 +86,13 @@
 
         <div id="app-popover" class="app-popover hidden" role="dialog" aria-label="Choose a Windows app">
           <div class="popover-tabs" role="tablist">
-            <button id="tab-catalog" class="popover-tab is-active" type="button" role="tab"
-                    aria-selected="true" aria-controls="panel-catalog">Installed apps</button>
-            <button id="tab-running" class="popover-tab" type="button" role="tab"
-                    aria-selected="false" aria-controls="panel-running">Open windows</button>
+           <button id="tab-running" class="popover-tab is-active" type="button" role="tab"
+                   aria-selected="true" aria-controls="panel-running">Open windows</button>
+           <button id="tab-catalog" class="popover-tab" type="button" role="tab"
+                   aria-selected="false" aria-controls="panel-catalog">Apps</button>
           </div>
 
-          <section id="panel-catalog" class="popover-panel" role="tabpanel" aria-labelledby="tab-catalog">
+          <section id="panel-catalog" class="popover-panel hidden" role="tabpanel" aria-labelledby="tab-catalog">
             <label class="search-field">
               <svg class="icon" aria-hidden="true"><use href="#icon-search"></use></svg>
               <input id="catalog-search" type="search" placeholder="Search installed apps"
@@ -110,13 +110,13 @@
             </button>
           </section>
 
-          <section id="panel-running" class="popover-panel hidden" role="tabpanel" aria-labelledby="tab-running">
+          <section id="panel-running" class="popover-panel" role="tabpanel" aria-labelledby="tab-running">
             <label class="search-field">
               <svg class="icon" aria-hidden="true"><use href="#icon-search"></use></svg>
               <input id="window-search" type="search" placeholder="Search open windows"
                      autocomplete="off" spellcheck="false" aria-label="Search open windows">
             </label>
-            <ul id="window-list" class="entry-list" aria-busy="false"></ul>
+            <ul id="window-list" class="window-grid" aria-busy="false"></ul>
             <p id="window-empty" class="popover-note hidden">No attachable window is open right now.</p>
           </section>
         </div>
