@@ -572,7 +572,10 @@ CaptureLayout ComputeLayout(
 	// content. Rather than assuming which, compare the two and crop only when there is a border to
 	// remove; anything else is clamped so a surprising surface size degrades into a smaller
 	// picture rather than into a read past its edge.
-	if (surface_width >= frame_width && frame_width > 0) {
+	if (surface_width >= frame_width
+		&& surface_height >= frame_height
+		&& frame_width > 0
+		&& frame_height > 0) {
 		layout.offset_x = geometry.content.left - geometry.frame.left;
 		layout.offset_y = geometry.content.top - geometry.frame.top;
 	}

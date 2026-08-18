@@ -1994,7 +1994,15 @@ std::string RunAction(const ActionRequest& request) {
 				if (!CurrentPattern(target->element.Get(), UIA_ValuePatternId, pattern)) {
 					return ActionCapability(tree, request, target, "SetValue is not supported by this control.");
 				}
-				result = pattern->SetValue(request.value->c_str());
+				BSTR value = SysAllocStringLen(
+					request.value->data(),
+					static_cast<UINT>(request.value->size()));
+				if (value == nullptr && !request.value->empty()) {
+					result = E_OUTOFMEMORY;
+				} else {
+					result = pattern->SetValue(value);
+					SysFreeString(value);
+				}
 			} else if (request.action == "select") {
 				ComPtr<IUIAutomationSelectionItemPattern> pattern;
 				if (!CurrentPattern(target->element.Get(), UIA_SelectionItemPatternId, pattern)) {
