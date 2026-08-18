@@ -10,6 +10,7 @@
   let refreshHandler = null;
   let automationHandler = null;
   let refreshPending = false;
+  let visibilityPending = null;
   const queuedAutomation = [];
 
   function id() {
@@ -115,7 +116,8 @@
         sockets.get(message.id)?.closed(message.code, message.reason);
         break;
       case "visibility":
-        visibilityHandler?.(message.visible);
+        if (visibilityHandler) visibilityHandler(message.visible);
+        else visibilityPending = message.visible;
         break;
       case "refresh":
         if (refreshHandler) refreshHandler();
@@ -180,6 +182,11 @@
 
     onVisibilityChanged(handler) {
       visibilityHandler = handler;
+      if (visibilityPending !== null) {
+        const visible = visibilityPending;
+        visibilityPending = null;
+        visibilityHandler(visible);
+      }
     },
 
     onRefreshRequested(handler) {

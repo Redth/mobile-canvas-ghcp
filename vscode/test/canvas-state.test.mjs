@@ -2,13 +2,19 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import {
   canBootDeviceState,
+  canResumeLiveView,
   clearStoredDeviceId,
   deviceStatusPresentation,
+  emptySelectionPresentation,
   formatDeviceState,
+  initialPanelVisible,
+  isCurrentDevice,
   organizeDiagnostics,
   readStoredDeviceId,
   resumeAuthenticatedPanel,
   shouldDrainIdleDecoder,
+  shouldShowConnectingStatus,
+  startupLiveViewPresentation,
   storeDeviceId,
 } from "../../web/canvas-state.js";
 
@@ -235,4 +241,41 @@ test("keeps unsupported diagnostic actions in the selector", () => {
     popover: [check],
   });
   assert.deepEqual(organizeDiagnostics(null), { notices: [], popover: [] });
+});
+
+test("trusts the host visibility signal instead of the document hidden flag", () => {
+  assert.equal(initialPanelVisible(true, true), true);
+  assert.equal(initialPanelVisible(true, false), true);
+  assert.equal(initialPanelVisible(false, true), false);
+  assert.equal(initialPanelVisible(false, false), true);
+});
+
+test("hides the connecting overlay when a live frame is already on screen", () => {
+  assert.equal(shouldShowConnectingStatus(false), true);
+  assert.equal(shouldShowConnectingStatus(true), false);
+});
+
+test("resumes a booted device that still has display geometry", () => {
+  assert.equal(canResumeLiveView({ state: "booted" }, true), true);
+  assert.equal(canResumeLiveView({ state: "booted" }, false), false);
+  assert.equal(canResumeLiveView({ state: "booting" }, true), false);
+  assert.equal(canResumeLiveView(undefined, true), false);
+});
+
+test("does not reselect the device already on screen", () => {
+  assert.equal(isCurrentDevice({ id: "android:phone" }, "android:phone"), true);
+  assert.equal(isCurrentDevice({ id: "android:phone" }, "ios:phone"), false);
+  assert.equal(isCurrentDevice(undefined, "android:phone"), false);
+});
+
+test("starts live view without asking to select a device", () => {
+  const startup = startupLiveViewPresentation();
+  assert.equal(startup.busy, true);
+  assert.equal(startup.title, "Opening live view");
+  assert.match(startup.detail, /simulator or emulator/);
+  assert.equal(startup.action, undefined);
+
+  const empty = emptySelectionPresentation();
+  assert.equal(empty.title, "Select a device");
+  assert.equal(empty.action.id, "create");
 });

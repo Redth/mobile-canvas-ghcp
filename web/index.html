@@ -121,7 +121,7 @@
           </span>
           <span class="selector-copy">
             <span id="selector-name" class="selector-name">Devices</span>
-            <span id="selector-detail" class="selector-detail">No device selected</span>
+            <span id="selector-detail" class="selector-detail">Opening live view</span>
           </span>
           <span id="selector-dot" class="state-dot" aria-hidden="true"></span>
           <svg class="icon selector-chevron" aria-hidden="true"><use href="#icon-chevron-down"></use></svg>
@@ -151,7 +151,7 @@
     ></aside>
 
     <main class="workspace">
-      <section id="empty-state" class="empty-state">
+      <section id="empty-state" class="empty-state hidden">
         <div class="empty-card">
           <div class="empty-icon" aria-hidden="true">
             <svg class="icon"><use id="empty-state-icon" href="#icon-device"></use></svg>
@@ -166,7 +166,7 @@
         </div>
       </section>
 
-      <section id="device-view" class="device-view hidden">
+      <section id="device-view" class="device-view">
         <div class="stage">
           <!--
             The two control clusters float over the stage rather than occupying a toolbar row, so a
@@ -223,9 +223,9 @@
                   </div>
                   <div class="stream-status-copy">
                     <span id="stream-overlay-eyebrow" class="stream-status-eyebrow">Live view</span>
-                    <h2 id="stream-overlay-title" class="stream-status-title">Connecting to device</h2>
+                    <h2 id="stream-overlay-title" class="stream-status-title">Opening live view</h2>
                     <p id="stream-overlay-detail" class="stream-status-detail">
-                      Preparing a secure, interactive stream.
+                      Connecting to a running simulator or emulator.
                     </p>
                   </div>
                   <button id="stream-overlay-action" class="button primary stream-status-action hidden"

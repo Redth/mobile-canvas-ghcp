@@ -51,6 +51,7 @@ export class HostBridge implements vscode.Disposable {
   private readonly discarded = new WeakSet<WebSocket>();
   private connection: HostConnection | undefined;
   private connectPromise: Promise<HostConnection> | undefined;
+  private closeTask: Promise<void> | undefined;
   private disposed = false;
   private signalOffset = 0;
   private selectionToRestore: string | undefined;
@@ -116,9 +117,6 @@ export class HostBridge implements vscode.Disposable {
   }
 
   async setVisible(visible: boolean): Promise<void> {
-    if (!visible) {
-      this.closeSockets();
-    }
     await this.post({ type: "visibility", visible });
   }
 
@@ -187,9 +185,13 @@ export class HostBridge implements vscode.Disposable {
       unwatchFile(this.refreshSignal, this.onRefreshSignal);
     }
     this.closeSockets();
-    void this.closeCanvas().catch((error) => {
+    this.closeTask = this.closeCanvas().catch((error) => {
       this.output.appendLine(`Mobile Canvas close failed: ${errorMessage(error)}`);
     });
+  }
+
+  closed(): Promise<void> {
+    return this.closeTask ?? Promise.resolve();
   }
 
   private async connect(): Promise<HostConnection> {

@@ -28,6 +28,8 @@ export function applyViewTitle(
 export class MobileCanvasViewProvider implements vscode.WebviewViewProvider {
   private view: vscode.WebviewView | undefined;
   private bridge: HostBridge | undefined;
+  private resolveGeneration = 0;
+  private closing: Promise<void> = Promise.resolve();
 
   constructor(
     private readonly context: vscode.ExtensionContext,
@@ -37,7 +39,13 @@ export class MobileCanvasViewProvider implements vscode.WebviewViewProvider {
   ) {}
 
   async resolveWebviewView(webviewView: vscode.WebviewView): Promise<void> {
-    this.bridge?.dispose();
+    const generation = ++this.resolveGeneration;
+    this.retireBridge();
+    await this.closing;
+    if (generation !== this.resolveGeneration) {
+      return;
+    }
+
     this.view = webviewView;
     webviewView.webview.options = {
       enableScripts: true,
@@ -47,6 +55,10 @@ export class MobileCanvasViewProvider implements vscode.WebviewViewProvider {
       ],
     };
     const runtime = await resolveMobileCanvas(this.context);
+    if (generation !== this.resolveGeneration) {
+      return;
+    }
+
     this.output.appendLine(`Mobile Canvas runtime: ${runtime.source}`);
     const bridge = new HostBridge(
       runtime.command,
@@ -72,10 +84,9 @@ export class MobileCanvasViewProvider implements vscode.WebviewViewProvider {
     const disposeSubscription = webviewView.onDidDispose(
       () => {
         if (this.bridge === bridge) {
-          this.bridge = undefined;
           this.view = undefined;
+          this.retireBridge();
         }
-        bridge.dispose();
       },
     );
     this.context.subscriptions.push(
@@ -87,6 +98,7 @@ export class MobileCanvasViewProvider implements vscode.WebviewViewProvider {
     // Attach the bridge before loading the document so its initial ready
     // message cannot be lost while the runtime is resolving.
     webviewView.webview.html = createWebviewHtml(this.context, webviewView.webview);
+    void bridge.setVisible(webviewView.visible);
   }
 
   async refresh(): Promise<void> {
@@ -117,7 +129,19 @@ export class MobileCanvasViewProvider implements vscode.WebviewViewProvider {
   }
 
   dispose(): void {
-    this.bridge?.dispose();
+    this.resolveGeneration += 1;
+    this.view = undefined;
+    this.retireBridge();
+  }
+
+  private retireBridge(): void {
+    const bridge = this.bridge;
+    if (!bridge) {
+      return;
+    }
+    this.bridge = undefined;
+    bridge.dispose();
+    this.closing = bridge.closed();
   }
 
   private requireBridge(): HostBridge {

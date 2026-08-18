@@ -77,6 +77,43 @@ export function createLatestCatalogLoader(fetchCatalog, applyCatalog) {
   };
 }
 
+export function initialPanelVisible(hostOwnsVisibility, documentHidden = false) {
+  return hostOwnsVisibility ? true : !documentHidden;
+}
+
+export function shouldShowConnectingStatus(hasVisibleFrame) {
+  return hasVisibleFrame !== true;
+}
+
+export function canResumeLiveView(device, hasDisplay) {
+  return device?.state === "booted" && hasDisplay === true;
+}
+
+export function isCurrentDevice(current, nextId) {
+  return Boolean(current?.id) && current.id === nextId;
+}
+
+export function emptySelectionPresentation() {
+  return {
+    tone: "accent",
+    icon: "#icon-device",
+    title: "Select a device",
+    detail: "Choose an existing target, or create one from an installed runtime.",
+    action: { id: "create", label: "New device", icon: "#icon-plus" },
+  };
+}
+
+export function startupLiveViewPresentation() {
+  return {
+    tone: "accent",
+    icon: "#icon-device",
+    eyebrow: "Live view",
+    title: "Opening live view",
+    detail: "Connecting to a running simulator or emulator.",
+    busy: true,
+  };
+}
+
 export function organizeDiagnostics(diagnostics) {
   const failures = (diagnostics ?? [])
     .flatMap((entry) => entry?.checks ?? [])
@@ -155,7 +192,7 @@ export function deviceStatusPresentation(kind, { deviceName, platform, detail } 
         icon: "#icon-device",
         eyebrow: "Live view",
         title: `Connecting to ${subject}`,
-        detail: detail || "Preparing a secure, interactive stream.",
+        detail: detail || "Connecting to a running simulator or emulator.",
         busy: true,
       };
     case "restarting":

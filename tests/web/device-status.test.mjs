@@ -62,3 +62,12 @@ test("primary actions retain their semantic fill on hover", () => {
     /background:\s*var\(--success-emphasis\)/,
   );
 });
+
+test("starts on the live view instead of the empty selector", () => {
+  assert.match(html, /id="empty-state" class="empty-state hidden"/);
+  assert.match(html, /id="device-view" class="device-view"/);
+  assert.doesNotMatch(html, /id="device-view" class="device-view hidden"/);
+  assert.match(html, />Opening live view</);
+  assert.match(html, /Connecting to a running simulator or emulator/);
+  assert.match(html, /id="selector-detail"[^>]*>Opening live view</);
+});

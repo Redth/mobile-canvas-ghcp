@@ -5,7 +5,7 @@ import test from "node:test";
 import vm from "node:vm";
 import { fileURLToPath } from "node:url";
 
-test("bridges bootstrap, API responses, and socket frames", async () => {
+function loadTransport() {
   const outbound = [];
   const listeners = new Map();
   let nextId = 0;
@@ -45,10 +45,14 @@ test("bridges bootstrap, API responses, and socket frames", async () => {
     "utf8",
   );
   vm.runInNewContext(script, sandbox);
-  const transport = window.mobileCanvasTransport;
   const receive = (data) => {
     for (const listener of listeners.get("message") ?? []) listener({ data });
   };
+  return { outbound, receive, transport: window.mobileCanvasTransport };
+}
+
+test("bridges bootstrap, API responses, and socket frames", async () => {
+  const { outbound, receive, transport } = loadTransport();
 
   const bootstrap = transport.bootstrap();
   assert.equal(outbound.shift().type, "ready");
@@ -144,4 +148,12 @@ test("bridges bootstrap, API responses, and socket frames", async () => {
 
   socket.close();
   assert.equal(outbound.shift().type, "socket-close");
+});
+
+test("replays visibility that arrived before the canvas subscribed", () => {
+  const { receive, transport } = loadTransport();
+  let visible = true;
+  receive({ type: "visibility", visible: false });
+  transport.onVisibilityChanged((value) => { visible = value; });
+  assert.equal(visible, false);
 });

@@ -62,7 +62,6 @@ async function verifyActivation(): Promise<void> {
   );
   assert.equal(definition.version, extension.packageJSON.version);
   assert.equal(definition.cwd?.toString(), extension.extensionUri.toString());
-
   const titleTarget: { title?: string; description?: string } = {};
   applyViewTitle(titleTarget, "  Pixel\n6  ", " Android 15  ·  booted ");
   assert.deepEqual(titleTarget, {
@@ -403,10 +402,29 @@ if (args[0] === "canvas" && args[1] === "open") {
     );
     await bridge.handleMessage({ type: "socket-close", id: "video-next" });
 
+    await bridge.handleMessage({
+      type: "socket-open",
+      id: "video-hide",
+      channel: "video",
+    });
+    await waitForMessage(
+      messages,
+      (message) => message.type === "socket-opened" && message.id === "video-hide",
+    );
+    const beforeHide = messages.length;
     await bridge.setVisible(false);
-    assert.ok(messages.some(
-      (message) => message.type === "visibility" && !message.visible,
-    ));
+    await waitFor(() =>
+      messages.slice(beforeHide).some((message) =>
+        message.type === "visibility" && !message.visible
+      )
+    );
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    assert.ok(
+      !messages.slice(beforeHide).some((message) =>
+        message.type === "socket-closed" && message.id === "video-hide"
+      ),
+      "hiding the view must keep the live stream so returning does not flash Live view",
+    );
     const bootstrapsBeforeRestart = bootstrapBodies.length;
     await bridge.restart();
     await bridge.handleMessage({ type: "ready" });
