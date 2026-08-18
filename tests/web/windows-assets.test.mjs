@@ -90,7 +90,7 @@ test("the stylesheet themes everything through semantic tokens", () => {
 
 test("open-window cards use responsive semantic grid and state styling", () => {
   const css = read("web", "windows", "windows-canvas.css");
-  assert.match(css, /\.window-grid \{[\s\S]*grid-template-columns: repeat\(auto-fit, minmax\(150px, 1fr\)\)/);
+  assert.match(css, /\.window-grid \{[\s\S]*grid-template-columns: repeat\(auto-fit, minmax\(118px, 1fr\)\)/);
   assert.match(css, /\.window-card:hover:not\(\[data-disabled="true"\]\)/);
   assert.match(css, /\.window-card\[aria-pressed="true"\]/);
   assert.match(css, /\.window-card:focus-visible/);

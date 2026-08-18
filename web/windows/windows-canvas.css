@@ -526,7 +526,7 @@ textarea {
   padding: 0;
   gap: 8px;
   list-style: none;
-  grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+  grid-template-columns: repeat(auto-fit, minmax(118px, 1fr));
 }
 
 .window-grid li {
@@ -1295,6 +1295,6 @@ textarea {
   }
 
   .window-grid {
-    grid-template-columns: repeat(auto-fit, minmax(132px, 1fr));
+    grid-template-columns: repeat(auto-fit, minmax(118px, 1fr));
   }
 }

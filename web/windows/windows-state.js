@@ -273,8 +273,8 @@ export function candidateThumbnailState(candidate, loadedState = "idle") {
 }
 
 /** Safe, fixed API route for a candidate thumbnail; the only dynamic segment is URL encoded. */
-export function windowThumbnailUrl(candidateId, maximumDimension = 320) {
-  const dimension = Math.max(96, Math.min(640, Math.round(Number(maximumDimension) || 320)));
+export function windowThumbnailUrl(candidateId, maximumDimension = 240) {
+  const dimension = Math.max(96, Math.min(640, Math.round(Number(maximumDimension) || 240)));
   return `/api/v1/windows/windows/${encodeURIComponent(String(candidateId ?? ""))}`
     + `/thumbnail?maximumDimension=${dimension}`;
 }

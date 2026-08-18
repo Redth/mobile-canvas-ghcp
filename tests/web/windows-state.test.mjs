@@ -248,7 +248,7 @@ test("candidate text stays data and thumbnail paths encode opaque IDs", () => {
   assert.equal(presentation.identity, "safe.exe");
   assert.equal(
     windowThumbnailUrl('candidate/"<tag>'),
-    "/api/v1/windows/windows/candidate%2F%22%3Ctag%3E/thumbnail?maximumDimension=320",
+    "/api/v1/windows/windows/candidate%2F%22%3Ctag%3E/thumbnail?maximumDimension=240",
   );
 });
 
