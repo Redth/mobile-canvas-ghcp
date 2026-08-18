@@ -1,4 +1,8 @@
-import { creatablePlatforms, createOptions } from "./create-device-options.js";
+import {
+  createOptions,
+  creatablePlatforms,
+  needsCatalogForCreate,
+} from "./create-device-options.js";
 import {
   canBootDeviceState,
   clearStoredDeviceId,
@@ -91,6 +95,7 @@ let panelVisibilityVersion = 0;
 
 const state = {
   catalog: null,
+  createCatalogPending: false,
   selected: null,
   display: null,
   socket: null,
@@ -1966,18 +1971,38 @@ document.addEventListener("keydown", (event) => {
   if (event.key === "Escape") closeDevicePopover();
 });
 
-document.querySelector("#create-button").addEventListener("click", openCreateDialog);
+document.querySelector("#create-button").addEventListener("click", () => {
+  void openCreateDialog();
+});
 elements.emptyAction.addEventListener("click", () => {
   if (elements.emptyAction.dataset.emptyAction === "create") {
-    openCreateDialog();
+    void openCreateDialog();
     return;
   }
   runBusy(elements.emptyAction, refresh).catch(showCanvasError);
 });
 
-function openCreateDialog() {
+/**
+ * Opens the create dialog against the catalog this panel already holds. That catalog comes from a
+ * single load at startup, so when it never arrived -- the load failed, or the host finished starting
+ * its backends afterwards -- both dropdowns would open empty with no way back short of reloading the
+ * panel. Reloading here recovers in place, and the dialog says it is loading meanwhile.
+ */
+async function openCreateDialog() {
   closeDevicePopover();
+  state.createCatalogPending = needsCatalogForCreate(state.catalog);
+  populateCreateOptions();
   elements.createDialog.showModal();
+  if (!state.createCatalogPending) return;
+
+  try {
+    await loadCatalog();
+  } catch (error) {
+    showError(error);
+  } finally {
+    state.createCatalogPending = false;
+    populateCreateOptions();
+  }
 }
 
 document.querySelector("#create-close").addEventListener("click", () => elements.createDialog.close());
@@ -2087,7 +2112,7 @@ for (const button of document.querySelectorAll("[data-action]")) {
 elements.createName.addEventListener("input", () => {
   elements.createName.dataset.edited = "1";
 });
-elements.createRuntime.addEventListener("change", populateCreateOptions);
+elements.createRuntime.addEventListener("change", () => populateCreateOptions());
 
 elements.createForm.addEventListener("submit", (event) => {
   event.preventDefault();
@@ -2304,7 +2329,9 @@ function populateCreateOptions() {
     ? runtimes
       .map((runtime) => `<option value="${escapeHtml(runtime.id)}">${escapeHtml(runtime.name)}</option>`)
       .join("")
-    : '<option value="">No compatible runtime installed</option>';
+    : `<option value="">${state.createCatalogPending
+      ? "Loading installed runtimes..."
+      : "No compatible runtime installed"}</option>`;
   elements.createRuntime.value = selectedRuntimeId || "";
   elements.createRuntime.disabled = runtimes.length === 0;
 
@@ -2314,7 +2341,9 @@ function populateCreateOptions() {
     ? deviceTypes
       .map((type) => `<option value="${escapeHtml(type.id)}">${escapeHtml(type.name)}</option>`)
       .join("")
-    : '<option value="">No compatible device type found</option>';
+    : `<option value="">${state.createCatalogPending
+      ? "Loading device types..."
+      : "No compatible device type found"}</option>`;
   if (deviceTypes.some((type) => type.id === priorDeviceTypeId))
     elements.createDeviceType.value = priorDeviceTypeId;
   elements.createDeviceType.disabled = deviceTypes.length === 0;

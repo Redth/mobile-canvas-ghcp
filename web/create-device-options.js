@@ -33,3 +33,12 @@ export function createOptions(catalog, platform, runtimeId) {
 
   return { runtimes, deviceTypes };
 }
+
+/**
+ * The create dialog is filled from the last catalog load, so a load that failed or has not happened
+ * yet leaves it with nothing to offer. Callers use this to reload the catalog before the user is
+ * left staring at two empty dropdowns.
+ */
+export function needsCatalogForCreate(catalog) {
+  return creatablePlatforms(catalog).length === 0;
+}
