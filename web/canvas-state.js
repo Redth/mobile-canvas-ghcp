@@ -1,5 +1,32 @@
 const SELECTED_DEVICE_PREFIX = "mobile-canvas-selected-device:";
 
+/**
+ * The product surface a canvas belongs to. The host scopes every credential and every activity
+ * event to one, and a payload that names none predates surfaces, so it is a mobile payload.
+ */
+export const MOBILE_SURFACE = "mobile";
+
+export function normalizeSurface(surface) {
+  return typeof surface === "string" && surface.length > 0 ? surface : MOBILE_SURFACE;
+}
+
+/**
+ * Whether an activity event is addressed to this panel.
+ *
+ * The host already delivers events only to the canvas context they name, so this is the client's
+ * own second gate. An event for another product surface is never ours even when the session and
+ * instance identifiers line up, and an event with no canvas identity came from the bare CLI, which
+ * speaks for no panel: only a host that opts in follows those.
+ */
+export function isActivityAddressedTo(activity, panel = {}) {
+  if (!activity || typeof activity !== "object") return false;
+  if (normalizeSurface(activity.surface) !== normalizeSurface(panel.surface)) return false;
+  if (!activity.sessionId || !activity.instanceId) {
+    return panel.followUnscoped === true;
+  }
+  return activity.sessionId === panel.sessionId && activity.instanceId === panel.instanceId;
+}
+
 export function readStoredDeviceId(storage, instanceId) {
   const value = storage.getItem(storageKey(instanceId));
   return typeof value === "string" && value.length > 0 ? value : null;

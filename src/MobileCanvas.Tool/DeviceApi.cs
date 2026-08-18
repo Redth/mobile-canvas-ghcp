@@ -7,6 +7,8 @@ using System.Text;
 using System.Text.Json;
 using MobileCanvas.Contracts;
 using MobileCanvas.Core;
+using WindowsCanvas.Contracts;
+using WindowsCanvas.Windows;
 using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Http;
 using Microsoft.Extensions.DependencyInjection;
@@ -17,14 +19,18 @@ namespace MobileCanvas.Tool;
 internal static class DeviceApi
 {
 	private const string SessionCookie = "mobile_device_session";
-	private const string CanvasKeyItem = "mobile-canvas-key";
-	private const string ControlAuthItem = "mobile-canvas-control-auth";
+
+	/// <summary>
+	/// Every route this module maps serves the Mobile Canvas product unless it is marked neutral.
+	/// </summary>
+	internal const string Surface = CanvasSurfaces.Mobile;
 
 	public static void Map(WebApplication app)
 	{
 		app.Use(ValidateLoopbackRequest);
 		app.Use(WriteApiErrors);
 		app.Use(Authenticate);
+		CanvasScope.UseSurfaceGuard(app, Surface);
 
 		MapAssets(app);
 		MapHost(app);
@@ -78,6 +84,10 @@ internal static class DeviceApi
 			var (status, code) = exception switch
 			{
 				UnauthorizedAccessException => (StatusCodes.Status401Unauthorized, "unauthorized"),
+				CanvasSurfaceException => (StatusCodes.Status403Forbidden, "surface_not_allowed"),
+				// Windows failures already carry the status and machine-readable code the caller
+				// should branch on, so they are passed through rather than re-derived here.
+				WindowsCanvasException windows => (windows.Status, windows.Code),
 				DeviceNotFoundException => (StatusCodes.Status404NotFound, "device_not_found"),
 				ArgumentException => (StatusCodes.Status400BadRequest, "invalid_request"),
 				DeviceCapabilityException or NotSupportedException =>
@@ -109,7 +119,7 @@ internal static class DeviceApi
 		if (authorization.StartsWith("Bearer ", StringComparison.OrdinalIgnoreCase) &&
 			FixedTimeEquals(authorization[7..], security.ControlToken))
 		{
-			context.Items[ControlAuthItem] = true;
+			CanvasScope.Attach(context, new CanvasRequestScope { HasControlToken = true });
 			await next(context).ConfigureAwait(false);
 			return;
 		}
@@ -118,7 +128,7 @@ internal static class DeviceApi
 		if (context.Request.Cookies.TryGetValue(SessionCookie, out var session) &&
 			bootstraps.TryGetSession(session, out var key))
 		{
-			context.Items[CanvasKeyItem] = key;
+			CanvasScope.Attach(context, new CanvasRequestScope { Session = key });
 			await next(context).ConfigureAwait(false);
 			return;
 		}
@@ -131,15 +141,24 @@ internal static class DeviceApi
 
 	internal static bool IsPublicPath(PathString path) =>
 		path == "/" ||
+		path == "/annexb.js" ||
 		path == "/canvas-state.js" ||
 		path == "/create-device-options.js" ||
 		path == "/device-canvas.js" ||
 		path == "/device-canvas.css" ||
-		path == "/api/v1/auth/bootstrap";
+		path == "/api/v1/auth/bootstrap" ||
+		// Exact paths, never a prefix: the Windows canvas shell and its modules, which a browser has
+		// to load before it can trade its bootstrap secret for a scoped session.
+		WindowsApi.IsPublicPath(path);
 
 	private static void MapAssets(WebApplication app)
 	{
 		app.MapGet("/", () => EmbeddedAsset("index.html", "text/html; charset=utf-8"));
+		// Annex-B framing is shared by both canvases, so it is served once from the root and
+		// imported by each renderer rather than duplicated per surface.
+		app.MapGet(
+			"/annexb.js",
+			() => EmbeddedAsset("annexb.js", "text/javascript; charset=utf-8")).SurfaceNeutral();
 		app.MapGet(
 			"/canvas-state.js",
 			() => EmbeddedAsset("canvas-state.js", "text/javascript; charset=utf-8"));
@@ -174,7 +193,7 @@ internal static class DeviceApi
 						MaxAge = CanvasBootstrapStore.CredentialLifetime,
 					});
 				return Results.NoContent();
-			});
+			}).SurfaceNeutral();
 
 		app.MapGet(
 			"/api/v1/status",
@@ -183,58 +202,70 @@ internal static class DeviceApi
 				Status = "ok",
 				Version = Assembly.GetExecutingAssembly().GetName().Version?.ToString(3) ?? "0.0.0",
 				ProcessId = Environment.ProcessId,
-			});
+			}).SurfaceNeutral();
 
 		app.MapPost(
 			"/api/v1/host/stop",
 			(HttpContext context, IHostApplicationLifetime lifetime) =>
 			{
-				RequireControl(context);
+				CanvasScope.RequireControl(context);
 				lifetime.StopApplication();
 				return Results.Accepted();
-			});
+			}).SurfaceNeutral();
 
 		app.MapPost(
 			"/api/v1/canvas/open",
 			(CanvasOpenRequest request, CanvasBootstrapStore store, HttpContext context) =>
 			{
-				RequireControl(context);
-				ValidateCanvasContext(request.SessionId, request.InstanceId);
-				var secret = store.Create(new CanvasContextKey(request.SessionId, request.InstanceId));
+				CanvasScope.RequireControl(context);
+				CanvasScope.ValidateContext(request.SessionId, request.InstanceId);
+				var surface = CanvasSurfaces.Normalize(request.Surface);
+				var secret = store.Create(
+					new CanvasContextKey(request.SessionId, request.InstanceId, surface));
 				var fragment =
 					$"bootstrap={Uri.EscapeDataString(secret)}" +
 					$"&sessionId={Uri.EscapeDataString(request.SessionId)}" +
-					$"&instanceId={Uri.EscapeDataString(request.InstanceId)}";
+					$"&instanceId={Uri.EscapeDataString(request.InstanceId)}" +
+					$"&surface={Uri.EscapeDataString(surface)}";
 				return new CanvasOpenResult
 				{
-					Url = $"http://127.0.0.1:{context.Request.Host.Port}/#{fragment}",
-					Title = CanvasTitles.Panel,
+					Url = $"http://127.0.0.1:{context.Request.Host.Port}{CanvasPathFor(surface)}#{fragment}",
+					Title = CanvasTitleFor(surface),
+					Surface = surface,
 				};
-			});
+			}).SurfaceNeutral();
 
 		app.MapPost(
 			"/api/v1/canvas/close",
 			(CanvasCloseRequest request, CanvasBootstrapStore store, DeviceService devices, HttpContext context) =>
 			{
-				RequireControl(context);
-				ValidateCanvasContext(request.SessionId, request.InstanceId);
-				var key = new CanvasContextKey(request.SessionId, request.InstanceId);
+				CanvasScope.RequireControl(context);
+				CanvasScope.ValidateContext(request.SessionId, request.InstanceId);
+				var key = new CanvasContextKey(
+					request.SessionId,
+					request.InstanceId,
+					CanvasSurfaces.Normalize(request.Surface));
 				// Host applications restore an open renderer without invoking canvas.open again.
 				// Keep its grant and selection until explicit detach, but rotate the browser session.
 				store.Close(key);
 				return Results.NoContent();
-			});
+			}).SurfaceNeutral();
 
 		app.MapPost(
 			"/api/v1/canvas/detach",
 			(CanvasBootstrapStore store, DeviceService devices, HttpContext context) =>
 			{
-				var key = RequireCanvasContext(context);
+				var key = CanvasScope.RequireContext(context);
 				devices.Detach(key);
+				// Detaching must drop the panel's Windows authorizations too. A canvas that goes
+				// away with an app still attached would otherwise leave the grant behind for a
+				// later panel with the same identifiers to inherit. Resolved optionally so a host
+				// built without the Windows surface keeps working unchanged.
+				context.RequestServices.GetService<WindowsAppService>()?.Detach(key);
 				store.Detach(key);
 				context.Response.Cookies.Delete(SessionCookie);
 				return Results.NoContent();
-			});
+			}).SurfaceNeutral();
 
 		app.MapPost(
 			"/api/v1/host/settings/{target}",
@@ -273,12 +304,12 @@ internal static class DeviceApi
 		app.MapGet(
 			"/api/v1/selection",
 			(HttpContext context, DeviceService devices, CancellationToken cancellationToken) =>
-				devices.GetSelectionAsync(RequireCanvasContext(context), cancellationToken));
+				devices.GetSelectionAsync(CanvasScope.RequireContext(context), cancellationToken));
 		app.MapPost(
 			"/api/v1/selection",
 			async (SelectDeviceRequest request, HttpContext context, DeviceService devices, CancellationToken cancellationToken) =>
 			{
-				var key = RequireCanvasContext(context);
+				var key = CanvasScope.RequireContext(context);
 				var device = await devices
 					.SelectAsync(key, request.DeviceId, cancellationToken)
 					.ConfigureAwait(false);
@@ -494,9 +525,11 @@ internal static class DeviceApi
 	/// canvas extension issued it. Canvas requests authenticate with a session cookie and are
 	/// deliberately skipped, so a person tapping the panel never summons the remote-control cursor.
 	///
-	/// When the caller named a canvas, the target device also becomes that canvas's selection. Agents
-	/// address devices by ID rather than by whatever the panel happens to be showing, and a panel that
-	/// stayed behind would render a cursor over the wrong screen.
+	/// When the caller named a canvas, the event is addressed to that canvas alone and the target
+	/// device also becomes that canvas's selection. Agents address devices by ID rather than by
+	/// whatever the panel happens to be showing, and a panel that stayed behind would render a
+	/// cursor over the wrong screen. Input that named no canvas reaches the panels on this endpoint's
+	/// own surface, because it speaks for no panel in particular.
 	/// </summary>
 	private static async Task PublishAutomationAsync(
 		HttpContext context,
@@ -504,11 +537,13 @@ internal static class DeviceApi
 		DeviceService devices,
 		CancellationToken cancellationToken)
 	{
-		if (!context.Items.ContainsKey(ControlAuthItem)) return;
-		var key = TryGetCanvasContext(context);
+		if (!CanvasScope.HasControlToken(context)) return;
+		var key = CanvasScope.TryGetContext(context);
 		if (key is null)
 		{
-			Hub(context).Publish(activity);
+			Hub(context).PublishToSurface(
+				CanvasScope.RequiredSurface(context, Surface) ?? Surface,
+				activity);
 			return;
 		}
 
@@ -519,16 +554,24 @@ internal static class DeviceApi
 			PublishSelection(context, key, activity.DeviceId);
 		}
 
-		Hub(context).Publish(activity with { SessionId = key.SessionId, InstanceId = key.InstanceId });
+		Hub(context).Publish(
+			key,
+			activity with
+			{
+				SessionId = key.SessionId,
+				InstanceId = key.InstanceId,
+				Surface = key.Surface,
+			});
 	}
 
 	private static void PublishSelection(HttpContext context, CanvasContextKey key, string deviceId) =>
-		Hub(context).Publish(new AutomationEvent
+		Hub(context).Publish(key, new AutomationEvent
 		{
 			Kind = AutomationEventKinds.Selection,
 			DeviceId = deviceId,
 			SessionId = key.SessionId,
 			InstanceId = key.InstanceId,
+			Surface = key.Surface,
 		});
 
 	private static AutomationActivityHub Hub(HttpContext context) =>
@@ -824,7 +867,10 @@ internal static class DeviceApi
 					throw new ArgumentException("A WebSocket upgrade is required.");
 
 				var hub = context.RequestServices.GetRequiredService<AutomationActivityHub>();
-				using var subscription = hub.Subscribe(out var reader);
+				// A subscriber has to say which panel it is: events are addressed, and a socket that
+				// named no canvas would either see everything or nothing. The cookie already answers
+				// this for a canvas; the control token has to name a panel in the query string.
+				using var subscription = hub.Subscribe(CanvasScope.RequireContext(context), out var reader);
 				using var socket = await context.WebSockets.AcceptWebSocketAsync().ConfigureAwait(false);
 
 				try
@@ -904,23 +950,20 @@ internal static class DeviceApi
 		return Results.Stream(stream, contentType);
 	}
 
-	private static CanvasContextKey RequireCanvasContext(HttpContext context) =>
-		TryGetCanvasContext(context)
-		?? throw new ArgumentException("A canvas sessionId and instanceId are required.");
+	/// <summary>
+	/// Where a canvas of one surface is served from. Mobile keeps the root path every shipped
+	/// client already opens; a new surface gets its own path rather than a query parameter, so the
+	/// browser origin, the asset allowlist, and the page itself line up.
+	/// </summary>
+	private static string CanvasPathFor(string surface) =>
+		surface.Equals(CanvasSurfaces.Windows, StringComparison.Ordinal)
+			? WindowsApi.CanvasPath
+			: "/";
 
-	private static CanvasContextKey? TryGetCanvasContext(HttpContext context)
-	{
-		if (context.Items.TryGetValue(CanvasKeyItem, out var item) && item is CanvasContextKey key)
-			return key;
-		if (!context.Items.ContainsKey(ControlAuthItem))
-			return null;
-		var sessionId = context.Request.Query["sessionId"].ToString();
-		var instanceId = context.Request.Query["instanceId"].ToString();
-		if (string.IsNullOrWhiteSpace(sessionId) || string.IsNullOrWhiteSpace(instanceId))
-			return null;
-		ValidateCanvasContext(sessionId, instanceId);
-		return new CanvasContextKey(sessionId, instanceId);
-	}
+	private static string CanvasTitleFor(string surface) =>
+		surface.Equals(CanvasSurfaces.Windows, StringComparison.Ordinal)
+			? CanvasTitles.WindowsPanel
+			: CanvasTitles.Panel;
 
 	private static async Task<DeviceTarget> SelectIfContextAsync(
 		DeviceTarget target,
@@ -928,26 +971,12 @@ internal static class DeviceApi
 		DeviceService devices,
 		CancellationToken cancellationToken)
 	{
-		var key = TryGetCanvasContext(context);
+		var key = CanvasScope.TryGetContext(context);
 		if (key is null)
 			return target;
 		var device = await devices.SelectAsync(key, target.Id, cancellationToken).ConfigureAwait(false);
 		PublishSelection(context, key, device.Id);
 		return device;
-	}
-
-	private static void RequireControl(HttpContext context)
-	{
-		if (!context.Items.ContainsKey(ControlAuthItem))
-			throw new UnauthorizedAccessException("This endpoint requires the host control token.");
-	}
-
-	private static void ValidateCanvasContext(string sessionId, string instanceId)
-	{
-		if (string.IsNullOrWhiteSpace(sessionId) || sessionId.Length > 200)
-			throw new ArgumentException("A valid sessionId is required.");
-		if (string.IsNullOrWhiteSpace(instanceId) || instanceId.Length > 200)
-			throw new ArgumentException("A valid instanceId is required.");
 	}
 
 	private static bool FixedTimeEquals(string left, string right)

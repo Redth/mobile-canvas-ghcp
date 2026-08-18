@@ -1,19 +1,52 @@
 import { readFileSync } from "node:fs";
 import * as vscode from "vscode";
+import { type SurfaceConfig, type SurfaceId } from "./surfaces";
+
+/**
+ * Per-surface webview template: the prepared host HTML to load, plus the two markers that host page
+ * carries and the shared assets that replace them. Only these differ between surfaces; the CSP,
+ * nonce, host theme override, and transport shim are identical for both.
+ */
+interface WebviewSurfaceAssets {
+  htmlPath: string;
+  styleMarker: string;
+  styleAsset: readonly string[];
+  scriptMarker: string;
+  scriptAsset: readonly string[];
+}
+
+const WEBVIEW_ASSETS: Record<SurfaceId, WebviewSurfaceAssets> = {
+  mobile: {
+    htmlPath: "dist/web/index.html",
+    styleMarker: '<link rel="stylesheet" href="/device-canvas.css">',
+    styleAsset: ["dist", "web", "device-canvas.css"],
+    scriptMarker: '<script type="module" src="/device-canvas.js"></script>',
+    scriptAsset: ["dist", "web", "device-canvas.js"],
+  },
+  windows: {
+    htmlPath: "dist/web/windows/index.html",
+    styleMarker: '<link rel="stylesheet" href="/windows/windows-canvas.css">',
+    styleAsset: ["dist", "web", "windows", "windows-canvas.css"],
+    scriptMarker: '<script type="module" src="/windows/windows-canvas.js"></script>',
+    scriptAsset: ["dist", "web", "windows", "windows-canvas.js"],
+  },
+};
 
 export function createWebviewHtml(
   context: vscode.ExtensionContext,
   webview: vscode.Webview,
+  surface: SurfaceConfig,
 ): string {
-  const htmlPath = context.asAbsolutePath("dist/web/index.html");
+  const assets = WEBVIEW_ASSETS[surface.id];
+  const htmlPath = context.asAbsolutePath(assets.htmlPath);
   const styleUri = webview.asWebviewUri(
-    vscode.Uri.joinPath(context.extensionUri, "dist", "web", "device-canvas.css"),
+    vscode.Uri.joinPath(context.extensionUri, ...assets.styleAsset),
   );
   const hostStyleUri = webview.asWebviewUri(
     vscode.Uri.joinPath(context.extensionUri, "media", "vscode-theme.css"),
   );
   const sharedScriptUri = webview.asWebviewUri(
-    vscode.Uri.joinPath(context.extensionUri, "dist", "web", "device-canvas.js"),
+    vscode.Uri.joinPath(context.extensionUri, ...assets.scriptAsset),
   );
   const hostThemeUri = webview.asWebviewUri(
     vscode.Uri.joinPath(context.extensionUri, "media", "vscode-theme.js"),
@@ -37,13 +70,13 @@ export function createWebviewHtml(
   );
   html = replaceOnce(
     html,
-    '<link rel="stylesheet" href="/device-canvas.css">',
+    assets.styleMarker,
     `<link rel="stylesheet" href="${styleUri}">\n  `
       + `<link rel="stylesheet" href="${hostStyleUri}">`,
   );
   html = replaceOnce(
     html,
-    '<script type="module" src="/device-canvas.js"></script>',
+    assets.scriptMarker,
     `<script nonce="${nonce}" src="${hostThemeUri}"></script>\n  `
       + `<script nonce="${nonce}" src="${transportUri}"></script>\n  `
       + `<script nonce="${nonce}" type="module" src="${sharedScriptUri}"></script>`,

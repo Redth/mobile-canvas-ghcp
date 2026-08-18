@@ -6,6 +6,7 @@ using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
 using ModelContextProtocol;
 using ModelContextProtocol.Server;
+using WindowsCanvas.Contracts;
 
 namespace MobileCanvas.Tool;
 
@@ -23,6 +24,7 @@ internal static class DeviceMcpHost
 	{
 		var options = new JsonSerializerOptions(McpJsonUtilities.DefaultOptions);
 		options.TypeInfoResolverChain.Insert(0, DeviceJsonContext.Default);
+		options.TypeInfoResolverChain.Insert(0, WindowsJsonContext.Default);
 		options.MakeReadOnly();
 		return options;
 	}
@@ -35,6 +37,7 @@ internal static class DeviceMcpHost
 		builder.Logging.AddConsole(options =>
 			options.LogToStandardErrorThreshold = LogLevel.Trace);
 		builder.Services.AddSingleton<DeviceHostClient>();
+		builder.Services.AddSingleton<WindowsHostClient>();
 		builder.Services
 			.AddMcpServer(options =>
 			{
@@ -56,7 +59,9 @@ internal static class DeviceMcpHost
 			.WithTools<DevicePresentationTools>(ToolSerializerOptions)
 			.WithTools<DeviceHardwareTools>(ToolSerializerOptions)
 			.WithTools<DeviceInterruptTools>(ToolSerializerOptions)
-			.WithTools<DeviceMediaTools>(ToolSerializerOptions);
+			.WithTools<DeviceMediaTools>(ToolSerializerOptions)
+			.WithTools<WindowsUiTools>(ToolSerializerOptions)
+			.WithTools<WindowsVisualTools>(ToolSerializerOptions);
 		await builder.Build().RunAsync(cancellationToken).ConfigureAwait(false);
 	}
 }

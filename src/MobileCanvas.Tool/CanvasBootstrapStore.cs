@@ -11,6 +11,11 @@ internal sealed class CanvasBootstrapStore
 	private readonly Dictionary<string, BootstrapGrant> _grants = [];
 	private readonly Dictionary<string, BrowserSession> _sessions = [];
 
+	/// <summary>
+	/// Issues a bootstrap secret for one panel on one product surface. Replacing a panel's grant
+	/// only retires credentials for that exact context: opening the desktop panel must not sign the
+	/// mobile panel out of the same host.
+	/// </summary>
 	public string Create(CanvasContextKey key)
 	{
 		lock (_gate)
@@ -32,9 +37,11 @@ internal sealed class CanvasBootstrapStore
 		{
 			var now = DateTimeOffset.UtcNow;
 			CleanupExpired(now);
+			var surface = CanvasSurfaces.Normalize(request.Surface);
 			if (!_grants.TryGetValue(request.Secret, out var grant) ||
 				!grant.Key.SessionId.Equals(request.SessionId, StringComparison.Ordinal) ||
-				!grant.Key.InstanceId.Equals(request.InstanceId, StringComparison.Ordinal))
+				!grant.Key.InstanceId.Equals(request.InstanceId, StringComparison.Ordinal) ||
+				!grant.Key.Surface.Equals(surface, StringComparison.Ordinal))
 			{
 				throw new UnauthorizedAccessException("The canvas bootstrap secret is invalid or expired.");
 			}

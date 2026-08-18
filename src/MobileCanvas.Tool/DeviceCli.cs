@@ -35,6 +35,14 @@ internal static class DeviceCli
 			return 0;
 		}
 
+		// The Windows surface has its own client, payloads, and JSON context, so it is dispatched
+		// before the Mobile verbs rather than sharing their serializer.
+		if (command == "windows")
+		{
+			return await WindowsCli.RunAsync(action, options, json, cancellationToken)
+				.ConfigureAwait(false);
+		}
+
 		object result = (command, action) switch
 		{
 			("host", "start") => await Client.StartAsync(cancellationToken).ConfigureAwait(false),
@@ -46,6 +54,7 @@ internal static class DeviceCli
 				{
 					SessionId = options.Required("session"),
 					InstanceId = options.Required("instance"),
+					Surface = options.Surface(),
 				},
 				cancellationToken).ConfigureAwait(false),
 			("canvas", "close") => await CloseCanvasAsync(options, cancellationToken).ConfigureAwait(false),
@@ -410,6 +419,7 @@ internal static class DeviceCli
 			{
 				SessionId = options.Required("session"),
 				InstanceId = options.Required("instance"),
+				Surface = options.Surface(),
 			},
 			cancellationToken).ConfigureAwait(false);
 		return new OperationResult { Operation = "canvas-close" };
@@ -718,6 +728,57 @@ internal static class DeviceCli
 		  mobile-canvas media add <id> --path <file> [--path <file> ...]
 		  mobile-canvas screenshot <id> [--output <path>] [--json]
 		  mobile-canvas recording start|stop|status <id>
+		  mobile-canvas windows capabilities [--json]
+		  mobile-canvas windows apps [--text <s>] [--limit <n>] [--ambiguous] [--json]
+		  mobile-canvas windows list --session <id> --instance <id> [--json]
+		  mobile-canvas windows launch <app-id> --session <id> --instance <id> [--timeout <s>]
+		  mobile-canvas windows launch-exe --path <absolute.exe> [--arg <value> ...]
+		                                   [--working-directory <dir>]
+		                                   --session <id> --instance <id>
+		  mobile-canvas windows attach <window-id> --session <id> --instance <id>
+		  mobile-canvas windows session|windows --session <id> --instance <id> [--json]
+		  mobile-canvas windows select <window-id> --session <id> --instance <id>
+		  mobile-canvas windows reveal|restore [--window <id>] --session <id> --instance <id>
+		  mobile-canvas windows ui-dump --window <id> --session <id> --instance <id>
+		                                    [--depth <n>] [--nodes <n>] [--timeout <ms>]
+		  mobile-canvas windows ui-find --window <id> --session <id> --instance <id>
+		                                    (--automation-id <id> --control-type <type> |
+		                                     --control-type <type> --name <name> |
+		                                     --index <n> | --path <a,b,...>)
+		  mobile-canvas windows ui-act --window <id> --action <invoke|setValue|select|toggle|expand|collapse|scroll|focus>
+		                                   --session <id> --instance <id> <selector options>
+		  mobile-canvas windows ui-wait --window <id> --condition <exists|notExists|property|state>
+		                                    --session <id> --instance <id> <selector options>
+		  mobile-canvas windows screenshot --window <id> --session <id> --instance <id>
+		                                    [--output <file.png>] [--scale <0.1-1>]
+		                                    [--max-dimension <n>] [--cursor]
+		  mobile-canvas windows geometry --window <id> --session <id> --instance <id>
+		  mobile-canvas windows click|right-click|double-click --window <id> --transform <token>
+		                                    --x <px> --y <px> [--button <left|right|middle>]
+		                                    [--capture-width <n>] [--capture-height <n>]
+		                                    [--modifier <ctrl|alt|shift|win> ...]
+		                                    [--mode <background|foreground>]
+		                                    --session <id> --instance <id>
+		  mobile-canvas windows pointer --window <id> --transform <token> --pointer-action <down|move|up>
+		                                    --x <px> --y <px> [--button <left|right|middle>]
+		                                    [--mode <background|foreground>]
+		                                    --session <id> --instance <id>
+		  mobile-canvas windows drag --window <id> --transform <token> --x <px> --y <px>
+		                                    --end-x <px> --end-y <px> [--duration <ms>] [--steps <n>]
+		                                    [--mode <background|foreground>]
+		                                    --session <id> --instance <id>
+		  mobile-canvas windows wheel --window <id> --transform <token> --x <px> --y <px>
+		                                    [--delta-y <notches>] [--delta-x <notches>]
+		                                    [--mode <background|foreground>]
+		                                    --session <id> --instance <id>
+		  mobile-canvas windows key --window <id> --transform <token> --key <name> [--key <name> ...]
+		                                    [--key-action <down|up|press>] [--modifier <name> ...]
+		                                    [--mode <background|foreground>]
+		                                    --session <id> --instance <id>
+		  mobile-canvas windows type --window <id> --transform <token> --text <text> [--delay <ms>]
+		                                    [--mode <background|foreground>]
+		                                    --session <id> --instance <id>
+		  mobile-canvas windows release --session <id> --instance <id>
 		  mobile-canvas mcp
 		  mobile-canvas guide
 		  mobile-canvas --version
@@ -812,7 +873,19 @@ internal static class DeviceCli
 internal sealed class CliArguments
 {
 	private static readonly HashSet<string> FlagNames =
-		["json", "no-json", "confirm", "schema", "wait", "raw", "system", "relaunch"];
+		[
+			"json",
+			"no-json",
+			"confirm",
+			"schema",
+			"wait",
+			"raw",
+			"system",
+			"relaunch",
+			"ambiguous",
+			"contains",
+			"cursor",
+		];
 	private readonly Dictionary<string, string?> _options =
 		new(StringComparer.OrdinalIgnoreCase);
 	private readonly List<KeyValuePair<string, string>> _repeated = [];
@@ -892,8 +965,14 @@ internal sealed class CliArguments
 		var instance = Value("instance");
 		return string.IsNullOrWhiteSpace(session) || string.IsNullOrWhiteSpace(instance)
 			? null
-			: new CanvasContextKey(session, instance);
+			: new CanvasContextKey(session, instance, Surface());
 	}
+
+	/// <summary>
+	/// The product surface a command speaks for. Omitting <c>--surface</c> means Mobile Canvas,
+	/// which is what every existing caller and script means.
+	/// </summary>
+	public string Surface() => CanvasSurfaces.Normalize(Value("surface"));
 
 	public CanvasContextKey RequiredContext() =>
 		Context() ?? throw new ArgumentException("--session and --instance are required.");

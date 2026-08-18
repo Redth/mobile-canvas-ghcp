@@ -38,6 +38,23 @@ public sealed class DeviceServiceTests
 	}
 
 	[Fact]
+	public async Task Selection_IsScopedToOneProductSurface()
+	{
+		var service = new DeviceService([new FakeBackend()]);
+		var mobile = new CanvasContextKey("session", "instance");
+		var windows = new CanvasContextKey("session", "instance", CanvasSurfaces.Windows);
+		await service.SelectAsync(mobile, FakeBackend.Device.Id);
+
+		// The same session and instance identifiers on another product are a different panel.
+		Assert.Null(service.GetSelectedId(windows));
+		Assert.False((await service.GetSelectionAsync(windows)).HasSelection);
+
+		service.Detach(windows);
+
+		Assert.Equal(FakeBackend.Device.Id, service.GetSelectedId(mobile));
+	}
+
+	[Fact]
 	public async Task GetSelection_WithoutSelection_ReportsNoSelectionInsteadOfNull()
 	{
 		var service = new DeviceService([new FakeBackend()]);

@@ -1,0 +1,13 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <RootNamespace>WindowsCanvas.Contracts</RootNamespace>
+    <!--
+      Windows App Canvas only runs on Windows, but the host that carries it publishes for every
+      supported runtime identifier. These records are plain data with no Windows-only API surface,
+      so the assembly compiles and publishes on macOS and Linux; the runtime reports the platform
+      as unsupported instead of the build failing.
+    -->
+    <IsTrimmable>true</IsTrimmable>
+  </PropertyGroup>
+</Project>

@@ -6,11 +6,13 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import * as vscode from "vscode";
 import { WebSocketServer } from "ws";
-import { CHAT_TOOL_NAMES } from "../../chatTools";
+import { CHAT_TOOL_NAMES, WINDOWS_CHAT_TOOL_NAMES } from "../../chatTools";
 import { createMcpDefinition } from "../../extension";
 import { HostBridge } from "../../hostBridge";
 import type { ExtensionMessage } from "../../messages";
+import { MOBILE_SURFACE, WINDOWS_SURFACE } from "../../surfaces";
 import { applyViewTitle, VIEW_INSTANCE_ID } from "../../viewProvider";
+import { WINDOWS_VIEW_INSTANCE_ID } from "../../windowsViewProvider";
 
 export async function run(): Promise<void> {
   await verifyActivation();
@@ -40,6 +42,32 @@ async function verifyActivation(): Promise<void> {
     );
   }
 
+  // Everything the Windows App contributes is win32-only, so a macOS or Linux VS Code must not
+  // register any of it. Gate the assertions on the same platform check the extension uses.
+  if (process.platform === "win32") {
+    for (const command of [
+      "windowsCanvas.open",
+      "windowsCanvas.refresh",
+      "windowsCanvas.appView.focus",
+      "workbench.view.extension.windowsCanvas",
+    ]) {
+      assert.ok(commands.includes(command), `${command} should be registered on Windows`);
+    }
+    for (const name of Object.values(WINDOWS_CHAT_TOOL_NAMES)) {
+      assert.ok(
+        vscode.lm.tools.some((tool) => tool.name === name),
+        `${name} should be registered on Windows`,
+      );
+    }
+  } else {
+    for (const command of ["windowsCanvas.open", "windowsCanvas.refresh"]) {
+      assert.ok(
+        !commands.includes(command),
+        `${command} must not be registered off Windows`,
+      );
+    }
+  }
+
   const definition = createMcpDefinition(
     extension.extensionUri,
     join(extension.extensionPath, "dist", "scripts", "mcp-vscode.mjs"),
@@ -55,6 +83,10 @@ async function verifyActivation(): Promise<void> {
     "--instance",
     VIEW_INSTANCE_ID,
   ]);
+  assert.ok(
+    !definition.args?.includes("--windows-instance"),
+    "the mobile MCP definition must not advertise a Windows instance",
+  );
   assert.equal(definition.env?.ELECTRON_RUN_AS_NODE, "1");
   assert.equal(
     definition.env?.MOBILE_CANVAS_VSCODE_REFRESH_SIGNAL,
@@ -62,6 +94,25 @@ async function verifyActivation(): Promise<void> {
   );
   assert.equal(definition.version, extension.packageJSON.version);
   assert.equal(definition.cwd?.toString(), extension.extensionUri.toString());
+
+  // When a Windows view exists the proxy is told its instance id so it can inject the Windows MCP
+  // tools' session and instance. The argument is appended, leaving the mobile order untouched.
+  const windowsDefinition = createMcpDefinition(
+    extension.extensionUri,
+    join(extension.extensionPath, "dist", "scripts", "mcp-vscode.mjs"),
+    extension.packageJSON.version,
+    "definition-session",
+    join(extension.extensionPath, "refresh.signal"),
+    WINDOWS_VIEW_INSTANCE_ID,
+  );
+  assert.deepEqual(windowsDefinition.args?.slice(-6), [
+    "--session",
+    "definition-session",
+    "--instance",
+    VIEW_INSTANCE_ID,
+    "--windows-instance",
+    WINDOWS_VIEW_INSTANCE_ID,
+  ]);
 
   const titleTarget: { title?: string; description?: string } = {};
   applyViewTitle(titleTarget, "  Pixel\n6  ", " Android 15  ·  booted ");
@@ -149,14 +200,26 @@ async function verifyHostBridge(): Promise<void> {
     response.statusCode = 404;
     response.end();
   });
+  const socketUrls: string[] = [];
   const sockets = new WebSocketServer({ server });
   sockets.on("connection", (socket, request) => {
     socketCookie = request.headers.cookie ?? "";
+    socketUrls.push(request.url ?? "");
     if (request.url?.startsWith("/ws/events")) {
       socket.send(JSON.stringify({
         kind: "text",
         deviceId: "ios:phone",
         detail: "must-not-leak",
+      }));
+      // Addressed to this panel's identifiers but scoped to another product surface, which the
+      // bridge must drop rather than forward into the Mobile webview.
+      socket.send(JSON.stringify({
+        kind: "text",
+        deviceId: "ios:phone",
+        detail: "must-not-leak-across-surfaces",
+        sessionId: "test-session",
+        instanceId: "test-view",
+        surface: "windows",
       }));
       socket.send(JSON.stringify({
         kind: "tap",
@@ -165,6 +228,7 @@ async function verifyHostBridge(): Promise<void> {
         y: 20,
         sessionId: "test-session",
         instanceId: "test-view",
+        surface: "mobile",
       }));
     } else {
       socket.send(Buffer.from([1, 2, 3]));
@@ -186,8 +250,10 @@ if (args[0] === "canvas" && args[1] === "open") {
   console.log(JSON.stringify({
     url: process.env.MOBILE_CANVAS_TEST_URL
       + "#bootstrap=test-secret&sessionId=" + encodeURIComponent(value("--session"))
-      + "&instanceId=" + encodeURIComponent(value("--instance")),
-    title: "Mobile Device"
+      + "&instanceId=" + encodeURIComponent(value("--instance"))
+      + "&surface=" + encodeURIComponent(value("--surface") || "mobile"),
+    title: "Mobile Device",
+    surface: value("--surface") || "mobile"
   }));
 } else if (args[0] === "canvas" && args[1] === "close") {
   console.log("{}");
@@ -210,6 +276,7 @@ if (args[0] === "canvas" && args[1] === "open") {
 
   const messages: ExtensionMessage[] = [];
   const bridge = new HostBridge(
+    MOBILE_SURFACE,
     command,
     "test-session",
     "test-view",
@@ -229,11 +296,13 @@ if (args[0] === "canvas" && args[1] === "open") {
       secret: "test-secret",
       sessionId: "test-session",
       instanceId: "test-view",
+      surface: "mobile",
     });
     assert.deepEqual(messages.shift(), {
       type: "context",
       sessionId: "test-session",
       instanceId: "test-view",
+      surface: "mobile",
     });
 
     const selectedContext = await bridge.getSelectedDeviceContext();
@@ -421,6 +490,7 @@ if (args[0] === "canvas" && args[1] === "open") {
     assert.match(viewBootstrap.sessionId, /^[0-9a-f-]{36}$/);
     assert.notEqual(viewBootstrap.sessionId, vscode.env.sessionId);
     assert.equal(viewBootstrap.instanceId, VIEW_INSTANCE_ID);
+    assert.equal(viewBootstrap.surface, "mobile");
 
     const selectedToolResult = await invokeTool(CHAT_TOOL_NAMES.selectedDevice);
     assert.deepEqual(readJsonPart(selectedToolResult.content[0]), {
@@ -444,6 +514,7 @@ if (args[0] === "canvas" && args[1] === "open") {
 
     const failedMessages: ExtensionMessage[] = [];
     const failedBridge = new HostBridge(
+      MOBILE_SURFACE,
       join(directory, "missing-mobile-canvas"),
       "failed-session",
       "failed-view",
@@ -465,6 +536,109 @@ if (args[0] === "canvas" && args[1] === "open") {
       assert.equal(failedMessages[1]?.type, "socket-closed");
     } finally {
       failedBridge.dispose();
+    }
+
+    // A host that hands this view a session for another product surface is refused outright: the
+    // Mobile view must never drive a panel that was authorized for something else.
+    const crossSurfaceCommand = join(directory, "cross-surface-canvas");
+    await writeFile(
+      crossSurfaceCommand,
+      `#!/usr/bin/env node
+const args = process.argv.slice(2);
+const value = name => args[args.indexOf(name) + 1];
+console.log(JSON.stringify({
+  url: process.env.MOBILE_CANVAS_TEST_URL
+    + "#bootstrap=test-secret&sessionId=" + encodeURIComponent(value("--session"))
+    + "&instanceId=" + encodeURIComponent(value("--instance"))
+    + "&surface=windows",
+  title: "Windows App",
+  surface: "windows"
+}));
+`,
+      "utf8",
+    );
+    await chmod(crossSurfaceCommand, 0o755);
+    const crossSurfaceMessages: ExtensionMessage[] = [];
+    const crossSurfaceBridge = new HostBridge(
+      MOBILE_SURFACE,
+      crossSurfaceCommand,
+      "test-session",
+      "test-view",
+      {
+        postMessage: async (message) => {
+          crossSurfaceMessages.push(message);
+          return true;
+        },
+      },
+      { appendLine: () => {} },
+    );
+    try {
+      const bootstrapsBeforeCrossSurface = bootstrapBodies.length;
+      await crossSurfaceBridge.handleMessage({ type: "ready" });
+      const fatal = crossSurfaceMessages.find((message) => message.type === "fatal");
+      assert.ok(fatal, "a cross-surface canvas URL must fail the view");
+      assert.equal(bootstrapBodies.length, bootstrapsBeforeCrossSurface);
+    } finally {
+      crossSurfaceBridge.dispose();
+    }
+
+    // A Windows-configured bridge is the mirror image of the Mobile one: it must refuse a Mobile-only
+    // API path outright, and it must open its video socket on the Windows route and never the Mobile
+    // one. The channel name it is given ("video") is identical to Mobile's; only the fixed surface
+    // route table decides where the socket actually connects.
+    const windowsMessages: ExtensionMessage[] = [];
+    const windowsBridge = new HostBridge(
+      WINDOWS_SURFACE,
+      command,
+      "test-session",
+      WINDOWS_VIEW_INSTANCE_ID,
+      {
+        postMessage: async (message) => {
+          windowsMessages.push(message);
+          return true;
+        },
+      },
+      { appendLine: () => {} },
+    );
+    try {
+      await windowsBridge.handleMessage({ type: "ready" });
+      assert.deepEqual(windowsMessages.shift(), {
+        type: "context",
+        sessionId: "test-session",
+        instanceId: WINDOWS_VIEW_INSTANCE_ID,
+        surface: "windows",
+      });
+
+      await windowsBridge.handleMessage({
+        type: "api",
+        id: "windows-rejects-devices",
+        path: "/api/v1/devices",
+      });
+      assert.equal(windowsMessages.shift()?.type, "operation-error");
+
+      const socketsBeforeWindowsVideo = socketUrls.length;
+      await windowsBridge.handleMessage({
+        type: "socket-open",
+        id: "windows-video",
+        channel: "video",
+      });
+      const windowsFrame = await waitForMessage(
+        windowsMessages,
+        (message) => message.type === "socket-message" && message.id === "windows-video",
+      );
+      assert.equal(windowsFrame.type, "socket-message");
+      const windowsSocketUrls = socketUrls.slice(socketsBeforeWindowsVideo);
+      assert.ok(
+        windowsSocketUrls.some((url) => url.startsWith("/ws/windows/video")),
+        "the Windows bridge must open its video socket on the Windows route",
+      );
+      assert.ok(
+        windowsSocketUrls.every((url) => !url.startsWith("/ws/video")),
+        "the Windows bridge must never open the Mobile video socket",
+      );
+      await windowsBridge.handleMessage({ type: "socket-close", id: "windows-video" });
+    } finally {
+      windowsBridge.dispose();
     }
   } finally {
     bridge.dispose();

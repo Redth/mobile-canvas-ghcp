@@ -64,7 +64,7 @@ public sealed class SimulatorRevealTests
 		Assert.DoesNotContain("window \"My \"Test\"", script);
 	}
 
-	[Fact]
+	[MacFact]
 	public async Task RevealAsync_LaunchesSimulatorWithTheDeviceWhenItIsNotRunning()
 	{
 		var runner = new ScriptedProcessRunner(DevicesJson) { SimulatorRunning = false };
@@ -78,7 +78,7 @@ public sealed class SimulatorRevealTests
 		Assert.DoesNotContain(runner.Requests, request => request.FileName == "osascript");
 	}
 
-	[Fact]
+	[MacFact]
 	public async Task RevealAsync_FocusesTheWindowWhenSimulatorIsAlreadyRunning()
 	{
 		var runner = new ScriptedProcessRunner(DevicesJson) { SimulatorRunning = true };
@@ -93,7 +93,7 @@ public sealed class SimulatorRevealTests
 			script.Arguments[1]);
 	}
 
-	[Fact]
+	[MacFact]
 	public async Task RevealAsync_SucceedsWhenAccessibilityIsUnavailable()
 	{
 		var runner = new ScriptedProcessRunner(DevicesJson)

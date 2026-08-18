@@ -30,6 +30,7 @@
   },
   "files": [
     "extension.mjs",
+    "windows-extension.mjs",
     "extensions/",
     "lib/",
     "runtimes/",

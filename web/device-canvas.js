@@ -1,9 +1,12 @@
+import { AnnexBParser, concatBytes, IDLE_NAL_FLUSH_MS } from "./annexb.js";
 import { creatablePlatforms, createOptions } from "./create-device-options.js";
 import {
   canBootDeviceState,
   clearStoredDeviceId,
   deviceStatusPresentation,
   formatDeviceState,
+  isActivityAddressedTo,
+  MOBILE_SURFACE,
   organizeDiagnostics,
   readStoredDeviceId,
   resumeAuthenticatedPanel,
@@ -166,6 +169,7 @@ async function bootstrap() {
     const context = await transport.bootstrap();
     sessionStorage.setItem("mobile-canvas-session", context.sessionId || "");
     sessionStorage.setItem("mobile-canvas-instance", context.instanceId || "");
+    sessionStorage.setItem("mobile-canvas-surface", context.surface || MOBILE_SURFACE);
     return;
   }
 
@@ -185,11 +189,15 @@ async function performBootstrapExchange() {
   if (!secret) return false;
   const sessionId = fragment.get("sessionId");
   const instanceId = fragment.get("instanceId");
+  // A host that predates product surfaces only ever opened mobile panels, so an absent surface
+  // means mobile rather than an unknown scope.
+  const surface = fragment.get("surface") || MOBILE_SURFACE;
   sessionStorage.setItem("mobile-canvas-session", sessionId || "");
   sessionStorage.setItem("mobile-canvas-instance", instanceId || "");
+  sessionStorage.setItem("mobile-canvas-surface", surface);
   const response = await sendApiRequest("/api/v1/auth/bootstrap", {
     method: "POST",
-    body: JSON.stringify({ secret, sessionId, instanceId }),
+    body: JSON.stringify({ secret, sessionId, instanceId, surface }),
   });
   await requireSuccessfulResponse(response);
   // Copilot reloads a persisted renderer without calling the provider's open callback. The scoped
@@ -692,7 +700,6 @@ const LINK_HEALTH_LABEL = { good: "healthy", fair: "degraded", poor: "not stream
 
 /** Below half the requested rate the stream is visibly stuttering, which is worth flagging amber. */
 const STARVED_FPS_RATIO = 0.5;
-const IDLE_NAL_FLUSH_MS = 120;
 
 function setStreamMode(mode) {
   state.streamMode = mode;
@@ -1002,13 +1009,20 @@ function stopStream() {
 
 class AnnexBDecoder {
   constructor() {
-    this.buffer = new Uint8Array();
-    this.prefix = [];
     this.timestamp = 0;
     this.codec = "avc1.64001f";
     this.source = null;
-    this.idleTimer = null;
     this.draining = false;
+    // Framing is shared with the Windows canvas; only what to do with a finished access unit is
+    // specific to this product.
+    this.parser = new AnnexBParser({
+      onCodec: (codec) => {
+        this.codec = codec;
+        this.ensureDecoder();
+      },
+      onAccessUnit: (unit) => this.decode(unit),
+      onIdle: () => this.drainIdle(),
+    });
   }
 
   setSource(source) {
@@ -1016,19 +1030,11 @@ class AnnexBDecoder {
   }
 
   push(bytes) {
-    this.buffer = concatBytes([this.buffer, bytes]);
-    const starts = findStartCodes(this.buffer);
-    if (starts.length >= 2) {
-      for (let index = 0; index < starts.length - 1; index++) {
-        this.handleNal(this.buffer.slice(starts[index], starts[index + 1]));
-      }
-      this.buffer = this.buffer.slice(starts.at(-1));
-    }
-    this.armIdleFlush();
+    this.parser.push(bytes);
   }
 
   /**
-   * Nothing about a paused stream is visible without this.
+   * Nothing about a paused stream is visible without the parser's idle flush.
    *
    * A NAL unit ends where the next one begins, so the trailing slice always has to wait for more
    * bytes to prove it is complete. idb also encodes B-frames, and WebCodecs conservatively buffers
@@ -1037,22 +1043,12 @@ class AnnexBDecoder {
    * the first frame after an idle gap to be a keyframe because flush() requires one next. Continuous
    * native iOS streams stay on the low-latency path without a flush.
    */
-  armIdleFlush() {
-    clearTimeout(this.idleTimer);
-    this.idleTimer = setTimeout(() => this.flush(), IDLE_NAL_FLUSH_MS);
+  drainIdle() {
+    if (shouldDrainIdleDecoder(this.source)) this.drainDecoder();
   }
 
   flush() {
-    clearTimeout(this.idleTimer);
-    this.idleTimer = null;
-    // Anything shorter than a start code plus a header byte cannot be decoded, and re-buffering it
-    // is harmless because the next push concatenates onto it.
-    if (this.buffer.length >= 5) {
-      const nal = this.buffer;
-      this.buffer = new Uint8Array();
-      this.handleNal(nal);
-    }
-    if (shouldDrainIdleDecoder(this.source)) this.drainDecoder();
+    this.parser.flush();
   }
 
   drainDecoder() {
@@ -1067,38 +1063,22 @@ class AnnexBDecoder {
   }
 
   dispose() {
-    clearTimeout(this.idleTimer);
-    this.idleTimer = null;
-    this.buffer = new Uint8Array();
+    this.parser.dispose();
   }
 
-  handleNal(nal) {
-    const prefixLength = nal[2] === 1 ? 3 : 4;
-    const type = nal[prefixLength] & 0x1f;
-    if (type === 7 && nal.length >= prefixLength + 4) {
-      this.codec = `avc1.${[nal[prefixLength + 1], nal[prefixLength + 2], nal[prefixLength + 3]]
-        .map((value) => value.toString(16).padStart(2, "0"))
-        .join("")}`;
-      this.ensureDecoder();
-    }
-    if (type === 1 || type === 5) {
-      this.ensureDecoder();
-      const accessUnit = concatBytes([...this.prefix, nal]);
-      this.prefix = [];
-      const duration = Math.round(1_000_000 / Number(elements.fps.value));
-      try {
-        state.decoder.decode(new EncodedVideoChunk({
-          type: type === 5 ? "key" : "delta",
-          timestamp: this.timestamp,
-          duration,
-          data: accessUnit,
-        }));
-        this.timestamp += duration;
-      } catch {
-        startPngFallback("PNG");
-      }
-    } else {
-      this.prefix.push(nal);
+  decode({ type, data }) {
+    this.ensureDecoder();
+    const duration = Math.round(1_000_000 / Number(elements.fps.value));
+    try {
+      state.decoder.decode(new EncodedVideoChunk({
+        type,
+        timestamp: this.timestamp,
+        duration,
+        data,
+      }));
+      this.timestamp += duration;
+    } catch {
+      startPngFallback("PNG");
     }
   }
 
@@ -1490,15 +1470,16 @@ function scheduleAutomationReconnect() {
 }
 
 /**
- * True when an event names this panel. Events without a canvas identity came from the bare CLI, which
- * is not speaking on any panel's behalf, so those never move a selection.
+ * True when an event names this panel. The addressing rule itself is shared with every host, so it
+ * lives in canvas-state.js; this only supplies the panel identity the renderer authenticated with.
  */
 function addressedToThisCanvas(activity) {
-  if (!activity.sessionId || !activity.instanceId) {
-    return transport?.followUnscopedAutomation === true;
-  }
-  return activity.sessionId === sessionStorage.getItem("mobile-canvas-session") &&
-    activity.instanceId === sessionStorage.getItem("mobile-canvas-instance");
+  return isActivityAddressedTo(activity, {
+    sessionId: sessionStorage.getItem("mobile-canvas-session"),
+    instanceId: sessionStorage.getItem("mobile-canvas-instance"),
+    surface: canvasSurface(),
+    followUnscoped: transport?.followUnscopedAutomation === true,
+  });
 }
 
 async function followSelection(deviceId) {
@@ -2391,17 +2372,6 @@ function escapeHtml(value) {
     .replaceAll('"', "&quot;");
 }
 
-function concatBytes(chunks) {
-  const length = chunks.reduce((total, chunk) => total + chunk.length, 0);
-  const result = new Uint8Array(length);
-  let offset = 0;
-  for (const chunk of chunks) {
-    result.set(chunk, offset);
-    offset += chunk.length;
-  }
-  return result;
-}
-
 function createSocket(channel, query) {
   if (transport?.createSocket) return transport.createSocket(channel, query);
   const protocol = location.protocol === "https:" ? "wss:" : "ws:";
@@ -2416,6 +2386,11 @@ function canvasInstanceId() {
     throw new Error("Mobile Canvas has no active panel identity.");
   }
   return instanceId;
+}
+
+/** The product surface this renderer was authorized for. Absent means the mobile canvas. */
+function canvasSurface() {
+  return sessionStorage.getItem("mobile-canvas-surface") || MOBILE_SURFACE;
 }
 
 function setPanelVisible(visible) {
@@ -2472,18 +2447,6 @@ async function handleScopedAutomation(activity) {
   if (state.selected?.id === activity.deviceId) {
     handleAutomationEvent(activity);
   }
-}
-
-function findStartCodes(bytes) {
-  const starts = [];
-  for (let index = 0; index < bytes.length - 3; index++) {
-    if (bytes[index] === 0 && bytes[index + 1] === 0 &&
-        (bytes[index + 2] === 1 || (bytes[index + 2] === 0 && bytes[index + 3] === 1))) {
-      starts.push(index);
-      index += bytes[index + 2] === 1 ? 2 : 3;
-    }
-  }
-  return starts;
 }
 
 bootstrap()

@@ -48,6 +48,7 @@
     --vscode-list-warningForeground,
     var(--vscode-editorWarning-foreground, #cca700)
   );
+  --attention-muted: color-mix(in srgb, var(--attention-fg) 18%, transparent);
   --focus: var(--vscode-focusBorder, var(--accent-fg));
   --overlay-backdrop: color-mix(in srgb, #000000 60%, transparent);
   --shadow-popover: 0 8px 24px var(--vscode-widget-shadow, #00000040);
@@ -188,4 +189,49 @@ body {
   background: var(--vscode-editorWidget-background, var(--canvas-default));
   color: var(--vscode-editorWidget-foreground, var(--fg-default));
   box-shadow: 0 8px 24px var(--vscode-widget-shadow, #00000066);
+}
+
+/*
+ * Windows App chrome. It shares the shell tokens above; only the elements this renderer names
+ * differently from the Mobile one need their own rules, so the two views read as the same product
+ * family without either owning the other's markup.
+ */
+:root[data-host="vscode"] .app-selector {
+  height: 30px;
+  border: 0;
+  border-right: 1px solid var(--border-default);
+  border-radius: 0;
+}
+
+:root[data-host="vscode"] .app-popover {
+  top: 100%;
+  border-radius: 0 0 var(--control-radius) var(--control-radius);
+}
+
+:root[data-host="vscode"] .topbar .app-selector:focus-visible {
+  outline-offset: -2px;
+}
+
+:root[data-host="vscode"] .tabstrip {
+  border-top: 1px solid var(--border-muted);
+}
+
+:root[data-host="vscode"] .tab {
+  border-radius: 0;
+}
+
+:root[data-host="vscode"] .stage {
+  padding: 6px;
+}
+
+:root[data-host="vscode"] .statusbar {
+  min-height: 22px;
+  padding: 2px 8px;
+}
+
+:root[data-host="vscode"]:not([data-theme]) textarea {
+  border-color: var(--vscode-input-border, transparent);
+  border-radius: var(--control-radius);
+  background: var(--vscode-input-background, var(--canvas-default));
+  color: var(--vscode-input-foreground, var(--fg-default));
 }

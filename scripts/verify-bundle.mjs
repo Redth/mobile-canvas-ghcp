@@ -8,12 +8,15 @@
 import { createHash } from "node:crypto";
 import { existsSync, readFileSync } from "node:fs";
 import { gunzipSync } from "node:zlib";
-import { dirname, join } from "node:path";
+import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { defaultRuntimeAssetName } from "../lib/runtime-assets.mjs";
+import { validateWindowsAppHelperEntry } from "../lib/windows-app-helper.mjs";
 
 const packageRoot = dirname(dirname(fileURLToPath(import.meta.url)));
-const runtimesDir = join(packageRoot, "runtimes");
+const runtimesDir = process.env.MOBILE_CANVAS_RUNTIMES_DIR
+  ? resolve(process.env.MOBILE_CANVAS_RUNTIMES_DIR)
+  : join(packageRoot, "runtimes");
 const manifestPath = join(runtimesDir, "manifest.json");
 
 if (!existsSync(manifestPath)) {
@@ -31,6 +34,13 @@ if (entries.length === 0) {
 }
 
 for (const [platformKey, entry] of entries) {
+  try {
+    validateWindowsAppHelperEntry(platformKey, entry);
+  } catch (error) {
+    console.error(`FAIL ${platformKey}: ${error.message}`);
+    failures += 1;
+  }
+
   for (const [name, file] of Object.entries(entry.files)) {
     if (!file.archive) {
       const expected = defaultRuntimeAssetName(manifest, entry, name);

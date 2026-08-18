@@ -82,3 +82,62 @@ jobs:
           path: .build/mobile-canvas-vscode.vsix
           include-hidden-files: true
           if-no-files-found: error
+
+  windows:
+    name: Windows native helper
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-dotnet@v4
+        with:
+          global-json-file: global.json
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Test managed solution
+        shell: bash
+        run: dotnet test MobileCanvas.slnx -c Release
+
+      # windows-latest has the MSVC ARM64 cross tools, so this gates both
+      # release architectures without relying on a scarce hosted ARM runner.
+      - name: Build Windows hosts and native helpers
+        shell: bash
+        run: |
+          ./scripts/build.sh win-x64
+          ./scripts/build.sh win-arm64
+
+      - name: Verify required Windows artifacts
+        shell: bash
+        run: |
+          for rid in win-x64 win-arm64; do
+            test -f ".build/bin/$rid/mobile-canvas.exe"
+            test -f ".build/bin/$rid/windows-app-helper.exe"
+          done
+
+      - name: Test x64 helper protocol
+        shell: bash
+        run: ctest --test-dir .build/native/windows-app-helper/win-x64 -C Release --output-on-failure
+
+      - name: Smoke x64 helper capabilities
+        shell: pwsh
+        run: |
+          $raw = & .\.build\bin\win-x64\windows-app-helper.exe capabilities --json
+          if ($LASTEXITCODE -ne 0) {
+            throw "windows-app-helper capabilities failed"
+          }
+          $capabilities = $raw | ConvertFrom-Json
+          if (
+            $capabilities.schemaVersion -ne 1 -or
+            $capabilities.ok -ne $true -or
+            -not $capabilities.architecture -or
+            $null -eq $capabilities.features.authenticodeSignature.valid
+          ) {
+            throw "windows-app-helper returned an invalid capabilities report"
+          }
+
+      - name: Test runtime helper packaging rules
+        shell: bash
+        run: node --test tests/scripts/windows-helper-runtime.test.mjs

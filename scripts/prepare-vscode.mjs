@@ -70,6 +70,7 @@ if (thin) {
 for (const relative of [
   "lib/runtime.mjs",
   "lib/runtime-assets.mjs",
+  "lib/windows-app-helper.mjs",
   "lib/mcp-vscode-proxy.mjs",
   "scripts/mcp-vscode.mjs",
   "LICENSE",

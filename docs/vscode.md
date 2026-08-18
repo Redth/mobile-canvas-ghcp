@@ -73,6 +73,48 @@ extension uses the stable attachable-tool API instead. The GitHub Copilot canvas
 SDK does not currently expose a composer attachment API; its equivalent device,
 screenshot, and UI-tree data remains available through canvas actions and MCP.
 
+## Use the Windows App view
+
+On Windows the extension contributes a second Activity Bar item, **Windows**,
+with a **Windows App** view. It is hidden on every other platform: the view
+declares a `mobileCanvas.windowsSupported` context clause, and the extension only
+sets that key, registers the provider, the `windowsCanvas.*` commands, and the
+Windows chat tools when `process.platform === "win32"`.
+
+The Windows view hosts the same shared renderer the GitHub **Windows App** canvas
+does (`web/windows/`), with the VS Code adapter supplying only transport, theme,
+save, and view-title behavior. It can search installed apps, launch one or start
+an explicit executable, attach to an open window, switch between the app's
+windows as tabs, stream the selected one, drive it through UI Automation, and
+fall back to screenshot-guided pointer and keyboard input.
+
+Each view is bound to one product surface, and that binding is not something the
+webview can influence:
+
+| | Mobile view | Windows App view |
+|---|---|---|
+| Canvas surface | `mobile` | `windows` |
+| HTTP paths | `/api/v1/*` except `/api/v1/windows/` | `/api/v1/windows/*` only |
+| `video` channel | `/ws/video` | `/ws/windows/video` |
+| `events` channel | `/ws/events` | `/ws/windows/events` |
+| View instance | `mobile-canvas-vscode-view` | `windows-canvas-vscode-view` |
+
+The renderer asks for a *channel* by name and never for a route; the extension
+host maps it through the fixed table above. The bootstrap grant the host returns
+must name the same surface, and an activity event that names a different one is
+dropped before it reaches the webview.
+
+### Attach the selected Windows app to chat
+
+After attaching an app in the Windows view:
+
+- `#windowsApp` adds the attached app session and its selected window.
+- `#windowsScreenshot` captures and adds a current PNG of that window.
+- `#windowsUiTree` adds the current UI Automation tree.
+
+They resolve only against the Windows view, exactly as the `#mobile*` tools
+resolve only against the Mobile view.
+
 ## Local execution and remote workspaces
 
 The extension declares `extensionKind: ["ui"]`. It therefore runs on the local

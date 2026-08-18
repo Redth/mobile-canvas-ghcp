@@ -27,6 +27,7 @@ try {
 const proxy = new McpVsCodeContextProxy({
   sessionId: options.session,
   instanceId: options.instance,
+  windowsInstanceId: options["windows-instance"],
   selectDevice: async (deviceId, { force = false } = {}) => {
     if (!force) {
       try {
@@ -186,7 +187,13 @@ function parseOptions(args) {
   const parsed = {};
   for (let index = 0; index < args.length; index += 1) {
     const name = args[index];
-    if (name !== "--session" && name !== "--instance") {
+    // --windows-instance is optional; when absent the proxy behaves exactly as before. Every other
+    // unknown option is still rejected so a malformed launch fails fast.
+    if (
+      name !== "--session"
+      && name !== "--instance"
+      && name !== "--windows-instance"
+    ) {
       throw new Error(`Unknown VS Code MCP option: ${name}`);
     }
     const value = args[++index];

@@ -21,8 +21,12 @@ install directory:
 - A plugin's `extensions` field names **container directories**. The loader
   scans each container's immediate child directories for `extension.mjs`; it
   does not load an entrypoint placed directly at the configured path. The
-  plugin therefore exposes `extensions/mobile-canvas/extension.mjs`, which
-  imports the shared root entrypoint used by source installs.
+  plugin therefore exposes `extensions/mobile-canvas/extension.mjs` and
+  `extensions/windows-app/extension.mjs`, each a two-line bridge that imports a
+  shared root entrypoint (`extension.mjs` and `windows-extension.mjs`) also used
+  by source installs. Both children ship in the one bundle and share the one
+  runtime; the Windows child registers no canvas unless it is running on
+  Windows, so a macOS or Linux install is unaffected by its presence.
 
 The consequences are strict:
 
@@ -42,6 +46,8 @@ GitHub Release asset:
 mobile-canvas-v0.1.7-osx-arm64.gz
 mobile-screencap-v0.1.7-osx-arm64.gz
 mobile-canvas-v0.1.7-linux-x64.gz
+windows-app-helper-v0.1.7-win-x64.gz
+windows-app-helper-v0.1.7-win-arm64.gz
 mobile-canvas-runtime-manifest-v0.1.7.json
 SHA256SUMS
 ```
@@ -81,6 +87,23 @@ into `~/.mobile-canvas/runtimes/<platform>-<arch>-<hash>/`, verifies each
 SHA-256, and marks them executable.
 
 Measured: **56 ms** on a cold start, **0 ms** once extracted.
+
+### Windows helper artifacts
+
+New `win32-x64` and `win32-arm64` entries declare
+`windows-app-helper.exe` in both `files` and `helpers`. The latter is a runtime
+preflight declaration: it rejects a helper outside Windows, a helper without a
+checksum, or a Windows entry that claims a helper but cannot extract it. The
+resolver verifies and extracts every declared file before returning
+`mobile-canvas.exe`; the helper is therefore checksum-verified and executable
+next to the managed host.
+
+Older manifests intentionally omit `helpers`. They remain valid for existing
+Mobile Canvas releases, which do not use the Windows App product yet. In
+particular, this source change does **not** rewrite `runtimes/manifest.json` or
+invent hashes for the checked-in `v0.1.16` archives. That manifest describes
+already-published assets. The next signed release rebuilds both Windows RIDs,
+then `scripts/bundle.mjs` writes their checksums and helper declarations.
 
 ### How installed versions coexist
 
@@ -224,6 +247,14 @@ keeps self-contained release packages safe when they are downloaded through a
 path that applies quarantine; shipping raw binaries would hand those users a
 `SIGKILL`.
 
+Windows is different: public `windows-app-helper.exe` artifacts require a valid
+Authenticode signature. Development and CI builds are intentionally unsigned;
+`windows-app-helper.exe capabilities --json` reports that diagnostic truthfully
+as `features.authenticodeSignature.valid: false`. The release operator must sign
+each x64 and ARM64 helper after compilation and before bundling computes its
+SHA-256. No signing secrets, certificates, or placeholder signing step are kept
+in this repository.
+
 ### Direct framebuffer capture and fallback permissions
 
 The primary iOS video path reads the simulator's CoreSimulator IOSurface
@@ -253,8 +284,9 @@ ScreenCaptureKit and then idb rather than failing.
 
 Native AOT **cannot cross-compile between operating systems** -- the compiler
 refuses with "Cross-OS native compilation is not supported" -- so each OS needs
-its own runner. Architectures *within* one OS do cross-compile, which is why one
-macOS machine produces both `osx-` slices.
+its own runner. Architectures *within* one OS do cross-compile: one macOS
+machine produces both `osx-` slices, while `windows-latest` cross-builds the
+required x64 and ARM64 managed hosts and helpers with MSVC.
 
 | Platform | iOS Simulator | Android emulator | Video |
 |---|---|---|---|
@@ -289,8 +321,10 @@ the source inputs used by that build.
 
 `.github/workflows/release.yml` is the canonical release path:
 
-1. Native OS runners build all six RIDs.
-2. The bundle job merges and verifies their manifests.
+1. Native OS runners build all six RIDs; Windows x64 and ARM64 helpers are
+   required artifacts.
+2. The release operator Authenticode-signs both Windows helpers before the
+   bundle job merges and verifies their manifests.
 3. `package-runtime-assets.mjs` creates versioned gzip assets and `SHA256SUMS`.
 4. CI packages remote and self-contained Copilot plugins and universal VSIXs,
    plus up to six self-contained target VSIXs.

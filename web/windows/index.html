@@ -1,0 +1,389 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="light dark">
+  <title>Windows App</title>
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Crect width='64' height='64' rx='14' fill='%231f6feb'/%3E%3Cg fill='white'%3E%3Crect x='14' y='16' width='15' height='13'/%3E%3Crect x='33' y='14' width='17' height='15'/%3E%3Crect x='14' y='33' width='15' height='13'/%3E%3Crect x='33' y='33' width='17' height='15'/%3E%3C/g%3E%3C/svg%3E">
+  <link rel="stylesheet" href="/windows/windows-canvas.css">
+</head>
+<body>
+  <svg class="icon-sprite" aria-hidden="true">
+    <symbol id="icon-window" viewBox="0 0 16 16">
+      <rect x="2" y="3" width="12" height="10" rx="1.75"></rect>
+      <path d="M2 6.25h12"></path>
+    </symbol>
+    <symbol id="icon-windows" viewBox="0 0 16 16">
+      <path d="M2.5 4.1 7 3.4v4.1H2.5zM8.2 3.2 13.5 2.4v5.1H8.2zM2.5 8.6H7v4.1l-4.5-.7zM8.2 8.6h5.3v5.1L8.2 12.9z"></path>
+    </symbol>
+    <symbol id="icon-search" viewBox="0 0 16 16">
+      <circle cx="7" cy="7" r="4.25"></circle>
+      <path d="m10.25 10.25 3 3"></path>
+    </symbol>
+    <symbol id="icon-refresh" viewBox="0 0 16 16">
+      <path d="M13.25 5.25V2.5l-1.45 1.45A5.5 5.5 0 1 0 13 9.75"></path>
+    </symbol>
+    <symbol id="icon-terminal" viewBox="0 0 16 16">
+      <rect x="2" y="3" width="12" height="10" rx="1.75"></rect>
+      <path d="m5 6.5 2 1.75-2 1.75M8.75 10.5h2.5"></path>
+    </symbol>
+    <symbol id="icon-detach" viewBox="0 0 16 16">
+      <path d="M8.75 2.75h-6v10.5h6"></path>
+      <path d="M14 8H6.5M11.25 5.25 14 8l-2.75 2.75"></path>
+    </symbol>
+    <symbol id="icon-tree" viewBox="0 0 16 16">
+      <rect x="2" y="2.25" width="4.5" height="3.5" rx="1"></rect>
+      <rect x="9.5" y="6.5" width="4.5" height="3" rx="1"></rect>
+      <rect x="9.5" y="11" width="4.5" height="3" rx="1"></rect>
+      <path d="M4.25 5.75v6.75h5.25M4.25 8h5.25"></path>
+    </symbol>
+    <symbol id="icon-camera" viewBox="0 0 16 16">
+      <path d="M2.25 5.25h2l1-1.75h5.5l1 1.75h2v8h-11z"></path>
+      <circle cx="8" cy="9.25" r="2.25"></circle>
+    </symbol>
+    <symbol id="icon-restore" viewBox="0 0 16 16">
+      <path d="M5.25 5.25h8v8h-8z"></path>
+      <path d="M3 10.75h-.25v-8h8V3"></path>
+    </symbol>
+    <symbol id="icon-front" viewBox="0 0 16 16">
+      <path d="M2.75 2.75h7.5v7.5h-7.5z"></path>
+      <path d="M5.75 13.25h7.5v-7.5"></path>
+    </symbol>
+    <symbol id="icon-alert" viewBox="0 0 16 16">
+      <path d="M8 1.75 14.25 13H1.75z"></path>
+      <path d="M8 5.25v3.5M8 11.35h.01"></path>
+    </symbol>
+    <symbol id="icon-help" viewBox="0 0 16 16">
+      <circle cx="8" cy="8" r="5.75"></circle>
+      <path d="M6.35 6.25a1.75 1.75 0 1 1 2.8 1.4C8.4 8.2 8 8.55 8 9.4M8 11.75h.01"></path>
+    </symbol>
+    <symbol id="icon-close" viewBox="0 0 16 16">
+      <path d="m3.25 3.25 9.5 9.5M12.75 3.25l-9.5 9.5"></path>
+    </symbol>
+    <symbol id="icon-chevron-down" viewBox="0 0 16 16">
+      <path d="m4 6.25 4 4 4-4"></path>
+    </symbol>
+    <symbol id="icon-lock" viewBox="0 0 16 16">
+      <rect x="3.25" y="7" width="9.5" height="6.5" rx="1.5"></rect>
+      <path d="M5.5 7V5.25a2.5 2.5 0 0 1 5 0V7"></path>
+    </symbol>
+    <symbol id="icon-shield" viewBox="0 0 16 16">
+      <path d="M8 1.75 13.25 3.5v4.25c0 3-2.25 5.4-5.25 6.5-3-1.1-5.25-3.5-5.25-6.5V3.5z"></path>
+    </symbol>
+  </svg>
+
+  <div class="app-shell">
+    <header class="topbar">
+      <div class="selector-wrap">
+        <button id="app-selector" class="app-selector" type="button" aria-haspopup="dialog"
+                aria-expanded="false" aria-controls="app-popover">
+          <span class="selector-glyph" aria-hidden="true">
+            <svg class="icon"><use href="#icon-windows"></use></svg>
+          </span>
+          <span class="selector-text">
+            <span id="selector-title" class="selector-title">No app attached</span>
+            <span id="selector-subtitle" class="selector-subtitle">Launch or attach a Windows app</span>
+          </span>
+          <svg class="icon selector-caret" aria-hidden="true"><use href="#icon-chevron-down"></use></svg>
+        </button>
+
+        <div id="app-popover" class="app-popover hidden" role="dialog" aria-label="Choose a Windows app">
+          <div class="popover-tabs" role="tablist">
+           <button id="tab-running" class="popover-tab is-active" type="button" role="tab"
+                   aria-selected="true" aria-controls="panel-running">Open windows</button>
+           <button id="tab-catalog" class="popover-tab" type="button" role="tab"
+                   aria-selected="false" aria-controls="panel-catalog">Apps</button>
+          </div>
+
+          <section id="panel-catalog" class="popover-panel hidden" role="tabpanel" aria-labelledby="tab-catalog">
+            <label class="search-field">
+              <svg class="icon" aria-hidden="true"><use href="#icon-search"></use></svg>
+              <input id="catalog-search" type="search" placeholder="Search installed apps"
+                     autocomplete="off" spellcheck="false" aria-label="Search installed apps">
+            </label>
+            <p id="catalog-warning" class="popover-note hidden"></p>
+            <ul id="catalog-list" class="entry-list" aria-busy="false"></ul>
+            <p id="catalog-empty" class="popover-note hidden">
+              No installed app matched. Apps with no Shell, shortcut, or App&nbsp;Paths registration
+              are not discoverable and must be launched by path.
+            </p>
+            <button id="open-executable" class="button subtle full" type="button">
+              <svg class="icon" aria-hidden="true"><use href="#icon-terminal"></use></svg>
+              Launch an executable by path…
+            </button>
+          </section>
+
+          <section id="panel-running" class="popover-panel" role="tabpanel" aria-labelledby="tab-running">
+            <label class="search-field">
+              <svg class="icon" aria-hidden="true"><use href="#icon-search"></use></svg>
+              <input id="window-search" type="search" placeholder="Search open windows"
+                     autocomplete="off" spellcheck="false" aria-label="Search open windows">
+            </label>
+            <ul id="window-list" class="window-grid" aria-busy="false"></ul>
+            <p id="window-empty" class="popover-note hidden">No attachable window is open right now.</p>
+          </section>
+        </div>
+      </div>
+
+      <div class="topbar-actions">
+        <button id="inspect-button" class="icon-button" type="button" title="UI Automation inspector"
+                aria-label="UI Automation inspector" aria-pressed="false">
+          <svg class="icon"><use href="#icon-tree"></use></svg>
+        </button>
+        <button id="screenshot-button" class="icon-button" type="button" title="Save a screenshot"
+                aria-label="Save a screenshot">
+          <svg class="icon"><use href="#icon-camera"></use></svg>
+        </button>
+        <button id="reveal-button" class="icon-button" type="button" title="Bring the window to the front"
+                aria-label="Bring the window to the front">
+          <svg class="icon"><use href="#icon-front"></use></svg>
+        </button>
+        <button id="refresh-button" class="icon-button" type="button" title="Refresh"
+                aria-label="Refresh">
+          <svg class="icon"><use href="#icon-refresh"></use></svg>
+        </button>
+        <button id="release-button" class="icon-button" type="button" title="Release this app"
+                aria-label="Release this app">
+          <svg class="icon"><use href="#icon-detach"></use></svg>
+        </button>
+      </div>
+    </header>
+
+    <div id="preflight" class="banner hidden" role="status">
+      <svg class="icon" aria-hidden="true"><use href="#icon-alert"></use></svg>
+      <div class="banner-text">
+        <strong id="preflight-title"></strong>
+        <span id="preflight-detail"></span>
+      </div>
+      <button id="preflight-details" class="button subtle" type="button">Details</button>
+    </div>
+
+    <nav id="tabstrip" class="tabstrip hidden" aria-label="App windows">
+      <div id="tabs" class="tabs" role="tablist"></div>
+    </nav>
+
+    <main class="stage" id="stage">
+      <div class="stage-inner">
+        <div id="viewport" class="viewport" data-status="idle">
+          <canvas id="screen" class="screen" width="16" height="16" tabindex="0"
+                  role="application" aria-label="Live window contents"></canvas>
+          <div id="automation" class="automation hidden" aria-hidden="true">
+            <div id="automation-cursor" class="automation-cursor">
+              <div class="automation-ripple"></div>
+              <svg class="automation-pointer" viewBox="0 0 24 24" aria-hidden="true">
+                <path d="M5.4 2 18.4 13.35c.78.68.33 1.96-.68 2.07l-5.22.63a1.2 1.2 0 0 0-.88.63l-2.4 4.6c-.45.86-1.75.58-1.82-.4L5.4 2z"></path>
+              </svg>
+            </div>
+            <div id="automation-label" class="automation-label"></div>
+          </div>
+        </div>
+
+        <div id="overlay" class="overlay" role="status">
+          <div class="overlay-card">
+            <span id="overlay-eyebrow" class="overlay-eyebrow"></span>
+            <h2 id="overlay-title" class="overlay-title"></h2>
+            <p id="overlay-detail" class="overlay-detail"></p>
+            <button id="overlay-action" class="button primary hidden" type="button">
+              <span id="overlay-action-text"></span>
+            </button>
+          </div>
+        </div>
+      </div>
+    </main>
+
+    <aside id="inspector" class="inspector hidden" aria-label="UI Automation inspector">
+      <header class="inspector-head">
+        <div class="inspector-heading">
+          <h2>Inspect UI</h2>
+        </div>
+        <form id="ui-query-form" class="query-form">
+            <label class="visually-hidden" for="ui-query-input">
+              Filter UI Automation elements
+            </label>
+            <div class="query-shell">
+              <svg class="icon query-icon" aria-hidden="true"><use href="#icon-search"></use></svg>
+              <input id="ui-query-input" class="query-input" type="text" role="combobox"
+                     aria-autocomplete="list" aria-expanded="false"
+                     aria-controls="ui-query-suggestions" aria-describedby="query-hint"
+                     autocomplete="off" spellcheck="false"
+                     placeholder="Search by name, ID, type, role, or value">
+              <button id="ui-query-clear" class="query-clear hidden" type="button"
+                      aria-label="Clear query">
+                <svg class="icon" aria-hidden="true"><use href="#icon-close"></use></svg>
+              </button>
+              <button id="ui-query-help" class="query-help-button" type="button"
+                      aria-label="Query syntax help" aria-expanded="false"
+                      aria-controls="ui-query-help-popover">
+                <svg class="icon" aria-hidden="true"><use href="#icon-help"></use></svg>
+              </button>
+              <button id="find-button" class="query-submit" type="submit">Find</button>
+            </div>
+            <ul id="ui-query-suggestions" class="query-suggestions hidden" role="listbox"
+                aria-label="Query suggestions"></ul>
+        </form>
+        <button id="inspector-close" class="icon-button" type="button" aria-label="Close inspector">
+          <svg class="icon"><use href="#icon-close"></use></svg>
+        </button>
+        <div id="ui-query-chips" class="query-chips hidden" aria-label="Parsed query"></div>
+        <span id="query-hint" class="visually-hidden">
+          Plain text searches names. Open query syntax help for fields and operators.
+        </span>
+        <div id="ui-query-help-popover" class="query-help-popover hidden">
+            <strong>Query syntax</strong>
+            <p>Plain text searches element names. Join filters with <code>and</code>.</p>
+            <dl>
+              <div><dt>Fields</dt><dd><code>name</code> <code>id</code> <code>type</code>
+                <code>role</code> <code>value</code> <code>index</code></dd></div>
+              <div><dt>Operators</dt><dd><code>=</code> exact, <code>contains</code> substring</dd></div>
+            </dl>
+            <div class="query-help-examples">
+              <button class="query-example" type="button" data-query='name contains "save"'>
+                name contains "save"
+              </button>
+              <button class="query-example" type="button" data-query="type=button and name=Save">
+                type=button and name=Save
+              </button>
+              <button class="query-example" type="button" data-query="id=SAVE and type=button">
+                id=SAVE and type=button
+              </button>
+            </div>
+        </div>
+        <p id="find-status" class="inspector-note query-status hidden" role="status"
+           aria-live="polite"></p>
+      </header>
+
+      <div class="inspector-body">
+        <div class="inspector-viewbar">
+          <div class="inspector-view-tabs" role="tablist" aria-label="Inspector view">
+            <button id="inspector-results-tab" class="inspector-view-tab is-active" type="button"
+                    role="tab" aria-selected="true" aria-controls="inspector-results-panel"
+                    tabindex="0">
+              Matches <span id="match-count" class="count-badge hidden"></span>
+            </button>
+            <button id="inspector-tree-tab" class="inspector-view-tab" type="button"
+                    role="tab" aria-selected="false" aria-controls="inspector-tree-panel"
+                    tabindex="-1">Tree <span id="tree-count" class="count-badge hidden"></span></button>
+          </div>
+          <button id="snapshot-button" class="icon-button inspector-reload" type="button"
+                  aria-label="Reload accessibility tree" title="Reload accessibility tree">
+            <svg class="icon" aria-hidden="true"><use href="#icon-refresh"></use></svg>
+          </button>
+          <details id="scope-details" class="scope-details">
+            <summary>Scope</summary>
+            <div class="scope-popover">
+              <label class="field narrow"><span>Depth</span>
+                <input id="snapshot-depth" type="number" min="1" max="32" value="12"></label>
+              <label class="field narrow"><span>Nodes</span>
+                <input id="snapshot-nodes" type="number" min="1" max="5000" value="500"></label>
+              <label class="field narrow"><span>Timeout (ms)</span>
+                <input id="snapshot-timeout" type="number" min="100" max="30000" step="100"
+                       value="5000"></label>
+            </div>
+          </details>
+        </div>
+
+        <section id="inspector-results-panel" class="inspector-panel" role="tabpanel"
+                 aria-labelledby="inspector-results-tab" tabindex="0">
+          <div id="inspector-query-empty" class="inspector-empty">
+            <svg class="icon" aria-hidden="true"><use href="#icon-search"></use></svg>
+            <strong>Search accessible elements</strong>
+            <p>Type a name, or combine fields such as <code>type=button</code>.</p>
+          </div>
+          <ul id="find-results" class="match-list"></ul>
+        </section>
+
+        <section id="inspector-tree-panel" class="inspector-panel hidden" role="tabpanel"
+                 aria-labelledby="inspector-tree-tab" tabindex="0">
+          <p id="snapshot-status" class="inspector-note hidden"></p>
+          <div id="snapshot-tree" class="tree" role="tree"></div>
+        </section>
+      </div>
+
+      <footer id="action-bar" class="inspector-actions hidden">
+        <div class="action-target">
+          <strong id="action-target-label"></strong>
+          <span id="action-target-detail"></span>
+        </div>
+        <label class="field hidden" id="action-value-field"><span>Value</span>
+          <input id="action-value" type="text" autocomplete="off" spellcheck="false"></label>
+        <div class="field-row compact hidden" id="action-scroll-field">
+          <label class="field narrow"><span>Direction</span>
+            <select id="action-direction">
+              <option value="down">Down</option>
+              <option value="up">Up</option>
+              <option value="left">Left</option>
+              <option value="right">Right</option>
+            </select></label>
+          <label class="field narrow"><span>Amount</span>
+            <select id="action-amount">
+              <option value="small">Small</option>
+              <option value="large">Large</option>
+            </select></label>
+        </div>
+        <div id="action-buttons" class="action-buttons"></div>
+        <p id="action-status" class="inspector-note hidden"></p>
+      </footer>
+    </aside>
+
+    <footer class="statusbar">
+      <button id="interaction-mode" class="interaction-mode" type="button" data-mode="background"
+              aria-pressed="false"
+              title="Focus-free: semantic clicks and scrolling preserve your active window and cursor">
+        <svg class="icon" aria-hidden="true"><use id="interaction-mode-icon" href="#icon-lock"></use></svg>
+        <span id="interaction-mode-label">Focus-free</span>
+      </button>
+      <span id="input-status" class="status-pill" data-status="idle">Ready</span>
+      <span class="status-fields">
+        <span class="status-field" title="Live view transport"><span class="status-label">Mode</span>
+          <output id="stream-mode">idle</output></span>
+        <span class="status-field" title="Frames drawn per second"><span class="status-label">FPS</span>
+          <output id="stream-fps">0</output></span>
+        <span class="status-field" title="Which capture backend produced these pixels">
+          <span class="status-label">Source</span><output id="capture-source">—</output></span>
+        <span class="status-field" title="Window content size in physical pixels">
+          <span class="status-label">Size</span><output id="capture-size">—</output></span>
+        <span class="status-field" title="Coordinate transform token; input measured against an older token is refused">
+          <span class="status-label">Transform</span><output id="transform-version">—</output></span>
+      </span>
+    </footer>
+  </div>
+
+  <dialog id="executable-dialog" class="dialog">
+    <form method="dialog" class="dialog-form" id="executable-form">
+      <h2>Launch an executable</h2>
+      <p class="dialog-note">
+        An absolute path and separate arguments only. There is no shell, no PATH search, no Shell
+        verb, and no URL: “launch an app” must not become “run whatever was typed”.
+      </p>
+      <label class="field"><span>Executable path</span>
+        <input id="executable-path" type="text" required spellcheck="false" autocomplete="off"
+               placeholder="C:\Program Files\Example\example.exe"></label>
+      <label class="field"><span>Arguments (one per line)</span>
+        <textarea id="executable-arguments" rows="3" spellcheck="false" autocomplete="off"></textarea></label>
+      <label class="field"><span>Working directory (optional)</span>
+        <input id="executable-working-directory" type="text" spellcheck="false" autocomplete="off"></label>
+      <p id="executable-error" class="dialog-error hidden"></p>
+      <div class="dialog-actions">
+        <button value="cancel" class="button" type="submit" formnovalidate>Cancel</button>
+        <button value="launch" class="button primary" type="submit">Launch</button>
+      </div>
+    </form>
+  </dialog>
+
+  <dialog id="preflight-dialog" class="dialog">
+    <form method="dialog" class="dialog-form">
+      <h2>Windows support</h2>
+      <ul id="preflight-features" class="feature-list"></ul>
+      <p id="preflight-environment" class="dialog-note"></p>
+      <div class="dialog-actions">
+        <button value="close" class="button primary" type="submit">Close</button>
+      </div>
+    </form>
+  </dialog>
+
+  <div id="toast" class="toast hidden" role="status" aria-live="polite"></div>
+
+  <script type="module" src="/windows/windows-canvas.js"></script>
+</body>
+</html>

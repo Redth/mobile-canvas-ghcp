@@ -37,6 +37,10 @@ const metadataDocuments = [
   ["package.json", packageManifest],
 ];
 
+if (!existsSync(join(root, "lib", "windows-app-helper.mjs"))) {
+  fail("runtime helper preflight module is missing from lib/windows-app-helper.mjs");
+}
+
 for (const [name, metadata] of metadataDocuments) {
   if (!metadata) {
     fail(`${name} has no metadata for ${manifest.name}`);
@@ -72,23 +76,28 @@ if (containers.some((entry) => typeof entry !== "string" || entry.length === 0))
     }
   }
 
-  const mobileCanvas = discovered.find((extension) => extension.name === "mobile-canvas");
-  if (!mobileCanvas) {
-    fail("configured containers do not expose mobile-canvas/extension.mjs");
-  } else {
-    const source = readFileSync(mobileCanvas.entrypoint, "utf8");
-    const importPath = /import\s+["']([^"']+)["'];/.exec(source)?.[1];
-    if (!importPath || !existsSync(resolve(dirname(mobileCanvas.entrypoint), importPath))) {
-      fail("plugin entrypoint does not import an existing shared extension module");
+  // Both products ship as sibling children of the same container and must each bridge to a shared
+  // source module and carry a byte-identical copy of the canvas icon.
+  const requiredChildren = ["mobile-canvas", "windows-app"];
+  const rootIcon = readFileSync(join(root, "assets", "icon.png"));
+  for (const name of requiredChildren) {
+    const child = discovered.find((extension) => extension.name === name);
+    if (!child) {
+      fail(`configured containers do not expose ${name}/extension.mjs`);
+      continue;
     }
 
-    const icon = join(dirname(mobileCanvas.entrypoint), "assets", "icon.png");
+    const source = readFileSync(child.entrypoint, "utf8");
+    const importPath = /import\s+["']([^"']+)["'];/.exec(source)?.[1];
+    if (!importPath || !existsSync(resolve(dirname(child.entrypoint), importPath))) {
+      fail(`${name} entrypoint does not import an existing shared extension module`);
+    }
+
+    const icon = join(dirname(child.entrypoint), "assets", "icon.png");
     if (!existsSync(icon)) {
-      fail("plugin extension icon is missing at assets/icon.png");
-    } else if (
-      !readFileSync(icon).equals(readFileSync(join(root, "assets", "icon.png")))
-    ) {
-      fail("plugin extension icon differs from the shared extension icon");
+      fail(`${name} extension icon is missing at assets/icon.png`);
+    } else if (!readFileSync(icon).equals(rootIcon)) {
+      fail(`${name} extension icon differs from the shared extension icon`);
     }
   }
 

@@ -73,7 +73,11 @@
     const message = event.data;
     switch (message.type) {
       case "context":
-        context = { sessionId: message.sessionId, instanceId: message.instanceId };
+        context = {
+          sessionId: message.sessionId,
+          instanceId: message.instanceId,
+          surface: message.surface || "mobile",
+        };
         resolveContext?.(context);
         resolveContext = null;
         rejectContext = null;

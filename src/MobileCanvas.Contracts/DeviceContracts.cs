@@ -20,6 +20,54 @@ public static class DevicePlatforms
 public static class CanvasTitles
 {
 	public const string Panel = "Mobile";
+
+	/// <summary>
+	/// Label for the Windows App canvas. It is a separate product surface with its own panel, so
+	/// it gets its own fixed title rather than sharing the mobile one.
+	/// </summary>
+	public const string WindowsPanel = "Windows App";
+}
+
+/// <summary>
+/// The product surfaces a canvas can be opened for. One host process serves every surface, so a
+/// credential has to say which product it was issued for: a browser session that was granted to a
+/// desktop panel must not be able to drive a phone, and vice versa.
+///
+/// A caller that names no surface is a Mobile Canvas caller. Every shipped client predates this
+/// field, so an absent surface means mobile rather than an error.
+/// </summary>
+public static class CanvasSurfaces
+{
+	public const string Mobile = "mobile";
+	public const string Windows = "windows";
+
+	public static readonly string[] All = [Mobile, Windows];
+
+	public static bool IsSupported(string? surface) =>
+		surface is not null && Array.Exists(All, known => known.Equals(surface, StringComparison.Ordinal));
+
+	/// <summary>
+	/// Resolves a caller-supplied surface, defaulting to mobile for callers that never sent one.
+	/// Unknown values are rejected instead of falling back, so a typo cannot silently widen scope.
+	/// </summary>
+	public static string Normalize(string? surface)
+	{
+		if (string.IsNullOrWhiteSpace(surface))
+			return Mobile;
+		var trimmed = surface.Trim().ToLowerInvariant();
+		return IsSupported(trimmed)
+			? trimmed
+			: throw new ArgumentException($"'{surface}' is not a supported canvas surface.");
+	}
+
+	/// <summary>
+	/// Whether activity events for a surface may carry the literal text that was typed. Mobile
+	/// events drive a status pill that has always shown the text an agent sent to a simulator the
+	/// user is already watching. Desktop automation types into the real session, where the same
+	/// field could carry a password, so those surfaces report shape rather than content.
+	/// </summary>
+	public static bool DisclosesTypedText(string? surface) =>
+		Normalize(surface).Equals(Mobile, StringComparison.Ordinal);
 }
 
 public static class DeviceStates
@@ -260,12 +308,47 @@ public sealed record AutomationEvent
 	public string? Detail { get; init; }
 
 	/// <summary>
-	/// Canvas panel the caller was acting on behalf of, when it identified one. Events are broadcast
-	/// to every connected canvas, so a panel uses this to tell "an agent is driving me" apart from
+	/// How much text an input carried, for surfaces whose typed text is never disclosed. Mobile
+	/// events keep reporting the text itself in <see cref="Detail"/>; a redacted event reports the
+	/// count so the panel can still say "typed 12 characters".
+	/// </summary>
+	public int? CharacterCount { get; init; }
+
+	/// <summary>
+	/// Canvas panel the caller was acting on behalf of, when it identified one. Events are addressed
+	/// to a single canvas context, so a panel uses this to tell "an agent is driving me" apart from
 	/// "an agent is driving the panel next door".
 	/// </summary>
 	public string? SessionId { get; init; }
 	public string? InstanceId { get; init; }
+
+	/// <summary>
+	/// Product surface the event belongs to. Absent on events that predate surface scoping, which
+	/// are mobile by definition.
+	/// </summary>
+	public string? Surface { get; init; }
+}
+
+/// <summary>
+/// Strips content a surface must never publish. Mobile events are returned unchanged, so the
+/// existing canvas overlay and status pill keep behaving exactly as they always have.
+/// </summary>
+public static class AutomationEventRedaction
+{
+	public static AutomationEvent ForSurface(string? surface, AutomationEvent activity)
+	{
+		if (CanvasSurfaces.DisclosesTypedText(surface))
+			return activity;
+		return activity.Kind switch
+		{
+			AutomationEventKinds.Text => activity with
+			{
+				Detail = null,
+				CharacterCount = activity.CharacterCount ?? activity.Detail?.Length ?? 0,
+			},
+			_ => activity,
+		};
+	}
 }
 
 public static class AutomationEventKinds
@@ -279,6 +362,16 @@ public static class AutomationEventKinds
 	public const string Button = "button";
 	public const string Rotate = "rotate";
 	public const string Screenshot = "screenshot";
+	public const string Semantic = "semantic";
+
+	/// <summary>
+	/// Windows screenshot-guided input. Mobile keeps its own gesture vocabulary unchanged; these
+	/// exist because a desktop pointer press, drag, and wheel are distinct things a panel draws
+	/// differently from a tap.
+	/// </summary>
+	public const string Pointer = "pointer";
+	public const string Drag = "drag";
+	public const string Wheel = "wheel";
 
 	/// <summary>
 	/// The device a canvas is pointed at changed. Selection lives on the host so that agents and the
@@ -354,14 +447,27 @@ public sealed record CanvasOpenRequest
 {
 	public string SessionId { get; init; } = "";
 	public string InstanceId { get; init; } = "";
+
+	/// <summary>Product surface the panel is being opened for. Empty means <c>mobile</c>.</summary>
+	public string Surface { get; init; } = CanvasSurfaces.Mobile;
 }
 
-public sealed record CanvasContextKey(string SessionId, string InstanceId);
+/// <summary>
+/// The authenticated identity of one canvas panel: which host session and panel instance it is,
+/// and which product surface it was authorized for. Surface participates in equality, so a grant,
+/// a browser session, and an event addressed to the mobile panel can never be matched by a
+/// desktop panel that happens to share the same session and instance identifiers.
+/// </summary>
+public sealed record CanvasContextKey(
+	string SessionId,
+	string InstanceId,
+	string Surface = CanvasSurfaces.Mobile);
 
 public sealed record CanvasOpenResult
 {
 	public string Url { get; init; } = "";
 	public string Title { get; init; } = "Mobile Device";
+	public string Surface { get; init; } = CanvasSurfaces.Mobile;
 }
 
 public sealed record CanvasBootstrapRequest
@@ -369,12 +475,14 @@ public sealed record CanvasBootstrapRequest
 	public string Secret { get; init; } = "";
 	public string SessionId { get; init; } = "";
 	public string InstanceId { get; init; } = "";
+	public string Surface { get; init; } = CanvasSurfaces.Mobile;
 }
 
 public sealed record CanvasCloseRequest
 {
 	public string SessionId { get; init; } = "";
 	public string InstanceId { get; init; } = "";
+	public string Surface { get; init; } = CanvasSurfaces.Mobile;
 }
 
 public sealed record SelectDeviceRequest

@@ -52,10 +52,12 @@ test("bridges bootstrap, API responses, and socket frames", async () => {
 
   const bootstrap = transport.bootstrap();
   assert.equal(outbound.shift().type, "ready");
+  // An extension host that predates product surfaces sends no surface, which is mobile.
   receive({ type: "context", sessionId: "session", instanceId: "view" });
   const context = await bootstrap;
   assert.equal(context.sessionId, "session");
   assert.equal(context.instanceId, "view");
+  assert.equal(context.surface, "mobile");
 
   const api = transport.api("/api/v1/catalog");
   const apiRequest = outbound.shift();
