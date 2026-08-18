@@ -24,6 +24,15 @@ public sealed class UnixFactAttribute : FactAttribute
 	}
 }
 
+public sealed class MacFactAttribute : FactAttribute
+{
+	public MacFactAttribute()
+	{
+		if (!OperatingSystem.IsMacOS())
+			Skip = "This behavior depends on the macOS Simulator runtime.";
+	}
+}
+
 public sealed class HostFileSecurityTests : IDisposable
 {
 	private readonly string root = Path.Combine(
