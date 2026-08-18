@@ -1065,7 +1065,7 @@ export function findResultPresentation(result) {
       matches,
     };
   }
-  return { tone: "ok", message: "One match.", ambiguous: false, matches };
+  return { tone: "ok", message: "", ambiguous: false, matches };
 }
 
 /* --------------------------------------------------------------------------------------------

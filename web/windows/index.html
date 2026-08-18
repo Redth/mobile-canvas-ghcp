@@ -192,15 +192,8 @@
         <div class="inspector-heading">
           <h2>Inspect UI</h2>
         </div>
-        <button id="inspector-close" class="icon-button" type="button" aria-label="Close inspector">
-          <svg class="icon"><use href="#icon-close"></use></svg>
-        </button>
-      </header>
-
-      <div class="inspector-body">
-        <section class="inspector-query" aria-labelledby="query-label">
-          <form id="ui-query-form" class="query-form">
-            <label id="query-label" class="visually-hidden" for="ui-query-input">
+        <form id="ui-query-form" class="query-form">
+            <label class="visually-hidden" for="ui-query-input">
               Filter UI Automation elements
             </label>
             <div class="query-shell">
@@ -223,12 +216,15 @@
             </div>
             <ul id="ui-query-suggestions" class="query-suggestions hidden" role="listbox"
                 aria-label="Query suggestions"></ul>
-          </form>
-          <div id="ui-query-chips" class="query-chips hidden" aria-label="Parsed query"></div>
-          <span id="query-hint" class="visually-hidden">
-            Plain text searches names. Open query syntax help for fields and operators.
-          </span>
-          <div id="ui-query-help-popover" class="query-help-popover hidden">
+        </form>
+        <button id="inspector-close" class="icon-button" type="button" aria-label="Close inspector">
+          <svg class="icon"><use href="#icon-close"></use></svg>
+        </button>
+        <div id="ui-query-chips" class="query-chips hidden" aria-label="Parsed query"></div>
+        <span id="query-hint" class="visually-hidden">
+          Plain text searches names. Open query syntax help for fields and operators.
+        </span>
+        <div id="ui-query-help-popover" class="query-help-popover hidden">
             <strong>Query syntax</strong>
             <p>Plain text searches element names. Join filters with <code>and</code>.</p>
             <dl>
@@ -247,11 +243,12 @@
                 id=SAVE and type=button
               </button>
             </div>
-          </div>
-          <p id="find-status" class="inspector-note query-status hidden" role="status"
-             aria-live="polite"></p>
-        </section>
+        </div>
+        <p id="find-status" class="inspector-note query-status hidden" role="status"
+           aria-live="polite"></p>
+      </header>
 
+      <div class="inspector-body">
         <div class="inspector-viewbar">
           <div class="inspector-view-tabs" role="tablist" aria-label="Inspector view">
             <button id="inspector-results-tab" class="inspector-view-tab is-active" type="button"
@@ -261,8 +258,12 @@
             </button>
             <button id="inspector-tree-tab" class="inspector-view-tab" type="button"
                     role="tab" aria-selected="false" aria-controls="inspector-tree-panel"
-                    tabindex="-1">Tree</button>
+                    tabindex="-1">Tree <span id="tree-count" class="count-badge hidden"></span></button>
           </div>
+          <button id="snapshot-button" class="icon-button inspector-reload" type="button"
+                  aria-label="Reload accessibility tree" title="Reload accessibility tree">
+            <svg class="icon" aria-hidden="true"><use href="#icon-refresh"></use></svg>
+          </button>
           <details id="scope-details" class="scope-details">
             <summary>Scope</summary>
             <div class="scope-popover">
@@ -289,13 +290,7 @@
 
         <section id="inspector-tree-panel" class="inspector-panel hidden" role="tabpanel"
                  aria-labelledby="inspector-tree-tab" tabindex="0">
-          <div class="tree-toolbar">
-            <div>
-              <strong>Accessibility tree</strong>
-              <p id="snapshot-status" class="inspector-note">Load a bounded snapshot of this window.</p>
-            </div>
-            <button id="snapshot-button" class="button" type="button">Load tree</button>
-          </div>
+          <p id="snapshot-status" class="inspector-note hidden"></p>
           <div id="snapshot-tree" class="tree" role="tree"></div>
         </section>
       </div>

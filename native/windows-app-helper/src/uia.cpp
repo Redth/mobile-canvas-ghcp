@@ -1670,23 +1670,30 @@ std::string SelectorJson(const Selector& selector) {
 
 Selector DerivedSelector(const Node& node) {
 	Selector result;
-	if (node.automation_id.has_value() && node.control_type != "unknown") {
-		result.automation_id = node.automation_id;
-		result.control_type = std::wstring(node.control_type.begin(), node.control_type.end());
-		return result;
-	}
-	if (node.control_type != "unknown" && node.password == false && node.name.has_value()) {
-		result.control_type = std::wstring(node.control_type.begin(), node.control_type.end());
-		result.name = node.name;
-		return result;
-	}
 	std::vector<int> reverse_path;
 	for (const Node* current = &node; current->parent != nullptr; current = current->parent) {
 		reverse_path.push_back(current->child_index);
 	}
 	std::reverse(reverse_path.begin(), reverse_path.end());
 	result.path = std::move(reverse_path);
-	if (result.path.empty()) {
+
+	if (node.automation_id.has_value() &&
+		!node.automation_id->empty() &&
+		node.control_type != "unknown") {
+		result.automation_id = node.automation_id;
+		result.control_type = std::wstring(node.control_type.begin(), node.control_type.end());
+	} else if (
+		node.control_type != "unknown" &&
+		node.password == false &&
+		node.name.has_value() &&
+		!node.name->empty()) {
+		result.control_type = std::wstring(node.control_type.begin(), node.control_type.end());
+		result.name = node.name;
+	}
+	if (result.path.empty() &&
+		!result.automation_id.has_value() &&
+		!result.control_type.has_value() &&
+		!result.name.has_value()) {
 		// The root has no child path. An explicit ordinal preserves the invariant that a derived
 		// selector never means "pick the first match" when it has no semantic fields.
 		result.index = 0;

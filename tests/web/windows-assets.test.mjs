@@ -61,6 +61,7 @@ test("the app picker starts with visual open-window cards and keeps launch paths
 });
 
 test("the UI Automation inspector is a single rich query surface with progressive disclosure", () => {
+  const css = read("web", "windows", "windows-canvas.css");
   assert.match(indexHtml, /id="ui-query-input"[\s\S]*role="combobox"[\s\S]*aria-autocomplete="list"/);
   assert.match(indexHtml, /id="ui-query-suggestions"[\s\S]*role="listbox"/);
   assert.match(indexHtml, /id="ui-query-help"[\s\S]*aria-controls="ui-query-help-popover"/);
@@ -75,6 +76,16 @@ test("the UI Automation inspector is a single rich query surface with progressiv
   assert.match(renderer, /state\.querySuggestionIndex >= 0/);
   assert.match(renderer, /row\.setAttribute\("role", "treeitem"\)/);
   assert.match(renderer, /row\.setAttribute\("aria-selected", "true"\)/);
+  assert.match(indexHtml, /id="inspector-tree-tab"[\s\S]*id="tree-count"/);
+  assert.match(
+    indexHtml,
+    /id="snapshot-button"[\s\S]*id="scope-details"/,
+    "Tree reload belongs beside Scope, not inside the tree content",
+  );
+  assert.match(renderer, /state\.matchPaths = presentation\.matches/);
+  assert.match(renderer, /const matchPaths = resolveSnapshotMatchPaths\(\)[\s\S]*renderTreeNode\(state\.snapshotRoot, 0, \[\], matchPaths/);
+  assert.match(renderer, /depth \* 8/);
+  assert.match(css, /\.inspector-actions \{[\s\S]*grid-template-areas:[\s\S]*"target buttons"/);
 });
 
 test("the stylesheet themes everything through semantic tokens", () => {

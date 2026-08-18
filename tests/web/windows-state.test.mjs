@@ -652,6 +652,7 @@ test("multiple matches are an ambiguity to resolve, never a list to act on", () 
   const one = findResultPresentation({ matches: [{ element: button }], totalMatches: 1 });
   assert.equal(one.ambiguous, false);
   assert.equal(one.tone, "ok");
+  assert.equal(one.message, "");
 
   const none = findResultPresentation({ matches: [], totalMatches: 0 });
   assert.equal(none.tone, "warning");

@@ -938,11 +938,13 @@ textarea {
 }
 
 .inspector-head {
-  display: flex;
+  position: relative;
+  display: grid;
   align-items: center;
-  justify-content: space-between;
-  padding: 9px 8px 9px 12px;
+  padding: 6px;
   border-bottom: 1px solid var(--border-muted);
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  gap: 6px;
 }
 
 .inspector-heading {
@@ -951,9 +953,9 @@ textarea {
 
 .inspector-head h2 {
   margin: 0;
-  font-size: 14px;
+  font-size: 11px;
   font-weight: 600;
-  letter-spacing: -0.01em;
+  white-space: nowrap;
 }
 
 .inspector-body {
@@ -963,23 +965,16 @@ textarea {
   grid-template-rows: auto auto minmax(0, 1fr);
 }
 
-.inspector-query {
-  position: relative;
-  display: grid;
-  padding: 12px;
-  border-bottom: 1px solid var(--border-muted);
-  gap: 7px;
-}
-
 .query-form {
   position: relative;
+  min-width: 0;
 }
 
 .query-shell {
   display: flex;
   align-items: center;
   min-width: 0;
-  min-height: 36px;
+  min-height: 32px;
   padding: 0 3px 0 9px;
   border: 1px solid var(--border-default);
   border-radius: var(--control-radius);
@@ -1002,7 +997,7 @@ textarea {
 .query-input {
   width: 100%;
   min-width: 0;
-  padding: 7px 0;
+  padding: 5px 0;
   border: 0;
   outline: 0;
   background: transparent;
@@ -1110,6 +1105,8 @@ textarea {
 
 .query-chips {
   display: flex;
+  min-width: 0;
+  grid-column: 2 / -1;
   flex-wrap: wrap;
   gap: 4px;
 }
@@ -1159,8 +1156,8 @@ textarea {
 .query-help-popover {
   position: absolute;
   z-index: 55;
-  inset-block-start: 58px;
-  inset-inline: 12px;
+  inset-block-start: calc(100% + 4px);
+  inset-inline: 48px 6px;
   display: grid;
   padding: 11px;
   border: 1px solid var(--border-default);
@@ -1214,6 +1211,7 @@ textarea {
 
 .query-status {
   min-height: 15px;
+  grid-column: 2 / -1;
 }
 
 .inspector-viewbar {
@@ -1230,8 +1228,15 @@ textarea {
 
 .inspector-view-tabs {
   display: flex;
+  min-width: 0;
   align-self: stretch;
   gap: 10px;
+  margin-inline-end: auto;
+}
+
+.inspector-reload {
+  width: 26px;
+  height: 26px;
 }
 
 .inspector-view-tab {
@@ -1353,22 +1358,6 @@ textarea {
   font-size: 10px;
 }
 
-.tree-toolbar {
-  display: flex;
-  align-items: start;
-  justify-content: space-between;
-  padding: 5px 6px 10px;
-  gap: 10px;
-}
-
-.tree-toolbar strong {
-  font-size: 11px;
-}
-
-.tree-toolbar > div {
-  min-width: 0;
-}
-
 .field-row {
   display: flex;
   gap: 8px;
@@ -1471,7 +1460,7 @@ textarea {
   display: flex;
   align-items: center;
   width: 100%;
-  gap: 6px;
+  gap: 4px;
   padding: 1px 0;
   border: 1px solid transparent;
   border-radius: var(--control-radius-sm);
@@ -1508,30 +1497,92 @@ textarea {
 
 .inspector-actions {
   display: grid;
-  padding: 10px 12px;
+  padding: 7px 8px;
   border-top: 1px solid var(--border-default);
   background: var(--canvas-subtle);
-  gap: 8px;
+  grid-template-columns: minmax(0, 1fr) auto;
+  grid-template-areas:
+    "target buttons"
+    "editor editor"
+    "status status";
+  gap: 6px 8px;
 }
 
 .action-target {
+  position: relative;
+  grid-area: target;
   display: grid;
   min-width: 0;
+  padding-inline-start: 10px;
   gap: 1px;
 }
 
-.action-target span {
+.action-target::before {
+  position: absolute;
+  inset-block: 4px;
+  inset-inline-start: 0;
+  width: 3px;
+  border-radius: 3px;
+  background: var(--accent-emphasis);
+  content: "";
+}
+
+.action-target strong {
   overflow: hidden;
-  color: var(--fg-muted);
   font-size: 11px;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 
+.action-target > span {
+  display: flex;
+  overflow: hidden;
+  color: var(--fg-muted);
+  font-size: 11px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  gap: 5px;
+}
+
+.selection-detail {
+  display: inline-flex;
+  overflow: hidden;
+  max-width: 18ch;
+  align-items: center;
+  text-overflow: ellipsis;
+}
+
+.selection-detail:not(:first-child)::before {
+  margin-inline-end: 5px;
+  color: var(--fg-subtle);
+  content: "·";
+}
+
+.selection-detail.warning {
+  color: var(--attention-fg);
+}
+
 .action-buttons {
+  grid-area: buttons;
   display: flex;
   flex-wrap: wrap;
+  justify-content: flex-end;
   gap: 6px;
+}
+
+.action-buttons .button {
+  min-height: 26px;
+  padding: 3px 8px;
+  font-size: 10px;
+}
+
+.inspector-actions > .field,
+.inspector-actions > .field-row {
+  grid-area: editor;
+}
+
+.inspector-actions > .inspector-note {
+  grid-area: status;
 }
 
 /* ---------------------------------------------------------------------------------------------
@@ -1719,6 +1770,19 @@ textarea {
     width: 100%;
     min-width: 0;
     border-left: 0;
+  }
+
+  .inspector-actions {
+    grid-template-columns: minmax(0, 1fr);
+    grid-template-areas:
+      "target"
+      "buttons"
+      "editor"
+      "status";
+  }
+
+  .action-buttons {
+    justify-content: flex-start;
   }
 
   .app-popover {

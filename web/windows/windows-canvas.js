@@ -107,6 +107,7 @@ const elements = {
   resultsPanel: document.querySelector("#inspector-results-panel"),
   treePanel: document.querySelector("#inspector-tree-panel"),
   matchCount: document.querySelector("#match-count"),
+  treeCount: document.querySelector("#tree-count"),
   scopeDetails: document.querySelector("#scope-details"),
   snapshotDepth: document.querySelector("#snapshot-depth"),
   snapshotNodes: document.querySelector("#snapshot-nodes"),
@@ -210,6 +211,9 @@ const state = {
   inspectorOpen: false,
   inspectorView: "results",
   snapshotRoot: null,
+  snapshotNodeCount: 0,
+  matchPaths: null,
+  matchElements: null,
   queryCompiled: null,
   querySuggestions: [],
   querySuggestionIndex: -1,
@@ -1867,7 +1871,10 @@ function updateQueryDraft({ suggest = true, clearResults = true } = {}) {
     elements.queryEmpty.classList.toggle("hidden", elements.queryInput.value.length > 0);
     elements.matchCount.classList.add("hidden");
     state.match = null;
+    state.matchPaths = null;
+    state.matchElements = null;
     elements.actionBar.classList.add("hidden");
+    if (state.snapshotRoot) renderSnapshotTree();
   }
   if (suggest) updateQuerySuggestions();
   return compiled;
@@ -2024,6 +2031,13 @@ function renderFindResult(result) {
     item.append(button);
     return item;
   }));
+  state.matchPaths = presentation.matches.length > 0
+    ? presentation.matches.map((match) => match.selector?.path ?? [])
+    : null;
+  state.matchElements = presentation.matches.length > 0
+    ? presentation.matches.map((match) => match.element)
+    : null;
+  if (state.snapshotRoot) renderSnapshotTree();
   if (presentation.matches.length === 1 && !presentation.ambiguous) {
     elements.findResults.querySelector(".match")?.setAttribute("aria-pressed", "true");
     selectMatch(presentation.matches[0], false);
@@ -2047,16 +2061,20 @@ function selectMatch(match, ambiguous) {
   elements.actionBar.classList.remove("hidden");
   setText(elements.actionTargetLabel, uiElementLabel(match.element));
   const value = uiElementValue(match.element);
-  setText(
-    elements.actionTargetDetail,
-    [
-      match.element.role,
-      value ? `value “${value}”` : null,
-      match.element.properties?.enabled === false ? "disabled" : null,
-      isPasswordElement(match.element) ? "password control — value never read or written" : null,
-      ambiguous ? "ambiguous: acting will be refused until the selector is unique" : null,
-    ].filter(Boolean).join(" · "),
-  );
+  const details = [
+    { label: match.element.role },
+    value ? { label: `“${value}”`, title: value } : null,
+    match.element.properties?.enabled === false ? { label: "disabled", tone: "warning" } : null,
+    isPasswordElement(match.element) ? { label: "password protected", tone: "warning" } : null,
+    ambiguous ? { label: "selector is not unique", tone: "warning" } : null,
+  ].filter(Boolean);
+  elements.actionTargetDetail.replaceChildren(...details.map((detail) => {
+    const item = document.createElement("span");
+    item.className = `selection-detail${detail.tone ? ` ${detail.tone}` : ""}`;
+    item.textContent = detail.label;
+    if (detail.title) item.title = detail.title;
+    return item;
+  }));
 
   const actions = availableUiActions(match.element);
   elements.actionButtons.replaceChildren(...actions.map((action) => {
@@ -2126,19 +2144,11 @@ async function dumpTree() {
   try {
     const snapshot = await getJson(`${uiPath("snapshot")}?${search}`);
     state.snapshotRoot = snapshot?.root ?? null;
+    state.snapshotNodeCount = snapshot?.metadata?.nodeCount ?? 0;
     const warnings = snapshotWarnings(snapshot?.metadata);
-    setNote(
-      elements.snapshotStatus,
-      [`${snapshot?.metadata?.nodeCount ?? 0} nodes.`, ...warnings].join(" "),
-      warnings.length > 0 ? "warning" : "ok",
-    );
-    elements.snapshotTree.replaceChildren();
-    if (snapshot?.root) {
-      elements.snapshotTree.append(renderTreeNode(snapshot.root, 0));
-      const first = elements.snapshotTree.querySelector(".tree-node");
-      if (first) first.tabIndex = 0;
-    }
-    else {
+    setNote(elements.snapshotStatus, warnings.join(" "), warnings.length > 0 ? "warning" : "");
+    renderSnapshotTree();
+    if (!snapshot?.root) {
       setNote(
         elements.snapshotStatus,
         "This window exposes no UI Automation tree. Use the live stage and screenshots instead.",
@@ -2150,12 +2160,67 @@ async function dumpTree() {
   }
 }
 
-function renderTreeNode(element, depth) {
+function renderSnapshotTree() {
+  elements.snapshotTree.replaceChildren();
+  if (!state.snapshotRoot) {
+    elements.treeCount.classList.add("hidden");
+    return;
+  }
+  const stats = { visible: 0 };
+  const matchPaths = resolveSnapshotMatchPaths();
+  const rendered = renderTreeNode(state.snapshotRoot, 0, [], matchPaths, stats);
+  if (rendered) elements.snapshotTree.append(rendered);
+  const total = state.snapshotNodeCount || stats.visible;
+  elements.treeCount.textContent = matchPaths && stats.visible !== total
+    ? `${stats.visible}/${total}`
+    : String(total);
+  elements.treeCount.classList.toggle("hidden", total === 0);
+  const first = elements.snapshotTree.querySelector(".tree-node");
+  if (first) first.tabIndex = 0;
+}
+
+function resolveSnapshotMatchPaths() {
+  if (!state.matchElements?.length) return state.matchPaths;
+  const derived = [];
+  const expected = (value) => String(value ?? "").toLocaleLowerCase();
+  const matchesElement = (element, target) => {
+    if (target.runtimeId && element.runtimeId) return target.runtimeId === element.runtimeId;
+    const targetProperties = target.properties ?? {};
+    const properties = element.properties ?? {};
+    return (
+      expected(element.controlType) === expected(target.controlType)
+      && expected(element.role) === expected(target.role)
+      && (!targetProperties.automationId ||
+        expected(properties.automationId) === expected(targetProperties.automationId))
+      && (!targetProperties.name || expected(properties.name) === expected(targetProperties.name))
+      && (!targetProperties.className ||
+        expected(properties.className) === expected(targetProperties.className))
+    );
+  };
+  const visit = (element, path) => {
+    if (state.matchElements.some((target) => matchesElement(element, target))) derived.push(path);
+    element.children?.forEach((child, index) => visit(child, [...path, index]));
+  };
+  visit(state.snapshotRoot, []);
+  return derived.length > 0 ? derived : state.matchPaths;
+}
+
+function treePathVisible(path, matchPaths) {
+  if (!Array.isArray(matchPaths) || matchPaths.length === 0) return true;
+  return matchPaths.some((matchPath) => (
+    path.length <= matchPath.length
+    && path.every((value, index) => value === matchPath[index])
+  ));
+}
+
+function renderTreeNode(element, depth, path, matchPaths, stats) {
+  if (!treePathVisible(path, matchPaths)) return null;
+  stats.visible += 1;
   const container = document.createElement("div");
   const row = document.createElement("button");
   row.type = "button";
   row.className = "tree-node";
-  row.style.paddingLeft = `${depth * 12}px`;
+  row.style.paddingLeft = `${depth * 8}px`;
   row.setAttribute("role", "treeitem");
   row.setAttribute("aria-level", String(depth + 1));
   row.setAttribute("aria-selected", "false");
@@ -2208,8 +2273,11 @@ function renderTreeNode(element, depth) {
   if ((element.children?.length ?? 0) > 0) {
     const group = document.createElement("div");
     group.setAttribute("role", "group");
-    for (const child of element.children) group.append(renderTreeNode(child, depth + 1));
-    container.append(group);
+    element.children.forEach((child, index) => {
+      const rendered = renderTreeNode(child, depth + 1, [...path, index], matchPaths, stats);
+      if (rendered) group.append(rendered);
+    });
+    if (group.childElementCount > 0) container.append(group);
   }
   return container;
 }
