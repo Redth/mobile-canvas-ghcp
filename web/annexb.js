@@ -66,6 +66,49 @@ export function codecFromParameterSet(nal) {
 }
 
 /**
+ * The first Exp-Golomb value in every slice header is `first_mb_in_slice`. A value of zero starts a
+ * new picture; a non-zero value is another slice of the current picture. Media Foundation commonly
+ * emits several slices per frame, so treating every VCL NAL as a frame produces partial green
+ * macroblock pictures in WebCodecs.
+ */
+export function firstMacroblockInSlice(nal) {
+  const type = nalUnitType(nal);
+  if (type !== 1 && type !== 5) return null;
+  const prefixLength = nalPrefixLength(nal);
+  const rbsp = new Uint8Array(16);
+  let rbspLength = 0;
+  let zeroRun = 0;
+  for (let index = prefixLength + 1; index < nal.length && rbspLength < rbsp.length; index++) {
+    const byte = nal[index];
+    if (zeroRun >= 2 && byte === 3) {
+      zeroRun = 0;
+      continue;
+    }
+    rbsp[rbspLength++] = byte;
+    zeroRun = byte === 0 ? zeroRun + 1 : 0;
+  }
+  let bit = 0;
+  const readBit = () => {
+    if (bit >= rbspLength * 8) return null;
+    const value = (rbsp[bit >> 3] >> (7 - (bit & 7))) & 1;
+    bit += 1;
+    return value;
+  };
+  let leadingZeros = 0;
+  while (readBit() === 0) {
+    leadingZeros += 1;
+    if (leadingZeros > 30) return null;
+  }
+  let suffix = 0;
+  for (let index = 0; index < leadingZeros; index++) {
+    const value = readBit();
+    if (value === null) return null;
+    suffix = (suffix * 2) + value;
+  }
+  return (2 ** leadingZeros) - 1 + suffix;
+}
+
+/**
  * Reassembles a socket's byte chunks into access units.
  *
  * A NAL unit ends where the next one begins, so the trailing slice always has to wait for more
@@ -85,8 +128,8 @@ export class AnnexBParser {
     onCodec = () => {},
     onIdle = () => {},
     idleFlushMs = IDLE_NAL_FLUSH_MS,
-    setTimeout: setTimer = globalThis.setTimeout,
-    clearTimeout: clearTimer = globalThis.clearTimeout,
+    setTimeout: setTimer = (...args) => globalThis.setTimeout(...args),
+    clearTimeout: clearTimer = (...args) => globalThis.clearTimeout(...args),
   } = {}) {
     if (typeof onAccessUnit !== "function") {
       throw new TypeError("An Annex-B parser needs somewhere to send access units.");
@@ -99,6 +142,8 @@ export class AnnexBParser {
     this.clearTimer = clearTimer;
     this.buffer = new Uint8Array();
     this.prefix = [];
+    this.accessUnit = [];
+    this.accessUnitType = null;
     this.idleTimer = null;
   }
 
@@ -111,6 +156,7 @@ export class AnnexBParser {
       }
       this.buffer = this.buffer.slice(starts.at(-1));
     }
+    this.emitBeforePendingNal();
     this.armIdleFlush();
   }
 
@@ -129,6 +175,7 @@ export class AnnexBParser {
       this.buffer = new Uint8Array();
       this.handleNal(nal);
     }
+    this.emitAccessUnit();
     this.onIdle();
   }
 
@@ -137,6 +184,8 @@ export class AnnexBParser {
     this.idleTimer = null;
     this.buffer = new Uint8Array();
     this.prefix = [];
+    this.accessUnit = [];
+    this.accessUnitType = null;
   }
 
   handleNal(nal) {
@@ -145,12 +194,48 @@ export class AnnexBParser {
       const codec = codecFromParameterSet(nal);
       if (codec) this.onCodec(codec);
     }
+
     if (type === 1 || type === 5) {
-      const data = concatBytes([...this.prefix, nal]);
-      this.prefix = [];
-      this.onAccessUnit({ type: type === 5 ? "key" : "delta", data });
+      const firstMacroblock = firstMacroblockInSlice(nal);
+      if (this.accessUnit.length > 0 && (firstMacroblock === 0 || firstMacroblock === null)) {
+        this.emitAccessUnit();
+      }
+      if (this.accessUnit.length === 0) {
+        this.accessUnit.push(...this.prefix);
+        this.prefix = [];
+      }
+      this.accessUnit.push(nal);
+      if (type === 5) this.accessUnitType = "key";
+      else this.accessUnitType ??= "delta";
     } else {
+      if (this.accessUnit.length > 0) this.emitAccessUnit();
       this.prefix.push(nal);
+    }
+  }
+
+  /**
+   * The trailing NAL waits in `buffer` until a later start code proves where it ends, but its header
+   * is already enough to prove where the previous picture ends. Peeking here avoids adding a full
+   * extra frame of latency to continuous streams that do not emit access-unit delimiters.
+   */
+  emitBeforePendingNal() {
+    if (this.accessUnit.length === 0 || this.buffer.length < 5) return;
+    const type = nalUnitType(this.buffer);
+    if (type !== 1 && type !== 5) {
+      this.emitAccessUnit();
+      return;
+    }
+    if (firstMacroblockInSlice(this.buffer) === 0) this.emitAccessUnit();
+  }
+
+  emitAccessUnit() {
+    if (this.accessUnit.length === 0) return;
+    const data = concatBytes(this.accessUnit);
+    const type = this.accessUnitType ?? "delta";
+    this.accessUnit = [];
+    this.accessUnitType = null;
+    if (data.length > 0) {
+      this.onAccessUnit({ type, data });
     }
   }
 }

@@ -8,6 +8,7 @@ import {
   AnnexBParser,
   codecFromParameterSet,
   concatBytes,
+  firstMacroblockInSlice,
   findStartCodes,
   IDLE_NAL_FLUSH_MS,
   nalPrefixLength,
@@ -30,6 +31,7 @@ const sps = nal(LONG_START, 0x67, 0x64, 0x00, 0x1f, 0xac, 0xd9);
 const pps = nal(LONG_START, 0x68, 0xeb, 0xe3, 0xcb, 0x22, 0xc0);
 const idr = nal(LONG_START, 0x65, 0x88, 0x84, 0x00, 0x10);
 const delta = nal(SHORT_START, 0x41, 0x9a, 0x24, 0x6c, 0x40);
+const aud = nal(LONG_START, 0x09, 0xf0);
 
 /** A parser whose idle flush is driven by the test rather than by the event loop. */
 function createParser(overrides = {}) {
@@ -70,6 +72,12 @@ test("the codec string comes from the sequence parameter set", () => {
   assert.equal(codecFromParameterSet(nal(LONG_START, 0x67)), null);
 });
 
+test("slice headers distinguish a new picture from another slice of the current picture", () => {
+  assert.equal(firstMacroblockInSlice(nal(LONG_START, 0x65, 0x80)), 0);
+  assert.equal(firstMacroblockInSlice(nal(LONG_START, 0x65, 0x40)), 1);
+  assert.equal(firstMacroblockInSlice(sps), null);
+});
+
 test("parameter sets are prepended to the slice that follows them", () => {
   const units = [];
   const codecs = [];
@@ -102,6 +110,22 @@ test("a gap in the stream flushes the trailing unit and reports the producer idl
   assert.equal(units[1].type, "delta");
   assert.deepEqual([...units[1].data], [...delta]);
   assert.equal(idleCount, 1);
+});
+
+test("multiple slices of one frame are submitted as one access unit", () => {
+  const units = [];
+  const firstSlice = nal(LONG_START, 0x65, 0x80, 0x11, 0x22);
+  const secondSlice = nal(LONG_START, 0x65, 0x40, 0x33, 0x44);
+  const { parser } = createParser({ onAccessUnit: (unit) => units.push(unit) });
+
+  parser.push(concatBytes([sps, pps, aud, firstSlice, secondSlice, aud, delta]));
+
+  assert.equal(units.length, 1);
+  assert.equal(units[0].type, "key");
+  assert.deepEqual(
+    [...units[0].data],
+    [...concatBytes([sps, pps, aud, firstSlice, secondSlice])],
+  );
 });
 
 test("split chunks are reassembled across pushes", () => {
