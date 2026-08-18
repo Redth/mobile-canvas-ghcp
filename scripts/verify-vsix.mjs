@@ -28,16 +28,23 @@ function verifyExtracted(directory) {
     "extension/package.json",
     "extension/out/extension.js",
     "extension/media/activitybar.svg",
+    "extension/media/windows-activitybar.svg",
     "extension/media/icon.png",
     "extension/media/vscode-theme.css",
     "extension/media/vscode-theme.js",
     "extension/media/vscode-transport.js",
     "extension/dist/web/index.html",
+    "extension/dist/web/annexb.js",
     "extension/dist/web/canvas-state.js",
     "extension/dist/web/create-device-options.js",
     "extension/dist/web/device-canvas.css",
     "extension/dist/web/device-canvas.js",
+    "extension/dist/web/windows/index.html",
+    "extension/dist/web/windows/windows-canvas.css",
+    "extension/dist/web/windows/windows-canvas.js",
+    "extension/dist/web/windows/windows-state.js",
     "extension/dist/lib/runtime.mjs",
+    "extension/dist/lib/windows-app-helper.mjs",
     "extension/dist/lib/mcp-vscode-proxy.mjs",
     "extension/dist/scripts/mcp-vscode.mjs",
     "extension/dist/runtimes/manifest.json",
@@ -87,12 +94,29 @@ function verifyExtracted(directory) {
     "mobileCanvas_selectedDevice",
     "mobileCanvas_screenshot",
     "mobileCanvas_uiTree",
+    "windowsCanvas_selectedApp",
+    "windowsCanvas_screenshot",
+    "windowsCanvas_uiTree",
   ]) {
     if (!extensionPackage.contributes?.languageModelTools?.some(
       (tool) => tool.name === name && tool.canBeReferencedInPrompt === true,
     )) {
       throw new Error(`VSIX is missing attachable chat tool ${name}.`);
     }
+  }
+
+  const containers = extensionPackage.contributes?.viewsContainers?.activitybar ?? [];
+  if (!containers.some((container) => container.id === "windowsCanvas")) {
+    throw new Error("VSIX is missing the windowsCanvas activity-bar container.");
+  }
+  const windowsViews = extensionPackage.contributes?.views?.windowsCanvas ?? [];
+  const windowsView = windowsViews.find((view) => view.id === "windowsCanvas.appView");
+  if (!windowsView) {
+    throw new Error("VSIX is missing the windowsCanvas.appView view.");
+  }
+  // The view carries a `when` clause so its container hides itself on non-Windows hosts.
+  if (typeof windowsView.when !== "string" || windowsView.when.length === 0) {
+    throw new Error("The windowsCanvas.appView view must declare a when clause.");
   }
 
   const sizeMiB = statSync(vsix).size / 1024 / 1024;
@@ -106,5 +130,4 @@ function verifyExtracted(directory) {
     + `${sizeMiB.toFixed(1)} MiB`,
   );
 }
-
 

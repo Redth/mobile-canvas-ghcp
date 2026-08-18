@@ -5,6 +5,7 @@ using MobileCanvas.Contracts;
 using MobileCanvas.Core;
 using MobileCanvas.Android;
 using MobileCanvas.iOS;
+using WindowsCanvas.Contracts;
 using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Hosting;
 using Microsoft.AspNetCore.Hosting.Server;
@@ -33,7 +34,12 @@ internal static class DeviceHost
 		builder.Logging.ClearProviders();
 		builder.WebHost.ConfigureKestrel(options => options.Listen(IPAddress.Loopback, 0));
 		builder.Services.ConfigureHttpJsonOptions(options =>
-			options.SerializerOptions.TypeInfoResolverChain.Insert(0, DeviceJsonContext.Default));
+		{
+			options.SerializerOptions.TypeInfoResolverChain.Insert(0, DeviceJsonContext.Default);
+			// The Windows surface has its own generated context. Chaining it keeps the two
+			// products' payloads independent while one Kestrel serializes both.
+			options.SerializerOptions.TypeInfoResolverChain.Insert(1, WindowsJsonContext.Default);
+		});
 		builder.Services.AddSingleton<IProcessRunner, SystemProcessRunner>();
 		builder.Services.AddSingleton<MacSystemSettingsLauncher>();
 		builder.Services.AddSingleton<IosSimulatorBackend>();
@@ -47,10 +53,12 @@ internal static class DeviceHost
 		builder.Services.AddSingleton<CanvasBootstrapStore>();
 		builder.Services.AddSingleton<AutomationActivityHub>();
 		builder.Services.AddSingleton(new HostSecurity(controlToken));
+		WindowsCanvasRegistration.Add(builder.Services);
 
 		var app = builder.Build();
 		app.UseWebSockets();
 		DeviceApi.Map(app);
+		WindowsApi.Map(app);
 
 		try
 		{
@@ -83,18 +91,7 @@ internal static class DeviceHost
 	{
 		try
 		{
-			var stream = new FileStream(
-				DevicePaths.Lock,
-				FileMode.OpenOrCreate,
-				FileAccess.ReadWrite,
-				FileShare.None);
-			if (!OperatingSystem.IsWindows())
-			{
-				File.SetUnixFileMode(
-					DevicePaths.Lock,
-					UnixFileMode.UserRead | UnixFileMode.UserWrite);
-			}
-			return stream;
+			return DevicePaths.OpenSingletonLock();
 		}
 		catch (IOException)
 		{

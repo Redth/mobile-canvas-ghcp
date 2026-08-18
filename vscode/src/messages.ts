@@ -32,7 +32,7 @@ export type WebviewMessage =
   | { type: "view-title"; title: string; description?: string };
 
 export type ExtensionMessage =
-  | { type: "context"; sessionId: string; instanceId: string }
+  | { type: "context"; sessionId: string; instanceId: string; surface: string }
   | {
       type: "api-result";
       id: string;

@@ -54,38 +54,43 @@ public sealed class DeviceService(IEnumerable<IDeviceBackend> backends)
 		return await backend.BootAsync(created.Id, cancellationToken).ConfigureAwait(false);
 	}
 
-	public async Task<DeviceTarget> SelectAsync(
+	public Task<DeviceTarget> SelectAsync(
 		string sessionId,
 		string instanceId,
+		string deviceId,
+		CancellationToken cancellationToken = default) =>
+		SelectAsync(new CanvasContextKey(sessionId, instanceId), deviceId, cancellationToken);
+
+	public async Task<DeviceTarget> SelectAsync(
+		CanvasContextKey key,
 		string deviceId,
 		CancellationToken cancellationToken = default)
 	{
 		var device = await GetDeviceAsync(deviceId, cancellationToken).ConfigureAwait(false);
-		_selections[SelectionKey(sessionId, instanceId)] = device.Id;
+		_selections[SelectionKey(key)] = device.Id;
 		return device;
 	}
-
-	public Task<DeviceTarget> SelectAsync(
-		CanvasContextKey key,
-		string deviceId,
-		CancellationToken cancellationToken = default) =>
-		SelectAsync(key.SessionId, key.InstanceId, deviceId, cancellationToken);
 
 	/// <summary>
 	/// The selected device ID, without asking a backend to describe it. Input runs on every tap, so it
 	/// needs a way to notice the canvas is pointed elsewhere that costs nothing when it is not.
 	/// </summary>
 	public string? GetSelectedId(CanvasContextKey key) =>
-		_selections.TryGetValue(SelectionKey(key.SessionId, key.InstanceId), out var deviceId)
+		_selections.TryGetValue(SelectionKey(key), out var deviceId)
 			? deviceId
 			: null;
 
-	public async Task<DeviceSelection> GetSelectionAsync(
+	public Task<DeviceSelection> GetSelectionAsync(
 		string sessionId,
 		string instanceId,
+		CancellationToken cancellationToken = default) =>
+		GetSelectionAsync(new CanvasContextKey(sessionId, instanceId), cancellationToken);
+
+	public async Task<DeviceSelection> GetSelectionAsync(
+		CanvasContextKey key,
 		CancellationToken cancellationToken = default)
 	{
-		if (!_selections.TryGetValue(SelectionKey(sessionId, instanceId), out var deviceId))
+		if (!_selections.TryGetValue(SelectionKey(key), out var deviceId))
 			return DeviceSelection.None;
 
 		try
@@ -95,31 +100,26 @@ public sealed class DeviceService(IEnumerable<IDeviceBackend> backends)
 		}
 		catch (DeviceNotFoundException)
 		{
-			_selections.TryRemove(SelectionKey(sessionId, instanceId), out _);
+			_selections.TryRemove(SelectionKey(key), out _);
 			return DeviceSelection.None;
 		}
 	}
 
-	public Task<DeviceSelection> GetSelectionAsync(
-		CanvasContextKey key,
-		CancellationToken cancellationToken = default) =>
-		GetSelectionAsync(key.SessionId, key.InstanceId, cancellationToken);
-
-	public async Task<DeviceTarget?> GetSelectedAsync(
+	public Task<DeviceTarget?> GetSelectedAsync(
 		string sessionId,
 		string instanceId,
 		CancellationToken cancellationToken = default) =>
-		(await GetSelectionAsync(sessionId, instanceId, cancellationToken).ConfigureAwait(false)).Device;
+		GetSelectedAsync(new CanvasContextKey(sessionId, instanceId), cancellationToken);
 
-	public Task<DeviceTarget?> GetSelectedAsync(
+	public async Task<DeviceTarget?> GetSelectedAsync(
 		CanvasContextKey key,
 		CancellationToken cancellationToken = default) =>
-		GetSelectedAsync(key.SessionId, key.InstanceId, cancellationToken);
+		(await GetSelectionAsync(key, cancellationToken).ConfigureAwait(false)).Device;
 
 	public void Detach(string sessionId, string instanceId) =>
-		_selections.TryRemove(SelectionKey(sessionId, instanceId), out _);
+		Detach(new CanvasContextKey(sessionId, instanceId));
 
-	public void Detach(CanvasContextKey key) => Detach(key.SessionId, key.InstanceId);
+	public void Detach(CanvasContextKey key) => _selections.TryRemove(SelectionKey(key), out _);
 
 	public Task<DeviceTarget> BootAsync(string deviceId, CancellationToken cancellationToken = default) =>
 		GetBackend(deviceId).BootAsync(deviceId, cancellationToken);
@@ -847,7 +847,12 @@ public sealed class DeviceService(IEnumerable<IDeviceBackend> backends)
 			? backend
 			: throw new DeviceCapabilityException($"Platform '{platform}' is not available on this host.");
 
-	private static string SelectionKey(string sessionId, string instanceId) => $"{sessionId}\n{instanceId}";
+	/// <summary>
+	/// Selections are stored per canvas context, product surface included, so two panels that share
+	/// a session and instance identifier across products never share one device selection.
+	/// </summary>
+	private static string SelectionKey(CanvasContextKey key) =>
+		$"{key.Surface}\n{key.SessionId}\n{key.InstanceId}";
 
 	private static void RequireConfirmation(string operation, bool confirm)
 	{

@@ -943,14 +943,9 @@ public sealed class DeviceHostClient
 
 	private static bool IsSingletonLockAvailable()
 	{
-		DevicePaths.EnsureHome();
 		try
 		{
-			using var stream = new FileStream(
-				DevicePaths.Lock,
-				FileMode.OpenOrCreate,
-				FileAccess.ReadWrite,
-				FileShare.None);
+			using var stream = DevicePaths.OpenSingletonLock();
 			return true;
 		}
 		catch (IOException)
@@ -1068,7 +1063,12 @@ public sealed class DeviceHostClient
 		CancellationToken cancellationToken) =>
 		await SendAsync(method, path, content: null, cancellationToken).ConfigureAwait(false);
 
-	private async Task<HttpResponseMessage> SendAsync(
+	/// <summary>
+	/// The one place a request reaches the host. Exposed to the assembly so the Windows surface
+	/// client can reuse host discovery, startup, version negotiation, and the control token
+	/// without duplicating any of it or widening the public API.
+	/// </summary>
+	internal async Task<HttpResponseMessage> SendAsync(
 		HttpMethod method,
 		string path,
 		HttpContent? content,
@@ -1178,8 +1178,23 @@ public sealed class DeviceHostClient
 			$"Mobile Canvas host returned {(int)response.StatusCode} {response.ReasonPhrase}.");
 	}
 
-	private static string WithContext(string path, CanvasContextKey context) =>
-		$"{path}{(path.Contains('?') ? '&' : '?')}sessionId={Escape(context.SessionId)}&instanceId={Escape(context.InstanceId)}";
+	private static string WithContext(string path, CanvasContextKey context)
+	{
+		var query =
+			$"sessionId={Escape(context.SessionId)}&instanceId={Escape(context.InstanceId)}";
+		// Mobile is the host's default, so mobile requests stay byte-identical to older clients.
+		if (!context.Surface.Equals(CanvasSurfaces.Mobile, StringComparison.Ordinal))
+			query += $"&surface={Escape(context.Surface)}";
+		return $"{path}{(path.Contains('?') ? '&' : '?')}{query}";
+	}
+
+	/// <summary>
+	/// Control-token callers name the panel they act for in the query string, and a Windows caller
+	/// has to name its surface there too. Exposed to the assembly so the Windows client builds the
+	/// exact same query the Mobile one does.
+	/// </summary>
+	internal static string WithContextQuery(string path, CanvasContextKey context) =>
+		WithContext(path, context);
 
 	private static string Escape(string value) => Uri.EscapeDataString(value);
 }

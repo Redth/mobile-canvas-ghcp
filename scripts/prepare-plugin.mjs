@@ -26,6 +26,9 @@ for (const relative of [
   ".mcp.json",
   "assets",
   "extension.mjs",
+  // The Windows App child bridges to this module, so it travels with the bundle exactly as the
+  // Mobile entrypoint does. It registers no canvas off Windows, so shipping it everywhere is safe.
+  "windows-extension.mjs",
   "extensions",
   "LICENSE",
   "package.json",
@@ -33,6 +36,7 @@ for (const relative of [
   "web",
   "lib/runtime.mjs",
   "lib/runtime-assets.mjs",
+  "lib/windows-app-helper.mjs",
   "scripts/mcp.mjs",
 ]) {
   const destination = join(output, relative);

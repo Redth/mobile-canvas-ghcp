@@ -299,3 +299,144 @@ test("refreshes rotation and recording mutations", async () => {
     [false, true, false, true, false, true],
   );
 });
+
+test("injects the Windows view identity into windows_app_* tools", async () => {
+  const selected = [];
+  const proxy = new McpVsCodeContextProxy({
+    sessionId: "vscode-session",
+    instanceId: "device-view",
+    windowsInstanceId: "windows-view",
+    selectDevice: async (deviceId, options) => selected.push({ deviceId, ...options }),
+  });
+  const message = {
+    jsonrpc: "2.0",
+    id: "win-1",
+    method: "tools/call",
+    params: {
+      name: "windows_app_screenshot",
+      arguments: {
+        sessionId: "stale-session",
+        instanceId: "stale-view",
+        // A stray deviceId must never drag a Windows tool into the Mobile selection follow-up.
+        deviceId: "ios:phone",
+      },
+    },
+  };
+
+  const result = await proxy.clientMessage(message);
+
+  assert.equal(result.params.arguments.sessionId, "vscode-session");
+  assert.equal(result.params.arguments.instanceId, "windows-view");
+  assert.deepEqual(selected, []);
+});
+
+test("short-circuits windows_app_* tools even without a Windows view", async () => {
+  const selected = [];
+  const proxy = new McpVsCodeContextProxy({
+    sessionId: "vscode-session",
+    instanceId: "device-view",
+    selectDevice: async (deviceId, options) => selected.push({ deviceId, ...options }),
+  });
+  const message = {
+    jsonrpc: "2.0",
+    id: "win-2",
+    method: "tools/call",
+    params: {
+      name: "windows_app_ui_tree",
+      arguments: { deviceId: "android:pixel" },
+    },
+  };
+
+  const result = await proxy.clientMessage(message);
+
+  // No Windows instance to inject, but the call must still bypass the Mobile device logic entirely.
+  assert.equal(result.params.arguments.sessionId, undefined);
+  assert.equal(result.params.arguments.instanceId, undefined);
+  assert.deepEqual(selected, []);
+});
+
+test("relabels windows_app_* schemas without touching mobile relabelling", async () => {
+  const proxy = new McpVsCodeContextProxy({
+    sessionId: "vscode-session",
+    instanceId: "device-view",
+    windowsInstanceId: "windows-view",
+    selectDevice: async () => {},
+  });
+  await proxy.clientMessage({ jsonrpc: "2.0", id: "list-2", method: "tools/list" });
+  const response = {
+    jsonrpc: "2.0",
+    id: "list-2",
+    result: {
+      tools: [
+        {
+          name: "windows_app_get_selected",
+          inputSchema: {
+            type: "object",
+            properties: {
+              sessionId: { type: "string" },
+              instanceId: { type: "string" },
+            },
+            required: ["sessionId", "instanceId"],
+          },
+        },
+        {
+          name: "mobile_device_get_selected",
+          inputSchema: {
+            type: "object",
+            properties: {
+              sessionId: { type: "string" },
+              instanceId: { type: "string" },
+            },
+            required: ["sessionId", "instanceId"],
+          },
+        },
+      ],
+    },
+  };
+
+  await proxy.serverMessage(response);
+
+  assert.deepEqual(response.result.tools[0].inputSchema.required, []);
+  assert.match(
+    response.result.tools[0].inputSchema.properties.sessionId.description,
+    /Windows App VS Code view/,
+  );
+  assert.deepEqual(response.result.tools[1].inputSchema.required, []);
+  assert.match(
+    response.result.tools[1].inputSchema.properties.instanceId.description,
+    /Mobile Canvas VS Code extension/,
+  );
+});
+
+test("leaves mobile_device_* tools unaffected when a Windows view exists", async () => {
+  const selected = [];
+  const proxy = new McpVsCodeContextProxy({
+    sessionId: "vscode-session",
+    instanceId: "device-view",
+    windowsInstanceId: "windows-view",
+    selectDevice: async (deviceId, options) => selected.push({ deviceId, ...options }),
+  });
+
+  const select = await proxy.clientMessage({
+    jsonrpc: "2.0",
+    id: "mobile-1",
+    method: "tools/call",
+    params: {
+      name: "mobile_device_select",
+      arguments: { deviceId: "ios:phone" },
+    },
+  });
+  assert.equal(select.params.arguments.sessionId, "vscode-session");
+  assert.equal(select.params.arguments.instanceId, "device-view");
+
+  await proxy.clientMessage({
+    jsonrpc: "2.0",
+    id: "mobile-2",
+    method: "tools/call",
+    params: {
+      name: "mobile_device_tap",
+      arguments: { deviceId: "android:pixel", x: 1, y: 2 },
+    },
+  });
+  assert.deepEqual(selected, [{ deviceId: "android:pixel", force: false }]);
+});

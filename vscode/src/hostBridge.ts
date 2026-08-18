@@ -10,6 +10,12 @@ import type {
   SocketChannel,
   WebviewMessage,
 } from "./messages";
+import {
+  assertAllowedApiPath,
+  socketRouteFor,
+  type SurfaceConfig,
+  type SurfaceId,
+} from "./surfaces";
 
 const execFileAsync = promisify(execFile);
 const REQUEST_TIMEOUT_MS = 120_000;
@@ -19,6 +25,7 @@ const ALLOWED_METHODS = new Set(["GET", "POST", "DELETE"]);
 interface CanvasOpenResult {
   url: string;
   title?: string;
+  surface?: string;
 }
 
 interface HostConnection {
@@ -40,6 +47,13 @@ export interface SelectedDeviceContext {
   deviceLabel: string;
 }
 
+export interface SelectedWindowsAppContext {
+  selection: unknown;
+  sessionLabel: string;
+  windowId: string;
+  windowLabel: string;
+}
+
 export class HostBridge implements vscode.Disposable {
   private readonly sockets = new Map<string, WebSocket>();
   private readonly openingSockets = new Set<string>();
@@ -56,6 +70,7 @@ export class HostBridge implements vscode.Disposable {
   private selectionToRestore: string | undefined;
 
   constructor(
+    private readonly surface: SurfaceConfig,
     private readonly command: string,
     private readonly sessionId: string,
     private readonly instanceId: string,
@@ -82,6 +97,7 @@ export class HostBridge implements vscode.Disposable {
             type: "context",
             sessionId: this.sessionId,
             instanceId: this.instanceId,
+            surface: this.surface.id,
           });
           break;
         case "api":
@@ -111,7 +127,7 @@ export class HostBridge implements vscode.Disposable {
       } else {
         await this.post({ type: "fatal", message: text });
       }
-      this.output.appendLine(`Mobile Canvas: ${text}`);
+      this.output.appendLine(`${this.surface.productName}: ${text}`);
     }
   }
 
@@ -123,7 +139,7 @@ export class HostBridge implements vscode.Disposable {
   }
 
   async restart(): Promise<void> {
-    this.selectionToRestore = await this.readSelectedDeviceId();
+    this.selectionToRestore = await this.readSelectedId();
     await this.closeCanvas();
     this.invalidateConnection();
   }
@@ -178,6 +194,63 @@ export class HostBridge implements vscode.Disposable {
     };
   }
 
+  async getSelectedWindowsApp(): Promise<SelectedWindowsAppContext> {
+    const selection = await this.getJson("/api/v1/windows/session");
+    const session = isRecord(selection) ? selection.session : undefined;
+    if (!isRecord(selection) || selection.hasSelection !== true || !isRecord(session)) {
+      throw new Error("Attach a Windows app in the Windows view first.");
+    }
+    const windowId = session.selectedWindowId;
+    if (typeof windowId !== "string" || !windowId) {
+      throw new Error("Attach a Windows app in the Windows view first.");
+    }
+    const windows = Array.isArray(session.windows) ? session.windows : [];
+    const selectedWindow = windows.find(
+      (entry) => isRecord(entry) && entry.id === windowId,
+    );
+    const title = isRecord(selectedWindow) ? selectedWindow.title : undefined;
+    const displayName = session.displayName;
+    return {
+      selection,
+      sessionLabel: typeof displayName === "string" && displayName ? displayName : windowId,
+      windowId,
+      windowLabel: typeof title === "string" && title ? title : windowId,
+    };
+  }
+
+  async getSelectedWindowsScreenshot(): Promise<{
+    context: SelectedWindowsAppContext;
+    bytes: Uint8Array;
+  }> {
+    const context = await this.getSelectedWindowsApp();
+    const response = await this.get(
+      `/api/v1/windows/session/windows/${encodeURIComponent(context.windowId)}/screenshot`,
+    );
+    const contentType = response.headers.get("content-type")?.split(";", 1)[0];
+    if (contentType !== "image/png") {
+      throw new Error(
+        `Windows App returned ${contentType ?? "an unknown content type"} for the screenshot.`,
+      );
+    }
+    return {
+      context,
+      bytes: new Uint8Array(await response.arrayBuffer()),
+    };
+  }
+
+  async getSelectedWindowsUiTree(): Promise<{
+    context: SelectedWindowsAppContext;
+    tree: unknown;
+  }> {
+    const context = await this.getSelectedWindowsApp();
+    return {
+      context,
+      tree: await this.getJson(
+        `/api/v1/windows/session/windows/${encodeURIComponent(context.windowId)}/ui/snapshot`,
+      ),
+    };
+  }
+
   dispose(): void {
     if (this.disposed) {
       return;
@@ -188,13 +261,13 @@ export class HostBridge implements vscode.Disposable {
     }
     this.closeSockets();
     void this.closeCanvas().catch((error) => {
-      this.output.appendLine(`Mobile Canvas close failed: ${errorMessage(error)}`);
+      this.output.appendLine(`${this.surface.productName} close failed: ${errorMessage(error)}`);
     });
   }
 
   private async connect(): Promise<HostConnection> {
     if (this.disposed) {
-      throw new Error("The Mobile Canvas view is closed.");
+      throw new Error(`The ${this.surface.productName} view is closed.`);
     }
     const pending = this.connectPromise ??= this.openCanvas();
     try {
@@ -222,6 +295,8 @@ export class HostBridge implements vscode.Disposable {
         this.sessionId,
         "--instance",
         this.instanceId,
+        "--surface",
+        this.surface.id,
         "--json",
       ],
       {
@@ -233,38 +308,52 @@ export class HostBridge implements vscode.Disposable {
     const result = JSON.parse(stdout) as CanvasOpenResult;
     const canvasUrl = new URL(result.url);
     if (canvasUrl.protocol !== "http:" || !isLoopback(canvasUrl.hostname)) {
-      throw new Error("The Mobile Canvas host must use a loopback HTTP address.");
+      throw new Error(`The ${this.surface.productName} host must use a loopback HTTP address.`);
     }
     const secret = canvasUrl.hash
       ? new URLSearchParams(canvasUrl.hash.slice(1)).get("bootstrap")
       : null;
     if (!secret) {
-      throw new Error("The Mobile Canvas host did not return a bootstrap secret.");
+      throw new Error(`The ${this.surface.productName} host did not return a bootstrap secret.`);
     }
 
     const sessionId = new URLSearchParams(canvasUrl.hash.slice(1)).get("sessionId");
     const instanceId = new URLSearchParams(canvasUrl.hash.slice(1)).get("instanceId");
     if (sessionId !== this.sessionId || instanceId !== this.instanceId) {
-      throw new Error("The Mobile Canvas host returned a mismatched panel identity.");
+      throw new Error(`The ${this.surface.productName} host returned a mismatched panel identity.`);
+    }
+
+    // The host must hand this view a session for its own product surface. Only Mobile tolerates an
+    // absent surface, for hosts that predate product surfaces and only ever granted mobile panels;
+    // Windows requires an explicit, matching surface, so a grant issued for another product cannot
+    // be silently adopted here.
+    const returnedSurface = new URLSearchParams(canvasUrl.hash.slice(1)).get("surface")
+      ?? result.surface;
+    const surface = returnedSurface
+      ?? (this.surface.id === "mobile" ? this.surface.id : undefined);
+    if (surface !== this.surface.id) {
+      throw new Error(
+        `The ${this.surface.productName} host returned a session for another product surface.`,
+      );
     }
 
     const baseUrl = new URL(canvasUrl.origin);
     const response = await fetch(new URL("/api/v1/auth/bootstrap", baseUrl), {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ secret, sessionId, instanceId }),
+      body: JSON.stringify({ secret, sessionId, instanceId, surface }),
       signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
     });
     if (!response.ok) {
       throw new Error(
-        `Mobile Canvas bootstrap failed: ${response.status} ${response.statusText}`,
+        `${this.surface.productName} bootstrap failed: ${response.status} ${response.statusText}`,
       );
     }
 
     const setCookie = response.headers.get("set-cookie");
     const cookie = setCookie?.split(";", 1)[0];
     if (!cookie?.startsWith("mobile_device_session=")) {
-      throw new Error("The Mobile Canvas host did not establish a panel session.");
+      throw new Error(`The ${this.surface.productName} host did not establish a panel session.`);
     }
 
     const connection = { baseUrl, cookie };
@@ -277,7 +366,7 @@ export class HostBridge implements vscode.Disposable {
   ): Promise<void> {
     const method = (message.method ?? "GET").toUpperCase();
     if (!ALLOWED_METHODS.has(method)) {
-      throw new Error(`Unsupported Mobile Canvas HTTP method: ${method}`);
+      throw new Error(`Unsupported ${this.surface.productName} HTTP method: ${method}`);
     }
 
     for (let attempt = 0; attempt < 2; attempt += 1) {
@@ -343,7 +432,7 @@ export class HostBridge implements vscode.Disposable {
         }
         if (!response.ok) {
           throw new Error(
-            `Mobile Canvas request failed: ${response.status} ${response.statusText}`,
+            `${this.surface.productName} request failed: ${response.status} ${response.statusText}`,
           );
         }
         return response;
@@ -354,7 +443,7 @@ export class HostBridge implements vscode.Disposable {
         this.invalidateConnection(connection);
       }
     }
-    throw new Error("Mobile Canvas could not reconnect to its local host.");
+    throw new Error(`${this.surface.productName} could not reconnect to its local host.`);
   }
 
   private async getJson(path: string): Promise<unknown> {
@@ -362,7 +451,7 @@ export class HostBridge implements vscode.Disposable {
     const contentType = response.headers.get("content-type")?.split(";", 1)[0];
     if (contentType !== "application/json") {
       throw new Error(
-        `Mobile Canvas returned ${contentType ?? "an unknown content type"} instead of JSON.`,
+        `${this.surface.productName} returned ${contentType ?? "an unknown content type"} instead of JSON.`,
       );
     }
     return response.json();
@@ -373,9 +462,9 @@ export class HostBridge implements vscode.Disposable {
     channel: SocketChannel,
     query?: string,
   ): Promise<void> {
-    if (channel !== "video" && channel !== "events") {
-      throw new Error(`Unsupported Mobile Canvas socket channel: ${String(channel)}`);
-    }
+    // The route comes from the fixed per-surface table keyed by the renderer's channel name, never
+    // from a path the renderer supplied. An unknown channel throws before any connection is opened.
+    const route = socketRouteFor(this.surface, channel);
     this.openingSockets.add(id);
     try {
       const connection = await this.connect();
@@ -391,7 +480,7 @@ export class HostBridge implements vscode.Disposable {
         return;
       }
       this.closeSocket(id);
-      const url = this.apiUrl(`/ws/${channel}`, connection);
+      const url = this.apiUrl(route, connection);
       url.search = query ?? "";
       url.protocol = "ws:";
       const socket = new WebSocket(url, { headers: { Cookie: connection.cookie } });
@@ -407,7 +496,12 @@ export class HostBridge implements vscode.Disposable {
           channel === "events"
           && (
             isBinary
-            || !isEventForCanvas(data.toString(), this.sessionId, this.instanceId)
+            || !isEventForCanvas(
+              data.toString(),
+              this.sessionId,
+              this.instanceId,
+              this.surface.id,
+            )
           )
         ) return;
         const payload = isBinary ? toArrayBuffer(data) : data.toString();
@@ -489,17 +583,20 @@ export class HostBridge implements vscode.Disposable {
   }
 
   private apiUrl(path: string, connection: HostConnection): URL {
-    if (
-      !path.startsWith("/api/v1/") && !path.startsWith("/ws/")
-    ) {
-      throw new Error(`Invalid Mobile Canvas host path: ${path}`);
+    // A socket route is one of the two fixed entries in this surface's table; anything else must be
+    // an allowed API path. Both are re-validated against the resolved pathname below so a crafted
+    // string cannot resolve to a different host route than the prefix test implied.
+    const socketRoutes = Object.values(this.surface.socketRoutes);
+    const isSocketRoute = socketRoutes.includes(path);
+    if (!isSocketRoute) {
+      assertAllowedApiPath(this.surface, path);
     }
     const url = new URL(path, connection.baseUrl);
-    const validPath = path.startsWith("/api/v1/")
-      ? url.pathname.startsWith("/api/v1/")
-      : url.pathname === "/ws/video" || url.pathname === "/ws/events";
+    const validPath = isSocketRoute
+      ? url.pathname === path
+      : this.surface.isAllowedApiPath(url.pathname);
     if (url.origin !== connection.baseUrl.origin || !validPath) {
-      throw new Error("Mobile Canvas requests must remain on the local host.");
+      throw new Error(`${this.surface.productName} requests must remain on the local host.`);
     }
     return url;
   }
@@ -524,6 +621,8 @@ export class HostBridge implements vscode.Disposable {
         this.sessionId,
         "--instance",
         this.instanceId,
+        "--surface",
+        this.surface.id,
         "--json",
       ],
       {
@@ -534,11 +633,14 @@ export class HostBridge implements vscode.Disposable {
     );
   }
 
-  private async readSelectedDeviceId(): Promise<string | undefined> {
+  // Selection is presentation state that must survive a canvas restart. Each surface keeps it in a
+  // different place, so the read/write endpoints and payload shape are chosen from the surface: the
+  // Mobile bridge never touches a Windows endpoint and vice versa.
+  private async readSelectedId(): Promise<string | undefined> {
     if (!this.connectPromise) return undefined;
     try {
       const connection = await this.connectPromise;
-      const response = await fetch(this.apiUrl("/api/v1/selection", connection), {
+      const response = await fetch(this.apiUrl(this.selectionReadPath(), connection), {
         headers: { Cookie: connection.cookie },
         signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
       });
@@ -547,33 +649,27 @@ export class HostBridge implements vscode.Disposable {
           `selection query failed: ${response.status} ${response.statusText}`,
         );
       }
-      const selection = await response.json() as {
-        hasSelection?: boolean;
-        device?: { id?: string };
-      };
-      return selection.hasSelection && typeof selection.device?.id === "string"
-        ? selection.device.id
-        : undefined;
+      return this.extractSelectedId(await response.json());
     } catch (error) {
       this.output.appendLine(
-        `Mobile Canvas could not preserve the selection: ${errorMessage(error)}`,
+        `${this.surface.productName} could not preserve the selection: ${errorMessage(error)}`,
       );
       return undefined;
     }
   }
 
   private async restoreSelection(connection: HostConnection): Promise<void> {
-    const deviceId = this.selectionToRestore;
+    const id = this.selectionToRestore;
     this.selectionToRestore = undefined;
-    if (!deviceId) return;
+    if (!id) return;
     try {
-      const response = await fetch(this.apiUrl("/api/v1/selection", connection), {
+      const response = await fetch(this.apiUrl(this.selectionWritePath(), connection), {
         method: "POST",
         headers: {
           Cookie: connection.cookie,
           "Content-Type": "application/json",
         },
-        body: JSON.stringify({ deviceId }),
+        body: JSON.stringify(this.selectionWriteBody(id)),
         signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
       });
       if (!response.ok) {
@@ -583,9 +679,37 @@ export class HostBridge implements vscode.Disposable {
       }
     } catch (error) {
       this.output.appendLine(
-        `Mobile Canvas could not restore ${deviceId}: ${errorMessage(error)}`,
+        `${this.surface.productName} could not restore ${id}: ${errorMessage(error)}`,
       );
     }
+  }
+
+  private selectionReadPath(): string {
+    return this.surface.id === "windows"
+      ? "/api/v1/windows/session"
+      : "/api/v1/selection";
+  }
+
+  private selectionWritePath(): string {
+    return this.surface.id === "windows"
+      ? "/api/v1/windows/session/windows/select"
+      : "/api/v1/selection";
+  }
+
+  private selectionWriteBody(id: string): Record<string, string> {
+    return this.surface.id === "windows" ? { windowId: id } : { deviceId: id };
+  }
+
+  private extractSelectedId(payload: unknown): string | undefined {
+    if (!isRecord(payload) || payload.hasSelection !== true) return undefined;
+    if (this.surface.id === "windows") {
+      const session = payload.session;
+      const windowId = isRecord(session) ? session.selectedWindowId : undefined;
+      return typeof windowId === "string" && windowId ? windowId : undefined;
+    }
+    const device = payload.device;
+    const deviceId = isRecord(device) ? device.id : undefined;
+    return typeof deviceId === "string" && deviceId ? deviceId : undefined;
   }
 
   private invalidateConnection(connection?: HostConnection): void {
@@ -629,14 +753,14 @@ export class HostBridge implements vscode.Disposable {
         }
         void Promise.resolve(this.post(message)).catch((error) => {
           this.output.appendLine(
-            `Mobile Canvas view notification failed: ${errorMessage(error)}`,
+            `${this.surface.productName} view notification failed: ${errorMessage(error)}`,
           );
         });
       }
     } catch (error) {
       if (!this.disposed) {
         this.output.appendLine(
-          `Mobile Canvas view signal failed: ${errorMessage(error)}`,
+          `${this.surface.productName} view signal failed: ${errorMessage(error)}`,
         );
       }
     }
@@ -708,12 +832,22 @@ function isEventForCanvas(
   payload: string,
   sessionId: string,
   instanceId: string,
+  surfaceId: SurfaceId,
 ): boolean {
   try {
     const activity = JSON.parse(payload) as {
       sessionId?: unknown;
       instanceId?: unknown;
+      surface?: unknown;
     };
+    // The host already addresses events to one panel; this is the second gate. An event that names
+    // a different product surface is always dropped. An absent surface is tolerated only for Mobile,
+    // to stay compatible with hosts that predate surfaces; Windows requires an explicit match.
+    if (activity.surface === undefined) {
+      if (surfaceId !== "mobile") return false;
+    } else if (activity.surface !== surfaceId) {
+      return false;
+    }
     return activity.sessionId === sessionId && activity.instanceId === instanceId;
   } catch {
     return false;

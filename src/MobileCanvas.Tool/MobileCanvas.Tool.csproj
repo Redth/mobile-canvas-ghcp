@@ -25,15 +25,23 @@
     <ProjectReference Include="..\MobileCanvas.Core\MobileCanvas.Core.csproj" />
     <ProjectReference Include="..\MobileCanvas.Android\MobileCanvas.Android.csproj" />
     <ProjectReference Include="..\MobileCanvas.iOS\MobileCanvas.iOS.csproj" />
+    <ProjectReference Include="..\WindowsCanvas.Contracts\WindowsCanvas.Contracts.csproj" />
+    <ProjectReference Include="..\WindowsCanvas.Windows\WindowsCanvas.Windows.csproj" />
     <InternalsVisibleTo Include="MobileCanvas.Tests" />
+    <InternalsVisibleTo Include="WindowsCanvas.Tests" />
   </ItemGroup>
 
   <ItemGroup>
     <EmbeddedResource Include="..\..\web\index.html" LogicalName="MobileCanvas.Web.index.html" />
+    <EmbeddedResource Include="..\..\web\annexb.js" LogicalName="MobileCanvas.Web.annexb.js" />
     <EmbeddedResource Include="..\..\web\canvas-state.js" LogicalName="MobileCanvas.Web.canvas-state.js" />
     <EmbeddedResource Include="..\..\web\create-device-options.js" LogicalName="MobileCanvas.Web.create-device-options.js" />
     <EmbeddedResource Include="..\..\web\device-canvas.js" LogicalName="MobileCanvas.Web.device-canvas.js" />
     <EmbeddedResource Include="..\..\web\device-canvas.css" LogicalName="MobileCanvas.Web.device-canvas.css" />
+    <EmbeddedResource Include="..\..\web\windows\index.html" LogicalName="MobileCanvas.Web.windows.index.html" />
+    <EmbeddedResource Include="..\..\web\windows\windows-canvas.css" LogicalName="MobileCanvas.Web.windows.windows-canvas.css" />
+    <EmbeddedResource Include="..\..\web\windows\windows-canvas.js" LogicalName="MobileCanvas.Web.windows.windows-canvas.js" />
+    <EmbeddedResource Include="..\..\web\windows\windows-state.js" LogicalName="MobileCanvas.Web.windows.windows-state.js" />
     <None Include="..\..\README.md" Pack="true" PackagePath="" Link="README.md" />
   </ItemGroup>
 
@@ -42,6 +50,8 @@
     <TrimmerRootAssembly Include="MobileCanvas.Contracts" />
     <TrimmerRootAssembly Include="MobileCanvas.Android" />
     <TrimmerRootAssembly Include="MobileCanvas.iOS" />
+    <TrimmerRootAssembly Include="WindowsCanvas.Contracts" />
+    <TrimmerRootAssembly Include="WindowsCanvas.Windows" />
   </ItemGroup>
 
   <!--

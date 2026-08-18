@@ -16,20 +16,38 @@ internal static class DevicePaths
 	internal static string HostDirectoryFor(string home, string protocolVersion) =>
 		Path.Combine(home, "hosts", $"v{protocolVersion}");
 
-	public static void EnsureHome()
+	internal static string HostsDirectoryFor(string home) => Path.Combine(home, "hosts");
+
+	/// <summary>
+	/// Every directory the host keeps private state in, outermost first. Creating them in this
+	/// order means a child is never created under a parent that is still world-readable.
+	/// </summary>
+	internal static IEnumerable<string> PrivateDirectoriesFor(string home, string protocolVersion)
 	{
-		EnsurePrivateDirectory(Home);
-		EnsurePrivateDirectory(Path.Combine(Home, "hosts"));
-		EnsurePrivateDirectory(HostHome);
+		yield return home;
+		yield return HostsDirectoryFor(home);
+		yield return HostDirectoryFor(home, protocolVersion);
 	}
 
-	private static void EnsurePrivateDirectory(string path)
+	public static void EnsureHome()
 	{
-		Directory.CreateDirectory(path);
-		if (!OperatingSystem.IsWindows())
-			File.SetUnixFileMode(
-				path,
-				UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute);
+		foreach (var directory in PrivateDirectoriesFor(Home, MobileCanvasProtocol.Version))
+			HostFileSecurity.CreatePrivateDirectory(directory);
+	}
+
+	/// <summary>
+	/// Opens the singleton lock, which is also what proves a host already owns this protocol
+	/// version. Both the host and the client take it, so the file's protection lives here rather
+	/// than in whichever process happened to create it first.
+	/// </summary>
+	public static FileStream OpenSingletonLock()
+	{
+		EnsureHome();
+		return HostFileSecurity.OpenPrivateFile(
+			Lock,
+			FileMode.OpenOrCreate,
+			FileAccess.ReadWrite,
+			FileShare.None);
 	}
 }
 
@@ -58,7 +76,9 @@ internal sealed class HostMetadataStore
 	{
 		DevicePaths.EnsureHome();
 		var temporaryPath = $"{DevicePaths.Metadata}.{Environment.ProcessId}.tmp";
-		using (var stream = new FileStream(
+		// The metadata carries the control token, so the temporary file is restricted before the
+		// token is written into it rather than after the bytes are already on disk.
+		using (var stream = HostFileSecurity.OpenPrivateFile(
 			temporaryPath,
 			FileMode.Create,
 			FileAccess.Write,
@@ -66,13 +86,10 @@ internal sealed class HostMetadataStore
 		{
 			JsonSerializer.Serialize(stream, metadata, DeviceJsonContext.Default.HostMetadata);
 		}
-		if (!OperatingSystem.IsWindows())
-		{
-			File.SetUnixFileMode(
-				temporaryPath,
-				UnixFileMode.UserRead | UnixFileMode.UserWrite);
-		}
 		File.Move(temporaryPath, DevicePaths.Metadata, overwrite: true);
+		// A rename carries the source file's own descriptor, but an older host may have left
+		// metadata behind with inherited permissions, so the destination is repaired as well.
+		HostFileSecurity.ProtectExistingFile(DevicePaths.Metadata);
 	}
 
 	public void DeleteIfOwnedBy(int processId)

@@ -1,0 +1,3 @@
+// RT_MANIFEST is integer resource type 24. Use the numeric value directly so rc.exe does not
+// interpret an undefined RT_MANIFEST token as a custom string resource type.
+1 24 "windows-app-helper.manifest"

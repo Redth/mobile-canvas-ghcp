@@ -20,9 +20,15 @@ import { gzipSync } from "node:zlib";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { sourceHash } from "./source-hash.mjs";
+import {
+  validateWindowsAppHelperEntry,
+  windowsAppHelperFilesForRid,
+} from "../lib/windows-app-helper.mjs";
 
 const packageRoot = dirname(dirname(fileURLToPath(import.meta.url)));
-const runtimesDir = join(packageRoot, "runtimes");
+const runtimesDir = process.env.MOBILE_CANVAS_RUNTIMES_DIR
+  ? resolve(process.env.MOBILE_CANVAS_RUNTIMES_DIR)
+  : join(packageRoot, "runtimes");
 
 // .NET runtime identifier -> the `${process.platform}-${process.arch}` value
 // Node reports on that machine, which is what the resolver looks up.
@@ -58,18 +64,25 @@ if (!platformKey) throw new Error(`unsupported rid: ${rid}`);
 const sourceDir = resolve(packageRoot, args.from ?? ".build/bin");
 const suffix = rid.startsWith("win-") ? ".exe" : "";
 const executable = `mobile-canvas${suffix}`;
+const helperFiles = windowsAppHelperFilesForRid(rid);
 
 // The capture helper only exists on macOS, where it owns direct simulator
 // framebuffer capture, ScreenCaptureKit fallback, and VideoToolbox encoding.
-const wanted = [executable, `mobile-screencap${suffix}`];
+const wanted = [
+  { name: executable, required: true },
+  ...helperFiles.map((name) => ({ name, required: true })),
+  ...(!rid.startsWith("win-")
+    ? [{ name: `mobile-screencap${suffix}`, required: false }]
+    : []),
+];
 
 const files = {};
 let primaryHash = null;
 
-for (const name of wanted) {
+for (const { name, required } of wanted) {
   const source = join(sourceDir, name);
   if (!existsSync(source)) {
-    if (name === executable) {
+    if (required) {
       throw new Error(`missing ${name} in ${sourceDir} -- run scripts/build.sh first`);
     }
     continue;
@@ -107,7 +120,10 @@ manifest.distribution = {
 // Comparing the built bytes cannot answer that: Native AOT is not bit-reproducible,
 // so a rebuild of identical source differs anyway.
 manifest.sourceHash = sourceHash().hash;
-manifest.runtimes[platformKey] = { rid, executable, id: primaryHash, files };
+const entry = { rid, executable, id: primaryHash, files };
+if (helperFiles.length > 0) entry.helpers = helperFiles;
+validateWindowsAppHelperEntry(platformKey, entry);
+manifest.runtimes[platformKey] = entry;
 
 // Sorted so a rebuild of one architecture produces no incidental diff noise
 // in the others, keeping release commits readable.

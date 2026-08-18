@@ -5,8 +5,11 @@
     <Project Path="src/MobileCanvas.iOS/MobileCanvas.iOS.csproj" />
     <Project Path="src/MobileCanvas.Android/MobileCanvas.Android.csproj" />
     <Project Path="src/MobileCanvas.Tool/MobileCanvas.Tool.csproj" />
+    <Project Path="src/WindowsCanvas.Contracts/WindowsCanvas.Contracts.csproj" />
+    <Project Path="src/WindowsCanvas.Windows/WindowsCanvas.Windows.csproj" />
   </Folder>
   <Folder Name="/tests/">
     <Project Path="tests/MobileCanvas.Tests/MobileCanvas.Tests.csproj" />
+    <Project Path="tests/WindowsCanvas.Tests/WindowsCanvas.Tests.csproj" />
   </Folder>
 </Solution>

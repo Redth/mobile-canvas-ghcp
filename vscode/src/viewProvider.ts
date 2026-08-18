@@ -5,6 +5,7 @@ import {
 } from "./hostBridge";
 import type { WebviewMessage } from "./messages";
 import { resolveMobileCanvas } from "./runtime";
+import { MOBILE_SURFACE } from "./surfaces";
 import { createWebviewHtml } from "./webviewHtml";
 
 export const VIEW_ID = "mobileCanvas.deviceView";
@@ -20,8 +21,9 @@ export function applyViewTitle(
   target: ViewTitleTarget,
   title: string,
   description?: string,
+  defaultTitle: string = DEFAULT_VIEW_TITLE,
 ): void {
-  target.title = normalizeTitle(title, 80) || DEFAULT_VIEW_TITLE;
+  target.title = normalizeTitle(title, 80) || defaultTitle;
   target.description = normalizeTitle(description ?? "", 120) || undefined;
 }
 
@@ -49,6 +51,7 @@ export class MobileCanvasViewProvider implements vscode.WebviewViewProvider {
     const runtime = await resolveMobileCanvas(this.context);
     this.output.appendLine(`Mobile Canvas runtime: ${runtime.source}`);
     const bridge = new HostBridge(
+      MOBILE_SURFACE,
       runtime.command,
       this.sessionId,
       VIEW_INSTANCE_ID,
@@ -86,7 +89,7 @@ export class MobileCanvasViewProvider implements vscode.WebviewViewProvider {
 
     // Attach the bridge before loading the document so its initial ready
     // message cannot be lost while the runtime is resolving.
-    webviewView.webview.html = createWebviewHtml(this.context, webviewView.webview);
+    webviewView.webview.html = createWebviewHtml(this.context, webviewView.webview, MOBILE_SURFACE);
   }
 
   async refresh(): Promise<void> {
@@ -95,7 +98,7 @@ export class MobileCanvasViewProvider implements vscode.WebviewViewProvider {
       return;
     }
     await this.bridge?.restart();
-    this.view.webview.html = createWebviewHtml(this.context, this.view.webview);
+    this.view.webview.html = createWebviewHtml(this.context, this.view.webview, MOBILE_SURFACE);
   }
 
   getSelectedDeviceContext(): Promise<SelectedDeviceContext> {

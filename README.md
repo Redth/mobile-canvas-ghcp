@@ -21,6 +21,11 @@ Live H.264 video at ~58 FPS on iOS and ~50 FPS on Android, with real tap, drag,
 scroll, and keyboard input. Everything runs locally on loopback; nothing is
 uploaded anywhere.
 
+On Windows the same bundle also ships **Windows App**, a separate canvas and a
+separate VS Code view for launching, attaching to, inspecting, and controlling
+local Windows desktop apps. It is a sibling product, not a mobile device: see
+[Windows apps](#windows-apps).
+
 ## Install
 
 ### GitHub Copilot app
@@ -35,6 +40,10 @@ then open the **Mobile Device** canvas:
 
 Reload Copilot after installation. The plugin registers the canvas and all
 `mobile_device_*` tools together; there is no separate executable download.
+
+The plugin ships two canvases from one install. **Mobile Device** is available
+everywhere; **Windows App** registers itself only when Copilot is running on
+Windows, so a macOS or Linux install sees exactly what it always has.
 
 <p align="center">
   <img src="assets/github-copilot-canvas.png" width="1100" alt="Mobile Canvas running as a maximized canvas in the GitHub Copilot app">
@@ -59,6 +68,9 @@ The extension includes the native runtimes and registers the
 `mobile_device_*` tools with Copilot Chat automatically. No global tool or
 `mcp.json` is required. See the [VS Code guide](docs/vscode.md) for remote
 workspace behavior, manual MCP setup, and development commands.
+
+On Windows the same extension adds a second Activity Bar item, **Windows**, with
+a **Windows App** view. It is hidden on every other platform.
 
 Both hosts still require Xcode for iOS or the Android SDK for Android; see
 [Requirements](#requirements).
@@ -112,12 +124,55 @@ and take over at any time.
   an animated cursor so a human watching can tell automation from their own
   input.
 
+## Windows apps
+
+On Windows the same install adds a second, separate product: the **Windows App**
+canvas and the **Windows** Activity Bar view. It is not a mobile device — launch,
+window, and accessibility semantics are materially different — so it has its own
+canvas, its own view, its own `/api/v1/windows/` surface, and its own
+`windows_app_*` tools. Mobile Canvas is unchanged by it.
+
+- Search installed apps from AppsFolder, packaged app identities, Start Menu
+  shortcuts, and App Paths. Apps that share a friendly name are shown as
+  ambiguous candidates rather than picked for you, and an app with no
+  registration at all is launched by absolute path with a discrete argument list.
+- Launch a catalog app, launch an explicit executable, or attach to a window that
+  is already open. Launching or attaching authorizes that app session
+  immediately; there is no extra per-action prompt.
+- Every positively correlated top-level window of that app becomes a tab. New
+  windows and dialogs appear on their own; nothing else on the desktop is
+  included, and two windows are never conflated.
+- The selected tab streams live Annex-B H.264 over the authenticated WebSocket
+  and decodes with WebCodecs, falling back to screenshot polling when that is
+  unavailable. Minimized windows pause with a restore action, and a resize or DPI
+  change reconnects for a fresh keyframe.
+- **UI Automation first.** Dump a bounded tree, search it, and invoke, set,
+  select, toggle, expand, collapse, scroll, or focus a real control. Screenshot
+  and coordinate control is the fallback for content with no semantic tree.
+- Coordinates are window-relative physical capture pixels and always travel with
+  the transform token they were measured against. A window that moved, resized,
+  changed DPI, or minimized invalidates the token, and the request is refused
+  rather than clicked somewhere else.
+- Typed text is never echoed into results or into the panel's activity overlay,
+  and password control values are never read or written.
+- Elevated, protected-content, and other-session windows are reported as
+  unsupported or read-only. No elevation workaround is attempted.
+
+```text
+mobile-canvas windows capabilities --json
+mobile-canvas windows apps --text notepad --json
+mobile-canvas windows launch --app <entryId> --session S --instance I --json
+mobile-canvas windows ui-find --window <windowId> --control-type button --name Save --session S --instance I
+mobile-canvas windows screenshot --window <windowId> --session S --instance I
+```
+
 ## Requirements
 
 | | Requirement |
 |---|---|
 | **iOS** | macOS, Xcode with Simulator runtimes, and [`idb_companion`](https://fbidb.io) for input |
 | **Android** | Android SDK with `emulator`, `avdmanager`, and `adb` on `PATH` |
+| **Windows apps** | Windows 10 version 1903 or later, an interactive desktop session, and the bundled `windows-app-helper.exe` |
 | **Optional iOS fallback** | Screen Recording and Accessibility permission for ScreenCaptureKit |
 
 For iOS input, install `idb_companion` from its Homebrew tap. Current Homebrew
@@ -145,15 +200,17 @@ test -x "$IDB_COMPANION_PATH" && "$IDB_COMPANION_PATH" --version
 Android emulators must be started with `-gpu host`. A software-rendered AVD
 drops video from ~50 FPS to ~3 FPS.
 
-| Platform | iOS Simulator | Android emulator | Video |
-|---|---|---|---|
-| macOS | yes | yes | H.264 |
-| Windows | no | yes | screenshot polling |
-| Linux | no | yes | screenshot polling |
+| Platform | iOS Simulator | Android emulator | Windows apps | Video |
+|---|---|---|---|---|
+| macOS | yes | yes | no | H.264 |
+| Windows | no | yes | yes | H.264 for Windows apps; screenshot polling for Android |
+| Linux | no | yes | no | screenshot polling |
 
 iOS control requires `simctl` and `idb`, so it is macOS-only. Android works
-everywhere; hardware H.264 encoding currently runs through a macOS helper, so
-elsewhere the canvas falls back to screenshot polling.
+everywhere; hardware H.264 encoding for Android currently runs through a macOS
+helper, so elsewhere that canvas falls back to screenshot polling. Windows app
+control requires the Windows session itself, so it is Windows-only and never
+registers anywhere else.
 
 ## CLI and source installs
 
@@ -167,8 +224,9 @@ cd mobile-canvas-ghcp
 ```
 
 Reload Copilot afterwards so it picks up the extension. Source installs register
-as **Mobile Device (Local)** (`mobile-device-local`), so a development build can
-coexist with the marketplace plugin without registering the same canvas ID twice.
+as **Mobile Device (Local)** (`mobile-device-local`) and, on Windows,
+**Windows App (Local)** (`windows-app-local`), so a development build can coexist
+with the marketplace plugin without registering the same canvas ID twice.
 
 ### As a .NET global tool
 
@@ -212,6 +270,23 @@ All 24 tools are available both as canvas actions and as MCP tools named
 A typical agent flow is `list` → `select` → read `udid` from the result → deploy
 your app to that exact device → drive it with the input tools.
 
+On Windows the **Windows App** canvas contributes its own actions, mirrored as
+`windows_app_*` MCP tools and `mobile-canvas windows ...` CLI commands. They are
+a separate namespace and never accept a raw window handle:
+
+| Group | Actions |
+|---|---|
+| Discovery | `get_windows_capabilities`, `search_windows_apps`, `list_running_windows` |
+| Session | `launch_windows_app`, `launch_windows_executable`, `attach_windows_window`, `get_windows_app_session`, `release_windows_app_session` |
+| Windows | `list_windows_app_windows`, `select_windows_app_window`, `reveal_windows_app_window`, `restore_windows_app_window` |
+| Semantic UI | `dump_windows_ui_tree`, `find_windows_ui_elements`, `act_on_windows_ui_element`, `wait_for_windows_ui` |
+| Visual input | `capture_windows_screenshot`, `get_windows_geometry`, `click_windows_app`, `drag_windows_app`, `scroll_windows_app`, `press_windows_app_key`, `type_windows_app_text` |
+
+A typical Windows flow is `search_windows_apps` → `launch_windows_app` →
+`find_windows_ui_elements` → `act_on_windows_ui_element`, dropping to
+`capture_windows_screenshot` plus `click_windows_app` only when a control has no
+semantic tree.
+
 ## VS Code integration
 
 The Marketplace installs a self-contained package on supported desktop targets;
@@ -222,6 +297,11 @@ appearance elsewhere. Attach the selected device, a fresh screenshot, or its
 accessibility tree to chat with `#mobileDevice`, `#mobileScreenshot`, or
 `#mobileUiTree`.
 
+On Windows the separate **Windows** view adds `#windowsApp`, `#windowsScreenshot`,
+and `#windowsUiTree` for the attached desktop app. Each view has a fixed product
+surface with its own allowlisted HTTP routes and socket channels, so neither can
+reach the other's endpoints or see the other's activity.
+
 The extension runs locally for Remote SSH, Dev Containers, and Codespaces.
 `vscode.dev` is unsupported.
 
@@ -229,22 +309,41 @@ The extension runs locally for Remote SSH, Dev Containers, and Codespaces.
 
 ```text
 GitHub Copilot app        VS Code extension          CLI / other agent
-  └─ extension.mjs          ├─ Activity Bar webview    └─ mobile-canvas mcp
-       │ canvas actions     └─ MCP context proxy              │
+  ├─ extension.mjs          ├─ Mobile view             └─ mobile-canvas mcp
+  └─ windows-extension.mjs  ├─ Windows view (Win only)         │
+       │ canvas actions     └─ MCP context proxy               │
        └──────────────────┬───────────────┬────────────────────┘
                           ▼
                   mobile-canvas host     (per-user, per-protocol singleton)
                     ├─ HTTP + WebSocket UI transport
-                    ├─ per-panel selected-device state
-                    └─ platform backends
-                         ├─ iOS      simctl + CoreSimulator IOSurface + idb
-                         └─ Android  emulator gRPC + adb
+                    ├─ per-panel, per-surface credentials and state
+                    ├─ Mobile surface  /  ·  /api/v1/*  ·  /ws/video, /ws/events
+                    │    └─ platform backends
+                    │         ├─ iOS      simctl + CoreSimulator IOSurface + idb
+                    │         └─ Android  emulator gRPC + adb
+                    └─ Windows surface  /windows/  ·  /api/v1/windows/*
+                         ·  /ws/windows/video, /ws/windows/events
+                         └─ windows-app-helper.exe
+                              Shell catalog · UI Automation · WGC + Media Foundation
 ```
+
+Windows apps are deliberately not another `IDeviceBackend`: their launch,
+process, window, and accessibility semantics are materially different from
+simulator lifecycle, so they get their own contracts, service, routes, and tools
+rather than being bent into the mobile model. Both surfaces share the host
+process, the loopback listener, the bootstrap flow, the runtime resolver, and the
+release bundle, and nothing else.
 
 The host is started on demand, binds only to `127.0.0.1`, and authenticates
 canvas panels with a scoped reload grant exchanged for a rotating session cookie.
 The grant remains in the URL fragment so a host-restored renderer can reconnect
 without exposing the credential in an HTTP request.
+Every grant, cookie, and automation event is scoped to one panel and one product
+surface, so a panel only receives the activity addressed to it and a credential
+issued for another surface cannot reach the device API.
+Host state under `~/.mobile-canvas` — including the control token in `host.json`
+— is kept owner-only: `0700`/`0600` on Unix, and an inheritance-free ACL that
+grants only the current account on Windows.
 It exits after an idle grace period and **never** shuts down a device
 implicitly, so detaching a panel is always safe.
 
@@ -282,11 +381,15 @@ npm run package --prefix vscode
 Two things to know before you change anything:
 
 - **Web assets are embedded resources.** Any change to `web/` needs a
-  republish, not a file copy. `extension.mjs` is the opposite — it is copied
-  directly and is not part of the binary.
-- **`dotnet publish` does not build the Swift helper.** `scripts/build.sh`
-  builds both. A stale helper fails only later, at stream start; check it with
-  `mobile-screencap --help` and confirm a `framebuffer` subcommand exists.
+  republish, not a file copy. Both renderers live there: `web/` is the Mobile
+  canvas, `web/windows/` is the Windows App canvas, and `web/annexb.js` is the
+  Annex-B framing they share. `extension.mjs` and `windows-extension.mjs` are the
+  opposite — they are copied directly and are not part of the binary.
+- **`dotnet publish` does not build native helpers.** `scripts/build.sh` builds
+  the macOS capture helper and, on Windows, `windows-app-helper.exe` beside the
+  managed host. Check the latter with
+  `windows-app-helper.exe capabilities --json`; unsigned development builds
+  report their signature state diagnostically.
 
 Changing `src/` or `native/` requires the **Release runtimes** workflow. It builds
 each Native AOT RID on its native OS, publishes checksummed release assets, and

@@ -1,0 +1,24 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <RootNamespace>WindowsCanvas.Windows</RootNamespace>
+    <!-- Source-generated P/Invoke emits unsafe marshalling stubs; nothing here writes unsafe code. -->
+    <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
+    <!--
+      The Windows service ships in the same host as Mobile Canvas, which publishes for macOS and
+      Linux runtime identifiers too. Nothing here is compiled for a Windows-only target framework:
+      the P/Invokes are source-generated and every call site is guarded by OperatingSystem
+      .IsWindows(), so the assembly builds and publishes everywhere and reports the platform as
+      unsupported at runtime.
+    -->
+    <NoWarn>$(NoWarn);CA1416</NoWarn>
+    <IsTrimmable>true</IsTrimmable>
+  </PropertyGroup>
+  <ItemGroup>
+    <ProjectReference Include="../MobileCanvas.Contracts/MobileCanvas.Contracts.csproj" />
+    <ProjectReference Include="../WindowsCanvas.Contracts/WindowsCanvas.Contracts.csproj" />
+  </ItemGroup>
+  <ItemGroup>
+    <InternalsVisibleTo Include="WindowsCanvas.Tests" />
+  </ItemGroup>
+</Project>

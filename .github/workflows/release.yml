@@ -41,11 +41,13 @@ jobs:
           # One macOS runner can cross-compile both architectures. Keeping them
           # together avoids competing for two scarce macOS hosted runners.
           - { key: osx,         rids: "osx-arm64 osx-x64", os: macos-14 }
-          - { key: win-x64,     rids: "win-x64",           os: windows-latest }
+          # windows-latest includes the MSVC ARM64 cross tools. Keep both
+          # Windows artifacts on this required runner instead of making a
+          # release depend on optional hosted ARM runner availability.
+          - { key: win,         rids: "win-x64 win-arm64", os: windows-latest }
           - { key: linux-x64,   rids: "linux-x64",         os: ubuntu-latest }
-          # ARM runners are not offered on every plan, so these may be skipped
-          # without failing the release.
-          - { key: win-arm64,   rids: "win-arm64",         os: windows-11-arm, optional: true }
+          # ARM runners are not offered on every plan, so this Linux variant
+          # remains optional. Windows ARM64 is cross-built above and required.
           - { key: linux-arm64, rids: "linux-arm64",       os: ubuntu-24.04-arm, optional: true }
     steps:
       - uses: actions/checkout@v4
@@ -76,7 +78,9 @@ jobs:
       - uses: actions/upload-artifact@v4
         with:
           name: bin-${{ matrix.key }}
-          path: .build/bin/*/mobile-*
+          path: |
+            .build/bin/*/mobile-*
+            .build/bin/*/windows-app-helper.exe
           if-no-files-found: error
           retention-days: 1
 
@@ -106,11 +110,19 @@ jobs:
 
       - name: Require core runtime builds
         run: |
-          for rid in osx-arm64 osx-x64 win-x64 linux-x64; do
+          for rid in osx-arm64 osx-x64 win-x64 win-arm64 linux-x64; do
             find ".build/artifacts" -type f \
               \( -path "*/$rid/mobile-canvas" -o -path "*/$rid/mobile-canvas.exe" \) \
               | grep -q . || {
               echo "required runtime did not build: $rid" >&2
+              exit 1
+            }
+          done
+          for rid in win-x64 win-arm64; do
+            find ".build/artifacts" -type f \
+              -path "*/$rid/windows-app-helper.exe" \
+              | grep -q . || {
+              echo "required Windows helper did not build: $rid" >&2
               exit 1
             }
           done
@@ -146,7 +158,10 @@ jobs:
           GH_TOKEN: ${{ github.token }}
 
       # bundle.mjs merges into the existing manifest, so bundling each downloaded
-      # architecture in turn produces one manifest covering all of them.
+      # architecture in turn produces one manifest covering all of them. Public
+      # releases must Authenticode-sign each Windows helper in the Windows build
+      # job before its artifact upload; no signing credentials are represented
+      # in this repository.
       - name: Bundle every architecture that built
         run: |
           shopt -s nullglob

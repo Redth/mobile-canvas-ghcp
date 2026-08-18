@@ -46,7 +46,12 @@
     "onCommand:mobileCanvas.refresh",
     "onLanguageModelTool:mobileCanvas_selectedDevice",
     "onLanguageModelTool:mobileCanvas_screenshot",
-    "onLanguageModelTool:mobileCanvas_uiTree"
+    "onLanguageModelTool:mobileCanvas_uiTree",
+    "onView:windowsCanvas.appView",
+    "onCommand:windowsCanvas.refresh",
+    "onLanguageModelTool:windowsCanvas_selectedApp",
+    "onLanguageModelTool:windowsCanvas_screenshot",
+    "onLanguageModelTool:windowsCanvas_uiTree"
   ],
   "main": "./out/extension.js",
   "contributes": {
@@ -56,6 +61,11 @@
           "id": "mobileCanvas",
           "title": "Mobile",
           "icon": "media/activitybar.svg"
+        },
+        {
+          "id": "windowsCanvas",
+          "title": "Windows",
+          "icon": "media/windows-activitybar.svg"
         }
       ]
     },
@@ -65,6 +75,14 @@
           "id": "mobileCanvas.deviceView",
           "name": "Device",
           "type": "webview"
+        }
+      ],
+      "windowsCanvas": [
+        {
+          "id": "windowsCanvas.appView",
+          "name": "Windows App",
+          "type": "webview",
+          "when": "mobileCanvas.windowsSupported"
         }
       ]
     },
@@ -79,6 +97,17 @@
         "title": "Refresh",
         "category": "Mobile Devices",
         "icon": "$(refresh)"
+      },
+      {
+        "command": "windowsCanvas.open",
+        "title": "Open Windows App",
+        "category": "Windows Apps"
+      },
+      {
+        "command": "windowsCanvas.refresh",
+        "title": "Refresh",
+        "category": "Windows Apps",
+        "icon": "$(refresh)"
       }
     ],
     "menus": {
@@ -87,6 +116,21 @@
           "command": "mobileCanvas.refresh",
           "group": "navigation",
           "when": "view == mobileCanvas.deviceView"
+        },
+        {
+          "command": "windowsCanvas.refresh",
+          "group": "navigation",
+          "when": "view == windowsCanvas.appView"
+        }
+      ],
+      "commandPalette": [
+        {
+          "command": "windowsCanvas.open",
+          "when": "mobileCanvas.windowsSupported"
+        },
+        {
+          "command": "windowsCanvas.refresh",
+          "when": "mobileCanvas.windowsSupported"
         }
       ]
     },
@@ -135,13 +179,52 @@
           "properties": {},
           "additionalProperties": false
         }
+      },
+      {
+        "name": "windowsCanvas_selectedApp",
+        "displayName": "Windows: Attached App",
+        "toolReferenceName": "windowsApp",
+        "canBeReferencedInPrompt": true,
+        "modelDescription": "Returns information about the Windows desktop app currently attached in the Windows App view, including its window title and selection details.",
+        "userDescription": "Attach the Windows desktop app currently selected in the Windows App view.",
+        "inputSchema": {
+          "type": "object",
+          "properties": {},
+          "additionalProperties": false
+        }
+      },
+      {
+        "name": "windowsCanvas_screenshot",
+        "displayName": "Windows: Screenshot",
+        "toolReferenceName": "windowsScreenshot",
+        "canBeReferencedInPrompt": true,
+        "modelDescription": "Captures and returns a PNG screenshot of the Windows desktop app currently attached in the Windows App view.",
+        "userDescription": "Attach a current screenshot of the attached Windows desktop app.",
+        "inputSchema": {
+          "type": "object",
+          "properties": {},
+          "additionalProperties": false
+        }
+      },
+      {
+        "name": "windowsCanvas_uiTree",
+        "displayName": "Windows: UI Tree",
+        "toolReferenceName": "windowsUiTree",
+        "canBeReferencedInPrompt": true,
+        "modelDescription": "Returns the current UI Automation tree for the Windows desktop app attached in the Windows App view.",
+        "userDescription": "Attach the current UI Automation tree for the attached Windows desktop app.",
+        "inputSchema": {
+          "type": "object",
+          "properties": {},
+          "additionalProperties": false
+        }
       }
     ]
   },
   "scripts": {
     "compile": "tsc -p .",
-    "check:web": "node --check ../web/canvas-state.js && node --check ../web/device-canvas.js && node --check media/vscode-theme.js && node --check media/vscode-transport.js",
-    "check:scripts": "node --check ../lib/runtime.mjs && node --check ../lib/runtime-assets.mjs && node --check ../lib/mcp-vscode-proxy.mjs && node --check ../scripts/mcp-vscode.mjs && node --check ../scripts/prepare-vscode.mjs && node --check ../scripts/prepare-plugin.mjs && node --check ../scripts/prepare-remote-runtime-manifest.mjs && node --check ../scripts/package-runtime-assets.mjs && node --check ../scripts/package-vscode-thin.mjs && node --check ../scripts/package-vscode-targets.mjs && node --check ../scripts/smoke-runtime.mjs && node --check ../scripts/vsix.mjs && node --check ../scripts/verify-vsix.mjs && node --check ../scripts/publish-vscode.mjs",
+    "check:web": "node --check ../web/canvas-state.js && node --check ../web/device-canvas.js && node --check ../web/annexb.js && node --check ../web/windows/windows-canvas.js && node --check ../web/windows/windows-state.js && node --check media/vscode-theme.js && node --check media/vscode-transport.js",
+    "check:scripts": "node --check ../lib/runtime.mjs && node --check ../lib/runtime-assets.mjs && node --check ../lib/windows-app-helper.mjs && node --check ../lib/mcp-vscode-proxy.mjs && node --check ../scripts/mcp-vscode.mjs && node --check ../windows-extension.mjs && node --check ../scripts/prepare-vscode.mjs && node --check ../scripts/prepare-plugin.mjs && node --check ../scripts/prepare-remote-runtime-manifest.mjs && node --check ../scripts/package-runtime-assets.mjs && node --check ../scripts/package-vscode-thin.mjs && node --check ../scripts/package-vscode-targets.mjs && node --check ../scripts/smoke-runtime.mjs && node --check ../scripts/vsix.mjs && node --check ../scripts/verify-vsix.mjs && node --check ../scripts/publish-vscode.mjs",
     "prepare-assets": "node ../scripts/prepare-vscode.mjs",
     "build": "npm run compile && npm run check:web && npm run check:scripts && npm run prepare-assets",
     "test:unit": "node --test test/*.test.mjs ../tests/web/*.test.mjs ../tests/scripts/*.test.mjs",
