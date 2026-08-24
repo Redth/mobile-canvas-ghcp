@@ -3,6 +3,7 @@ import test from "node:test";
 import {
   creatablePlatforms,
   createOptions,
+  needsCatalogForCreate,
 } from "../../web/create-device-options.js";
 
 const catalog = {
@@ -64,4 +65,12 @@ test("an empty runtime compatibility list permits every platform device type", (
     createOptions(catalog, "android", "android-35").deviceTypes.map((type) => type.id),
     ["pixel"],
   );
+});
+
+test("a catalog without a creatable platform asks the dialog to reload", () => {
+  assert.equal(needsCatalogForCreate(catalog), false);
+  assert.equal(needsCatalogForCreate(null), true);
+  assert.equal(needsCatalogForCreate({}), true);
+  assert.equal(needsCatalogForCreate({ runtimes: catalog.runtimes, deviceTypes: [] }), true);
+  assert.equal(needsCatalogForCreate({ runtimes: [], deviceTypes: catalog.deviceTypes }), true);
 });
