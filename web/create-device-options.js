@@ -42,3 +42,36 @@ export function createOptions(catalog, platform, runtimeId) {
 export function needsCatalogForCreate(catalog) {
   return creatablePlatforms(catalog).length === 0;
 }
+
+export function createOptionPlaceholders(pending) {
+  return pending
+    ? {
+        runtime: "Loading installed runtimes...",
+        deviceType: "Loading device types...",
+      }
+    : {
+        runtime: "No compatible runtime installed",
+        deviceType: "No compatible device type found",
+      };
+}
+
+export async function presentCreateDialog({
+  catalog,
+  loadCatalog,
+  renderOptions,
+  showDialog,
+  showError,
+}) {
+  const pending = needsCatalogForCreate(catalog);
+  renderOptions(pending);
+  showDialog();
+  if (!pending) return;
+
+  try {
+    await loadCatalog();
+  } catch (error) {
+    showError(error);
+  } finally {
+    renderOptions(false);
+  }
+}

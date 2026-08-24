@@ -1,7 +1,8 @@
 import {
+  createOptionPlaceholders,
   createOptions,
   creatablePlatforms,
-  needsCatalogForCreate,
+  presentCreateDialog,
 } from "./create-device-options.js";
 import {
   canBootDeviceState,
@@ -1996,19 +1997,16 @@ elements.emptyAction.addEventListener("click", () => {
  */
 async function openCreateDialog() {
   closeDevicePopover();
-  state.createCatalogPending = needsCatalogForCreate(state.catalog);
-  populateCreateOptions();
-  elements.createDialog.showModal();
-  if (!state.createCatalogPending) return;
-
-  try {
-    await loadCatalog();
-  } catch (error) {
-    showError(error);
-  } finally {
-    state.createCatalogPending = false;
-    populateCreateOptions();
-  }
+  await presentCreateDialog({
+    catalog: state.catalog,
+    loadCatalog,
+    renderOptions: (pending) => {
+      state.createCatalogPending = pending;
+      populateCreateOptions();
+    },
+    showDialog: () => elements.createDialog.showModal(),
+    showError,
+  });
 }
 
 document.querySelector("#create-close").addEventListener("click", () => elements.createDialog.close());
@@ -2118,7 +2116,7 @@ for (const button of document.querySelectorAll("[data-action]")) {
 elements.createName.addEventListener("input", () => {
   elements.createName.dataset.edited = "1";
 });
-elements.createRuntime.addEventListener("change", () => populateCreateOptions());
+elements.createRuntime.addEventListener("change", populateCreateOptions);
 
 elements.createForm.addEventListener("submit", (event) => {
   event.preventDefault();
@@ -2331,13 +2329,12 @@ function populateCreateOptions() {
   const selectedRuntimeId = runtimes.some((runtime) => runtime.id === priorRuntimeId)
     ? priorRuntimeId
     : runtimes[0]?.id;
+  const placeholders = createOptionPlaceholders(state.createCatalogPending);
   elements.createRuntime.innerHTML = runtimes.length > 0
     ? runtimes
       .map((runtime) => `<option value="${escapeHtml(runtime.id)}">${escapeHtml(runtime.name)}</option>`)
       .join("")
-    : `<option value="">${state.createCatalogPending
-      ? "Loading installed runtimes..."
-      : "No compatible runtime installed"}</option>`;
+    : `<option value="">${placeholders.runtime}</option>`;
   elements.createRuntime.value = selectedRuntimeId || "";
   elements.createRuntime.disabled = runtimes.length === 0;
 
@@ -2347,9 +2344,7 @@ function populateCreateOptions() {
     ? deviceTypes
       .map((type) => `<option value="${escapeHtml(type.id)}">${escapeHtml(type.name)}</option>`)
       .join("")
-    : `<option value="">${state.createCatalogPending
-      ? "Loading device types..."
-      : "No compatible device type found"}</option>`;
+    : `<option value="">${placeholders.deviceType}</option>`;
   if (deviceTypes.some((type) => type.id === priorDeviceTypeId))
     elements.createDeviceType.value = priorDeviceTypeId;
   elements.createDeviceType.disabled = deviceTypes.length === 0;

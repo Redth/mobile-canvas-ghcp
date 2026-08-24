@@ -1,59 +1,83 @@
 import assert from "node:assert/strict";
-import { readFileSync } from "node:fs";
-import { dirname, join } from "node:path";
 import test from "node:test";
-import { fileURLToPath } from "node:url";
 import { createLatestCatalogLoader } from "../../web/canvas-state.js";
+import {
+  createOptionPlaceholders,
+  presentCreateDialog,
+} from "../../web/create-device-options.js";
 
-const webRoot = join(dirname(fileURLToPath(import.meta.url)), "..", "..", "web");
-const script = readFileSync(join(webRoot, "device-canvas.js"), "utf8");
-const html = readFileSync(join(webRoot, "index.html"), "utf8");
+const catalog = {
+  runtimes: [{ id: "ios-18", isAvailable: true, platform: "ios" }],
+  deviceTypes: [{ id: "iphone-16", platform: "ios" }],
+};
 
-function body(name) {
-  const start = script.indexOf(`function ${name}(`);
-  assert.ok(start >= 0, `Expected a ${name} function`);
-  const open = script.indexOf("{", start);
-  let depth = 0;
-  for (let index = open; index < script.length; index++) {
-    if (script[index] === "{") depth++;
-    if (script[index] === "}" && --depth === 0) return script.slice(open, index + 1);
-  }
-  assert.fail(`Could not read the body of ${name}`);
-}
-
-test("the create dialog markup ships no options of its own", () => {
-  // Both hosts render this markup, so an option baked in here would be shown before any catalog
-  // load and would survive one that failed.
-  assert.match(html, /<select id="create-runtime"[^>]*><\/select>/);
-  assert.match(html, /<select id="create-device-type"[^>]*><\/select>/);
+test("empty options distinguish loading from unavailable runtimes and devices", () => {
+  assert.deepEqual(createOptionPlaceholders(true), {
+    runtime: "Loading installed runtimes...",
+    deviceType: "Loading device types...",
+  });
+  assert.deepEqual(createOptionPlaceholders(false), {
+    runtime: "No compatible runtime installed",
+    deviceType: "No compatible device type found",
+  });
 });
 
-test("opening the create dialog reloads the catalog when it has nothing to offer", () => {
-  const opener = body("openCreateDialog");
-  assert.match(script, /const loadCatalog = createLatestCatalogLoader\(/);
-  assert.match(opener, /needsCatalogForCreate\(state\.catalog\)/);
-  assert.match(opener, /populateCreateOptions\(\)/);
-  assert.match(opener, /await loadCatalog\(\)/);
-  // A failed reload still has to repopulate, or the dropdowns keep the loading placeholder.
-  assert.match(opener, /finally\s*\{[^}]*populateCreateOptions\(\)/s);
+test("a ready catalog opens without reloading", async () => {
+  const calls = [];
+  await presentCreateDialog({
+    catalog,
+    loadCatalog: async () => calls.push("load"),
+    renderOptions: (pending) => calls.push(`render:${pending}`),
+    showDialog: () => calls.push("show"),
+    showError: (error) => calls.push(`error:${error.message}`),
+  });
+
+  assert.deepEqual(calls, ["render:false", "show"]);
 });
 
-test("the create dialog always fills both dropdowns, empty catalog included", () => {
-  const populate = body("populateCreateOptions");
-  assert.match(populate, /Loading installed runtimes/);
-  assert.match(populate, /No compatible runtime installed/);
-  assert.match(populate, /Loading device types/);
-  assert.match(populate, /No compatible device type found/);
-  assert.match(populate, /elements\.createSubmit\.disabled = /);
+test("an empty catalog opens in a loading state and repopulates after reloading", async () => {
+  let finishReload;
+  const reload = new Promise((resolve) => {
+    finishReload = resolve;
+  });
+  const calls = [];
+  const opening = presentCreateDialog({
+    catalog: null,
+    loadCatalog: async () => {
+      calls.push("load");
+      await reload;
+    },
+    renderOptions: (pending) => calls.push(`render:${pending}`),
+    showDialog: () => calls.push("show"),
+    showError: (error) => calls.push(`error:${error.message}`),
+  });
+
+  assert.deepEqual(calls, ["render:true", "show", "load"]);
+  finishReload();
+  await opening;
+  assert.deepEqual(calls, ["render:true", "show", "load", "render:false"]);
 });
 
-test("the runtime change handler does not forward its event as an argument", () => {
-  // populateCreateOptions reads state, not arguments; passing the listener directly used to hand it
-  // a DOM event.
-  assert.match(
-    script,
-    /elements\.createRuntime\.addEventListener\("change", \(\) => populateCreateOptions\(\)\)/,
-  );
+test("a failed catalog reload reports the error and clears the loading state", async () => {
+  const calls = [];
+  await presentCreateDialog({
+    catalog: null,
+    loadCatalog: async () => {
+      calls.push("load");
+      throw new Error("catalog unavailable");
+    },
+    renderOptions: (pending) => calls.push(`render:${pending}`),
+    showDialog: () => calls.push("show"),
+    showError: (error) => calls.push(`error:${error.message}`),
+  });
+
+  assert.deepEqual(calls, [
+    "render:true",
+    "show",
+    "load",
+    "error:catalog unavailable",
+    "render:false",
+  ]);
 });
 
 test("a stale startup catalog cannot replace a successful dialog reload", async () => {
