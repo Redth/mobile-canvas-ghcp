@@ -30,6 +30,38 @@ export async function resumeAuthenticatedPanel({
   return true;
 }
 
+export function shouldRetainDeviceFrame(frameDeviceId, selectedDeviceId) {
+  return typeof selectedDeviceId === "string"
+    && selectedDeviceId.length > 0
+    && frameDeviceId === selectedDeviceId;
+}
+
+export function createFramePrimer({ capture, decode, isCurrent }) {
+  let version = 0;
+  const isActive = (requestVersion, deviceId) =>
+    requestVersion === version && isCurrent(deviceId);
+
+  return {
+    invalidate() {
+      version += 1;
+    },
+    async prime(deviceId, paint) {
+      const requestVersion = ++version;
+      const source = await capture(deviceId);
+      if (!isActive(requestVersion, deviceId)) return false;
+
+      const frame = await decode(source);
+      try {
+        if (!isActive(requestVersion, deviceId)) return false;
+        paint(frame);
+        return true;
+      } finally {
+        frame?.close?.();
+      }
+    },
+  };
+}
+
 export function createLatestCatalogLoader(fetchCatalog, applyCatalog) {
   let nextVersion = 0;
   let appliedVersion = 0;
