@@ -3,6 +3,7 @@ import { readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import test from "node:test";
 import { fileURLToPath } from "node:url";
+import { createLatestCatalogLoader } from "../../web/canvas-state.js";
 
 const webRoot = join(dirname(fileURLToPath(import.meta.url)), "..", "..", "web");
 const script = readFileSync(join(webRoot, "device-canvas.js"), "utf8");
@@ -29,6 +30,7 @@ test("the create dialog markup ships no options of its own", () => {
 
 test("opening the create dialog reloads the catalog when it has nothing to offer", () => {
   const opener = body("openCreateDialog");
+  assert.match(script, /const loadCatalog = createLatestCatalogLoader\(/);
   assert.match(opener, /needsCatalogForCreate\(state\.catalog\)/);
   assert.match(opener, /populateCreateOptions\(\)/);
   assert.match(opener, /await loadCatalog\(\)/);
@@ -52,4 +54,29 @@ test("the runtime change handler does not forward its event as an argument", () 
     script,
     /elements\.createRuntime\.addEventListener\("change", \(\) => populateCreateOptions\(\)\)/,
   );
+});
+
+test("a stale startup catalog cannot replace a successful dialog reload", async () => {
+  let finishStartup;
+  let finishReload;
+  const startup = new Promise((resolve) => {
+    finishStartup = resolve;
+  });
+  const reload = new Promise((resolve) => {
+    finishReload = resolve;
+  });
+  const catalogs = [startup, reload];
+  const applied = [];
+  const loadCatalog = createLatestCatalogLoader(
+    () => catalogs.shift(),
+    (catalog) => applied.push(catalog),
+  );
+
+  const startupLoad = loadCatalog();
+  const dialogReload = loadCatalog();
+  finishReload({ source: "dialog" });
+  assert.equal(await dialogReload, true);
+  finishStartup({ source: "startup" });
+  assert.equal(await startupLoad, false);
+  assert.deepEqual(applied, [{ source: "dialog" }]);
 });

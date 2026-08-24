@@ -30,6 +30,21 @@ export async function resumeAuthenticatedPanel({
   return true;
 }
 
+export function createLatestCatalogLoader(fetchCatalog, applyCatalog) {
+  let nextVersion = 0;
+  let appliedVersion = 0;
+
+  return async () => {
+    const version = ++nextVersion;
+    const catalog = await fetchCatalog();
+    if (version < appliedVersion) return false;
+
+    applyCatalog(catalog);
+    appliedVersion = version;
+    return true;
+  };
+}
+
 export function organizeDiagnostics(diagnostics) {
   const failures = (diagnostics ?? [])
     .flatMap((entry) => entry?.checks ?? [])

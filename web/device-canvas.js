@@ -6,6 +6,7 @@ import {
 import {
   canBootDeviceState,
   clearStoredDeviceId,
+  createLatestCatalogLoader,
   deviceStatusPresentation,
   formatDeviceState,
   organizeDiagnostics,
@@ -244,13 +245,18 @@ async function refresh() {
   }
 }
 
-async function loadCatalog() {
-  const response = await api("/api/v1/catalog");
-  state.catalog = await response.json();
-  renderDiagnostics();
-  renderDeviceList();
-  populateCreateOptions();
-}
+const loadCatalog = createLatestCatalogLoader(
+  async () => {
+    const response = await api("/api/v1/catalog");
+    return response.json();
+  },
+  (catalog) => {
+    state.catalog = catalog;
+    renderDiagnostics();
+    renderDeviceList();
+    populateCreateOptions();
+  },
+);
 
 function renderDiagnostics() {
   const { notices, popover } = organizeDiagnostics(state.catalog?.diagnostics);
