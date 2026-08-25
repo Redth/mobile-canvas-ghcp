@@ -7,12 +7,14 @@ import {
 import {
   canBootDeviceState,
   clearStoredDeviceId,
+  createFramePrimer,
   createLatestCatalogLoader,
   deviceStatusPresentation,
   formatDeviceState,
   organizeDiagnostics,
   readStoredDeviceId,
   resumeAuthenticatedPanel,
+  shouldRetainDeviceFrame,
   shouldDrainIdleDecoder,
   storeDeviceId,
 } from "./canvas-state.js";
@@ -107,6 +109,7 @@ const state = {
   frameClock: performance.now(),
   parser: null,
   framePainted: false,
+  frameDeviceId: null,
   pointer: null,
   wheel: null,
   wheelTimer: null,
@@ -126,6 +129,18 @@ const state = {
   followTarget: null,
   panelVisible: !document.hidden,
 };
+
+const framePrimer = createFramePrimer({
+  capture: async (deviceId) => {
+    const response = await api(`/api/v1/devices/${encodeURIComponent(deviceId)}/screenshot`);
+    return response.blob();
+  },
+  decode: (blob) => createImageBitmap(blob),
+  isCurrent: (deviceId) =>
+    state.panelVisible
+    && !state.detached
+    && state.selected?.id === deviceId,
+});
 
 async function api(path, options = {}) {
   let response = await sendApiRequest(path, options);
@@ -458,14 +473,15 @@ async function selectDevice(device, persist) {
   }
   if (selectionVersion !== state.selectionVersion) return;
 
+  const retainFrame = shouldRetainDeviceFrame(state.frameDeviceId, device.id);
   state.selected = device;
   storeDeviceId(localStorage, canvasInstanceId(), device.id);
   // A cursor left over from the previous device would point at coordinates that no longer mean
   // anything, so drop the overlay whenever the selection changes.
   endAutomation();
-  // The canvas keeps its last painted frame, so without this the previous device's screen shows
-  // through under the "Starting live view..." overlay as though it belonged to the new one.
-  clearScreen();
+  // Reusing the selected device is a refresh/reconnect, so keep its last frame visible. A genuinely
+  // different selection must not inherit pixels from the previous device.
+  if (!retainFrame) clearScreen();
   elements.empty.classList.add("hidden");
   elements.detached.classList.add("hidden");
   elements.view.classList.remove("hidden");
@@ -526,6 +542,7 @@ function showEmptySelection() {
   endAutomation();
   state.selected = null;
   state.display = null;
+  clearScreen();
   elements.view.classList.add("hidden");
   elements.detached.classList.add("hidden");
   configureEmptyState({
@@ -914,7 +931,10 @@ function startStream() {
   stopStream();
   if (!state.panelVisible || !state.selected || state.selected.state !== "booted") return;
 
-  showDeviceStatus("connecting");
+  const deviceId = state.selected.id;
+  const retainFrame = shouldRetainDeviceFrame(state.frameDeviceId, deviceId);
+  if (retainFrame) hideDeviceStatus();
+  else showDeviceStatus("connecting");
   setStreamMode("connecting");
   state.frameClock = performance.now();
 
@@ -975,6 +995,13 @@ function startStream() {
       startPngFallback("PNG");
     }
   });
+  if (!retainFrame) {
+    void primeScreen(deviceId).catch((error) => {
+      if (state.panelVisible && !state.detached && state.selected?.id === deviceId) {
+        console.warn("Could not preload the initial device frame.", error);
+      }
+    });
+  }
 }
 
 function showStreamFailure(error) {
@@ -986,6 +1013,7 @@ function showStreamFailure(error) {
 }
 
 function stopStream() {
+  framePrimer.invalidate();
   // The parser holds a pending flush timer that would otherwise fire into a closed decoder.
   if (state.parser) {
     state.parser.dispose();
@@ -1133,12 +1161,16 @@ class AnnexBDecoder {
 }
 
 function clearScreen() {
+  framePrimer.invalidate();
   elements.canvas.width = 180;
   elements.canvas.height = 400;
   state.canvasContext = null;
+  state.frameDeviceId = null;
 }
 
 function drawVideoFrame(frame) {
+  // A real stream frame wins over an in-flight screenshot used to seed an otherwise empty canvas.
+  framePrimer.invalidate();
   // H.264 codes in 16-pixel macroblocks, so a frame whose real size is not a multiple of 16 carries
   // padding that the visible rectangle excludes. The short drawImage overload leaves that crop up to
   // the implementation, and WebKit blits the padded coded buffer, which showed up as a strip of
@@ -1208,6 +1240,7 @@ function drawScreenSource(source, sourceX, sourceY, sourceWidth, sourceHeight) {
     sourceHeight,
   );
   context.restore();
+  state.frameDeviceId = state.selected?.id ?? null;
 }
 
 // The stream can silently degrade to idb when ScreenCaptureKit is unavailable, which reads as a
@@ -1247,6 +1280,7 @@ function startPngFallback(label) {
     || !state.selected
     || state.selected.state !== "booted"
   ) return;
+  framePrimer.invalidate();
   applyCaptureSource({ source: "png", sourceDetail: "Screenshot polling fallback." });
   if (state.socket) {
     const socket = state.socket;
@@ -1262,19 +1296,25 @@ function startPngFallback(label) {
   setStreamMode(label);
   const capture = async () => {
     state.pngTimer = null;
+    const deviceId = state.selected?.id;
+    if (
+      !deviceId
+      || !state.panelVisible
+      || state.detached
+      || state.selected.state !== "booted"
+      || state.socket
+    ) return;
     try {
-      const response = await api(`/api/v1/devices/${encodeURIComponent(state.selected.id)}/screenshot`);
-      const bitmap = await createImageBitmap(await response.blob());
-      drawScreenSource(bitmap, 0, 0, bitmap.width, bitmap.height);
-      bitmap.close();
-      hideDeviceStatus();
-      countFrame();
+      await primeScreen(deviceId, countFrame);
     } catch (error) {
-      showDeviceStatus("disconnected", { detail: error.message });
+      if (state.panelVisible && !state.detached && state.selected?.id === deviceId) {
+        showDeviceStatus("disconnected", { detail: error.message });
+      }
     } finally {
       if (
         state.panelVisible
         && !state.detached
+        && state.selected?.id === deviceId
         && state.selected?.state === "booted"
         && !state.socket
       ) {
@@ -1283,6 +1323,14 @@ function startPngFallback(label) {
     }
   };
   state.pngTimer = setTimeout(capture, 0);
+}
+
+function primeScreen(deviceId, onPaint) {
+  return framePrimer.prime(deviceId, (bitmap) => {
+    drawScreenSource(bitmap, 0, 0, bitmap.width, bitmap.height);
+    hideDeviceStatus();
+    onPaint?.();
+  });
 }
 
 function countFrame() {

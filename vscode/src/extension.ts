@@ -20,7 +20,15 @@ export function activate(context: vscode.ExtensionContext): void {
   context.subscriptions.push(
     output,
     viewProvider,
-    vscode.window.registerWebviewViewProvider(VIEW_ID, viewProvider),
+    // The canvas is expensive to rebuild: a hidden view otherwise tears the webview down, and
+    // coming back re-bootstraps the host session, reloads the catalog, and reconnects the video
+    // stream from scratch, which reads as the panel crashing back to its loading state. The page
+    // already stops streaming and drops its sockets while hidden (MobileCanvasViewProvider wires
+    // onDidChangeVisibility to HostBridge.setVisible, and the page acts on it in setPanelVisible),
+    // so retaining the context keeps no capture running.
+    vscode.window.registerWebviewViewProvider(VIEW_ID, viewProvider, {
+      webviewOptions: { retainContextWhenHidden: true },
+    }),
     vscode.commands.registerCommand("mobileCanvas.open", async () => {
       await vscode.commands.executeCommand("workbench.view.extension.mobileCanvas");
       await vscode.commands.executeCommand(`${VIEW_ID}.focus`);
