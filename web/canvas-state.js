@@ -1,4 +1,18 @@
 const SELECTED_DEVICE_PREFIX = "mobile-canvas-selected-device:";
+const IDB_INSTALL_COMMAND =
+  "brew tap facebook/fb && brew trust facebook/fb && brew install facebook/fb/idb";
+const MISSING_IDB_MESSAGE =
+  `idb_companion was not found. Run \`${IDB_INSTALL_COMMAND}\`, or set `
+  + "MOBILE_CANVAS_IDB_COMPANION or IDB_COMPANION_PATH to the executable.";
+
+export function formatUserFacingMessage(message) {
+  const value = String(message ?? "");
+  const normalized = value.toLowerCase();
+  return normalized.includes("idb_companion was not found")
+      || normalized.includes("install idb_companion")
+    ? MISSING_IDB_MESSAGE
+    : value;
+}
 
 export function readStoredDeviceId(storage, instanceId) {
   const value = storage.getItem(storageKey(instanceId));
@@ -80,7 +94,11 @@ export function createLatestCatalogLoader(fetchCatalog, applyCatalog) {
 export function organizeDiagnostics(diagnostics) {
   const failures = (diagnostics ?? [])
     .flatMap((entry) => entry?.checks ?? [])
-    .filter((check) => check?.status !== "ok");
+    .filter((check) => check?.status !== "ok")
+    .map((check) => ({
+      ...check,
+      message: formatUserFacingMessage(check.message),
+    }));
   const notices = [];
   const popover = [];
 

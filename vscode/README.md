@@ -65,8 +65,16 @@ Mobile Canvas or .NET tool to install.
 
 | Platform | What you need |
 |---|---|
-| iOS | macOS, Xcode with Simulator runtimes, and [`idb_companion`](https://fbidb.io) for input |
+| iOS | macOS, Xcode with Simulator runtimes, and [`idb`](https://fbidb.io) (provides `idb_companion`) for input |
 | Android | Android SDK tools and `adb` on `PATH` |
+
+For iOS input, install Meta's current Homebrew package:
+
+```bash
+brew tap facebook/fb
+brew trust facebook/fb
+brew install facebook/fb/idb
+```
 
 VS Code 1.101 or newer is required. Browser-hosted `vscode.dev` is not supported
 because it cannot launch local native runtimes.
