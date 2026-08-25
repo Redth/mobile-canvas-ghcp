@@ -104,12 +104,25 @@ private final class FramebufferCapture: @unchecked Sendable {
 		label: "dev.mobilecanvas.framebuffer.frames",
 		qos: .userInteractive)
 
+	// CoreSimulator only reports damage, so a static screen produces no callbacks at all and the
+	// encoded stream stalls until the user touches something. These drive a keepalive that re-sends
+	// the last frame so the panel keeps painting, and so a client joining an idle device still gets
+	// a decodable keyframe promptly.
+	private let idleTickInterval = 0.2
+	private let idleFrameInterval = 0.4
+	private let idleKeyFrameInterval = 1.0
+
 	private var framebuffer: MCSimulatorFramebuffer?
 	private var currentSurface: IOSurface?
 	private var sourceBuffer: CVPixelBuffer?
 	private var transformer: PixelBufferTransformer?
 	private var encoder: H264Encoder?
+	private var idleTimer: DispatchSourceTimer?
+	// Keepalives re-encode this snapshot rather than re-reading the live IOSurface, which would race
+	// the producer outside the callback boundary that normally guarantees a settled frame.
+	private var lastOutputBuffer: CVPixelBuffer?
 	private var lastEncodedAt = -Double.infinity
+	private var lastKeyFrameAt = -Double.infinity
 	private var didStop = false
 	private var receivedFrames: UInt64 = 0
 	private var droppedFrames: UInt64 = 0
@@ -160,6 +173,7 @@ private final class FramebufferCapture: @unchecked Sendable {
 		do {
 			let ready = try configure(surface)
 			encodeCurrentFrame(force: true)
+			startIdleTimer()
 			lock.unlock()
 			return ready
 		} catch {
@@ -167,6 +181,19 @@ private final class FramebufferCapture: @unchecked Sendable {
 			framebuffer.stop()
 			throw error
 		}
+	}
+
+	private func startIdleTimer() {
+		let timer = DispatchSource.makeTimerSource(queue: frameQueue)
+		timer.schedule(
+			deadline: .now() + idleTickInterval,
+			repeating: idleTickInterval,
+			leeway: .milliseconds(50))
+		timer.setEventHandler { [weak self] in
+			self?.processIdleTick()
+		}
+		idleTimer = timer
+		timer.activate()
 	}
 
 	func stop() {
@@ -178,13 +205,17 @@ private final class FramebufferCapture: @unchecked Sendable {
 		didStop = true
 		let encoder = self.encoder
 		self.encoder = nil
+		let idleTimer = self.idleTimer
+		self.idleTimer = nil
 		transformer = nil
 		sourceBuffer = nil
+		lastOutputBuffer = nil
 		currentSurface = nil
 		let framebuffer = self.framebuffer
 		self.framebuffer = nil
 		lock.unlock()
 
+		idleTimer?.cancel()
 		framebuffer?.stop()
 		encoder?.finish()
 	}
@@ -246,6 +277,25 @@ private final class FramebufferCapture: @unchecked Sendable {
 		}
 	}
 
+	private func processIdleTick() {
+		lock.lock()
+		guard !didStop else {
+			lock.unlock()
+			return
+		}
+		if ProcessInfo.processInfo.systemUptime - lastEncodedAt >= idleFrameInterval {
+			encodeKeepAliveFrame()
+		}
+		// An idle stream never reaches processFrameRendered, so this is the only place a client that
+		// went away while the screen was static is noticed.
+		let disconnected = sink.closed
+		lock.unlock()
+
+		if disconnected {
+			onFailure("client disconnected", false)
+		}
+	}
+
 	private func configure(_ surface: IOSurface) throws -> FramebufferReady {
 		let surfaceReference = unsafeBitCast(surface, to: IOSurfaceRef.self)
 		let sourceWidth = IOSurfaceGetWidth(surfaceReference)
@@ -275,6 +325,9 @@ private final class FramebufferCapture: @unchecked Sendable {
 		sourceBuffer = pixelBuffer
 		if dimensionsChanged {
 			encoder?.finish()
+			// The cached keepalive frame belongs to the retired encoder's geometry.
+			lastOutputBuffer = nil
+			lastKeyFrameAt = -Double.infinity
 			transformer = try PixelBufferTransformer(
 				sourceWidth: sourceWidth,
 				sourceHeight: sourceHeight,
@@ -308,13 +361,34 @@ private final class FramebufferCapture: @unchecked Sendable {
 			droppedFrames += 1
 			return
 		}
-		lastEncodedAt = now
 
 		guard let outputBuffer = transformer.transform(sourceBuffer) else {
 			droppedFrames += 1
 			return
 		}
-		encoder.encode(outputBuffer)
+		// Only a frame that actually reached the encoder should suppress the next keepalive.
+		lastEncodedAt = now
+		lastOutputBuffer = outputBuffer
+		submit(outputBuffer, to: encoder, at: now)
+	}
+
+	private func encodeKeepAliveFrame() {
+		guard let encoder, let outputBuffer = lastOutputBuffer else { return }
+		let now = ProcessInfo.processInfo.systemUptime
+		lastEncodedAt = now
+		submit(outputBuffer, to: encoder, at: now)
+	}
+
+	// Presentation timestamps advance one frame per submission, so VideoToolbox's
+	// MaxKeyFrameIntervalDuration is measured in media time. While idle that runs far slower than the
+	// clock, which would leave a joining client waiting many seconds for a keyframe, so the interval
+	// is enforced against wall time here instead.
+	private func submit(_ buffer: CVPixelBuffer, to encoder: H264Encoder, at now: Double) {
+		let needsKeyFrame = now - lastKeyFrameAt >= idleKeyFrameInterval
+		if needsKeyFrame {
+			lastKeyFrameAt = now
+		}
+		encoder.encode(buffer, forceKeyFrame: needsKeyFrame)
 	}
 
 	private func outputDimensions(sourceWidth: Int, sourceHeight: Int) -> (width: Int, height: Int) {
