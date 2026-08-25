@@ -535,6 +535,16 @@ function deviceStatusKind(device) {
   return "unavailable";
 }
 
+function showLoadingSelection() {
+  configureEmptyState({
+    tone: "accent",
+    icon: "#icon-device",
+    title: "Opening live view…",
+    detail: "Connecting to the device catalog.",
+  });
+  elements.empty.classList.remove("hidden");
+}
+
 function showEmptySelection() {
   state.selectionVersion += 1;
   state.selectionTarget = null;
@@ -569,10 +579,15 @@ function configureEmptyState({ tone, icon, title, detail, action }) {
   elements.emptyIcon.setAttribute("href", icon);
   setText(elements.emptyTitle, title);
   setText(elements.emptyDetail, detail);
-  elements.emptyAction.dataset.emptyAction = action.id;
-  elements.emptyActionIcon.setAttribute("href", action.icon);
-  setText(elements.emptyActionText, action.label);
-  elements.emptyAction.setAttribute("aria-label", action.label);
+  if (action) {
+    elements.emptyAction.dataset.emptyAction = action.id;
+    elements.emptyActionIcon.setAttribute("href", action.icon);
+    setText(elements.emptyActionText, action.label);
+    elements.emptyAction.setAttribute("aria-label", action.label);
+    elements.emptyAction.classList.remove("hidden");
+  } else {
+    elements.emptyAction.classList.add("hidden");
+  }
 }
 
 /**
@@ -2563,6 +2578,8 @@ function findStartCodes(bytes) {
   }
   return starts;
 }
+
+showLoadingSelection();
 
 bootstrap()
   .then(refresh)

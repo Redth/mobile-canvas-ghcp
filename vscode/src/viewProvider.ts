@@ -1,4 +1,5 @@
 import * as vscode from "vscode";
+import { BridgeLifecycleCoordinator } from "./bridgeLifecycle";
 import {
   HostBridge,
   type SelectedDeviceContext,
@@ -27,7 +28,10 @@ export function applyViewTitle(
 
 export class MobileCanvasViewProvider implements vscode.WebviewViewProvider {
   private view: vscode.WebviewView | undefined;
-  private bridge: HostBridge | undefined;
+  // Serializes bridge replacement across overlapping resolveWebviewView calls: waits for a
+  // retired bridge's asynchronous close before a replacement bridge is installed, and ensures
+  // only the newest resolution wins.
+  private readonly lifecycle = new BridgeLifecycleCoordinator<HostBridge>();
 
   constructor(
     private readonly context: vscode.ExtensionContext,
@@ -37,7 +41,14 @@ export class MobileCanvasViewProvider implements vscode.WebviewViewProvider {
   ) {}
 
   async resolveWebviewView(webviewView: vscode.WebviewView): Promise<void> {
-    this.bridge?.dispose();
+    const generation = this.lifecycle.beginResolution();
+    // The previous bridge's `canvas close` is asynchronous; opening the replacement before it
+    // settles lets a late close tear down the panel this resolution is about to create.
+    await this.lifecycle.retire();
+    if (!this.lifecycle.isCurrent(generation)) {
+      return;
+    }
+
     this.view = webviewView;
     webviewView.webview.options = {
       enableScripts: true,
@@ -47,6 +58,10 @@ export class MobileCanvasViewProvider implements vscode.WebviewViewProvider {
       ],
     };
     const runtime = await resolveMobileCanvas(this.context);
+    if (!this.lifecycle.isCurrent(generation)) {
+      return;
+    }
+
     this.output.appendLine(`Mobile Canvas runtime: ${runtime.source}`);
     const bridge = new HostBridge(
       runtime.command,
@@ -56,7 +71,7 @@ export class MobileCanvasViewProvider implements vscode.WebviewViewProvider {
       this.output,
       this.refreshSignal,
     );
-    this.bridge = bridge;
+    this.lifecycle.setActive(bridge);
     const messageSubscription = webviewView.webview.onDidReceiveMessage(
       (message: WebviewMessage) => {
         if (message.type === "view-title") {
@@ -71,11 +86,10 @@ export class MobileCanvasViewProvider implements vscode.WebviewViewProvider {
     );
     const disposeSubscription = webviewView.onDidDispose(
       () => {
-        if (this.bridge === bridge) {
-          this.bridge = undefined;
+        if (this.lifecycle.current === bridge) {
           this.view = undefined;
+          void this.lifecycle.retire();
         }
-        bridge.dispose();
       },
     );
     this.context.subscriptions.push(
@@ -94,7 +108,7 @@ export class MobileCanvasViewProvider implements vscode.WebviewViewProvider {
       await vscode.commands.executeCommand(`${VIEW_ID}.focus`);
       return;
     }
-    await this.bridge?.restart();
+    await this.lifecycle.current?.restart();
     this.view.webview.html = createWebviewHtml(this.context, this.view.webview);
   }
 
@@ -117,16 +131,18 @@ export class MobileCanvasViewProvider implements vscode.WebviewViewProvider {
   }
 
   dispose(): void {
-    this.bridge?.dispose();
+    this.lifecycle.invalidate();
+    this.view = undefined;
+    void this.lifecycle.retire();
   }
 
   private requireBridge(): HostBridge {
-    if (!this.bridge) {
+    if (!this.lifecycle.current) {
       throw new Error(
         "Open Mobile from the Activity Bar and select a device before attaching its context.",
       );
     }
-    return this.bridge;
+    return this.lifecycle.current;
   }
 }
 

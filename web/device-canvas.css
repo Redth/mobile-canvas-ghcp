@@ -1035,6 +1035,7 @@ summary:focus-visible,
   font-size: 12px;
   line-height: 1.5;
   text-wrap: pretty;
+  white-space: pre-line;
 }
 
 .button.stream-status-action {

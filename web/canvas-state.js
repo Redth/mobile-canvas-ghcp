@@ -146,7 +146,7 @@ export function deviceStatusPresentation(kind, { deviceName, platform, detail } 
         icon: "#icon-power",
         eyebrow: "Powering on",
         title: `Starting ${subject}`,
-        detail: detail || "This can take a moment. Live view will connect automatically.",
+        detail: detail || "This can take a moment.\nLive view will connect automatically.",
         busy: true,
       };
     case "connecting":
