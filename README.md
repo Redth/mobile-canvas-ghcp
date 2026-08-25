@@ -116,17 +116,18 @@ and take over at any time.
 
 | | Requirement |
 |---|---|
-| **iOS** | macOS, Xcode with Simulator runtimes, and [`idb_companion`](https://fbidb.io) for input |
+| **iOS** | macOS, Xcode with Simulator runtimes, and [`idb`](https://fbidb.io) (provides `idb_companion`) for input |
 | **Android** | Android SDK with `emulator`, `avdmanager`, and `adb` on `PATH` |
 | **Optional iOS fallback** | Screen Recording and Accessibility permission for ScreenCaptureKit |
 
-For iOS input, install `idb_companion` from its Homebrew tap. Current Homebrew
-versions require explicitly trusting third-party formulae:
+For iOS input, install Meta's `idb` metapackage, which provides
+`idb_companion`. Current Homebrew versions require explicitly trusting the
+third-party tap:
 
 ```bash
 brew tap facebook/fb
-brew trust --formula facebook/fb/idb-companion
-brew install facebook/fb/idb-companion
+brew trust facebook/fb
+brew install facebook/fb/idb
 ```
 
 Then add the installed executable to your shell environment. For zsh:
