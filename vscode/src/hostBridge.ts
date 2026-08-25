@@ -51,6 +51,7 @@ export class HostBridge implements vscode.Disposable {
   private readonly discarded = new WeakSet<WebSocket>();
   private connection: HostConnection | undefined;
   private connectPromise: Promise<HostConnection> | undefined;
+  private closeTask: Promise<void> | undefined;
   private disposed = false;
   private signalOffset = 0;
   private selectionToRestore: string | undefined;
@@ -187,9 +188,18 @@ export class HostBridge implements vscode.Disposable {
       unwatchFile(this.refreshSignal, this.onRefreshSignal);
     }
     this.closeSockets();
-    void this.closeCanvas().catch((error) => {
+    this.closeTask = this.closeCanvas().catch((error) => {
       this.output.appendLine(`Mobile Canvas close failed: ${errorMessage(error)}`);
     });
+  }
+
+  /**
+   * Resolves once the asynchronous `canvas close` kicked off by dispose() has settled. A
+   * replacement bridge for the same session/instance must await this before opening, or its
+   * `canvas open` can race the previous bridge's still-in-flight close and get torn down by it.
+   */
+  closed(): Promise<void> {
+    return this.closeTask ?? Promise.resolve();
   }
 
   private async connect(): Promise<HostConnection> {
