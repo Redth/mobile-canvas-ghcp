@@ -22,6 +22,10 @@ test("Ailoha source manifest covers the complete product source", () => {
   assert.equal(manifest.snapshot.fileCount, manifest.files.length);
   assert.ok(manifest.snapshot.totalBytes > 0);
   assert.match(manifest.snapshot.sha256, /^[a-f0-9]{64}$/);
+  assert.ok(manifest.surfaces.backendOperations.length > 40);
+  assert.ok(manifest.surfaces.httpRoutes.length > 50);
+  assert.ok(manifest.surfaces.mcpTools.length > 30);
+  assert.ok(manifest.surfaces.canvasActions.length > 20);
 
   for (const required of [
     "extension.mjs",
@@ -36,6 +40,14 @@ test("Ailoha source manifest covers the complete product source", () => {
   assert.equal(sources.some((source) => source.startsWith(".build/")), false);
   assert.equal(sources.some((source) => source.includes("/bin/")), false);
   assert.equal(sources.some((source) => source.includes("/obj/")), false);
+
+  assert.ok(manifest.surfaces.backendOperations.includes("OpenVideoStreamAsync"));
+  assert.ok(manifest.surfaces.httpRoutes.includes("/ws/video"));
+  assert.ok(manifest.surfaces.mcpTools.includes("mobile_device_screenshot"));
+  assert.ok(manifest.surfaces.canvasActions.includes("list_devices"));
+  for (const surface of Object.values(manifest.surfaces)) {
+    assert.deepEqual(surface, [...surface].sort());
+  }
 });
 
 test("Ailoha source manifest records byte-exact hashes and destinations", () => {
