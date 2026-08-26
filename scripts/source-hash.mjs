@@ -15,7 +15,7 @@
 //   source-hash.mjs --check    compare against the hash in runtimes/manifest.json
 import { createHash } from "node:crypto";
 import { execFileSync } from "node:child_process";
-import { readFileSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -52,7 +52,7 @@ export function sourceHash() {
 	})
 		.toString("utf8")
 		.split("\0")
-		.filter(Boolean)
+		.filter((relative) => relative && existsSync(join(root, relative)))
 		.sort();
 
 	if (listed.length === 0) {

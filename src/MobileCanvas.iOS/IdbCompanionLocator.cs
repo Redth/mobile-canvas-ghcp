@@ -2,6 +2,10 @@ namespace MobileCanvas.iOS;
 
 internal static class IdbCompanionLocator
 {
+	public const string InstallationGuidance =
+		"Run `brew tap facebook/fb && brew trust facebook/fb && brew install facebook/fb/idb`, "
+		+ "or set MOBILE_CANVAS_IDB_COMPANION or IDB_COMPANION_PATH to the executable.";
+
 	private static readonly string[] KnownPaths =
 	[
 		"/opt/homebrew/bin/idb_companion",

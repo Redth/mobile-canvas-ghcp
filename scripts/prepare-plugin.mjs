@@ -4,7 +4,10 @@ import { execFileSync } from "node:child_process";
 import { cpSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { remoteRuntimeManifest } from "../lib/runtime-assets.mjs";
+import {
+  assertDarwinHelperEntries,
+  remoteRuntimeManifest,
+} from "../lib/runtime-assets.mjs";
 
 const root = join(dirname(fileURLToPath(import.meta.url)), "..");
 const thin = process.argv.includes("--thin");
@@ -16,6 +19,9 @@ const archive = join(
   ".build",
   `mobile-canvas-copilot-plugin${thin ? "-thin" : ""}-v${version}.tar.gz`,
 );
+const runtimeManifest = JSON.parse(readFileSync(join(root, "runtimes", "manifest.json"), "utf8"));
+
+assertDarwinHelperEntries(runtimeManifest, { context: "Copilot plugin runtime manifest" });
 
 rmSync(output, { recursive: true, force: true });
 mkdirSync(output, { recursive: true });
@@ -41,8 +47,7 @@ for (const relative of [
 }
 
 if (thin) {
-  const manifest = JSON.parse(readFileSync(join(root, "runtimes", "manifest.json"), "utf8"));
-  const remoteManifest = remoteRuntimeManifest(manifest);
+  const remoteManifest = remoteRuntimeManifest(runtimeManifest);
   mkdirSync(join(output, "runtimes"), { recursive: true });
   writeFileSync(
     join(output, "runtimes", "manifest.json"),

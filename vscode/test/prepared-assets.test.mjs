@@ -3,6 +3,7 @@ import { existsSync, readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import test from "node:test";
 import { fileURLToPath } from "node:url";
+import { assertDarwinHelperEntries } from "../../lib/runtime-assets.mjs";
 
 const extensionRoot = join(dirname(fileURLToPath(import.meta.url)), "..");
 
@@ -30,6 +31,7 @@ test("prepared extension assets contain the shared runtime and UI", () => {
   const runtimeManifest = JSON.parse(
     readFileSync(join(extensionRoot, "dist/runtimes/manifest.json"), "utf8"),
   );
+  assertDarwinHelperEntries(runtimeManifest, { context: "prepared VS Code assets" });
   assert.equal(runtimeManifest.version, extensionPackage.version);
   for (const runtime of Object.values(runtimeManifest.runtimes)) {
     for (const file of Object.values(runtime.files)) {

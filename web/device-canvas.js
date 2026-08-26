@@ -649,7 +649,7 @@ function updateControlAvailability() {
     if (action === "reveal") {
       const description = state.selected?.platform === "android"
         ? "Show emulator window (restarts emulator)"
-        : "Show simulator in Simulator.app";
+        : "Show simulator in the selected Xcode host app";
       button.title = description;
       button.setAttribute("aria-label", description);
     }
@@ -1216,7 +1216,7 @@ function drawVideoFrame(frame) {
 }
 
 /**
- * CoreSimulator keeps its IOSurface in the device's native portrait geometry. Simulator.app normally
+ * CoreSimulator keeps its IOSurface in the device's native portrait geometry. The simulator host app normally
  * rotates that surface while displaying it, but a headless direct orientation event has no app window
  * transform to capture. The emulator stream can likewise lag one frame shape behind its sensor. Rotate
  * only when the source and reported display aspects disagree, so native landscape frames stay untouched.

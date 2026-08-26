@@ -73,6 +73,13 @@ jobs:
             ./scripts/build.sh "$rid"
           done
 
+      - name: Test bundled CoreSimulator HID
+        if: matrix.key == 'osx'
+        shell: bash
+        run: |
+          ./native/mobile-screencap/test.sh --arch arm64
+          ./native/mobile-screencap/test.sh --arch x86_64
+
       - uses: actions/upload-artifact@v4
         with:
           name: bin-${{ matrix.key }}

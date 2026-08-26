@@ -40,3 +40,10 @@ test("unrelated runtime failures pass through unchanged", () => {
   const message = "idb_companion exited with code 1";
   assert.equal(formatUserFacingMessage(message), message);
 });
+
+test("aggregate native and IDB failures retain both transport reasons", () => {
+  const message =
+    "iOS input is unavailable. Bundled Simulator HID: helper exited; "
+    + "IDB fallback: idb_companion was not found.";
+  assert.equal(formatUserFacingMessage(message), message);
+});

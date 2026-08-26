@@ -7,9 +7,9 @@ const MISSING_IDB_MESSAGE =
 
 export function formatUserFacingMessage(message) {
   const value = String(message ?? "");
-  const normalized = value.toLowerCase();
-  return normalized.includes("idb_companion was not found")
-      || normalized.includes("install idb_companion")
+  const normalized = value.trimStart().toLowerCase();
+  return normalized.startsWith("idb_companion was not found")
+      || normalized.startsWith("install idb_companion")
     ? MISSING_IDB_MESSAGE
     : value;
 }
@@ -173,7 +173,7 @@ export function deviceStatusPresentation(kind, { deviceName, platform, detail } 
         icon: "#icon-device",
         eyebrow: "Live view",
         title: `Connecting to ${subject}`,
-        detail: detail || "Preparing a secure, interactive stream.",
+        detail: detail || "Waiting for the first frame.",
         busy: true,
       };
     case "restarting":

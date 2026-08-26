@@ -3,6 +3,7 @@
 import { existsSync, readFileSync, statSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
+import { assertDarwinHelperEntries } from "../lib/runtime-assets.mjs";
 import { listFiles, verifyPublishableImages, withVsix } from "./vsix.mjs";
 
 const root = join(dirname(fileURLToPath(import.meta.url)), "..");
@@ -21,6 +22,10 @@ function verifyExtracted(directory) {
   const runtimeManifest = JSON.parse(
     readEntry("extension/dist/runtimes/manifest.json"),
   );
+  assertDarwinHelperEntries(runtimeManifest, {
+    context: "VSIX runtime manifest",
+    requireAll: Object.keys(runtimeManifest.runtimes ?? {}).length > 1,
+  });
 
   for (const path of [
     "extension/readme.md",
@@ -106,5 +111,4 @@ function verifyExtracted(directory) {
     + `${sizeMiB.toFixed(1)} MiB`,
   );
 }
-
 

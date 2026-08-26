@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 # Builds the mobile-screencap helper.
 #
-# CoreSimulator's IOSurface APIs, ScreenCaptureKit, and VideoToolbox are not reachable from
-# Native AOT .NET, so capture lives in this small executable beside `mobile-canvas`.
+# CoreSimulator HID/IOSurface APIs, ScreenCaptureKit, and VideoToolbox are not reachable from
+# Native AOT .NET, so those integrations live in this executable beside `mobile-canvas`.
 #
 # Usage:
 #   ./build.sh                 # universal binary into out/
@@ -43,8 +43,8 @@ if [[ "$(uname -s)" != "Darwin" ]]; then
 fi
 
 SWIFT_SOURCES=("$SCRIPT_DIR"/Sources/*.swift)
-OBJC_SOURCE="$SCRIPT_DIR/Sources/SimulatorFramebufferBridge.m"
-BRIDGING_HEADER="$SCRIPT_DIR/Sources/SimulatorFramebufferBridge.h"
+OBJC_SOURCES=("$SCRIPT_DIR"/Sources/*.m)
+BRIDGING_HEADER="$SCRIPT_DIR/Sources/Bridging.h"
 SDK_PATH="$(xcrun --sdk macosx --show-sdk-path)"
 mkdir -p "$OUTPUT_DIR"
 
@@ -57,15 +57,23 @@ SLICES=()
 for arch in "${ARCHES[@]}"; do
 	slice_dir="$OUTPUT_DIR/$arch"
 	mkdir -p "$slice_dir"
+	# Drop stale objects: swiftc rejects an input it sees change mid-build, which an incremental
+	# rebuild into an existing slice directory can trip.
+	rm -f "$slice_dir"/*.o
 	echo "building $arch..."
-	xcrun clang \
-		-target "${arch}-apple-macos${DEPLOYMENT_TARGET}" \
-		-isysroot "$SDK_PATH" \
-		-fobjc-arc \
-		-fblocks \
-		-O \
-		-c "$OBJC_SOURCE" \
-		-o "$slice_dir/SimulatorFramebufferBridge.o"
+	OBJECTS=()
+	for source in "${OBJC_SOURCES[@]}"; do
+		object="$slice_dir/$(basename "${source%.m}").o"
+		xcrun clang \
+			-target "${arch}-apple-macos${DEPLOYMENT_TARGET}" \
+			-isysroot "$SDK_PATH" \
+			-fobjc-arc \
+			-fblocks \
+			-O \
+			-c "$source" \
+			-o "$object"
+		OBJECTS+=("$object")
+	done
 	xcrun swiftc \
 		"${OPTIMIZATION[@]}" \
 		-swift-version 5 \
@@ -82,7 +90,7 @@ for arch in "${ARCHES[@]}"; do
 		-framework Accelerate \
 		-o "$slice_dir/mobile-screencap" \
 		"${SWIFT_SOURCES[@]}" \
-		"$slice_dir/SimulatorFramebufferBridge.o"
+		"${OBJECTS[@]}"
 	SLICES+=("$slice_dir/mobile-screencap")
 done
 

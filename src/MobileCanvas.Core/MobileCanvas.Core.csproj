@@ -6,4 +6,7 @@
   <ItemGroup>
     <ProjectReference Include="../MobileCanvas.Contracts/MobileCanvas.Contracts.csproj" />
   </ItemGroup>
+  <ItemGroup>
+    <InternalsVisibleTo Include="MobileCanvas.Tests" />
+  </ItemGroup>
 </Project>

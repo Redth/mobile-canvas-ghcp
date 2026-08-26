@@ -1,9 +1,16 @@
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
-import { mkdtempSync, readFileSync, rmSync } from "node:fs";
+import {
+  existsSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  statSync,
+  unlinkSync,
+} from "node:fs";
 import { createServer } from "node:http";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import test from "node:test";
 import { gzipSync } from "node:zlib";
 import {
@@ -61,21 +68,30 @@ test("remote manifests replace local archive paths with pinned release assets", 
 
 test("downloads, verifies, and reuses a cached runtime", async () => {
   const { executable, manifest, entry } = fixture();
-  const packed = gzipSync(executable);
+  const helper = Buffer.from("#!/bin/sh\necho mobile-screencap\n");
+  entry.files["mobile-screencap"] = {
+    sha256: createHash("sha256").update(helper).digest("hex"),
+    size: helper.length,
+  };
+  const packed = new Map([
+    ["mobile-canvas", gzipSync(executable)],
+    ["mobile-screencap", gzipSync(helper)],
+  ]);
   const cacheRoot = mkdtempSync(join(tmpdir(), "mobile-canvas-runtime-cache-"));
   const runtimesDir = mkdtempSync(join(tmpdir(), "mobile-canvas-empty-runtimes-"));
   let requests = 0;
   const server = createServer((request, response) => {
     requests += 1;
-    assert.equal(
-      request.url,
-      `/${runtimeAssetName(manifest, entry, "mobile-canvas")}`,
+    const name = [...packed.keys()].find(
+      (candidate) => request.url === `/${runtimeAssetName(manifest, entry, candidate)}`,
     );
+    assert.ok(name, `unexpected runtime request ${request.url}`);
+    const body = packed.get(name);
     response.writeHead(200, {
       "content-type": "application/gzip",
-      "content-length": packed.length,
+      "content-length": body.length,
     });
-    response.end(packed);
+    response.end(body);
   });
 
   await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
@@ -89,10 +105,20 @@ test("downloads, verifies, and reuses a cached runtime", async () => {
     };
     const first = await materializeRuntime(manifest, entry, options);
     const second = await materializeRuntime(manifest, entry, options);
+    const helperPath = join(dirname(first), "mobile-screencap");
 
     assert.equal(first, second);
     assert.deepEqual(readFileSync(first), executable);
-    assert.equal(requests, 1);
+    assert.deepEqual(readFileSync(helperPath), helper);
+    assert.notEqual(statSync(helperPath).mode & 0o111, 0);
+    assert.equal(requests, 2);
+
+    unlinkSync(helperPath);
+    assert.equal(existsSync(helperPath), false);
+    const repaired = await materializeRuntime(manifest, entry, options);
+    assert.equal(repaired, first);
+    assert.deepEqual(readFileSync(helperPath), helper);
+    assert.equal(requests, 4);
   } finally {
     server.close();
     rmSync(cacheRoot, { recursive: true, force: true });

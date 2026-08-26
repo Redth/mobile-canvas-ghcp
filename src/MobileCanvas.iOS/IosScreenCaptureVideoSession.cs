@@ -92,7 +92,7 @@ internal sealed class IosScreenCaptureVideoSession : ILiveVideoSession
 		startInfo.ArgumentList.Add(window.WindowId.ToString());
 		AddEncodingOptions(startInfo, options);
 
-		// The capture is already limited by how large Simulator.app draws the window, so scaling up
+		// The capture is already limited by how large the simulator host app draws the window, so scaling up
 		// would only upsample.
 		AddScaleOption(startInfo, options.Scale, window.CaptureHeightPixels);
 		return startInfo;

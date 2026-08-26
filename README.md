@@ -116,13 +116,18 @@ and take over at any time.
 
 | | Requirement |
 |---|---|
-| **iOS** | macOS, Xcode with Simulator runtimes, and [`idb`](https://fbidb.io) (provides `idb_companion`) for input |
+| **iOS** | macOS and a full Xcode installation with Simulator runtimes |
 | **Android** | Android SDK with `emulator`, `avdmanager`, and `adb` on `PATH` |
-| **Optional iOS fallback** | Screen Recording and Accessibility permission for ScreenCaptureKit |
+| **Optional iOS accessibility/fallbacks** | [`idb`](https://fbidb.io) (provides `idb_companion`), plus Screen Recording and Accessibility permission for ScreenCaptureKit window capture |
 
-For iOS input, install Meta's `idb` metapackage, which provides
-`idb_companion`. Current Homebrew versions require explicitly trusting the
-third-party tap:
+The bundled `mobile-screencap` helper provides iOS touch, keyboard, buttons,
+rotation, and direct video capture. Xcode 26 uses Simulator.app; Xcode 27 uses
+Device Hub. Neither visible app needs to be open for headless input.
+
+Install Meta's `idb` metapackage only when you need the iOS accessibility
+hierarchy (`ui_tree`, `ui_find`, or `ui_tap`), compatibility input fallback, or
+the final live-video fallback. It provides `idb_companion`; current Homebrew
+versions require explicitly trusting the third-party tap:
 
 ```bash
 brew tap facebook/fb
@@ -152,9 +157,10 @@ drops video from ~50 FPS to ~3 FPS.
 | Windows | no | yes | screenshot polling |
 | Linux | no | yes | screenshot polling |
 
-iOS control requires `simctl` and `idb`, so it is macOS-only. Android works
-everywhere; hardware H.264 encoding currently runs through a macOS helper, so
-elsewhere the canvas falls back to screenshot polling.
+iOS control requires Xcode's `simctl` and the bundled CoreSimulator helper, so it
+is macOS-only. Android works everywhere; hardware H.264 encoding currently runs
+through the same macOS helper, so elsewhere the canvas falls back to screenshot
+polling.
 
 ## CLI and source installs
 
@@ -238,7 +244,7 @@ GitHub Copilot app        VS Code extension          CLI / other agent
                     ├─ HTTP + WebSocket UI transport
                     ├─ per-panel selected-device state
                     └─ platform backends
-                         ├─ iOS      simctl + CoreSimulator IOSurface + idb
+                         ├─ iOS      simctl + bundled CoreSimulator helper + optional idb
                          └─ Android  emulator gRPC + adb
 ```
 
@@ -262,7 +268,7 @@ Video is deliberately split from input on both platforms:
 |---|---|---|
 | Frames | CoreSimulator IOSurface (ScreenCaptureKit fallback) | emulator gRPC `streamScreenshot` |
 | Encode | VideoToolbox H.264 | same VideoToolbox H.264 |
-| Input | idb (touch/keys), CoreSimulator `GSEvent` (rotation) | emulator gRPC `streamInputEvent` |
+| Input | bundled CoreSimulator HID (Indigo/DTUHID), `GSEvent` rotation; optional idb fallback | emulator gRPC `streamInputEvent` |
 | Lifecycle | `simctl` | `emulator`/`avdmanager` + gRPC |
 
 Raw Android frames are encoded before they reach the browser, so only ~1-2 Mbps
@@ -287,7 +293,8 @@ Two things to know before you change anything:
   directly and is not part of the binary.
 - **`dotnet publish` does not build the Swift helper.** `scripts/build.sh`
   builds both. A stale helper fails only later, at stream start; check it with
-  `mobile-screencap --help` and confirm a `framebuffer` subcommand exists.
+  `mobile-screencap --help` and confirm `framebuffer`, `hid`, `hid-doctor`, and
+  Android's `encode` subcommands exist.
 
 Changing `src/` or `native/` requires the **Release runtimes** workflow. It builds
 each Native AOT RID on its native OS, publishes checksummed release assets, and
