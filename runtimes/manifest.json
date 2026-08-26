@@ -3,82 +3,82 @@
     "darwin-arm64": {
       "rid": "osx-arm64",
       "executable": "mobile-canvas",
-      "id": "ef7f5fc6de41e9da9eb1deb8c05fe06c821de2c0996c210dab6a509d0e23588f",
+      "id": "704e8ed1a6314e34cb25b9c8d50979ab96708467eb7552deff2a7e46fba4718e",
       "files": {
         "mobile-canvas": {
-          "sha256": "ef7f5fc6de41e9da9eb1deb8c05fe06c821de2c0996c210dab6a509d0e23588f",
-          "size": 31962016,
-          "asset": "mobile-canvas-v0.1.16-osx-arm64.gz"
+          "sha256": "704e8ed1a6314e34cb25b9c8d50979ab96708467eb7552deff2a7e46fba4718e",
+          "size": 32244016,
+          "asset": "mobile-canvas-v0.1.16-rc.69-osx-arm64.gz"
         },
         "mobile-screencap": {
-          "sha256": "bbd45c0e7a85ce7d6590ab2fadc170e959e2ae60d8430b6d7484626fe7372b8b",
-          "size": 656960,
-          "asset": "mobile-screencap-v0.1.16-osx-arm64.gz"
+          "sha256": "119b2c58958faa985523ab50273600752098856f41a5a2b633ced63037f0e8b7",
+          "size": 911488,
+          "asset": "mobile-screencap-v0.1.16-rc.69-osx-arm64.gz"
         }
       }
     },
     "darwin-x64": {
       "rid": "osx-x64",
       "executable": "mobile-canvas",
-      "id": "2c12e21fde804f8e5a8de227e144f8d81401aed7ad92373562a4a2dc38fe1ada",
+      "id": "602373a5c99d2531af082e3aab7cb6afbd55fab97ed7109c69d5791e622f10ab",
       "files": {
         "mobile-canvas": {
-          "sha256": "2c12e21fde804f8e5a8de227e144f8d81401aed7ad92373562a4a2dc38fe1ada",
-          "size": 33707936,
-          "asset": "mobile-canvas-v0.1.16-osx-x64.gz"
+          "sha256": "602373a5c99d2531af082e3aab7cb6afbd55fab97ed7109c69d5791e622f10ab",
+          "size": 33991760,
+          "asset": "mobile-canvas-v0.1.16-rc.69-osx-x64.gz"
         },
         "mobile-screencap": {
-          "sha256": "bbd45c0e7a85ce7d6590ab2fadc170e959e2ae60d8430b6d7484626fe7372b8b",
-          "size": 656960,
-          "asset": "mobile-screencap-v0.1.16-osx-x64.gz"
+          "sha256": "119b2c58958faa985523ab50273600752098856f41a5a2b633ced63037f0e8b7",
+          "size": 911488,
+          "asset": "mobile-screencap-v0.1.16-rc.69-osx-x64.gz"
         }
       }
     },
     "linux-arm64": {
       "rid": "linux-arm64",
       "executable": "mobile-canvas",
-      "id": "beabd9ec69f7495d4f389fb5e434c769f6364f3798da688123eed3582471e57f",
+      "id": "349bf29c625f1297cd17334613411f7fe103967dae5d6a5c03b362d3707abe96",
       "files": {
         "mobile-canvas": {
-          "sha256": "beabd9ec69f7495d4f389fb5e434c769f6364f3798da688123eed3582471e57f",
-          "size": 34084760,
-          "asset": "mobile-canvas-v0.1.16-linux-arm64.gz"
+          "sha256": "349bf29c625f1297cd17334613411f7fe103967dae5d6a5c03b362d3707abe96",
+          "size": 34351360,
+          "asset": "mobile-canvas-v0.1.16-rc.69-linux-arm64.gz"
         }
       }
     },
     "linux-x64": {
       "rid": "linux-x64",
       "executable": "mobile-canvas",
-      "id": "454feea8fb2bf942cf2ce1ba4c4a5ae6ee9608e7cadeccbba5ac5940a71c04a9",
+      "id": "07e5fed2411d1cbf78e3e70094309ac2bcfcfb21f78bd2f20be8339874b47802",
       "files": {
         "mobile-canvas": {
-          "sha256": "454feea8fb2bf942cf2ce1ba4c4a5ae6ee9608e7cadeccbba5ac5940a71c04a9",
-          "size": 33388208,
-          "asset": "mobile-canvas-v0.1.16-linux-x64.gz"
+          "sha256": "07e5fed2411d1cbf78e3e70094309ac2bcfcfb21f78bd2f20be8339874b47802",
+          "size": 33654816,
+          "asset": "mobile-canvas-v0.1.16-rc.69-linux-x64.gz"
         }
       }
     },
     "win32-arm64": {
       "rid": "win-arm64",
       "executable": "mobile-canvas.exe",
-      "id": "a505b238c28e0f4833e12bc7ef32cd1a6173c547e4d8f0c925f7090cc0528820",
+      "id": "afe358057344f702b5c17fd8459e4c7b7399843ac8f32d881013129e2dcef236",
       "files": {
         "mobile-canvas.exe": {
-          "sha256": "a505b238c28e0f4833e12bc7ef32cd1a6173c547e4d8f0c925f7090cc0528820",
-          "size": 37677568,
-          "asset": "mobile-canvas-v0.1.16-win-arm64.gz"
+          "sha256": "afe358057344f702b5c17fd8459e4c7b7399843ac8f32d881013129e2dcef236",
+          "size": 37973504,
+          "asset": "mobile-canvas-v0.1.16-rc.69-win-arm64.gz"
         }
       }
     },
     "win32-x64": {
       "rid": "win-x64",
       "executable": "mobile-canvas.exe",
-      "id": "7ca3734fd79c162d29d4e20c62f8d466cb33225d0f4b510033223201c2c8d90e",
+      "id": "f6e4574c4102d62c3dab3b6b5c23150dcbb7e9d22389dd1b68a1516687722761",
       "files": {
         "mobile-canvas.exe": {
-          "sha256": "7ca3734fd79c162d29d4e20c62f8d466cb33225d0f4b510033223201c2c8d90e",
-          "size": 36996096,
-          "asset": "mobile-canvas-v0.1.16-win-x64.gz"
+          "sha256": "f6e4574c4102d62c3dab3b6b5c23150dcbb7e9d22389dd1b68a1516687722761",
+          "size": 37278208,
+          "asset": "mobile-canvas-v0.1.16-rc.69-win-x64.gz"
         }
       }
     }
@@ -86,7 +86,7 @@
   "version": "0.1.16",
   "distribution": {
     "repository": "Redth/mobile-canvas-ghcp",
-    "tag": "v0.1.16"
+    "tag": "v0.1.16-rc.69"
   },
-  "sourceHash": "17bedec6aebe295b5d4c1e68ec126094addf71d94fc0870173592cc2b764b10b"
+  "sourceHash": "953277c3fa0b584e1f2530cd5b954e4c513f50e42af884da8a78693e0c82f669"
 }
