@@ -118,14 +118,16 @@ Dependencies are restored through
 npm ci --prefix vscode --ignore-scripts
 npm test --prefix vscode
 npm run package --prefix vscode
+./scripts/release.sh
+npm run package:targets --prefix vscode -- --local-only
 ```
 
 The package command writes `.build/mobile-canvas-vscode.vsix` and verifies that
 it contains the checksummed runtime manifest, production web assets, and no test
 or source-map files. It downloads the matching release asset on first use.
-Release CI additionally creates six self-contained platform packages after
-building the native runtimes; VS Code Marketplace selects these packages
-automatically.
+On macOS, the final two commands build both local runtime architectures and
+package self-contained Darwin target VSIXs. Release CI creates all six
+self-contained platform packages; VS Code Marketplace selects them automatically.
 
 To debug interactively, run **Run Mobile Canvas VS Code Extension** from the
 repository's Run and Debug view. The pre-launch task compiles TypeScript and

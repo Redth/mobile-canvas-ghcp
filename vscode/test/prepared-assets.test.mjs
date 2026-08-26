@@ -35,8 +35,15 @@ test("prepared extension assets contain the shared runtime and UI", () => {
   assert.equal(runtimeManifest.version, extensionPackage.version);
   for (const runtime of Object.values(runtimeManifest.runtimes)) {
     for (const file of Object.values(runtime.files)) {
-      assert.equal(file.archive, undefined);
-      assert.match(file.asset, /^mobile-(canvas|screencap)-v.+\.gz$/);
+      if (file.archive) {
+        assert.equal(
+          existsSync(join(extensionRoot, "dist/runtimes", file.archive)),
+          true,
+          file.archive,
+        );
+      } else {
+        assert.match(file.asset, /^mobile-(canvas|screencap)-v.+\.gz$/);
+      }
     }
   }
 });

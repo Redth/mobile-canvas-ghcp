@@ -4,6 +4,7 @@ import { execFileSync } from "node:child_process";
 import { readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
+import { localRuntimeManifest } from "../lib/runtime-assets.mjs";
 
 const root = join(dirname(fileURLToPath(import.meta.url)), "..");
 const extensionRoot = join(root, "vscode");
@@ -20,10 +21,21 @@ const supportedTargets = [
 const manifest = JSON.parse(
   readFileSync(join(root, "runtimes", "manifest.json"), "utf8"),
 );
-const targets = supportedTargets.filter((target) => manifest.runtimes?.[target]);
+const args = process.argv.slice(2);
+const unknown = args.filter((arg) => arg !== "--local-only");
+if (unknown.length > 0) {
+  throw new Error(`unknown argument: ${unknown.join(", ")}`);
+}
+const localOnly = args.includes("--local-only");
+const packageManifest = localOnly ? localRuntimeManifest(manifest) : manifest;
+const targets = supportedTargets.filter((target) => packageManifest.runtimes?.[target]);
 
 if (targets.length === 0) {
-  throw new Error("runtime manifest contains no VS Code target platforms");
+  throw new Error(
+    localOnly
+      ? "runtime manifest contains no fully local VS Code target platforms"
+      : "runtime manifest contains no VS Code target platforms",
+  );
 }
 
 try {

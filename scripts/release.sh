@@ -15,6 +15,19 @@ if [[ "$(uname -s)" != "Darwin" ]]; then
   exit 1
 fi
 
+# Keep remote-only platforms pinned to the checked-in release while replacing
+# the two locally built macOS entries with archives.
+if [[ -z "${MOBILE_CANVAS_RELEASE_TAG:-}" && -f runtimes/manifest.json ]]; then
+  MOBILE_CANVAS_RELEASE_TAG="$(
+    node --input-type=module -e '
+      import { readFileSync } from "node:fs";
+      const manifest = JSON.parse(readFileSync("runtimes/manifest.json", "utf8"));
+      process.stdout.write(manifest.distribution?.tag ?? "");
+    '
+  )"
+  export MOBILE_CANVAS_RELEASE_TAG
+fi
+
 # Native AOT cross-compiles between macOS architectures, so one machine can
 # produce both slices.
 for rid in osx-arm64 osx-x64; do
@@ -23,7 +36,7 @@ for rid in osx-arm64 osx-x64; do
 done
 
 node scripts/verify-bundle.mjs
-npm run package:runtimes
+npm run package:runtimes -- --local-only
 
 printf '\n%s\n' "macOS runtimes and local release assets refreshed."
 printf '%s\n' "Run the Release runtimes workflow to rebuild every supported RID."
