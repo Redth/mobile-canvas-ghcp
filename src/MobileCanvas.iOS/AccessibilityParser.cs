@@ -53,7 +53,7 @@ internal static partial class AccessibilityParser
 	{
 		var role = String(node, "role") ?? String(node, "type") ?? String(node, "AXRole");
 		var label = String(node, "AXLabel") ?? String(node, "label") ?? String(node, "title");
-		var value = String(node, "AXValue") ?? String(node, "value");
+		var value = ScalarString(node, "AXValue") ?? ScalarString(node, "value");
 		var identifier = String(node, "AXUniqueId") ?? String(node, "identifier") ?? String(node, "AXIdentifier");
 		var mapped = MapRole(role, String(node, "subrole"));
 
@@ -161,6 +161,19 @@ internal static partial class AccessibilityParser
 		node.TryGetProperty(name, out var property) && property.ValueKind == JsonValueKind.String
 			? property.GetString()
 			: null;
+
+	private static string? ScalarString(JsonElement node, string name)
+	{
+		if (!node.TryGetProperty(name, out var property))
+			return null;
+
+		return property.ValueKind switch
+		{
+			JsonValueKind.String => property.GetString(),
+			JsonValueKind.Number or JsonValueKind.True or JsonValueKind.False => property.GetRawText(),
+			_ => null,
+		};
+	}
 
 	private static bool? Bool(JsonElement node, string name) =>
 		node.TryGetProperty(name, out var property) && property.ValueKind is JsonValueKind.True or JsonValueKind.False

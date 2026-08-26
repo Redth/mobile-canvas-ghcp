@@ -95,6 +95,7 @@ export function organizeDiagnostics(diagnostics) {
   const failures = (diagnostics ?? [])
     .flatMap((entry) => entry?.checks ?? [])
     .filter((check) => check?.status !== "ok")
+    .filter(isActionableDiagnostic)
     .map((check) => ({
       ...check,
       message: formatUserFacingMessage(check.message),
@@ -116,6 +117,19 @@ export function organizeDiagnostics(diagnostics) {
   }
 
   return { notices, popover };
+}
+
+function isActionableDiagnostic(check) {
+  const name = String(check?.name ?? "").toLowerCase();
+  const status = String(check?.status ?? "").toLowerCase();
+  const message = String(check?.message ?? "").toLowerCase();
+
+  if (name === "emulator-discovery" && status === "warning") return false;
+  return !(
+    name === "idb_companion"
+    && status === "warning"
+    && message.startsWith("optional idb_companion is unavailable")
+  );
 }
 
 export function shouldDrainIdleDecoder(source) {

@@ -93,17 +93,6 @@ internal sealed class AndroidSdkLocator
 		checks.Add(Tool("emulator", Emulator, "emulator not found. Install the Android Emulator package."));
 		checks.Add(Tool("avdmanager", AvdManager, "avdmanager not found. Install cmdline-tools; creating AVDs will be unavailable."));
 
-		var running = RunningDirectory;
-		checks.Add(running is not null && Directory.Exists(running)
-			? new DependencyCheck { Name = "emulator-discovery", Status = "ok", Message = "Emulator discovery directory found.", Path = running }
-			: new DependencyCheck
-			{
-				Name = "emulator-discovery",
-				Status = "warning",
-				Message = "No emulator discovery directory yet. It appears once an emulator starts.",
-				Path = running,
-			});
-
 		return [.. checks];
 
 		static DependencyCheck Tool(string name, string? path, string missingMessage) =>

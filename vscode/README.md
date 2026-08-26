@@ -67,11 +67,12 @@ Mobile Canvas or .NET tool to install.
 |---|---|
 | iOS | macOS and a full Xcode installation with Simulator runtimes |
 | Android | Android SDK tools and `adb` on `PATH` |
-| Optional iOS accessibility/fallbacks | [`idb`](https://fbidb.io) (provides `idb_companion`) |
+| Optional iOS fallbacks | [`idb`](https://fbidb.io) (provides `idb_companion`) |
 
-The bundled helper provides iOS touch, keyboard, buttons, rotation, and direct
-video capture. Install Meta's `idb` package only for accessibility hierarchy,
-compatibility input fallback, or the final live-video fallback:
+The bundled helper provides iOS touch, keyboard, buttons, rotation,
+accessibility hierarchy, and direct video capture. Meta's `idb` package is only
+a compatibility input fallback and the final live-video fallback; Mobile Canvas
+does not report it missing unless a native path actually needs it:
 
 ```bash
 brew tap facebook/fb

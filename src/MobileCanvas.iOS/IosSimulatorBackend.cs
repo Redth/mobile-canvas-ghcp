@@ -13,6 +13,7 @@ public sealed class IosSimulatorBackend : IDeviceBackend, IAsyncDisposable
 	private readonly IProcessRunner _processRunner;
 	private readonly CoreSimulatorHidManager _hid;
 	private readonly IdbCompanionManager _companions;
+	private readonly NativeAccessibilityReader _accessibility;
 	private readonly IosRecordingManager _recordings;
 	private readonly SimulatorDisplayProfiles _profiles;
 
@@ -37,6 +38,7 @@ public sealed class IosSimulatorBackend : IDeviceBackend, IAsyncDisposable
 		_processRunner = processRunner;
 		_hid = new CoreSimulatorHidManager();
 		_companions = new IdbCompanionManager(processRunner);
+		_accessibility = new NativeAccessibilityReader(processRunner);
 		_recordings = new IosRecordingManager(processRunner);
 		_profiles = new SimulatorDisplayProfiles(processRunner);
 	}
@@ -658,15 +660,37 @@ public sealed class IosSimulatorBackend : IDeviceBackend, IAsyncDisposable
 		bool includeRaw,
 		CancellationToken cancellationToken = default)
 	{
-		if (IdbCompanionLocator.Find() is null)
+		var device = await RequireBootedAsync(deviceId, cancellationToken).ConfigureAwait(false);
+		string? developerDirectory = null;
+		try
 		{
-			throw new DeviceCapabilityException(
-				"The iOS accessibility hierarchy requires the optional idb_companion. "
-				+ $"{IdbCompanionLocator.InstallationGuidance} "
-				+ "This enables ui_tree, ui_find, and ui_tap.");
+			developerDirectory = await XcodeDeveloperDirectory.ResolveSelectedAsync(
+				_processRunner,
+				cancellationToken).ConfigureAwait(false);
 		}
-		var companion = await GetCompanionAsync(deviceId, cancellationToken).ConfigureAwait(false);
-		var json = await companion.GetAccessibilityJsonAsync(cancellationToken).ConfigureAwait(false);
+		catch (OperationCanceledException)
+		{
+			throw;
+		}
+		catch (Exception exception) when (
+			exception is ProcessExecutionException
+				or InvalidOperationException
+				or ArgumentException)
+		{
+			// The native reader reports a more specific framework/load error, and IDB remains usable.
+		}
+
+		var json = await IosAccessibilityFallback.ReadAsync(
+			() => _accessibility.ReadAsync(device.NativeId, developerDirectory, cancellationToken),
+			async () =>
+			{
+				var fallback = await GetCompanionAsync(deviceId, cancellationToken).ConfigureAwait(false);
+				var payload = await fallback.GetAccessibilityJsonAsync(cancellationToken).ConfigureAwait(false);
+				if (AccessibilityParser.Parse(payload) is null)
+					throw new InvalidDataException("idb_companion returned an invalid accessibility hierarchy.");
+				return payload;
+			}).ConfigureAwait(false);
+
 		var root = AccessibilityParser.Parse(json);
 
 		return new UiSnapshot
@@ -2483,16 +2507,7 @@ public sealed class IosSimulatorBackend : IDeviceBackend, IAsyncDisposable
 			xcodePath,
 			cancellationToken).ConfigureAwait(false);
 		var nativeHidReady = hid.Negotiable;
-		checks.Add(new DependencyCheck
-		{
-			Name = "Bundled CoreSimulator HID",
-			Status = nativeHidReady ? "ok" : companion is null ? "error" : "warning",
-			Message = nativeHidReady
-				? $"{hid.Detail} This is a static negotiability probe; a booted-device session "
-					+ "becomes authoritative when it reports ready."
-				: hid.Detail,
-			Path = NativeHelperLocator.Path,
-		});
+		checks.Add(BuildHidCheck(hid, companion));
 
 		SimulatorKitInstallation? simulatorKit = null;
 		if (xcodeReady)
@@ -2519,18 +2534,6 @@ public sealed class IosSimulatorBackend : IDeviceBackend, IAsyncDisposable
 			Path = simulatorKit?.FrameworkPath,
 		});
 
-		checks.Add(new DependencyCheck
-		{
-			Name = "idb_companion",
-			Status = companion is null ? "warning" : "ok",
-			Message = companion is null
-				? "Optional idb_companion is unavailable. Accessibility tree/search/tap, "
-					+ "compatibility input fallback, and the final live-video fallback are disabled."
-				: "Optional idb_companion is available for accessibility, compatibility input "
-					+ "fallback, and the final live-video fallback.",
-			Path = companion,
-		});
-
 		// Report the permission-free primary source separately from the TCC-gated fallback. Missing
 		// fallback grants only require attention when direct capture is unavailable.
 		var screencap = await ScreenCaptureHelper.GetDiagnosticsAsync(cancellationToken)
@@ -2542,7 +2545,7 @@ public sealed class IosSimulatorBackend : IDeviceBackend, IAsyncDisposable
 			Name = "Simulator framebuffer",
 			Status = framebufferReady ? "ok" : "warning",
 			Message = screencapPath is null
-				? "mobile-screencap was not found next to mobile-canvas; video falls back to idb."
+				? "mobile-screencap was not found next to mobile-canvas; bundled video sources are unavailable."
 				: framebufferReady
 					? "Direct CoreSimulator IOSurface capture is available without TCC permissions."
 					: string.IsNullOrWhiteSpace(screencap.FramebufferDetail)
@@ -2553,7 +2556,8 @@ public sealed class IosSimulatorBackend : IDeviceBackend, IAsyncDisposable
 		checks.Add(BuildScreencapCheck(
 			screencapPath,
 			screencap,
-			framebufferReady));
+			framebufferReady,
+			companion is not null));
 
 		return new HostDiagnostics
 		{
@@ -2563,10 +2567,28 @@ public sealed class IosSimulatorBackend : IDeviceBackend, IAsyncDisposable
 		};
 	}
 
+	internal static DependencyCheck BuildHidCheck(
+		CoreSimulatorHidDoctorResult hid,
+		string? companion) =>
+		new()
+		{
+			Name = "Bundled CoreSimulator HID",
+			Status = hid.Negotiable ? "ok" : companion is null ? "error" : "warning",
+			Message = hid.Negotiable
+				? $"{hid.Detail} This is a static negotiability probe; a booted-device session "
+					+ "becomes authoritative when it reports ready."
+				: companion is null
+					? $"{hid.Detail} The optional IDB input fallback is unavailable. "
+						+ IdbCompanionLocator.InstallationGuidance
+					: $"{hid.Detail} Input will use the optional IDB fallback.",
+			Path = NativeHelperLocator.Path,
+		};
+
 	internal static DependencyCheck BuildScreencapCheck(
 		string? path,
 		ScreencapDiagnostics diagnostics,
-		bool framebufferReady)
+		bool framebufferReady,
+		bool idbAvailable)
 	{
 		var screenCaptureReady = path is not null
 			&& diagnostics.ScreenRecordingGranted
@@ -2575,15 +2597,20 @@ public sealed class IosSimulatorBackend : IDeviceBackend, IAsyncDisposable
 		return new DependencyCheck
 		{
 			Name = "ScreenCaptureKit fallback",
-			Status = fallbackNeeded ? "warning" : "ok",
+			Status = fallbackNeeded
+				? idbAvailable ? "warning" : "error"
+				: "ok",
 			Message = path is null
-				? "The native helper is unavailable; idb is the only video fallback."
+				? idbAvailable
+					? "The native helper is unavailable; live video will use the optional IDB fallback."
+					: "The native helper and optional IDB video fallback are unavailable. "
+						+ IdbCompanionLocator.InstallationGuidance
 				: screenCaptureReady
 					? "ScreenCaptureKit and exact Accessibility geometry are available as a fallback."
 					: framebufferReady
 						? "Direct framebuffer capture is available without TCC permissions; "
 							+ "ScreenCaptureKit fallback grants are optional."
-						: BuildScreencapMessage(diagnostics, framebufferReady),
+						: BuildScreencapMessage(diagnostics, framebufferReady, idbAvailable),
 			Path = path,
 			Actions = path is not null && fallbackNeeded
 				? BuildScreencapActions(diagnostics)
@@ -2593,7 +2620,8 @@ public sealed class IosSimulatorBackend : IDeviceBackend, IAsyncDisposable
 
 	private static string BuildScreencapMessage(
 		ScreencapDiagnostics diagnostics,
-		bool framebufferReady)
+		bool framebufferReady,
+		bool idbAvailable)
 	{
 		var missing = new List<string>();
 		if (!diagnostics.ScreenRecordingGranted)
@@ -2606,7 +2634,10 @@ public sealed class IosSimulatorBackend : IDeviceBackend, IAsyncDisposable
 		return $"Grant {permissions} in System Settings > Privacy & Security to enable "
 			+ (framebufferReady
 				? "the ScreenCaptureKit fallback; direct framebuffer capture remains available."
-				: "ScreenCaptureKit video; until then video falls back to idb.");
+				: idbAvailable
+					? "ScreenCaptureKit video; until then live video uses the optional IDB fallback."
+					: "ScreenCaptureKit video. The optional IDB fallback is also unavailable. "
+						+ IdbCompanionLocator.InstallationGuidance);
 	}
 
 	internal static DiagnosticAction[] BuildScreencapActions(ScreencapDiagnostics diagnostics)

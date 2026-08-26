@@ -65,6 +65,7 @@ struct HidTests {
 		protocolSerialization(runner)
 		commandFramingAndFailurePolicy(runner)
 		contactCleanup(runner)
+		AccessibilityTests.run(runner)
 
 		runner.finish()
 	}

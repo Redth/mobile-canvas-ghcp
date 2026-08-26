@@ -24,6 +24,15 @@ NS_ASSUME_NONNULL_BEGIN
 /// The main screen scale, or `0` when CoreSimulator did not report one.
 @property (nonatomic, readonly) float mainScreenScale;
 
+/// Whether CoreSimulator reports this device as booted. Read defensively: a device that raises
+/// while answering (or an unexpectedly old CoreSimulator) is treated as not booted rather than
+/// letting the exception escape.
+@property (nonatomic, readonly, getter=isBooted) BOOL booted;
+
+/// CoreSimulator's own state name (`"Booted"`, `"Shutdown"`, ...), or `nil` when it could not be
+/// read.
+@property (nonatomic, readonly, copy, nullable) NSString *stateDescription;
+
 /// Whether the CoreSimulator private framework could be loaded in this process.
 @property (class, nonatomic, readonly, getter=isCoreSimulatorAvailable) BOOL coreSimulatorAvailable;
 
