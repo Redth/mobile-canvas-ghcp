@@ -55,6 +55,7 @@ test("presents actionable and progress device states", () => {
   assert.equal(connecting.busy, true);
   assert.equal(connecting.action, undefined);
   assert.match(connecting.title, /iPhone 16 Pro/);
+  assert.equal(connecting.detail, "Waiting for the first frame.");
 
   const disconnected = deviceStatusPresentation("disconnected", {
     platform: "ios",

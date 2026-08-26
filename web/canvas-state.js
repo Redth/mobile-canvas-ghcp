@@ -173,7 +173,7 @@ export function deviceStatusPresentation(kind, { deviceName, platform, detail } 
         icon: "#icon-device",
         eyebrow: "Live view",
         title: `Connecting to ${subject}`,
-        detail: detail || "Preparing a secure, interactive stream.",
+        detail: detail || "Waiting for the first frame.",
         busy: true,
       };
     case "restarting":
