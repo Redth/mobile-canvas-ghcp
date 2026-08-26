@@ -57,6 +57,7 @@ export function buildAilohaSourceManifest({
       fileCount: files.length,
       totalBytes,
     },
+    surfaces: readProductSurfaces(repositoryRoot, files),
     files,
   };
 }
@@ -90,6 +91,49 @@ function describeFile(repositoryRoot, source, trackedModes) {
     size: bytes.length,
     executable: trackedModes.get(source) ?? (lstatSync(path).mode & 0o111) !== 0,
   };
+}
+
+function readProductSurfaces(repositoryRoot, files) {
+  const backend = readFileSync(
+    join(repositoryRoot, "src", "MobileCanvas.Core", "DeviceBackend.cs"),
+    "utf8",
+  );
+  const backendStart = backend.indexOf("public interface IDeviceBackend");
+  const backendEnd = backend.indexOf("public interface ILiveVideoSession");
+  if (backendStart < 0 || backendEnd <= backendStart) {
+    throw new Error("Could not locate IDeviceBackend in DeviceBackend.cs.");
+  }
+
+  const api = readFileSync(
+    join(repositoryRoot, "src", "MobileCanvas.Tool", "DeviceApi.cs"),
+    "utf8",
+  );
+  const extension = readFileSync(join(repositoryRoot, "extension.mjs"), "utf8");
+  const mcp = files
+    .filter(
+      (file) =>
+        file.source.startsWith("src/MobileCanvas.Tool/Mcp/") &&
+        file.source.endsWith(".cs"),
+    )
+    .map((file) => readFileSync(join(repositoryRoot, file.source), "utf8"))
+    .join("\n");
+
+  return {
+    backendOperations: matches(
+      backend.slice(backendStart, backendEnd),
+      /\bTask(?:<[^;\n]+>)?\s+([A-Z]\w+Async)\s*\(/g,
+    ),
+    httpRoutes: matches(api, /"(\/(?:api\/v1|ws\/)[^"]+)"/g),
+    mcpTools: matches(mcp, /Name\s*=\s*"(mobile_device_[^"]+)"/g),
+    canvasActions: [
+      ...matches(extension, /\bname:\s*"([a-z][a-z0-9_]*)"/g),
+      ...matches(extension, /\btargetAction\(\s*"([a-z][a-z0-9_]*)"/g),
+    ].sort(),
+  };
+}
+
+function matches(source, pattern) {
+  return [...new Set([...source.matchAll(pattern)].map((match) => match[1]))].sort();
 }
 
 function readTrackedModes(repositoryRoot) {
