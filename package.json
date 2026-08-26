@@ -19,6 +19,7 @@
     "device-automation"
   ],
   "scripts": {
+    "ailoha:manifest": "node scripts/ailoha-source-manifest.mjs",
     "icons": "node scripts/generate-icons.mjs",
     "package:plugin": "node scripts/prepare-plugin.mjs",
     "package:plugin:thin": "node scripts/prepare-plugin.mjs --thin",
