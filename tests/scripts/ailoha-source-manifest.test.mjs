@@ -6,6 +6,7 @@ import test from "node:test";
 import { fileURLToPath } from "node:url";
 import {
   buildAilohaSourceManifest,
+  computeAilohaSnapshot,
 } from "../../scripts/ailoha-source-manifest.mjs";
 
 const root = join(dirname(fileURLToPath(import.meta.url)), "..", "..");
@@ -14,7 +15,7 @@ test("Ailoha source manifest covers the complete product source", () => {
   const manifest = buildAilohaSourceManifest();
   const sources = manifest.files.map((file) => file.source);
 
-  assert.equal(manifest.schemaVersion, 1);
+  assert.equal(manifest.schemaVersion, 2);
   assert.equal(manifest.source.repository, "Redth/mobile-canvas-ghcp");
   assert.match(manifest.source.commit, /^[a-f0-9]{40}$/);
   assert.equal(manifest.destinationRoot, "imports/mobile-canvas");
@@ -22,6 +23,7 @@ test("Ailoha source manifest covers the complete product source", () => {
   assert.equal(manifest.snapshot.fileCount, manifest.files.length);
   assert.ok(manifest.snapshot.totalBytes > 0);
   assert.match(manifest.snapshot.sha256, /^[a-f0-9]{64}$/);
+  assert.deepEqual(manifest.snapshot.includes, ["files", "surfaces"]);
   assert.ok(manifest.surfaces.backendOperations.length > 40);
   assert.ok(manifest.surfaces.httpRoutes.length > 50);
   assert.ok(manifest.surfaces.mcpTools.length > 30);
@@ -75,4 +77,19 @@ test("Ailoha source manifest is deterministic for an unchanged checkout", () => 
 
   assert.equal(first.snapshot.sha256, second.snapshot.sha256);
   assert.deepEqual(first.files, second.files);
+});
+
+test("Ailoha source snapshot authenticates the feature surface inventory", () => {
+  const manifest = buildAilohaSourceManifest();
+  assert.equal(
+    computeAilohaSnapshot(manifest.files, manifest.surfaces),
+    manifest.snapshot.sha256,
+  );
+
+  const tampered = structuredClone(manifest.surfaces);
+  tampered.canvasActions = [...tampered.canvasActions, "not_a_real_action"].sort();
+  assert.notEqual(
+    computeAilohaSnapshot(manifest.files, tampered),
+    manifest.snapshot.sha256,
+  );
 });

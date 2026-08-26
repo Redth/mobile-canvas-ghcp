@@ -26,25 +26,15 @@ export function buildAilohaSourceManifest({
   const files = listSourceFiles(repositoryRoot)
     .filter((path) => path !== excluded)
     .map((source) => describeFile(repositoryRoot, source, trackedModes));
-  const snapshot = createHash("sha256");
-  let totalBytes = 0;
-
-  for (const file of files) {
-    totalBytes += file.size;
-    snapshot.update(file.source);
-    snapshot.update("\0");
-    snapshot.update(file.sha256);
-    snapshot.update("\0");
-    snapshot.update(file.executable ? "1" : "0");
-    snapshot.update("\0");
-  }
+  const surfaces = readProductSurfaces(repositoryRoot, files);
+  const totalBytes = files.reduce((total, file) => total + file.size, 0);
 
   const packageJson = JSON.parse(
     readFileSync(join(repositoryRoot, "package.json"), "utf8"),
   );
 
   return {
-    schemaVersion: 1,
+    schemaVersion: 2,
     source: {
       repository: "Redth/mobile-canvas-ghcp",
       commit: git(repositoryRoot, ["rev-parse", "HEAD"]).trim(),
@@ -53,13 +43,33 @@ export function buildAilohaSourceManifest({
     },
     destinationRoot,
     snapshot: {
-      sha256: snapshot.digest("hex"),
+      sha256: computeAilohaSnapshot(files, surfaces),
       fileCount: files.length,
       totalBytes,
+      includes: ["files", "surfaces"],
     },
-    surfaces: readProductSurfaces(repositoryRoot, files),
+    surfaces,
     files,
   };
+}
+
+export function computeAilohaSnapshot(files, surfaces) {
+  const snapshot = createHash("sha256");
+
+  for (const file of files) {
+    snapshot.update(file.source);
+    snapshot.update("\0");
+    snapshot.update(file.sha256);
+    snapshot.update("\0");
+    snapshot.update(file.executable ? "1" : "0");
+    snapshot.update("\0");
+  }
+
+  snapshot.update("surfaces");
+  snapshot.update("\0");
+  snapshot.update(JSON.stringify(surfaces));
+  snapshot.update("\0");
+  return snapshot.digest("hex");
 }
 
 function listSourceFiles(repositoryRoot) {
