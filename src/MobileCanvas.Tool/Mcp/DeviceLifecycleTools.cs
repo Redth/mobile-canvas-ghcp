@@ -76,7 +76,7 @@ public sealed class DeviceLifecycleTools(DeviceHostClient client)
 		Idempotent = true,
 		OpenWorld = false,
 		UseStructuredContent = true)]
-	[Description("Show a virtual device window. Reveals an iOS simulator in Simulator.app; restarts a headless Android emulator with its native window.")]
+	[Description("Show a virtual device window. Reveals an iOS simulator in its selected Xcode host app; restarts a headless Android emulator with its native window.")]
 	public Task<DeviceTarget> Reveal(
 		[Description("Provider-qualified device ID.")] string deviceId,
 		CancellationToken cancellationToken = default) =>

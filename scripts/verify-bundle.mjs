@@ -10,7 +10,10 @@ import { existsSync, readFileSync } from "node:fs";
 import { gunzipSync } from "node:zlib";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { defaultRuntimeAssetName } from "../lib/runtime-assets.mjs";
+import {
+  assertDarwinHelperEntries,
+  defaultRuntimeAssetName,
+} from "../lib/runtime-assets.mjs";
 
 const packageRoot = dirname(dirname(fileURLToPath(import.meta.url)));
 const runtimesDir = join(packageRoot, "runtimes");
@@ -24,6 +27,13 @@ if (!existsSync(manifestPath)) {
 const manifest = JSON.parse(readFileSync(manifestPath, "utf8"));
 const entries = Object.entries(manifest.runtimes ?? {});
 let failures = 0;
+
+try {
+  assertDarwinHelperEntries(manifest, { context: "runtimes/manifest.json" });
+} catch (error) {
+  console.error(`FAIL ${error.message}`);
+  failures += 1;
+}
 
 if (entries.length === 0) {
   console.error("manifest declares no runtimes");

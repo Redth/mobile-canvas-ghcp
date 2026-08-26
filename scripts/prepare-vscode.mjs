@@ -3,7 +3,10 @@
 import { cpSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { remoteRuntimeManifest } from "../lib/runtime-assets.mjs";
+import {
+  assertDarwinHelperEntries,
+  remoteRuntimeManifest,
+} from "../lib/runtime-assets.mjs";
 
 const root = join(dirname(fileURLToPath(import.meta.url)), "..");
 const extensionRoot = join(root, "vscode");
@@ -13,6 +16,8 @@ const runtimeManifest = JSON.parse(readFileSync(join(root, "runtimes", "manifest
 const targetIndex = process.argv.indexOf("--target");
 const target = targetIndex >= 0 ? process.argv[targetIndex + 1] : null;
 const thin = process.argv.includes("--thin");
+
+assertDarwinHelperEntries(runtimeManifest, { context: "VS Code runtime manifest" });
 
 if (target && thin) {
   throw new Error("--target and --thin cannot be combined");

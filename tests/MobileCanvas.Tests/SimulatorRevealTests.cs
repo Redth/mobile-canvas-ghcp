@@ -47,8 +47,12 @@ public sealed class SimulatorRevealTests
 	[Fact]
 	public void BuildScript_RaisesTheDeviceWindowWithoutDrivingMenus()
 	{
-		var script = SimulatorWindowFocus.BuildScript("iPhone 17", "iOS 27.0");
+		var script = SimulatorWindowFocus.BuildScript(
+			CreateHost(SimulatorHostLayout.Simulator),
+			"iPhone 17",
+			"iOS 27.0");
 
+		Assert.Contains("bundle identifier is \"com.apple.iphonesimulator\"", script);
 		Assert.Contains("exists window \"iPhone 17 \u2013 iOS 27.0\"", script);
 		Assert.Contains("perform action \"AXRaise\" of window \"iPhone 17 \u2013 iOS 27.0\"", script);
 		// Opening menus steals keyboard and mouse focus, so a missing window is left alone.
@@ -58,60 +62,125 @@ public sealed class SimulatorRevealTests
 	[Fact]
 	public void BuildScript_EscapesQuotesInDeviceNames()
 	{
-		var script = SimulatorWindowFocus.BuildScript("My \"Test\" Phone", "iOS 27.0");
+		var script = SimulatorWindowFocus.BuildScript(
+			CreateHost(SimulatorHostLayout.Simulator),
+			"My \"Test\" Phone",
+			"iOS 27.0");
 
 		Assert.Contains("window \"My \\\"Test\\\" Phone \u2013 iOS 27.0\"", script);
 		Assert.DoesNotContain("window \"My \"Test\"", script);
 	}
 
 	[Fact]
-	public async Task RevealAsync_LaunchesSimulatorWithTheDeviceWhenItIsNotRunning()
+	public void BuildScript_ActivatesDeviceHubWithoutAssumingItsWindowLayout()
 	{
-		var runner = new ScriptedProcessRunner(DevicesJson) { SimulatorRunning = false };
-		await using var backend = new IosSimulatorBackend(runner);
+		var script = SimulatorWindowFocus.BuildScript(
+			CreateHost(SimulatorHostLayout.DeviceHub),
+			"iPhone 17",
+			"iOS 27.0");
 
-		await backend.RevealAsync(DeviceId, CancellationToken.None);
-
-		var open = Assert.Single(runner.Requests, request => request.FileName == "open");
-		Assert.Equal(["-a", "Simulator", "--args", "-CurrentDeviceUDID", "ABCD-1234"], open.Arguments);
-		// `--args` already selects the device on launch, so no Accessibility work is needed.
-		Assert.DoesNotContain(runner.Requests, request => request.FileName == "osascript");
+		Assert.Contains("bundle identifier is \"com.apple.dt.Devices\"", script);
+		Assert.Contains("set frontmost to true", script);
+		Assert.Contains("exists window \"iPhone 17 \u2013 iOS 27.0\"", script);
+		Assert.DoesNotContain("menu", script, StringComparison.OrdinalIgnoreCase);
 	}
 
 	[Fact]
-	public async Task RevealAsync_FocusesTheWindowWhenSimulatorIsAlreadyRunning()
+	public async Task RevealAsync_LaunchesLegacySimulatorWithTheDevice()
 	{
-		var runner = new ScriptedProcessRunner(DevicesJson) { SimulatorRunning = true };
-		await using var backend = new IosSimulatorBackend(runner);
+		var (root, developerDirectory, appPath) = CreateXcode(SimulatorHostLayout.Simulator);
+		try
+		{
+			var runner = new ScriptedProcessRunner(DevicesJson, developerDirectory);
+			await using var backend = new IosSimulatorBackend(runner);
 
-		await backend.RevealAsync(DeviceId, CancellationToken.None);
+			await backend.RevealAsync(DeviceId, CancellationToken.None);
 
-		var script = Assert.Single(runner.Requests, request => request.FileName == "osascript");
-		Assert.Equal("-e", script.Arguments[0]);
-		Assert.Equal(
-			SimulatorWindowFocus.BuildScript("UI Test iPhone", "iOS 18.6"),
-			script.Arguments[1]);
+			var open = Assert.Single(runner.Requests, request => request.FileName == "open");
+			Assert.Equal([appPath, "--args", "-CurrentDeviceUDID", "ABCD-1234"], open.Arguments);
+			var script = Assert.Single(runner.Requests, request => request.FileName == "osascript");
+			Assert.Contains("com.apple.iphonesimulator", script.Arguments[1]);
+		}
+		finally
+		{
+			Directory.Delete(root, recursive: true);
+		}
+	}
+
+	[Fact]
+	public async Task RevealAsync_LaunchesAndActivatesDeviceHub()
+	{
+		var (root, developerDirectory, appPath) = CreateXcode(SimulatorHostLayout.DeviceHub);
+		try
+		{
+			var runner = new ScriptedProcessRunner(DevicesJson, developerDirectory);
+			await using var backend = new IosSimulatorBackend(runner);
+
+			await backend.RevealAsync(DeviceId, CancellationToken.None);
+
+			var open = Assert.Single(runner.Requests, request => request.FileName == "open");
+			Assert.Equal(
+				["-a", appPath, "devices://device/open?id=ABCD-1234"],
+				open.Arguments);
+			var script = Assert.Single(runner.Requests, request => request.FileName == "osascript");
+			Assert.Equal("-e", script.Arguments[0]);
+			Assert.Equal(
+				SimulatorWindowFocus.BuildScript(
+					CreateHost(SimulatorHostLayout.DeviceHub),
+					"UI Test iPhone",
+					"iOS 18.6"),
+				script.Arguments[1]);
+		}
+		finally
+		{
+			Directory.Delete(root, recursive: true);
+		}
 	}
 
 	[Fact]
 	public async Task RevealAsync_SucceedsWhenAccessibilityIsUnavailable()
 	{
-		var runner = new ScriptedProcessRunner(DevicesJson)
+		var (root, developerDirectory, _) = CreateXcode(SimulatorHostLayout.DeviceHub);
+		try
 		{
-			SimulatorRunning = true,
-			OsascriptThrows = true,
-		};
-		await using var backend = new IosSimulatorBackend(runner);
+			var runner = new ScriptedProcessRunner(DevicesJson, developerDirectory)
+			{
+				OsascriptThrows = true,
+			};
+			await using var backend = new IosSimulatorBackend(runner);
 
-		var device = await backend.RevealAsync(DeviceId, CancellationToken.None);
+			var device = await backend.RevealAsync(DeviceId, CancellationToken.None);
 
-		// Reveal already brought Simulator.app forward, so a denied permission must not fail the call.
-		Assert.Equal("ABCD-1234", device.NativeId);
+			// Reveal already brought the host app forward, so denied Accessibility must not fail it.
+			Assert.Equal("ABCD-1234", device.NativeId);
+		}
+		finally
+		{
+			Directory.Delete(root, recursive: true);
+		}
 	}
 
-	private sealed class ScriptedProcessRunner(string devicesJson) : IProcessRunner
+	private static SimulatorHostInstallation CreateHost(SimulatorHostLayout layout) =>
+		layout == SimulatorHostLayout.DeviceHub
+			? new("", "/Xcode.app/Contents/Applications/DeviceHub.app", "com.apple.dt.Devices", "Device Hub", layout)
+			: new("", "/Xcode.app/Contents/Developer/Applications/Simulator.app", "com.apple.iphonesimulator", "Simulator", layout);
+
+	private static (string Root, string DeveloperDirectory, string AppPath) CreateXcode(
+		SimulatorHostLayout layout)
 	{
-		public bool SimulatorRunning { get; init; }
+		var root = Directory.CreateTempSubdirectory("mobile-canvas-reveal-").FullName;
+		var developerDirectory = Path.Combine(root, "Xcode.app", "Contents", "Developer");
+		var appPath = layout == SimulatorHostLayout.DeviceHub
+			? Path.Combine(root, "Xcode.app", "Contents", "Applications", "DeviceHub.app")
+			: Path.Combine(developerDirectory, "Applications", "Simulator.app");
+		Directory.CreateDirectory(appPath);
+		return (root, developerDirectory, appPath);
+	}
+
+	private sealed class ScriptedProcessRunner(
+		string devicesJson,
+		string developerDirectory) : IProcessRunner
+	{
 		public bool OsascriptThrows { get; init; }
 		public List<ProcessRequest> Requests { get; } = [];
 
@@ -122,8 +191,8 @@ public sealed class SimulatorRevealTests
 			Requests.Add(request);
 			if (request.FileName == "xcrun" && request.Arguments.Contains("list"))
 				return Task.FromResult(new ProcessResult(0, devicesJson, ""));
-			if (request.FileName == "pgrep")
-				return Task.FromResult(new ProcessResult(SimulatorRunning ? 0 : 1, "", ""));
+			if (request.FileName == "xcode-select")
+				return Task.FromResult(new ProcessResult(0, developerDirectory, ""));
 			if (request.FileName == "osascript" && OsascriptThrows)
 				throw new InvalidOperationException("osascript is unavailable.");
 			return Task.FromResult(new ProcessResult(0, "", ""));

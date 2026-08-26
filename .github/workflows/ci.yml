@@ -25,6 +25,11 @@ jobs:
       - name: Test
         run: dotnet test MobileCanvas.slnx -c Release
 
+      - name: Test bundled CoreSimulator HID
+        run: |
+          ./native/mobile-screencap/test.sh --arch arm64
+          ./native/mobile-screencap/test.sh --arch x86_64
+
       # Several manifests carry the version, and they drift silently: the
       # marketplace manifests sat a whole release behind while the binary
       # shipped a newer number, so a bug report would name a version nobody

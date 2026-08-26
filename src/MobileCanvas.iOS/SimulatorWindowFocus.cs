@@ -1,19 +1,15 @@
 namespace MobileCanvas.iOS;
 
 /// <summary>
-/// Builds the System Events script that brings a Simulator.app device window forward.
+/// Builds the System Events script that brings the selected simulator host app forward.
 /// </summary>
 /// <remarks>
-/// <c>open -a Simulator --args -CurrentDeviceUDID &lt;udid&gt;</c> only delivers <c>--args</c> when
-/// <c>open</c> actually launches Simulator.app. If it is already running the flag is ignored, so a
-/// reveal neither raises the requested window nor re-attaches a device that is booted but detached.
-/// Simulator.app advertises AppleScript support, but Apple Events to it time out (-1712), so
-/// Accessibility is the only usable lever. This deliberately stops at raising an existing window:
-/// driving the File &gt; Open Simulator menu would also re-attach a detached device, but opening
-/// menus steals keyboard and mouse focus from whatever the user is doing. When there is no window
-/// to raise the reveal simply leaves Simulator.app frontmost.
+/// The host apps do not expose a reliable AppleScript dictionary, so Accessibility is the usable
+/// lever. Simulator.app has one titled window per device; Device Hub may instead use a compact
+/// sidebar layout. The script therefore activates the app by bundle identifier and raises the
+/// legacy titled window only when one exists. It deliberately does not drive menus or sidebar UI.
 /// </remarks>
-public static class SimulatorWindowFocus
+internal static class SimulatorWindowFocus
 {
 	/// <summary>Separator Simulator.app places between the device name and runtime in window titles.</summary>
 	private const string TitleSeparator = " \u2013 ";
@@ -23,20 +19,27 @@ public static class SimulatorWindowFocus
 		$"{deviceName}{TitleSeparator}{runtimeName}";
 
 	/// <summary>
-	/// Builds an AppleScript that raises <paramref name="deviceName"/>'s window when Simulator.app
-	/// is showing one, and does nothing otherwise.
+	/// Builds an AppleScript that activates the resolved host and raises the legacy per-device window
+	/// when one exists.
 	/// </summary>
-	public static string BuildScript(string deviceName, string runtimeName)
+	public static string BuildScript(
+		SimulatorHostInstallation host,
+		string deviceName,
+		string runtimeName)
 	{
 		var title = Escape(BuildWindowTitle(deviceName, runtimeName));
+		var bundleIdentifier = Escape(host.BundleIdentifier);
 		return $"""
 			tell application "System Events"
-				tell process "Simulator"
-					if exists window "{title}" then
+				set hostProcesses to every application process whose bundle identifier is "{bundleIdentifier}"
+				if (count of hostProcesses) > 0 then
+					tell item 1 of hostProcesses
 						set frontmost to true
-						perform action "AXRaise" of window "{title}"
-					end if
-				end tell
+						if exists window "{title}" then
+							perform action "AXRaise" of window "{title}"
+						end if
+					end tell
+				end if
 			end tell
 			""";
 	}

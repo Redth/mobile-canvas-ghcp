@@ -7,6 +7,7 @@ import {
 } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
+import { assertDarwinHelperEntries } from "../lib/runtime-assets.mjs";
 
 const scriptRoot = join(dirname(fileURLToPath(import.meta.url)), "..");
 const root = resolve(process.argv[2] ?? scriptRoot);
@@ -16,6 +17,7 @@ const marketplace = JSON.parse(
   readFileSync(join(root, ".github", "plugin", "marketplace.json"), "utf8"),
 );
 const packageManifest = JSON.parse(readFileSync(join(root, "package.json"), "utf8"));
+const runtimeManifest = JSON.parse(readFileSync(join(root, "runtimes", "manifest.json"), "utf8"));
 
 const configured = typeof manifest.extensions === "object" && !Array.isArray(manifest.extensions)
   ? manifest.extensions.paths
@@ -27,6 +29,12 @@ const fail = (message) => {
   console.error(`FAIL ${message}`);
   failures += 1;
 };
+
+try {
+  assertDarwinHelperEntries(runtimeManifest, { context: "Copilot plugin runtime manifest" });
+} catch (error) {
+  fail(error.message);
+}
 
 const marketplacePlugin = marketplace.plugins?.find(
   (plugin) => plugin.name === manifest.name,

@@ -1,4 +1,5 @@
 using System.Diagnostics;
+using MobileCanvas.Core;
 
 namespace MobileCanvas.Android;
 
@@ -17,34 +18,11 @@ namespace MobileCanvas.Android;
 /// </remarks>
 internal static class AndroidVideoEncoder
 {
-	public const string ExecutableName = "mobile-screencap";
-	private const string PathVariable = "MOBILE_CANVAS_SCREENCAP_PATH";
+	public const string ExecutableName = NativeHelperLocator.ExecutableName;
 
-	private static readonly Lazy<string?> ResolvedPath = new(Resolve, isThreadSafe: true);
+	public static string? Path => NativeHelperLocator.Path;
 
-	public static string? Path => ResolvedPath.Value;
-
-	public static bool IsAvailable => OperatingSystem.IsMacOS() && ResolvedPath.Value is not null;
-
-	private static string? Resolve()
-	{
-		if (!OperatingSystem.IsMacOS())
-			return null;
-
-		var configured = Environment.GetEnvironmentVariable(PathVariable);
-		if (!string.IsNullOrWhiteSpace(configured) && File.Exists(configured))
-			return configured;
-
-		var baseDirectory = AppContext.BaseDirectory;
-		string[] candidates =
-		[
-			System.IO.Path.Combine(baseDirectory, ExecutableName),
-			System.IO.Path.Combine(baseDirectory, "native", ExecutableName),
-			System.IO.Path.Combine(baseDirectory, "bin", ExecutableName),
-		];
-
-		return candidates.FirstOrDefault(File.Exists);
-	}
+	public static bool IsAvailable => NativeHelperLocator.IsAvailable;
 
 	public static void TryKill(Process process)
 	{

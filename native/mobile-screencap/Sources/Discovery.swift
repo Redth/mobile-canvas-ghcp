@@ -22,7 +22,7 @@ struct RectDTO: Codable {
 	}
 }
 
-/// A Simulator.app device window, resolved as far as the current permissions allow.
+/// A simulator host app device window, resolved as far as the current permissions allow.
 struct SimulatorWindow: Codable {
 	var windowId: UInt32
 	var title: String
@@ -40,7 +40,10 @@ struct SimulatorWindow: Codable {
 }
 
 enum Discovery {
-	static let simulatorBundleId = "com.apple.iphonesimulator"
+	static let simulatorBundleIds: Set<String> = [
+		"com.apple.iphonesimulator",
+		"com.apple.dt.Devices",
+	]
 
 	static func accessibilityTrusted() -> Bool {
 		AXIsProcessTrusted()
@@ -55,12 +58,15 @@ enum Discovery {
 		let devices = trusted ? SimctlCatalog.bootedDevices() : [:]
 
 		return content.windows.compactMap { window -> SimulatorWindow? in
-			guard window.owningApplication?.bundleIdentifier == Discovery.simulatorBundleId else {
+			guard
+				let bundleIdentifier = window.owningApplication?.bundleIdentifier,
+				Discovery.simulatorBundleIds.contains(bundleIdentifier)
+			else {
 				return nil
 			}
 			guard let title = window.title, !title.isEmpty else { return nil }
 			let frame = window.frame
-			// Simulator also owns small utility surfaces (menu shims, tiny helper windows).
+			// The host apps also own small utility surfaces (menu shims, tiny helper windows).
 			// A device window is always at least phone-sized.
 			guard frame.width >= 100, frame.height >= 100 else { return nil }
 
@@ -190,9 +196,9 @@ struct DeviceScreen {
 }
 
 enum AccessibilityGeometry {
-	/// Simulator.app exposes the device framebuffer view as an AXGroup with the subrole
-	/// `iOSContentGroup`. Reading its frame gives an exact crop with no image analysis, and it
-	/// stays correct across zoom changes, bezel styles, and device types.
+	/// Simulator.app and Device Hub expose the device framebuffer view as an AXGroup with the
+	/// `iOSContentGroup` subrole. Reading its frame gives an exact crop with no image analysis, and
+	/// it stays correct across zoom changes, bezel styles, and device types.
 	static let contentSubrole = "iOSContentGroup"
 
 	static func deviceScreen(pid: pid_t, windowFrame: CGRect) -> DeviceScreen? {

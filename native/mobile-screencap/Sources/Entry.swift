@@ -42,6 +42,10 @@ struct MobileScreencap {
 				case "rotate":
 					try RotationCommand.run(options)
 					exit(0)
+				case "hid":
+					try HidCommand.run(options)
+				case "hid-doctor":
+					try HidDoctorCommand.run(options)
 				case "doctor":
 					try await runDoctor()
 				case "--help", "-h", "help":
@@ -75,6 +79,8 @@ struct MobileScreencap {
 			  capture                  Stream Annex-B H.264 on stdout.
 			  encode                   Encode raw frames from stdin to Annex-B H.264 on stdout.
 			  rotate                   Rotate an iOS Simulator device.
+			  hid                      Persistent NDJSON HID session on stdin/stdout.
+			  hid-doctor               Report bundled HID transport negotiability as JSON.
 
 			Framebuffer options:
 			  --udid <udid>            Simulator UDID. Required.
@@ -101,6 +107,10 @@ struct MobileScreencap {
 			  --udid <udid>            Simulator device identifier. Required.
 			  --orientation <name>     portrait, portrait-upside-down, landscape-left,
 			                           or landscape-right. Required.
+
+			HID options:
+			  --udid <udid>            Simulator device identifier. Required.
+			  --developer-dir <path>   Override the selected developer directory.
 
 			"""
 		FileHandle.standardError.write(Data(usage.utf8))

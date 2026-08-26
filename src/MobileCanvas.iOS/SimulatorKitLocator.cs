@@ -79,16 +79,9 @@ internal static class SimulatorKitLocator
 		IProcessRunner processRunner,
 		CancellationToken cancellationToken)
 	{
-		var result = await processRunner.RunAsync(
-			new ProcessRequest("xcode-select", ["-p"]),
+		var developerDirectory = await XcodeDeveloperDirectory.ResolveSelectedAsync(
+			processRunner,
 			cancellationToken).ConfigureAwait(false);
-		if (result.ExitCode != 0)
-			throw new ProcessExecutionException("xcode-select", ["-p"], result);
-
-		var developerDirectory = result.StandardOutput.Trim();
-		if (developerDirectory.Length == 0)
-			throw new InvalidOperationException("xcode-select returned an empty developer directory.");
-
 		return Resolve(developerDirectory);
 	}
 

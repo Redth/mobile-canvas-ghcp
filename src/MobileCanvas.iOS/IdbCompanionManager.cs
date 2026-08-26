@@ -3,6 +3,7 @@ using System.Diagnostics;
 using System.Net.Sockets;
 using MobileCanvas.Contracts;
 using MobileCanvas.Core;
+using Grpc.Core;
 using Grpc.Net.Client;
 using Idb;
 
@@ -13,15 +14,18 @@ internal sealed class IdbCompanionManager(IProcessRunner processRunner) : IAsync
 	private readonly ConcurrentDictionary<string, IdbCompanionSession> _sessions =
 		new(StringComparer.OrdinalIgnoreCase);
 	private readonly SemaphoreSlim _gate = new(1, 1);
+	private int _disposed;
 
 	public async Task<IdbCompanionSession> GetAsync(string udid, CancellationToken cancellationToken)
 	{
+		ObjectDisposedException.ThrowIf(Volatile.Read(ref _disposed) != 0, this);
 		if (_sessions.TryGetValue(udid, out var existing) && existing.IsRunning)
 			return existing;
 
 		await _gate.WaitAsync(cancellationToken).ConfigureAwait(false);
 		try
 		{
+			ObjectDisposedException.ThrowIf(Volatile.Read(ref _disposed) != 0, this);
 			if (_sessions.TryGetValue(udid, out existing))
 			{
 				if (existing.IsRunning)
@@ -41,13 +45,70 @@ internal sealed class IdbCompanionManager(IProcessRunner processRunner) : IAsync
 		}
 	}
 
+	public async Task<IdbCompanionSession> GetForHidAsync(
+		string udid,
+		CancellationToken cancellationToken)
+	{
+		try
+		{
+			return await GetAsync(udid, cancellationToken).ConfigureAwait(false);
+		}
+		catch (OperationCanceledException)
+		{
+			throw;
+		}
+		catch (Exception exception) when (IsAvailabilityFailure(exception))
+		{
+			throw new IdbHidException(exception.Message, exception);
+		}
+	}
+
+	public async Task RemoveAsync(string udid)
+	{
+		if (Volatile.Read(ref _disposed) != 0)
+			return;
+		await _gate.WaitAsync().ConfigureAwait(false);
+		try
+		{
+			if (Volatile.Read(ref _disposed) != 0)
+				return;
+			if (_sessions.TryRemove(udid, out var session))
+				await session.DisposeAsync().ConfigureAwait(false);
+		}
+		finally
+		{
+			_gate.Release();
+		}
+	}
+
 	public async ValueTask DisposeAsync()
 	{
-		foreach (var session in _sessions.Values)
-			await session.DisposeAsync().ConfigureAwait(false);
-		_sessions.Clear();
-		_gate.Dispose();
+		if (Interlocked.Exchange(ref _disposed, 1) != 0)
+			return;
+
+		await _gate.WaitAsync().ConfigureAwait(false);
+		try
+		{
+			foreach (var session in _sessions.Values)
+				await session.DisposeAsync().ConfigureAwait(false);
+			_sessions.Clear();
+		}
+		finally
+		{
+			_gate.Release();
+		}
 	}
+
+	internal static bool IsAvailabilityFailure(Exception exception) =>
+		exception is FileNotFoundException
+			or DirectoryNotFoundException
+			or UnauthorizedAccessException
+			or TimeoutException
+			or IOException
+			or SocketException
+			or RpcException
+			or InvalidOperationException
+			or PlatformNotSupportedException;
 }
 
 internal sealed class IdbCompanionSession : IAsyncDisposable
@@ -59,7 +120,7 @@ internal sealed class IdbCompanionSession : IAsyncDisposable
 	private readonly List<string> _standardError = [];
 	private readonly SemaphoreSlim _hidGate = new(1, 1);
 	private readonly SemaphoreSlim _videoGate = new(1, 1);
-	private bool _disposed;
+	private int _disposed;
 
 	private IdbCompanionSession(
 		string udid,
@@ -79,7 +140,7 @@ internal sealed class IdbCompanionSession : IAsyncDisposable
 	}
 
 	public string Udid { get; }
-	public bool IsRunning => !_disposed && !_process.HasExited;
+	public bool IsRunning => Volatile.Read(ref _disposed) == 0 && !_process.HasExited;
 	public CompanionService.CompanionServiceClient Client { get; }
 	public IProcessRunner ProcessRunner { get; }
 
@@ -206,6 +267,25 @@ internal sealed class IdbCompanionSession : IAsyncDisposable
 		}
 	}
 
+	public async Task SendIosHidAsync(
+		IReadOnlyList<IosHidEvent> events,
+		CancellationToken cancellationToken)
+	{
+		var converted = IdbHidAdapter.Convert(events);
+		try
+		{
+			await SendHidAsync(converted, cancellationToken).ConfigureAwait(false);
+		}
+		catch (OperationCanceledException)
+		{
+			throw;
+		}
+		catch (Exception exception) when (IdbCompanionManager.IsAvailabilityFailure(exception))
+		{
+			throw new IdbHidException(exception.Message, exception);
+		}
+	}
+
 	/// <summary>
 	/// The accessibility hierarchy as idb's raw JSON. Nested format is requested because the flat
 	/// legacy format loses the parent/child structure a caller needs to tell one "Done" from another.
@@ -260,18 +340,23 @@ internal sealed class IdbCompanionSession : IAsyncDisposable
 
 	public async ValueTask DisposeAsync()
 	{
-		if (_disposed)
+		if (Interlocked.Exchange(ref _disposed, 1) != 0)
 			return;
-		_disposed = true;
 		_channel.Dispose();
 		if (!_process.HasExited)
 		{
 			_process.Kill(entireProcessTree: true);
-			await _process.WaitForExitAsync().ConfigureAwait(false);
+			using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(3));
+			try
+			{
+				await _process.WaitForExitAsync(timeout.Token).ConfigureAwait(false);
+			}
+			catch (OperationCanceledException)
+			{
+				// The process has already been force-terminated; do not hang backend disposal.
+			}
 		}
 		_process.Dispose();
-		_hidGate.Dispose();
-		_videoGate.Dispose();
 
 		if (File.Exists(_socketPath))
 			File.Delete(_socketPath);
@@ -281,7 +366,7 @@ internal sealed class IdbCompanionSession : IAsyncDisposable
 
 	private void ThrowIfUnavailable()
 	{
-		ObjectDisposedException.ThrowIf(_disposed, this);
+		ObjectDisposedException.ThrowIf(Volatile.Read(ref _disposed) != 0, this);
 		if (_process.HasExited)
 			throw new InvalidOperationException(
 				$"idb_companion exited with code {_process.ExitCode}: {string.Join(Environment.NewLine, _standardError)}");

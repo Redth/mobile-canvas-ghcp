@@ -1,29 +1,13 @@
 #import "SimulatorFramebufferBridge.h"
 
+#import "SimulatorDeviceBridge.h"
+#import "SimulatorPrivateAPI.h"
+
 #import <IOSurface/IOSurface.h>
-#import <dlfcn.h>
 #import <limits.h>
 #import <mach/mach.h>
 
 static NSString *const MCFramebufferErrorDomain = @"com.github.copilot.mobile-canvas.framebuffer";
-
-@protocol MCSimServiceContextClass <NSObject>
-+ (id)sharedServiceContextForDeveloperDir:(id)developerDirectory error:(id *)error;
-@end
-
-@protocol MCSimServiceContext <NSObject>
-- (id)defaultDeviceSetWithError:(id *)error;
-@end
-
-@interface SimDeviceSet : NSObject
-@property (nonatomic, readonly) NSArray *availableDevices;
-@end
-
-@interface SimDevice : NSObject
-@property (nonatomic, readonly) NSUUID *UDID;
-@property (nonatomic, readonly) id io;
-- (mach_port_t)lookup:(NSString *)service error:(NSError **)error;
-@end
 
 @protocol MCSimDeviceIOClient <NSObject>
 - (NSArray *)ioPorts;
@@ -95,14 +79,7 @@ static NSError *MCExceptionError(NSException *exception, NSString *operation)
 
 static BOOL MCLoadCoreSimulator(void)
 {
-    static void *frameworkHandle = NULL;
-    static dispatch_once_t onceToken;
-    dispatch_once(&onceToken, ^{
-        frameworkHandle = dlopen(
-            "/Library/Developer/PrivateFrameworks/CoreSimulator.framework/CoreSimulator",
-            RTLD_LAZY | RTLD_LOCAL);
-    });
-    return frameworkHandle != NULL && NSClassFromString(@"SimServiceContext") != nil;
+    return MCSimulatorDevice.isCoreSimulatorAvailable;
 }
 
 static BOOL MCIsIOSurface(id _Nullable candidate)
@@ -118,50 +95,10 @@ static SimDevice *_Nullable MCFindDevice(
     NSString *developerDirectory,
     NSError **error)
 {
-    if (!MCLoadCoreSimulator()) {
-        if (error != NULL) {
-            const char *loadError = dlerror();
-            NSString *detail = loadError != NULL
-                ? [NSString stringWithUTF8String:loadError]
-                : @"CoreSimulator.framework could not be loaded";
-            *error = MCError(1, detail, nil);
-        }
-        return nil;
-    }
-
-    id contextError = nil;
-    Class<MCSimServiceContextClass> contextClass =
-        (Class<MCSimServiceContextClass>)NSClassFromString(@"SimServiceContext");
-    id<MCSimServiceContext> context =
-        [contextClass sharedServiceContextForDeveloperDir:developerDirectory error:&contextError];
-    if (context == nil) {
-        if (error != NULL) {
-            *error = MCError(1, @"Could not connect to CoreSimulator", contextError);
-        }
-        return nil;
-    }
-
-    id deviceSetError = nil;
-    SimDeviceSet *deviceSet = [context defaultDeviceSetWithError:&deviceSetError];
-    if (deviceSet == nil) {
-        if (error != NULL) {
-            *error = MCError(2, @"Could not open the default simulator device set", deviceSetError);
-        }
-        return nil;
-    }
-
-    for (SimDevice *device in deviceSet.availableDevices) {
-        if ([device.UDID.UUIDString caseInsensitiveCompare:udid] == NSOrderedSame) {
-            return device;
-        }
-    }
-
-    if (error != NULL) {
-        *error = MCError(3,
-                         [NSString stringWithFormat:@"Simulator %@ was not found in the default device set", udid],
-                         nil);
-    }
-    return nil;
+    MCSimulatorDevice *matched = [MCSimulatorDevice deviceWithUDID:udid
+                                                developerDirectory:developerDirectory
+                                                             error:error];
+    return (SimDevice *)matched.device;
 }
 
 @interface MCSimulatorFramebuffer ()

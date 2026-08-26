@@ -11,6 +11,7 @@ namespace MobileCanvas.iOS;
 public sealed class IosSimulatorBackend : IDeviceBackend, IAsyncDisposable
 {
 	private readonly IProcessRunner _processRunner;
+	private readonly CoreSimulatorHidManager _hid;
 	private readonly IdbCompanionManager _companions;
 	private readonly IosRecordingManager _recordings;
 	private readonly SimulatorDisplayProfiles _profiles;
@@ -22,11 +23,19 @@ public sealed class IosSimulatorBackend : IDeviceBackend, IAsyncDisposable
 	private readonly ConcurrentDictionary<string, (DeviceTarget Device, long Stamp)> _bootedCache = new();
 	private readonly ConcurrentDictionary<string, bool> _revalidating = new();
 	private readonly ConcurrentDictionary<string, string> _orientations = new(StringComparer.OrdinalIgnoreCase);
+	private readonly ConcurrentDictionary<string, ActiveHidRoute> _activeTouches =
+		new(StringComparer.OrdinalIgnoreCase);
+	private readonly ConcurrentDictionary<string, SemaphoreSlim> _inputGates =
+		new(StringComparer.OrdinalIgnoreCase);
+	private readonly ConcurrentDictionary<string, bool> _removingInputSessions =
+		new(StringComparer.OrdinalIgnoreCase);
+	private readonly SemaphoreSlim _inputRemovalGate = new(1, 1);
 	private static readonly TimeSpan BootedCacheLifetime = TimeSpan.FromSeconds(15);
 
 	public IosSimulatorBackend(IProcessRunner processRunner)
 	{
 		_processRunner = processRunner;
+		_hid = new CoreSimulatorHidManager();
 		_companions = new IdbCompanionManager(processRunner);
 		_recordings = new IosRecordingManager(processRunner);
 		_profiles = new SimulatorDisplayProfiles(processRunner);
@@ -153,14 +162,22 @@ public sealed class IosSimulatorBackend : IDeviceBackend, IAsyncDisposable
 	public async Task<DeviceTarget> ShutdownAsync(string deviceId, CancellationToken cancellationToken = default)
 	{
 		InvalidateBootedCache(deviceId);
-		var device = await GetDeviceAsync(deviceId, cancellationToken).ConfigureAwait(false);
-		if (device.State != DeviceStates.Shutdown)
+		var nativeId = DeviceIdentity.GetNativeId(deviceId);
+		try
 		{
-			var arguments = new[] { "shutdown", device.NativeId };
-			var result = await RunAsync(arguments, cancellationToken).ConfigureAwait(false);
-			EnsureSuccess("xcrun", ["simctl", .. arguments], result);
+			var device = await GetDeviceAsync(deviceId, cancellationToken).ConfigureAwait(false);
+			if (device.State != DeviceStates.Shutdown)
+			{
+				var arguments = new[] { "shutdown", device.NativeId };
+				var result = await RunAsync(arguments, cancellationToken).ConfigureAwait(false);
+				EnsureSuccess("xcrun", ["simctl", .. arguments], result);
+			}
+			return await GetDeviceAsync(deviceId, cancellationToken).ConfigureAwait(false);
 		}
-		return await GetDeviceAsync(deviceId, cancellationToken).ConfigureAwait(false);
+		finally
+		{
+			await RemoveInputSessionsAsync(nativeId).ConfigureAwait(false);
+		}
 	}
 
 	public async Task<DeviceTarget> RestartAsync(string deviceId, CancellationToken cancellationToken = default)
@@ -172,67 +189,67 @@ public sealed class IosSimulatorBackend : IDeviceBackend, IAsyncDisposable
 	public async Task<DeviceTarget> EraseAsync(string deviceId, CancellationToken cancellationToken = default)
 	{
 		InvalidateBootedCache(deviceId);
-		var device = await ShutdownAsync(deviceId, cancellationToken).ConfigureAwait(false);
-		var arguments = new[] { "erase", device.NativeId };
-		var result = await RunAsync(arguments, cancellationToken).ConfigureAwait(false);
-		EnsureSuccess("xcrun", ["simctl", .. arguments], result);
-		return await GetDeviceAsync(deviceId, cancellationToken).ConfigureAwait(false);
+		var nativeId = DeviceIdentity.GetNativeId(deviceId);
+		try
+		{
+			var device = await ShutdownAsync(deviceId, cancellationToken).ConfigureAwait(false);
+			var arguments = new[] { "erase", device.NativeId };
+			var result = await RunAsync(arguments, cancellationToken).ConfigureAwait(false);
+			EnsureSuccess("xcrun", ["simctl", .. arguments], result);
+			return await GetDeviceAsync(deviceId, cancellationToken).ConfigureAwait(false);
+		}
+		finally
+		{
+			await RemoveInputSessionsAsync(nativeId).ConfigureAwait(false);
+		}
 	}
 
 	public async Task DeleteAsync(string deviceId, CancellationToken cancellationToken = default)
 	{
 		InvalidateBootedCache(deviceId);
-		var device = await GetDeviceAsync(deviceId, cancellationToken).ConfigureAwait(false);
-		if (device.State != DeviceStates.Shutdown)
-			await ShutdownAsync(deviceId, cancellationToken).ConfigureAwait(false);
-		var arguments = new[] { "delete", device.NativeId };
-		var result = await RunAsync(arguments, cancellationToken).ConfigureAwait(false);
-		EnsureSuccess("xcrun", ["simctl", .. arguments], result);
+		var nativeId = DeviceIdentity.GetNativeId(deviceId);
+		try
+		{
+			var device = await GetDeviceAsync(deviceId, cancellationToken).ConfigureAwait(false);
+			if (device.State != DeviceStates.Shutdown)
+				await ShutdownAsync(deviceId, cancellationToken).ConfigureAwait(false);
+			var arguments = new[] { "delete", device.NativeId };
+			var result = await RunAsync(arguments, cancellationToken).ConfigureAwait(false);
+			EnsureSuccess("xcrun", ["simctl", .. arguments], result);
+		}
+		finally
+		{
+			await RemoveInputSessionsAsync(nativeId).ConfigureAwait(false);
+		}
 	}
 
 	public async Task<DeviceTarget> RevealAsync(string deviceId, CancellationToken cancellationToken = default)
 	{
 		var device = await BootAsync(deviceId, cancellationToken).ConfigureAwait(false);
-		// `--args` are only handed to Simulator.app when `open` launches it, so a reveal against an
-		// already-running instance just activates the app and leaves the requested device unfocused.
-		// Sample the state before activating so the follow-up only runs when it is actually needed.
-		var wasRunning = await IsSimulatorRunningAsync(cancellationToken).ConfigureAwait(false);
-		var arguments = new[] { "-a", "Simulator", "--args", "-CurrentDeviceUDID", device.NativeId };
+		var host = await SimulatorHostLocator.ResolveSelectedAsync(
+			_processRunner,
+			cancellationToken).ConfigureAwait(false);
+		var arguments = host.BuildOpenArguments(device.NativeId);
 		var result = await _processRunner.RunAsync(
 			new ProcessRequest("open", arguments),
 			cancellationToken).ConfigureAwait(false);
 		EnsureSuccess("open", arguments, result);
-		if (wasRunning)
-			await FocusSimulatorWindowAsync(device, cancellationToken).ConfigureAwait(false);
+		await FocusSimulatorWindowAsync(host, device, cancellationToken).ConfigureAwait(false);
 		return device;
 	}
 
-	private async Task<bool> IsSimulatorRunningAsync(CancellationToken cancellationToken)
-	{
-		try
-		{
-			var result = await _processRunner.RunAsync(
-				new ProcessRequest("pgrep", ["-x", "Simulator"]),
-				cancellationToken).ConfigureAwait(false);
-			return result.ExitCode == 0;
-		}
-		catch (Exception exception) when (exception is not OperationCanceledException)
-		{
-			// Treat an unusable pgrep as "not running" so reveal falls back to plain `open`.
-			return false;
-		}
-	}
-
 	/// <summary>
-	/// Best-effort focus of an already-running Simulator.app, which needs Accessibility. Reveal has
-	/// already activated the app by this point, so a denied permission degrades to the old behaviour
-	/// rather than failing the call.
+	/// Best-effort focus of the selected simulator host, which needs Accessibility. Reveal has already
+	/// activated the app, so a denied permission leaves it frontmost rather than failing the call.
 	/// </summary>
-	private async Task FocusSimulatorWindowAsync(DeviceTarget device, CancellationToken cancellationToken)
+	private async Task FocusSimulatorWindowAsync(
+		SimulatorHostInstallation host,
+		DeviceTarget device,
+		CancellationToken cancellationToken)
 	{
 		if (string.IsNullOrWhiteSpace(device.Name) || string.IsNullOrWhiteSpace(device.RuntimeName))
 			return;
-		var script = SimulatorWindowFocus.BuildScript(device.Name, device.RuntimeName);
+		var script = SimulatorWindowFocus.BuildScript(host, device.Name, device.RuntimeName);
 		try
 		{
 			await _processRunner.RunAsync(
@@ -250,16 +267,10 @@ public sealed class IosSimulatorBackend : IDeviceBackend, IAsyncDisposable
 		TapRequest request,
 		CancellationToken cancellationToken = default)
 	{
-		var companion = await GetCompanionAsync(deviceId, cancellationToken).ConfigureAwait(false);
-		var point = new Point { X = request.X, Y = request.Y };
-		var events = new List<HIDEvent>
-		{
-			Touch(point, HIDEvent.Types.HIDDirection.Down),
-		};
-		if (request.Duration > 0)
-			events.Add(new HIDEvent { Delay = new HIDEvent.Types.HIDDelay { Duration = request.Duration } });
-		events.Add(Touch(point, HIDEvent.Types.HIDDirection.Up));
-		await companion.SendHidAsync(events, cancellationToken).ConfigureAwait(false);
+		await SendInputAsync(
+			deviceId,
+			IosHidEvents.CreateTap(request.X, request.Y, request.Duration),
+			cancellationToken).ConfigureAwait(false);
 	}
 
 	public async Task TouchAsync(
@@ -267,14 +278,74 @@ public sealed class IosSimulatorBackend : IDeviceBackend, IAsyncDisposable
 		TouchRequest request,
 		CancellationToken cancellationToken = default)
 	{
-		var companion = await GetCompanionAsync(deviceId, cancellationToken).ConfigureAwait(false);
-		var point = new Point { X = request.X, Y = request.Y };
-		// Indigo has no distinct move phase: a touch that is already down is moved by pressing
-		// again at the new point, so down and move share the same direction.
-		var direction = string.Equals(request.Phase, TouchPhases.Up, StringComparison.OrdinalIgnoreCase)
-			? HIDEvent.Types.HIDDirection.Up
-			: HIDEvent.Types.HIDDirection.Down;
-		await companion.SendHidAsync([Touch(point, direction)], cancellationToken).ConfigureAwait(false);
+		var device = await RequireBootedAsync(deviceId, cancellationToken).ConfigureAwait(false);
+		var touch = IosHidEvents.CreateTouch(request.X, request.Y, request.Phase);
+		var gate = _inputGates.GetOrAdd(device.NativeId, static _ => new SemaphoreSlim(1, 1));
+		var enteredTouchGate = false;
+		try
+		{
+			var acquired = false;
+			try
+			{
+				await gate.WaitAsync(cancellationToken).ConfigureAwait(false);
+				acquired = true;
+				enteredTouchGate = true;
+				ThrowIfInputSessionsAreBeingRemoved(device.NativeId);
+				if (touch.Phase == IosHidTouchPhase.Down)
+				{
+					if (_activeTouches.ContainsKey(device.NativeId))
+						throw new DeviceCapabilityException("A continuous touch is already active on this simulator.");
+
+					var route = await SendInputCoreAsync(device, [touch], cancellationToken).ConfigureAwait(false);
+					_activeTouches[device.NativeId] = route;
+					return;
+				}
+
+				if (!_activeTouches.TryGetValue(device.NativeId, out var active))
+				{
+					throw new DeviceCapabilityException(
+						$"No continuous touch is active on simulator '{device.NativeId}'. "
+						+ "Start the gesture with phase 'down'.");
+				}
+
+				try
+				{
+					await active.SendAsync([touch], cancellationToken).ConfigureAwait(false);
+				}
+				catch (CoreSimulatorHidException exception)
+				{
+					_activeTouches.TryRemove(device.NativeId, out _);
+					throw new CoreSimulatorHidException(
+						$"The continuous touch lost its bundled CoreSimulator HID session: {exception.Message}",
+						beforeDelivery: false,
+						exception);
+				}
+				catch (IdbHidException exception)
+				{
+					_activeTouches.TryRemove(device.NativeId, out _);
+					throw new DeviceCapabilityException(
+						$"The continuous touch lost its optional idb session: {exception.Message}");
+				}
+				finally
+				{
+					if (touch.Phase == IosHidTouchPhase.Up)
+						_activeTouches.TryRemove(device.NativeId, out _);
+				}
+			}
+			finally
+			{
+				if (acquired)
+					gate.Release();
+			}
+		}
+		catch (OperationCanceledException) when (enteredTouchGate)
+		{
+			// Cancellation can race a delivered down or move with its acknowledgement. Tear down
+			// the captured transport so the helper's EOF cleanup lifts any possibly active contact,
+			// and so the next gesture starts from a known state.
+			await RemoveInputSessionsAsync(device.NativeId).ConfigureAwait(false);
+			throw;
+		}
 	}
 
 	public async Task SwipeAsync(
@@ -282,18 +353,15 @@ public sealed class IosSimulatorBackend : IDeviceBackend, IAsyncDisposable
 		SwipeRequest request,
 		CancellationToken cancellationToken = default)
 	{
-		var companion = await GetCompanionAsync(deviceId, cancellationToken).ConfigureAwait(false);
-		await companion.SendHidAsync(
+		await SendInputAsync(
+			deviceId,
 			[
-				new HIDEvent
-				{
-					Swipe = new HIDEvent.Types.HIDSwipe
-					{
-						Start = new Point { X = request.StartX, Y = request.StartY },
-						End = new Point { X = request.EndX, Y = request.EndY },
-						Duration = request.Duration,
-					},
-				},
+				IosHidEvents.CreateSwipe(
+					request.StartX,
+					request.StartY,
+					request.EndX,
+					request.EndY,
+					request.Duration),
 			],
 			cancellationToken).ConfigureAwait(false);
 	}
@@ -303,19 +371,23 @@ public sealed class IosSimulatorBackend : IDeviceBackend, IAsyncDisposable
 		string text,
 		CancellationToken cancellationToken = default)
 	{
-		var companion = await GetCompanionAsync(deviceId, cancellationToken).ConfigureAwait(false);
-		if (IdbKeyboard.TryCreateTextEvents(text, out var events))
+		if (text.Length == 0)
+			return;
+
+		var device = await RequireBootedAsync(deviceId, cancellationToken).ConfigureAwait(false);
+		if (IosHidEvents.TryCreateTextEvents(text, out var events))
 		{
-			await companion.SendHidAsync(events, cancellationToken).ConfigureAwait(false);
+			await SendInputAsync(device, events, cancellationToken).ConfigureAwait(false);
 			return;
 		}
 
-		var arguments = new[] { "simctl", "pbcopy", companion.Udid };
+		var arguments = new[] { "simctl", "pbcopy", device.NativeId };
 		var clipboard = await _processRunner.RunAsync(
 			new ProcessRequest("xcrun", arguments, StandardInput: text),
 			cancellationToken).ConfigureAwait(false);
 		EnsureSuccess("xcrun", arguments, clipboard);
-		await companion.SendHidAsync(IdbKeyboard.CreatePasteEvents(), cancellationToken).ConfigureAwait(false);
+		await SendInputAsync(device, IosHidEvents.CreatePasteEvents(), cancellationToken)
+			.ConfigureAwait(false);
 	}
 
 	public async Task PressKeyAsync(
@@ -323,9 +395,10 @@ public sealed class IosSimulatorBackend : IDeviceBackend, IAsyncDisposable
 		ulong keyCode,
 		CancellationToken cancellationToken = default)
 	{
-		var companion = await GetCompanionAsync(deviceId, cancellationToken).ConfigureAwait(false);
-		await companion.SendHidAsync(IdbKeyboard.CreateKeyPress(keyCode), cancellationToken)
-			.ConfigureAwait(false);
+		await SendInputAsync(
+			deviceId,
+			IosHidEvents.CreateKeyPress(keyCode),
+			cancellationToken).ConfigureAwait(false);
 	}
 
 	public async Task PressButtonAsync(
@@ -333,24 +406,9 @@ public sealed class IosSimulatorBackend : IDeviceBackend, IAsyncDisposable
 		string button,
 		CancellationToken cancellationToken = default)
 	{
-		var companion = await GetCompanionAsync(deviceId, cancellationToken).ConfigureAwait(false);
-		var buttonType = button.ToLowerInvariant() switch
-		{
-			"home" => HIDEvent.Types.HIDButtonType.Home,
-			"lock" => HIDEvent.Types.HIDButtonType.Lock,
-			"side" or "side-button" => HIDEvent.Types.HIDButtonType.SideButton,
-			"siri" => HIDEvent.Types.HIDButtonType.Siri,
-			"apple-pay" => HIDEvent.Types.HIDButtonType.ApplePay,
-			_ => throw new ArgumentException(
-				"Button must be home, lock, side-button, siri, or apple-pay.",
-				nameof(button)),
-		};
-		var grpcButton = new HIDEvent.Types.HIDButton { Button = buttonType };
-		await companion.SendHidAsync(
-			[
-				Button(grpcButton, HIDEvent.Types.HIDDirection.Down),
-				Button(grpcButton, HIDEvent.Types.HIDDirection.Up),
-			],
+		await SendInputAsync(
+			deviceId,
+			[IosHidEvents.CreateButtonPress(button)],
 			cancellationToken).ConfigureAwait(false);
 	}
 
@@ -462,15 +520,30 @@ public sealed class IosSimulatorBackend : IDeviceBackend, IAsyncDisposable
 				$"{ScreenCaptureHelper.ExecutableName} is unavailable, so native capture cannot start.";
 		}
 
-		var companion = await GetCompanionAsync(deviceId, cancellationToken).ConfigureAwait(false);
-		return await companion.OpenVideoAsync(
-				options,
-				display,
-				BuildCaptureFallbackDetail(
-					framebufferUnavailableReason,
-					screenCaptureUnavailableReason),
-				cancellationToken)
-			.ConfigureAwait(false);
+		var nativeFailure = BuildCaptureFallbackDetail(
+			framebufferUnavailableReason,
+			screenCaptureUnavailableReason);
+		if (IdbCompanionLocator.Find() is null)
+			throw BuildVideoUnavailableException(nativeFailure, "idb_companion is not installed.");
+
+		try
+		{
+			var companion = await GetCompanionAsync(deviceId, cancellationToken).ConfigureAwait(false);
+			return await companion.OpenVideoAsync(
+					options,
+					display,
+					nativeFailure,
+					cancellationToken)
+				.ConfigureAwait(false);
+		}
+		catch (OperationCanceledException)
+		{
+			throw;
+		}
+		catch (Exception exception) when (IdbCompanionManager.IsAvailabilityFailure(exception))
+		{
+			throw BuildVideoUnavailableException(nativeFailure, exception.Message);
+		}
 	}
 
 	internal static string? BuildCaptureFallbackDetail(
@@ -485,18 +558,30 @@ public sealed class IosSimulatorBackend : IDeviceBackend, IAsyncDisposable
 		return details.Count == 0 ? null : string.Join(" ", details);
 	}
 
+	internal static DeviceCapabilityException BuildVideoUnavailableException(
+		string? nativeFailure,
+		string idbFailure)
+	{
+		var nativeDetail = string.IsNullOrWhiteSpace(nativeFailure)
+			? "Native framebuffer and ScreenCaptureKit capture are unavailable."
+			: nativeFailure;
+		return new DeviceCapabilityException(
+			$"iOS live video is unavailable. {nativeDetail} "
+			+ $"Optional idb final fallback: {idbFailure}");
+	}
+
 	private async Task<CaptureWindowResult> FindCaptureWindowAsync(
 		string nativeId,
 		CancellationToken cancellationToken)
 	{
-		// Live capture must not turn a headless boot into a visible Simulator.app window. An already
+		// Live capture must not turn a headless boot into a visible simulator host window. An already
 		// visible window remains a valid fallback, but opening one is reserved for RevealAsync.
 		var permissions = await ScreenCaptureHelper.GetDiagnosticsAsync(cancellationToken).ConfigureAwait(false);
 		if (!permissions.ScreenRecordingGranted)
 		{
 			return new CaptureWindowResult(
 				null,
-				"Grant Screen Recording permission so ScreenCaptureKit can read Simulator.app.");
+				"Grant Screen Recording permission so ScreenCaptureKit can read the simulator host app.");
 		}
 		if (!permissions.AccessibilityGranted)
 		{
@@ -526,7 +611,7 @@ public sealed class IosSimulatorBackend : IDeviceBackend, IAsyncDisposable
 		{
 			return new CaptureWindowResult(
 				null,
-				"Simulator.app is not showing this device. Use Show simulator window to make this fallback available.");
+				"The simulator host app is not showing this device. Use Show simulator window to make this fallback available.");
 		}
 
 		if (!match.HasExactGeometry)
@@ -573,6 +658,12 @@ public sealed class IosSimulatorBackend : IDeviceBackend, IAsyncDisposable
 		bool includeRaw,
 		CancellationToken cancellationToken = default)
 	{
+		if (IdbCompanionLocator.Find() is null)
+		{
+			throw new DeviceCapabilityException(
+				"The iOS accessibility hierarchy requires the optional idb_companion. "
+				+ "Install it or set MOBILE_CANVAS_IDB_COMPANION to use ui_tree, ui_find, or ui_tap.");
+		}
 		var companion = await GetCompanionAsync(deviceId, cancellationToken).ConfigureAwait(false);
 		var json = await companion.GetAccessibilityJsonAsync(cancellationToken).ConfigureAwait(false);
 		var root = AccessibilityParser.Parse(json);
@@ -2162,7 +2253,103 @@ public sealed class IosSimulatorBackend : IDeviceBackend, IAsyncDisposable
 	public async ValueTask DisposeAsync()
 	{
 		await _recordings.DisposeAsync().ConfigureAwait(false);
+		await _hid.DisposeAsync().ConfigureAwait(false);
 		await _companions.DisposeAsync().ConfigureAwait(false);
+		_activeTouches.Clear();
+		_inputGates.Clear();
+	}
+
+	private async Task<ActiveHidRoute> SendInputAsync(
+		string deviceId,
+		IReadOnlyList<IosHidEvent> events,
+		CancellationToken cancellationToken)
+	{
+		var device = await RequireBootedAsync(deviceId, cancellationToken).ConfigureAwait(false);
+		return await SendInputAsync(device, events, cancellationToken).ConfigureAwait(false);
+	}
+
+	private async Task<ActiveHidRoute> SendInputAsync(
+		DeviceTarget device,
+		IReadOnlyList<IosHidEvent> events,
+		CancellationToken cancellationToken)
+	{
+		var gate = _inputGates.GetOrAdd(device.NativeId, static _ => new SemaphoreSlim(1, 1));
+		await gate.WaitAsync(cancellationToken).ConfigureAwait(false);
+		try
+		{
+			ThrowIfInputSessionsAreBeingRemoved(device.NativeId);
+			return await SendInputCoreAsync(device, events, cancellationToken).ConfigureAwait(false);
+		}
+		finally
+		{
+			gate.Release();
+		}
+	}
+
+	private Task<ActiveHidRoute> SendInputCoreAsync(
+		DeviceTarget device,
+		IReadOnlyList<IosHidEvent> events,
+		CancellationToken cancellationToken) =>
+		IosHidFallback.SendAsync(
+			async () =>
+			{
+				var session = await _hid.GetAsync(device.NativeId, cancellationToken)
+					.ConfigureAwait(false);
+				await session.SendAsync(events, cancellationToken).ConfigureAwait(false);
+				return new ActiveHidRoute(
+					"bundled CoreSimulator HID",
+					session.SendAsync);
+			},
+			async () =>
+			{
+				var session = await _companions.GetForHidAsync(device.NativeId, cancellationToken)
+					.ConfigureAwait(false);
+				await session.SendIosHidAsync(events, cancellationToken).ConfigureAwait(false);
+				return new ActiveHidRoute(
+					"optional idb",
+					session.SendIosHidAsync);
+			});
+
+	private async Task RemoveInputSessionsAsync(string nativeId)
+	{
+		await _inputRemovalGate.WaitAsync().ConfigureAwait(false);
+		try
+		{
+			_removingInputSessions[nativeId] = true;
+			var gate = _inputGates.GetOrAdd(nativeId, static _ => new SemaphoreSlim(1, 1));
+			// Dispose first so an input call waiting for a helper/idb acknowledgement is forced to
+			// complete and release the gate. Removing once more while holding the gate catches a
+			// session whose startup raced the first removal.
+			await Task.WhenAll(
+				_hid.RemoveAsync(nativeId),
+				_companions.RemoveAsync(nativeId)).ConfigureAwait(false);
+			await gate.WaitAsync().ConfigureAwait(false);
+			try
+			{
+				_activeTouches.TryRemove(nativeId, out _);
+				await Task.WhenAll(
+					_hid.RemoveAsync(nativeId),
+					_companions.RemoveAsync(nativeId)).ConfigureAwait(false);
+			}
+			finally
+			{
+				gate.Release();
+			}
+		}
+		finally
+		{
+			_removingInputSessions.TryRemove(nativeId, out _);
+			_inputRemovalGate.Release();
+		}
+	}
+
+	private void ThrowIfInputSessionsAreBeingRemoved(string nativeId)
+	{
+		if (_removingInputSessions.ContainsKey(nativeId))
+		{
+			throw new DeviceCapabilityException(
+				$"Input sessions for simulator '{nativeId}' are being reset for a lifecycle operation.");
+		}
 	}
 
 	private async Task<IdbCompanionSession> GetCompanionAsync(
@@ -2172,6 +2359,10 @@ public sealed class IosSimulatorBackend : IDeviceBackend, IAsyncDisposable
 		var device = await RequireBootedAsync(deviceId, cancellationToken).ConfigureAwait(false);
 		return await _companions.GetAsync(device.NativeId, cancellationToken).ConfigureAwait(false);
 	}
+
+	private sealed record ActiveHidRoute(
+		string Name,
+		Func<IReadOnlyList<IosHidEvent>, CancellationToken, Task> SendAsync);
 
 	private async Task<DeviceTarget> RequireBootedAsync(
 		string deviceId,
@@ -2253,30 +2444,70 @@ public sealed class IosSimulatorBackend : IDeviceBackend, IAsyncDisposable
 	private async Task<HostDiagnostics> GetDiagnosticsAsync(CancellationToken cancellationToken)
 	{
 		var checks = new List<DependencyCheck>();
-		var xcode = await _processRunner.RunAsync(
-			new ProcessRequest("xcode-select", ["-p"]),
-			cancellationToken).ConfigureAwait(false);
-		var xcodePath = xcode.ExitCode == 0 ? xcode.StandardOutput.Trim() : null;
+		string? xcodePath = null;
+		string? xcodeFailure = null;
+		try
+		{
+			xcodePath = await XcodeDeveloperDirectory.ResolveSelectedAsync(
+				_processRunner,
+				cancellationToken).ConfigureAwait(false);
+		}
+		catch (OperationCanceledException)
+		{
+			throw;
+		}
+		catch (Exception exception) when (
+			exception is ProcessExecutionException
+				or InvalidOperationException
+				or ArgumentException)
+		{
+			xcodeFailure = exception.Message;
+		}
 		var xcodeReady = !string.IsNullOrWhiteSpace(xcodePath);
+		var companion = IdbCompanionLocator.Find();
 		checks.Add(new DependencyCheck
 		{
 			Name = "Xcode",
 			Status = xcodeReady ? "ok" : "error",
 			Message = xcodeReady
 				? "Full Xcode developer directory is selected."
-				: string.IsNullOrWhiteSpace(xcode.StandardError)
+				: string.IsNullOrWhiteSpace(xcodeFailure)
 					? "xcode-select did not return a developer directory."
-					: xcode.StandardError.Trim(),
+					: xcodeFailure,
 			Path = xcodePath,
+		});
+
+		var hid = await CoreSimulatorHidDoctor.ProbeAsync(
+			_processRunner,
+			xcodePath,
+			cancellationToken).ConfigureAwait(false);
+		var nativeHidReady = hid.Negotiable;
+		checks.Add(new DependencyCheck
+		{
+			Name = "Bundled CoreSimulator HID",
+			Status = nativeHidReady ? "ok" : companion is null ? "error" : "warning",
+			Message = nativeHidReady
+				? $"{hid.Detail} This is a static negotiability probe; a booted-device session "
+					+ "becomes authoritative when it reports ready."
+				: hid.Detail,
+			Path = NativeHelperLocator.Path,
 		});
 
 		SimulatorKitInstallation? simulatorKit = null;
 		if (xcodeReady)
 			SimulatorKitLocator.TryResolve(xcodePath!, out simulatorKit);
+		var simulatorKitRequired = string.Equals(
+			hid.TransportPolicy,
+			"indigo",
+			StringComparison.OrdinalIgnoreCase);
 		checks.Add(new DependencyCheck
 		{
 			Name = "SimulatorKit",
-			Status = simulatorKit is null ? "error" : "ok",
+			Status = simulatorKit is not null
+				? "ok"
+				: simulatorKitRequired && companion is null
+					? "error"
+					: "warning",
 			Message = simulatorKit is null
 				? xcodeReady
 					? SimulatorKitLocator.GetMissingFrameworkMessage(xcodePath!)
@@ -2287,14 +2518,15 @@ public sealed class IosSimulatorBackend : IDeviceBackend, IAsyncDisposable
 			Path = simulatorKit?.FrameworkPath,
 		});
 
-		var companion = IdbCompanionLocator.Find();
 		checks.Add(new DependencyCheck
 		{
 			Name = "idb_companion",
-			Status = companion is null ? "error" : "ok",
+			Status = companion is null ? "warning" : "ok",
 			Message = companion is null
-				? "Install idb_companion or set MOBILE_CANVAS_IDB_COMPANION."
-				: "idb_companion is available for touch, keyboard, and fallback video.",
+				? "Optional idb_companion is unavailable. Accessibility tree/search/tap, "
+					+ "compatibility input fallback, and the final live-video fallback are disabled."
+				: "Optional idb_companion is available for accessibility, compatibility input "
+					+ "fallback, and the final live-video fallback.",
 			Path = companion,
 		});
 
@@ -2307,7 +2539,7 @@ public sealed class IosSimulatorBackend : IDeviceBackend, IAsyncDisposable
 		checks.Add(new DependencyCheck
 		{
 			Name = "Simulator framebuffer",
-			Status = framebufferReady ? "ok" : screencapPath is null ? "error" : "warning",
+			Status = framebufferReady ? "ok" : "warning",
 			Message = screencapPath is null
 				? "mobile-screencap was not found next to mobile-canvas; video falls back to idb."
 				: framebufferReady
@@ -2325,7 +2557,7 @@ public sealed class IosSimulatorBackend : IDeviceBackend, IAsyncDisposable
 		return new HostDiagnostics
 		{
 			Platform = DevicePlatforms.Ios,
-			Ready = checks.All(check => check.Status != "error"),
+			Ready = xcodeReady && (nativeHidReady || companion is not null),
 			Checks = checks.ToArray(),
 		};
 	}
@@ -2411,26 +2643,4 @@ public sealed class IosSimulatorBackend : IDeviceBackend, IAsyncDisposable
 			throw new ProcessExecutionException(fileName, arguments, result);
 	}
 
-	private static HIDEvent Touch(Point point, HIDEvent.Types.HIDDirection direction) => new()
-	{
-		Press = new HIDEvent.Types.HIDPress
-		{
-			Action = new HIDEvent.Types.HIDPressAction
-			{
-				Touch = new HIDEvent.Types.HIDTouch { Point = point },
-			},
-			Direction = direction,
-		},
-	};
-
-	private static HIDEvent Button(
-		HIDEvent.Types.HIDButton button,
-		HIDEvent.Types.HIDDirection direction) => new()
-	{
-		Press = new HIDEvent.Types.HIDPress
-		{
-			Action = new HIDEvent.Types.HIDPressAction { Button = button },
-			Direction = direction,
-		},
-	};
 }

@@ -1,10 +1,11 @@
 using System.Diagnostics;
 using System.Text.Json;
+using MobileCanvas.Core;
 
 namespace MobileCanvas.iOS;
 
 /// <summary>
-/// A Simulator.app device window as reported by the <c>mobile-screencap</c> helper.
+/// A simulator host app device window as reported by the <c>mobile-screencap</c> helper.
 /// </summary>
 internal sealed record ScreencapWindow
 {
@@ -19,7 +20,7 @@ internal sealed record ScreencapWindow
 
 	/// <summary>
 	/// True when Accessibility resolved the device screen exactly. When false the helper can only
-	/// capture the whole window, which includes Simulator chrome and the device bezel, so input
+	/// capture the whole window, which includes host-app chrome and the device bezel, so input
 	/// coordinates would not line up.
 	/// </summary>
 	public bool HasExactGeometry { get; init; }
@@ -47,54 +48,11 @@ internal sealed record ScreencapDiagnostics
 /// </remarks>
 internal static class ScreenCaptureHelper
 {
-	public const string ExecutableName = "mobile-screencap";
-	private const string PathVariable = "MOBILE_CANVAS_SCREENCAP_PATH";
+	public const string ExecutableName = NativeHelperLocator.ExecutableName;
 
-	private static readonly Lazy<string?> ResolvedPath = new(Resolve, isThreadSafe: true);
+	public static string? Path => NativeHelperLocator.Path;
 
-	public static string? Path => ResolvedPath.Value;
-
-	public static bool IsAvailable => OperatingSystem.IsMacOS() && ResolvedPath.Value is not null;
-
-	private static string? Resolve()
-	{
-		if (!OperatingSystem.IsMacOS())
-			return null;
-
-		var configured = Environment.GetEnvironmentVariable(PathVariable);
-		if (!string.IsNullOrWhiteSpace(configured) && File.Exists(configured))
-			return configured;
-
-		var baseDirectory = AppContext.BaseDirectory;
-		string[] candidates =
-		[
-			System.IO.Path.Combine(baseDirectory, ExecutableName),
-			System.IO.Path.Combine(baseDirectory, "native", ExecutableName),
-			System.IO.Path.Combine(baseDirectory, "runtimes", "native", ExecutableName),
-		];
-
-		foreach (var candidate in candidates)
-		{
-			if (File.Exists(candidate))
-				return candidate;
-		}
-
-		// Development layout: walk up to the repository root and use the build script output.
-		var directory = new DirectoryInfo(baseDirectory);
-		for (var depth = 0; depth < 10 && directory is not null; depth++, directory = directory.Parent)
-		{
-			var developmentPath = System.IO.Path.Combine(
-				directory.FullName,
-				"native",
-				ExecutableName,
-				"out",
-				ExecutableName);
-			if (File.Exists(developmentPath))
-				return developmentPath;
-		}
-
-		return null;
-	}
+	public static bool IsAvailable => NativeHelperLocator.IsAvailable;
 
 	public static async Task<IReadOnlyList<ScreencapWindow>> ListAsync(CancellationToken cancellationToken)
 	{

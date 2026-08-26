@@ -102,6 +102,18 @@ public class NativeCaptureTests
 	}
 
 	[Fact]
+	public void VideoUnavailable_ReportsNativeAndOptionalIdbFailures()
+	{
+		var exception = IosSimulatorBackend.BuildVideoUnavailableException(
+			"Direct framebuffer capture unavailable: private API changed",
+			"idb_companion is not installed.");
+
+		Assert.Contains("private API changed", exception.Message);
+		Assert.Contains("Optional idb final fallback", exception.Message);
+		Assert.Contains("not installed", exception.Message);
+	}
+
+	[Fact]
 	public void ScreencapCheck_DoesNotPromptForOptionalFallbackPermissions()
 	{
 		var check = IosSimulatorBackend.BuildScreencapCheck(

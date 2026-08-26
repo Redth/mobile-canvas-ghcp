@@ -69,6 +69,11 @@ resolver does a direct lookup with no platform mapping table at runtime:
           "asset": "mobile-canvas-v0.1.11-osx-arm64.gz",
           "sha256": "...",
           "size": 26260560
+        },
+        "mobile-screencap": {
+          "asset": "mobile-screencap-v0.1.11-osx-arm64.gz",
+          "sha256": "...",
+          "size": 656960
         }
       }
     }
@@ -76,9 +81,11 @@ resolver does a direct lookup with no platform mapping table at runtime:
 }
 ```
 
-On first use `lib/runtime.mjs` gunzips the archives for the current platform
+On first use `lib/runtime.mjs` gunzips every archive for the current platform
 into `~/.mobile-canvas/runtimes/<platform>-<arch>-<hash>/`, verifies each
-SHA-256, and marks them executable.
+SHA-256, and marks them executable. The cache identity includes every declared
+file hash, not just `mobile-canvas`, so a helper-only rebuild cannot reuse a
+stale helper. An incomplete cache is discarded and materialized again.
 
 Measured: **56 ms** on a cold start, **0 ms** once extracted.
 
@@ -228,9 +235,9 @@ path that applies quarantine; shipping raw binaries would hand those users a
 
 The primary iOS video path reads the simulator's CoreSimulator IOSurface
 directly and encodes it with VideoToolbox. It does **not** need Screen Recording,
-Accessibility, a visible Simulator.app window, or either TCC prompt.
+Accessibility, a visible simulator host window, or either TCC prompt.
 Rotation uses the same CoreSimulator bridge to send a device-targeted orientation
-event and likewise does not automate or depend on Simulator.app.
+event and likewise does not automate or depend on Simulator.app or Device Hub.
 
 ScreenCaptureKit remains the first fallback for private-framework compatibility.
 That path needs Screen Recording and reads window geometry through Accessibility.
@@ -249,6 +256,46 @@ to the app hosting the canvas, and updates never disturb it.
 prompting. If the private framebuffer API changes, capture falls through to
 ScreenCaptureKit and then idb rather than failing.
 
+### Persistent CoreSimulator HID and Xcode 27
+
+The same bundled helper owns iOS input. `mobile-screencap hid --udid <udid>`
+stays alive for the simulator session and exchanges versioned NDJSON requests
+and results over stdin/stdout; stderr remains diagnostic-only. Keeping one
+connection preserves continuous touch state and avoids a process launch for each
+gesture.
+
+The native transport is selected from the CoreSimulator framework actually
+loaded in the helper:
+
+- below CoreSimulator `1155.4`, input uses the legacy SimulatorKit Indigo HID
+  client;
+- at `1155.4` and later, input uses the simulator's
+  `com.apple.coredevice.feature.remote.hid.digitizer` DTUHID XPC service.
+
+The comparison is numeric and deliberately does not use the selected Xcode
+version. CoreSimulator is installed system-wide and can be newer than
+`DEVELOPER_DIR`. DTUHID is negotiated by resolving its private `_4sim` XPC
+symbols and looking up the service on the target `SimDevice`; the demand-launched
+`dtuhidd` process does not need to be resident beforehand.
+
+Xcode 27 also moves `SimulatorKit.framework` to
+`Contents/SharedFrameworks` and replaces Simulator.app with
+`Contents/Applications/DeviceHub.app` (`com.apple.dt.Devices`). Those are
+separate concerns:
+
+- the helper probes both SimulatorKit layouts before resolving its runtime-only
+  Indigo symbols;
+- CoreSimulatorService, `simctl`, device discovery, and HID remain headless and
+  do not route through Device Hub;
+- reveal and ScreenCaptureKit fallback code recognizes Device Hub as the
+  optional visible simulator host while preserving Simulator.app support for
+  Xcode 26.
+
+`idb_companion` remains optional. It supplies the accessibility hierarchy,
+compatibility input fallback when native HID cannot start before delivery, and
+the final live-video fallback. A native failure after an event may have been
+delivered is surfaced directly and is never replayed through IDB.
+
 ## Supported platforms
 
 Native AOT **cannot cross-compile between operating systems** -- the compiler
@@ -262,7 +309,8 @@ macOS machine produces both `osx-` slices.
 | Windows | unavailable | full | PNG polling |
 | Linux | unavailable | full | PNG polling |
 
-iOS needs `simctl` and `idb`, so it is macOS-only and always will be.
+iOS needs Xcode's `simctl` and the bundled CoreSimulator helper, so it is
+macOS-only. IDB is optional for accessibility and compatibility fallbacks.
 
 Android is fully functional everywhere -- `AndroidSdkLocator` already resolves
 `.exe`, `.bat` and Windows SDK layouts -- but H.264 encoding goes through the
