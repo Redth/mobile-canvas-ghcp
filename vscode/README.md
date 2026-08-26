@@ -65,8 +65,19 @@ Mobile Canvas or .NET tool to install.
 
 | Platform | What you need |
 |---|---|
-| iOS | macOS, Xcode with Simulator runtimes, and [`idb_companion`](https://fbidb.io) for input |
+| iOS | macOS and a full Xcode installation with Simulator runtimes |
 | Android | Android SDK tools and `adb` on `PATH` |
+| Optional iOS accessibility/fallbacks | [`idb`](https://fbidb.io) (provides `idb_companion`) |
+
+The bundled helper provides iOS touch, keyboard, buttons, rotation, and direct
+video capture. Install Meta's `idb` package only for accessibility hierarchy,
+compatibility input fallback, or the final live-video fallback:
+
+```bash
+brew tap facebook/fb
+brew trust facebook/fb
+brew install facebook/fb/idb
+```
 
 VS Code 1.101 or newer is required. Browser-hosted `vscode.dev` is not supported
 because it cannot launch local native runtimes.

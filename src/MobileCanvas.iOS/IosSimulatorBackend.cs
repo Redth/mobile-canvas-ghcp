@@ -662,7 +662,8 @@ public sealed class IosSimulatorBackend : IDeviceBackend, IAsyncDisposable
 		{
 			throw new DeviceCapabilityException(
 				"The iOS accessibility hierarchy requires the optional idb_companion. "
-				+ "Install it or set MOBILE_CANVAS_IDB_COMPANION to use ui_tree, ui_find, or ui_tap.");
+				+ $"{IdbCompanionLocator.InstallationGuidance} "
+				+ "This enables ui_tree, ui_find, and ui_tap.");
 		}
 		var companion = await GetCompanionAsync(deviceId, cancellationToken).ConfigureAwait(false);
 		var json = await companion.GetAccessibilityJsonAsync(cancellationToken).ConfigureAwait(false);

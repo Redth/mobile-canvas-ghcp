@@ -154,7 +154,7 @@ internal sealed class IdbCompanionSession : IAsyncDisposable
 
 		var companionPath = IdbCompanionLocator.Find()
 			?? throw new FileNotFoundException(
-				"idb_companion was not found. Install it with Homebrew or set MOBILE_CANVAS_IDB_COMPANION.");
+				$"idb_companion was not found. {IdbCompanionLocator.InstallationGuidance}");
 		var simulatorKit = await SimulatorKitLocator.ResolveSelectedAsync(processRunner, cancellationToken)
 			.ConfigureAwait(false);
 		var root = Path.Combine("/tmp", $"mobile-canvas-idb-{Environment.UserName}");

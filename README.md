@@ -118,21 +118,21 @@ and take over at any time.
 |---|---|
 | **iOS** | macOS and a full Xcode installation with Simulator runtimes |
 | **Android** | Android SDK with `emulator`, `avdmanager`, and `adb` on `PATH` |
-| **Optional iOS accessibility/fallbacks** | [`idb_companion`](https://fbidb.io), plus Screen Recording and Accessibility permission for ScreenCaptureKit window capture |
+| **Optional iOS accessibility/fallbacks** | [`idb`](https://fbidb.io) (provides `idb_companion`), plus Screen Recording and Accessibility permission for ScreenCaptureKit window capture |
 
 The bundled `mobile-screencap` helper provides iOS touch, keyboard, buttons,
 rotation, and direct video capture. Xcode 26 uses Simulator.app; Xcode 27 uses
 Device Hub. Neither visible app needs to be open for headless input.
 
-Install `idb_companion` only when you need the iOS accessibility hierarchy
-(`ui_tree`, `ui_find`, or `ui_tap`), compatibility input fallback, or the final
-live-video fallback. Current Homebrew versions require explicitly trusting
-third-party formulae:
+Install Meta's `idb` metapackage only when you need the iOS accessibility
+hierarchy (`ui_tree`, `ui_find`, or `ui_tap`), compatibility input fallback, or
+the final live-video fallback. It provides `idb_companion`; current Homebrew
+versions require explicitly trusting the third-party tap:
 
 ```bash
 brew tap facebook/fb
-brew trust --formula facebook/fb/idb-companion
-brew install facebook/fb/idb-companion
+brew trust facebook/fb
+brew install facebook/fb/idb
 ```
 
 Then add the installed executable to your shell environment. For zsh:

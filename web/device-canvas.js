@@ -11,6 +11,7 @@ import {
   createLatestCatalogLoader,
   deviceStatusPresentation,
   formatDeviceState,
+  formatUserFacingMessage,
   organizeDiagnostics,
   readStoredDeviceId,
   resumeAuthenticatedPanel,
@@ -174,7 +175,9 @@ async function requireSuccessfulResponse(response) {
     const payload = await response.json().catch(() => ({
       message: `${response.status} ${response.statusText}`,
     }));
-    const error = new Error(payload.message || "Mobile Canvas request failed.");
+    const error = new Error(
+      formatUserFacingMessage(payload.message || "Mobile Canvas request failed."),
+    );
     error.code = payload.code;
     error.status = response.status;
     throw error;
@@ -2440,15 +2443,16 @@ function showToast(message, isError = false) {
 }
 
 function showError(error) {
-  showToast(error.message || String(error), true);
+  showToast(formatUserFacingMessage(error.message || String(error)), true);
 }
 
 function showCanvasError(error) {
+  const message = formatUserFacingMessage(error.message || String(error));
   if (state.selected && !state.detached) {
     stopStream();
     showDeviceStatus("error", {
       title: "Couldn't refresh the device",
-      detail: error.message || String(error),
+      detail: message,
       action: { id: "refresh", label: "Refresh devices", icon: "#icon-refresh" },
     });
     setStreamMode("offline");
@@ -2462,7 +2466,7 @@ function showCanvasError(error) {
       tone: "danger",
       icon: "#icon-alert",
       title: "Couldn't load devices",
-      detail: error.message || String(error),
+      detail: message,
       action: { id: "refresh", label: "Try again", icon: "#icon-refresh" },
     });
     elements.empty.classList.remove("hidden");
