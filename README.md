@@ -310,7 +310,9 @@ The Ailoha source manifest is a deterministic inventory of every tracked or
 unignored source file, its destination under `imports/mobile-canvas`, and its
 byte-exact hash. It also records the current backend operations, API/WebSocket
 routes, MCP tools, and canvas actions so Ailoha can measure feature parity
-against code. Ailoha uses it to pin and verify imports while this repository
+against code. The aggregate snapshot authenticates both the files and that
+surface inventory, so parity metadata cannot drift independently from the
+imported source. Ailoha uses it to pin and verify imports while this repository
 remains the implementation source of truth. Pass `--require-clean` for an
 importable release snapshot.
 
