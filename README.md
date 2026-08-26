@@ -282,6 +282,7 @@ dotnet test  tests/MobileCanvas.Tests/MobileCanvas.Tests.csproj
 npm ci --prefix vscode --ignore-scripts
 npm test --prefix vscode
 npm run package --prefix vscode
+npm run ailoha:manifest -- --output .build/ailoha-source-manifest.json
 ./scripts/build.sh          # builds one architecture into .build/bin/<rid>
 ./scripts/release.sh        # rebuilds macOS release assets for local validation
 ```
@@ -295,6 +296,12 @@ Two things to know before you change anything:
   builds both. A stale helper fails only later, at stream start; check it with
   `mobile-screencap --help` and confirm `framebuffer`, `hid`, `hid-doctor`, and
   Android's `encode` subcommands exist.
+
+The Ailoha source manifest is a deterministic inventory of every tracked or
+unignored source file, its destination under `imports/mobile-canvas`, and its
+byte-exact hash. Ailoha uses it to pin and verify imports while this repository
+remains the implementation source of truth. Pass `--require-clean` for an
+importable release snapshot.
 
 Changing `src/` or `native/` requires the **Release runtimes** workflow. It builds
 each Native AOT RID on its native OS, publishes checksummed release assets, and
