@@ -214,6 +214,8 @@ public sealed class AndroidEmulatorBackendTests
 			"arm64-v8a");
 		Directory.CreateDirectory(olderImage);
 		Directory.CreateDirectory(newerImage);
+		File.WriteAllText(Path.Combine(olderImage, "source.properties"), "Pkg.Revision=1\n");
+		File.WriteAllText(Path.Combine(newerImage, "package.xml"), "<repository />\n");
 
 		try
 		{
@@ -232,6 +234,28 @@ public sealed class AndroidEmulatorBackendTests
 					Assert.Equal("google_apis", runtime.Tag);
 					Assert.Equal("arm64-v8a", runtime.Architecture);
 				});
+		}
+		finally
+		{
+			Directory.Delete(root, recursive: true);
+		}
+	}
+
+	[Fact]
+	public void InstalledSystemImages_IgnoreInterruptedDirectoriesWithoutPackageMetadata()
+	{
+		var root = Directory.CreateTempSubdirectory("mobile-canvas-sdk-").FullName;
+		var partialImage = Path.Combine(
+			root,
+			"system-images",
+			"android-35",
+			"google_apis",
+			"arm64-v8a");
+		Directory.CreateDirectory(partialImage);
+
+		try
+		{
+			Assert.Empty(AndroidSdkLocator.FindInstalledSystemImages(root));
 		}
 		finally
 		{
@@ -439,12 +463,14 @@ public sealed class AndroidEmulatorBackendTests
 			CreateTool("platform-tools", Executable("adb"));
 			CreateTool("emulator", Executable("emulator"));
 			AvdManager = CreateTool("cmdline-tools", "latest", "bin", Script("avdmanager"));
-			Directory.CreateDirectory(Path.Combine(
+			var systemImage = Path.Combine(
 				Root,
 				"system-images",
 				"android-35",
 				"google_apis",
-				"arm64-v8a"));
+				"arm64-v8a");
+			Directory.CreateDirectory(systemImage);
+			File.WriteAllText(Path.Combine(systemImage, "source.properties"), "Pkg.Revision=1\n");
 		}
 
 		public string Root { get; }
