@@ -27,7 +27,7 @@ public sealed partial class AndroidEmulatorBackend : IDeviceBackend, IAsyncDispo
 {
 	private const string ProviderId = "android-emulator";
 
-	private readonly AndroidSdkLocator _locator = new();
+	private readonly AndroidSdkLocator _locator;
 	private readonly EmulatorConnectionPool _connections = new();
 	private readonly EmulatorDiscovery _discovery;
 	private readonly IProcessRunner _processRunner;
@@ -56,9 +56,18 @@ public sealed partial class AndroidEmulatorBackend : IDeviceBackend, IAsyncDispo
 	private readonly Dictionary<string, DisplayGeometry> _geometryCache = new(StringComparer.OrdinalIgnoreCase);
 
 	public AndroidEmulatorBackend(IProcessRunner processRunner, ILogger<AndroidEmulatorBackend> logger)
+		: this(processRunner, logger, new AndroidSdkLocator())
+	{
+	}
+
+	internal AndroidEmulatorBackend(
+		IProcessRunner processRunner,
+		ILogger<AndroidEmulatorBackend> logger,
+		AndroidSdkLocator locator)
 	{
 		_processRunner = processRunner;
 		_logger = logger;
+		_locator = locator;
 		_discovery = new EmulatorDiscovery(_locator, processRunner);
 		_recordings = new AndroidRecordingManager(this, logger);
 	}
@@ -88,7 +97,7 @@ public sealed partial class AndroidEmulatorBackend : IDeviceBackend, IAsyncDispo
 		return new DeviceCatalog
 		{
 			Devices = devices,
-			Runtimes = BuildRuntimes(devices),
+			Runtimes = BuildRuntimes(devices, _locator.GetInstalledSystemImages()),
 			DeviceTypes = deviceTypes,
 			Diagnostics = [diagnostics],
 		};
@@ -182,7 +191,9 @@ public sealed partial class AndroidEmulatorBackend : IDeviceBackend, IAsyncDispo
 			State = state,
 			IsAvailable = true,
 			IsVirtual = true,
-			RuntimeId = config.GetValueOrDefault("image.sysdir.1"),
+			RuntimeId = config.GetValueOrDefault("image.sysdir.1") is { Length: > 0 } systemImage
+				? ToSystemImagePackage(systemImage)
+				: null,
 			RuntimeName = DescribeRuntime(config),
 			OsVersion = DescribeApiLevel(config),
 			DeviceTypeId = config.GetValueOrDefault("hw.device.name"),
@@ -224,26 +235,54 @@ public sealed partial class AndroidEmulatorBackend : IDeviceBackend, IAsyncDispo
 		};
 	}
 
-	private static DeviceRuntime[] BuildRuntimes(DeviceTarget[] devices)
+	internal static DeviceRuntime[] BuildRuntimes(
+		DeviceTarget[] devices,
+		IReadOnlyList<AndroidSystemImage> installedSystemImages)
 	{
-		// sdkmanager is slow and network-aware, so runtimes are derived from what the configured AVDs
-		// actually reference. That is also the only set a user can create against offline.
-		return [.. devices
-			.Where(d => !string.IsNullOrEmpty(d.RuntimeId))
-			.GroupBy(d => d.RuntimeId!, StringComparer.OrdinalIgnoreCase)
-			.Select(g => new DeviceRuntime
+		var installed = installedSystemImages.Select(image => new RuntimeCandidate(
+			image.PackageId,
+			$"API {image.Version} ({PrettifyAvdName(image.Tag)}, {image.Architecture})",
+			image.Version,
+			image.Architecture,
+			IsInstalled: true));
+		var configured = devices
+			.Where(device => !string.IsNullOrWhiteSpace(device.RuntimeId))
+			.Select(device => new RuntimeCandidate(
+				ToSystemImagePackage(device.RuntimeId!),
+				device.RuntimeName ?? device.RuntimeId!,
+				device.OsVersion ?? "",
+				device.Architecture,
+				IsInstalled: false));
+
+		return [.. installed
+			.Concat(configured)
+			.GroupBy(runtime => runtime.Id, StringComparer.OrdinalIgnoreCase)
+			.Select(group =>
 			{
-				Id = ToSystemImagePackage(g.Key),
-				Name = g.First().RuntimeName ?? g.Key,
-				Version = g.First().OsVersion ?? "",
-				Platform = DevicePlatforms.Android,
-				IsAvailable = true,
-				SupportedArchitectures = [.. g.Select(d => d.Architecture)
-					.Where(a => !string.IsNullOrEmpty(a))
-					.Distinct(StringComparer.OrdinalIgnoreCase)!],
+				var preferred = group.OrderByDescending(runtime => runtime.IsInstalled).First();
+				return new DeviceRuntime
+				{
+					Id = group.Key,
+					Name = preferred.Name,
+					Version = preferred.Version,
+					Platform = DevicePlatforms.Android,
+					IsAvailable = group.Any(runtime => runtime.IsInstalled),
+					SupportedArchitectures = [.. group
+						.Select(runtime => runtime.Architecture)
+						.Where(static architecture => !string.IsNullOrWhiteSpace(architecture))
+						.Select(static architecture => architecture!)
+						.Distinct(StringComparer.OrdinalIgnoreCase)],
+				};
 			})
 			.OrderBy(r => r.Name, StringComparer.OrdinalIgnoreCase)];
 	}
+
+	private sealed record RuntimeCandidate(
+		string Id,
+		string Name,
+		string Version,
+		string? Architecture,
+		bool IsInstalled);
 
 	private async Task<DeviceType[]> ListDeviceTypesAsync(CancellationToken cancellationToken)
 	{
@@ -286,7 +325,8 @@ public sealed partial class AndroidEmulatorBackend : IDeviceBackend, IAsyncDispo
 		CreateDeviceRequest request,
 		CancellationToken cancellationToken = default)
 	{
-		if (_locator.AvdManager is null)
+		var avdManager = _locator.AvdManager;
+		if (avdManager is null)
 		{
 			throw new DeviceCapabilityException(
 				"avdmanager was not found. Install the Android SDK 'cmdline-tools;latest' package to create AVDs.");
@@ -295,29 +335,67 @@ public sealed partial class AndroidEmulatorBackend : IDeviceBackend, IAsyncDispo
 		if (string.IsNullOrWhiteSpace(request.RuntimeId))
 			throw new ArgumentException("A system image (runtimeId) is required to create an AVD.", nameof(request));
 
-		var name = SanitizeAvdName(request.Name);
-		var arguments = new List<string>
+		var requestedRuntimeId = ToSystemImagePackage(request.RuntimeId);
+		var runtime = _locator.GetInstalledSystemImages().FirstOrDefault(image =>
+			image.PackageId.Equals(requestedRuntimeId, StringComparison.OrdinalIgnoreCase));
+		if (runtime is null)
 		{
-			"create", "avd", "--name", name, "--package", request.RuntimeId, "--force",
-		};
-
-		if (!string.IsNullOrWhiteSpace(request.DeviceTypeId))
-		{
-			arguments.Add("--device");
-			arguments.Add(request.DeviceTypeId);
+			throw new ArgumentException(
+				$"System image '{request.RuntimeId}' is not installed.",
+				nameof(request));
 		}
+
+		var name = SanitizeAvdName(request.Name);
+		var arguments = BuildCreateArguments(name, runtime.PackageId, request.DeviceTypeId);
 
 		// avdmanager prompts on stdin for a custom hardware profile; "no" accepts the image default.
 		var result = await _processRunner
-			.RunAsync(new ProcessRequest(_locator.AvdManager, [.. arguments], StandardInput: "no\n"), cancellationToken)
+			.RunAsync(new ProcessRequest(avdManager, arguments, StandardInput: "no\n"), cancellationToken)
 			.ConfigureAwait(false);
 
 		if (result.ExitCode != 0)
-			throw new ProcessExecutionException(_locator.AvdManager, arguments, result);
+			throw new ProcessExecutionException(avdManager, arguments, result);
 
-		return await GetDeviceAsync(
-			DeviceIdentity.Create(Platform, ProviderId, name),
+		var deviceId = DeviceIdentity.Create(Platform, ProviderId, name);
+		return await CreationRollback.ResolveAsync(
+			resolve: token => GetDeviceAsync(deviceId, token),
+			rollback: token => DeleteCreatedAvdAsync(avdManager, name, token),
+			resourceDescription: $"Android AVD '{name}'",
 			cancellationToken).ConfigureAwait(false);
+	}
+
+	internal static string[] BuildCreateArguments(
+		string name,
+		string runtimeId,
+		string? deviceTypeId)
+	{
+		var arguments = new List<string>
+		{
+			"create", "avd", "--name", name, "--package", runtimeId,
+		};
+
+		if (!string.IsNullOrWhiteSpace(deviceTypeId))
+		{
+			arguments.Add("--device");
+			arguments.Add(deviceTypeId);
+		}
+
+		return [.. arguments];
+	}
+
+	private async Task DeleteCreatedAvdAsync(
+		string avdManager,
+		string name,
+		CancellationToken cancellationToken)
+	{
+		var arguments = new[] { "delete", "avd", "--name", name };
+		var result = await _processRunner
+			.RunAsync(new ProcessRequest(avdManager, arguments), cancellationToken)
+			.ConfigureAwait(false);
+		if (result.ExitCode != 0)
+			throw new ProcessExecutionException(avdManager, arguments, result);
+
+		InvalidateCache(name);
 	}
 
 	public async Task<DeviceTarget> BootAsync(string deviceId, CancellationToken cancellationToken = default)
@@ -3672,9 +3750,11 @@ public sealed partial class AndroidEmulatorBackend : IDeviceBackend, IAsyncDispo
 	/// <c>avdmanager --package</c> expects, so a listed runtime can be passed straight back to create.
 	/// </summary>
 	internal static string ToSystemImagePackage(string sysdir) =>
-		string.Join(';', sysdir.Trim('/', '\\').Split(['/', '\\'], StringSplitOptions.RemoveEmptyEntries));
+		string.Join(
+			';',
+			sysdir.Trim().Trim('/', '\\').Split(['/', '\\'], StringSplitOptions.RemoveEmptyEntries));
 
-	private static string SanitizeAvdName(string name)
+	internal static string SanitizeAvdName(string name)
 	{
 		// avdmanager rejects spaces and most punctuation in AVD names.
 		var cleaned = AvdNamePattern().Replace(name, "_").Trim('_');

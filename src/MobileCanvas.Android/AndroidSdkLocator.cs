@@ -11,7 +11,20 @@ namespace MobileCanvas.Android;
 /// </summary>
 internal sealed class AndroidSdkLocator
 {
-	private readonly Lazy<string?> _sdkRoot = new(FindSdkRoot);
+	private readonly Lazy<string?> _sdkRoot;
+
+	internal AndroidSdkLocator() : this(FindSdkRoot)
+	{
+	}
+
+	internal AndroidSdkLocator(string? sdkRoot) : this(() => sdkRoot)
+	{
+	}
+
+	private AndroidSdkLocator(Func<string?> findSdkRoot)
+	{
+		_sdkRoot = new Lazy<string?>(findSdkRoot);
+	}
 
 	public string? SdkRoot => _sdkRoot.Value;
 
@@ -43,6 +56,44 @@ internal sealed class AndroidSdkLocator
 
 			return candidates.FirstOrDefault(File.Exists);
 		}
+	}
+
+	public IReadOnlyList<AndroidSystemImage> GetInstalledSystemImages() =>
+		SdkRoot is { } root ? FindInstalledSystemImages(root) : [];
+
+	internal static IReadOnlyList<AndroidSystemImage> FindInstalledSystemImages(string sdkRoot)
+	{
+		var systemImages = Path.Combine(sdkRoot, "system-images");
+		if (!Directory.Exists(systemImages))
+			return [];
+
+		var results = new List<AndroidSystemImage>();
+		foreach (var platformDirectory in EnumerateDirectories(systemImages))
+		{
+			var platform = Path.GetFileName(platformDirectory);
+			if (!platform.StartsWith("android-", StringComparison.OrdinalIgnoreCase))
+				continue;
+
+			foreach (var tagDirectory in EnumerateDirectories(platformDirectory))
+			{
+				var tag = Path.GetFileName(tagDirectory);
+				foreach (var architectureDirectory in EnumerateDirectories(tagDirectory))
+				{
+					var architecture = Path.GetFileName(architectureDirectory);
+					results.Add(new AndroidSystemImage(
+						$"system-images;{platform};{tag};{architecture}",
+						platform["android-".Length..],
+						tag,
+						architecture));
+				}
+			}
+		}
+
+		return results
+			.OrderByDescending(image => ParseVersion(image.Version))
+			.ThenBy(image => image.Tag, StringComparer.OrdinalIgnoreCase)
+			.ThenBy(image => image.Architecture, StringComparer.OrdinalIgnoreCase)
+			.ToArray();
 	}
 
 	/// <summary>
@@ -148,7 +199,32 @@ internal sealed class AndroidSdkLocator
 
 		return defaults.FirstOrDefault(Directory.Exists);
 	}
+
+	private static Version ParseVersion(string value) =>
+		Version.TryParse(value, out var parsed) ? parsed : new Version();
+
+	private static IEnumerable<string> EnumerateDirectories(string path)
+	{
+		try
+		{
+			return Directory.EnumerateDirectories(path).ToArray();
+		}
+		catch (IOException)
+		{
+			return [];
+		}
+		catch (UnauthorizedAccessException)
+		{
+			return [];
+		}
+	}
 }
+
+internal sealed record AndroidSystemImage(
+	string PackageId,
+	string Version,
+	string Tag,
+	string Architecture);
 
 /// <summary>
 /// Enumerates configured AVDs and running emulator instances, and joins them to adb serials.
