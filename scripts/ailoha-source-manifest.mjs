@@ -34,34 +34,41 @@ export function buildAilohaSourceManifest({
   );
 
   return {
-    schemaVersion: 2,
+    schemaVersion: 3,
     source: {
       repository: "Redth/mobile-canvas-ghcp",
       commit: git(repositoryRoot, ["rev-parse", "HEAD"]).trim(),
       version: packageJson.version,
-      dirty: git(repositoryRoot, ["status", "--porcelain"]).trim().length > 0,
+      dirty: isWorkingTreeDirty(repositoryRoot, excluded),
     },
     destinationRoot,
     snapshot: {
-      sha256: computeAilohaSnapshot(files, surfaces),
+      sha256: computeAilohaSnapshot(files, surfaces, destinationRoot),
       fileCount: files.length,
       totalBytes,
-      includes: ["files", "surfaces"],
+      includes: ["destinationRoot", "files", "surfaces"],
     },
     surfaces,
     files,
   };
 }
 
-export function computeAilohaSnapshot(files, surfaces) {
+export function computeAilohaSnapshot(files, surfaces, importRoot = destinationRoot) {
   const snapshot = createHash("sha256");
 
+  snapshot.update("destinationRoot");
+  snapshot.update("\0");
+  snapshot.update(importRoot);
+  snapshot.update("\0");
+
   for (const file of files) {
-    snapshot.update(file.source);
-    snapshot.update("\0");
-    snapshot.update(file.sha256);
-    snapshot.update("\0");
-    snapshot.update(file.executable ? "1" : "0");
+    snapshot.update(JSON.stringify({
+      source: file.source,
+      destination: file.destination,
+      sha256: file.sha256,
+      size: file.size,
+      executable: file.executable,
+    }));
     snapshot.update("\0");
   }
 
@@ -70,6 +77,20 @@ export function computeAilohaSnapshot(files, surfaces) {
   snapshot.update(JSON.stringify(surfaces));
   snapshot.update("\0");
   return snapshot.digest("hex");
+}
+
+function isWorkingTreeDirty(repositoryRoot, excluded) {
+  const arguments_ = [
+    "status",
+    "--porcelain",
+    "--untracked-files=all",
+    "--",
+    ".",
+  ];
+  if (excluded && !excluded.startsWith("../") && excluded !== "..") {
+    arguments_.push(`:(exclude,top)${excluded}`);
+  }
+  return git(repositoryRoot, arguments_).trim().length > 0;
 }
 
 function listSourceFiles(repositoryRoot) {
@@ -188,7 +209,10 @@ function parseArguments(arguments_) {
   return { output, requireClean };
 }
 
-if (import.meta.url === `file://${process.argv[1]}`) {
+if (
+  process.argv[1] &&
+  fileURLToPath(import.meta.url) === resolve(process.argv[1])
+) {
   const options = parseArguments(process.argv.slice(2));
   const outputPath = options.output
     ? isAbsolute(options.output)

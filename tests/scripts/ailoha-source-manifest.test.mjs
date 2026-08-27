@@ -15,7 +15,7 @@ test("Ailoha source manifest covers the complete product source", () => {
   const manifest = buildAilohaSourceManifest();
   const sources = manifest.files.map((file) => file.source);
 
-  assert.equal(manifest.schemaVersion, 2);
+  assert.equal(manifest.schemaVersion, 3);
   assert.equal(manifest.source.repository, "Redth/mobile-canvas-ghcp");
   assert.match(manifest.source.commit, /^[a-f0-9]{40}$/);
   assert.equal(manifest.destinationRoot, "imports/mobile-canvas");
@@ -23,7 +23,10 @@ test("Ailoha source manifest covers the complete product source", () => {
   assert.equal(manifest.snapshot.fileCount, manifest.files.length);
   assert.ok(manifest.snapshot.totalBytes > 0);
   assert.match(manifest.snapshot.sha256, /^[a-f0-9]{64}$/);
-  assert.deepEqual(manifest.snapshot.includes, ["files", "surfaces"]);
+  assert.deepEqual(
+    manifest.snapshot.includes,
+    ["destinationRoot", "files", "surfaces"],
+  );
   assert.ok(manifest.surfaces.backendOperations.length > 40);
   assert.ok(manifest.surfaces.httpRoutes.length > 50);
   assert.ok(manifest.surfaces.mcpTools.length > 30);
@@ -82,14 +85,61 @@ test("Ailoha source manifest is deterministic for an unchanged checkout", () => 
 test("Ailoha source snapshot authenticates the feature surface inventory", () => {
   const manifest = buildAilohaSourceManifest();
   assert.equal(
-    computeAilohaSnapshot(manifest.files, manifest.surfaces),
+    computeAilohaSnapshot(
+      manifest.files,
+      manifest.surfaces,
+      manifest.destinationRoot,
+    ),
     manifest.snapshot.sha256,
   );
 
   const tampered = structuredClone(manifest.surfaces);
   tampered.canvasActions = [...tampered.canvasActions, "not_a_real_action"].sort();
   assert.notEqual(
-    computeAilohaSnapshot(manifest.files, tampered),
+    computeAilohaSnapshot(
+      manifest.files,
+      tampered,
+      manifest.destinationRoot,
+    ),
     manifest.snapshot.sha256,
   );
+});
+
+test("Ailoha source snapshot authenticates the complete import mapping", () => {
+  const manifest = buildAilohaSourceManifest();
+  const files = structuredClone(manifest.files);
+  files[0].destination = `${manifest.destinationRoot}/different-path`;
+
+  assert.notEqual(
+    computeAilohaSnapshot(files, manifest.surfaces, manifest.destinationRoot),
+    manifest.snapshot.sha256,
+  );
+  assert.notEqual(
+    computeAilohaSnapshot(
+      manifest.files,
+      manifest.surfaces,
+      `${manifest.destinationRoot}-elsewhere`,
+    ),
+    manifest.snapshot.sha256,
+  );
+});
+
+test("Ailoha manifest output does not make its own checkout dirty", async () => {
+  const output = join(root, `ailoha-source-manifest-${process.pid}.json`);
+  const before = buildAilohaSourceManifest({ outputPath: output }).source.dirty;
+  try {
+    await import("node:fs/promises").then(({ writeFile }) =>
+      writeFile(output, "{}\n"),
+    );
+    const manifest = buildAilohaSourceManifest({ outputPath: output });
+    assert.equal(manifest.source.dirty, before);
+    assert.equal(
+      manifest.files.some((file) => file.source === output.slice(root.length + 1)),
+      false,
+    );
+  } finally {
+    await import("node:fs/promises").then(({ rm }) =>
+      rm(output, { force: true }),
+    );
+  }
 });

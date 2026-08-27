@@ -301,11 +301,13 @@ The Ailoha source manifest is a deterministic inventory of every tracked or
 unignored source file, its destination under `imports/mobile-canvas`, and its
 byte-exact hash. It also records the current backend operations, API/WebSocket
 routes, MCP tools, and canvas actions so Ailoha can measure feature parity
-against code. The aggregate snapshot authenticates both the files and that
-surface inventory, so parity metadata cannot drift independently from the
-imported source. Ailoha uses it to pin and verify imports while this repository
-remains the implementation source of truth. Pass `--require-clean` for an
-importable release snapshot.
+against code. The aggregate snapshot authenticates the destination root, every
+complete import record, and that surface inventory, so neither mapping nor
+parity metadata can drift independently from the imported source. Repository
+attributes require LF text checkouts so clean snapshots are byte-stable across
+platforms. Ailoha uses the manifest to pin and verify imports while this
+repository remains the implementation source of truth. Pass `--require-clean`
+for an importable release snapshot.
 
 Changing `src/` or `native/` requires the **Release runtimes** workflow. It builds
 each Native AOT RID on its native OS, publishes checksummed release assets, and
