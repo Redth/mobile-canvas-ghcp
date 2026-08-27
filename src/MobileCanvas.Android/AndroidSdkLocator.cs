@@ -79,6 +79,12 @@ internal sealed class AndroidSdkLocator
 				var tag = Path.GetFileName(tagDirectory);
 				foreach (var architectureDirectory in EnumerateDirectories(tagDirectory))
 				{
+					if (!File.Exists(Path.Combine(architectureDirectory, "package.xml"))
+						&& !File.Exists(Path.Combine(architectureDirectory, "source.properties")))
+					{
+						continue;
+					}
+
 					var architecture = Path.GetFileName(architectureDirectory);
 					results.Add(new AndroidSystemImage(
 						$"system-images;{platform};{tag};{architecture}",
