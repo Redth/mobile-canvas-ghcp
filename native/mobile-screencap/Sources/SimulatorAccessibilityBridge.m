@@ -83,6 +83,32 @@ static BOOL MCLoadAccessibilityPlatformTranslation(NSString *_Nullable *_Nullabl
 - (nullable id)macPlatformElementFromTranslation:(nullable id)translation;
 @end
 
+@protocol MCAXPTranslationObject <NSObject>
+@property (nonatomic, copy, nullable) NSString *bridgeDelegateToken;
+@end
+
+@protocol MCAXPMacPlatformElement <NSObject>
+@property (nonatomic, strong, readonly, nullable) id<MCAXPTranslationObject> translation;
+@end
+
+static BOOL MCSetTranslationBridgeDelegateToken(id _Nullable translation, NSString *token)
+{
+    if (![translation respondsToSelector:@selector(setBridgeDelegateToken:)]) {
+        return NO;
+    }
+    [(id<MCAXPTranslationObject>)translation setBridgeDelegateToken:token];
+    return YES;
+}
+
+static BOOL MCSetElementBridgeDelegateToken(id _Nullable element, NSString *token)
+{
+    if (![element respondsToSelector:@selector(translation)]) {
+        return NO;
+    }
+    id translation = [(id<MCAXPMacPlatformElement>)element translation];
+    return MCSetTranslationBridgeDelegateToken(translation, token);
+}
+
 #pragma mark - Bounded per-token XPC bridge
 
 /// Per-read bookkeeping keyed by a one-shot token: which device to route a translation request to,
@@ -394,9 +420,13 @@ static id _Nullable MCConvertAccessibilityValue(id _Nullable value)
 static NSDictionary<NSString *, id> *_Nullable MCBuildAccessibilityNode(id<NSAccessibility> element,
                                                                          NSInteger depth,
                                                                          NSInteger maxDepth,
-                                                                         NSInteger *remainingNodes)
+                                                                         NSInteger *remainingNodes,
+                                                                         NSString *_Nullable bridgeDelegateToken)
 {
     if (*remainingNodes <= 0) {
+        return nil;
+    }
+    if (bridgeDelegateToken != nil && !MCSetElementBridgeDelegateToken(element, bridgeDelegateToken)) {
         return nil;
     }
     (*remainingNodes)--;
@@ -461,9 +491,12 @@ static NSDictionary<NSString *, id> *_Nullable MCBuildAccessibilityNode(id<NSAcc
                 continue;
             }
             NSDictionary<NSString *, id> *childNode =
-                MCBuildAccessibilityNode((id<NSAccessibility>)child, depth + 1, maxDepth, remainingNodes);
+                MCBuildAccessibilityNode((id<NSAccessibility>)child, depth + 1, maxDepth, remainingNodes,
+                                         bridgeDelegateToken);
             if (childNode != nil) {
                 [children addObject:childNode];
+            } else if (bridgeDelegateToken != nil) {
+                return nil;
             }
         }
     }
@@ -477,7 +510,18 @@ NSDictionary<NSString *, id> *_Nullable MCAccessibilityNodeForElement(id element
                                                                        NSInteger maxNodes)
 {
     NSInteger remaining = MAX(maxNodes, 1);
-    return MCBuildAccessibilityNode((id<NSAccessibility>)element, 0, MAX(maxDepth, 0), &remaining);
+    return MCBuildAccessibilityNode((id<NSAccessibility>)element, 0, MAX(maxDepth, 0), &remaining, nil);
+}
+
+NSDictionary<NSString *, id> *_Nullable MCAccessibilityNodeForElementWithBridgeDelegateToken(
+    id element,
+    NSInteger maxDepth,
+    NSInteger maxNodes,
+    NSString *bridgeDelegateToken)
+{
+    NSInteger remaining = MAX(maxNodes, 1);
+    return MCBuildAccessibilityNode((id<NSAccessibility>)element, 0, MAX(maxDepth, 0), &remaining,
+                                    bridgeDelegateToken);
 }
 
 #pragma mark - MCAccessibilityReader
@@ -548,6 +592,14 @@ NSDictionary<NSString *, id> *_Nullable MCAccessibilityNodeForElement(id element
         @try {
             [translator setBridgeTokenDelegate:delegate];
             id application = [translator frontmostApplicationWithDisplayId:0 bridgeDelegateToken:token];
+            if (application != nil && !MCSetTranslationBridgeDelegateToken(application, token)) {
+                if (error != NULL) {
+                    *error = MCAccessibilityError(
+                        MCAccessibilityErrorSelectorUnavailable,
+                        @"The accessibility translation object does not expose bridgeDelegateToken", nil);
+                }
+                return nil;
+            }
             id root = application != nil ? [translator macPlatformElementFromTranslation:application] : nil;
 
             if (root == nil || ![root isKindOfClass:NSObject.class]) {
@@ -572,7 +624,8 @@ NSDictionary<NSString *, id> *_Nullable MCAccessibilityNodeForElement(id element
             }
 
             NSDictionary<NSString *, id> *tree =
-                MCAccessibilityNodeForElement((id<NSAccessibility>)root, maxDepth, maxNodes);
+                MCAccessibilityNodeForElementWithBridgeDelegateToken(
+                    (id<NSAccessibility>)root, maxDepth, maxNodes, token);
 
             if ([delegate didTimeOutForToken:token]) {
                 if (error != NULL) {

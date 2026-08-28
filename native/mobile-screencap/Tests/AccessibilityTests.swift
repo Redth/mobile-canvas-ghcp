@@ -9,6 +9,7 @@ import Foundation
 enum AccessibilityTests {
 	static func run(_ runner: TestRunner) {
 		serialization(runner)
+		bridgeDelegateTokenPropagation(runner)
 		valueConversion(runner)
 		optionalAttributes(runner)
 		traversalBounds(runner)
@@ -92,6 +93,33 @@ enum AccessibilityTests {
 			runner.expect(node["role"] == nil, "role is omitted, not empty-stringed")
 			runner.expect(node["AXLabel"] == nil, "AXLabel is omitted")
 			runner.expect((node["children"] as? [Any])?.isEmpty == true, "children is still an empty array")
+		}
+	}
+
+	// MARK: Bridge delegate token
+
+	static func bridgeDelegateTokenPropagation(_ runner: TestRunner) {
+		runner.test("bridge token reaches the root and children before attribute reads") {
+			let token = "test-token"
+			let child = MCFakeAXElement()
+			child.fakeRole = "AXButton"
+			child.expectedBridgeDelegateToken = token
+
+			let root = MCFakeAXElement()
+			root.fakeRole = "AXWindow"
+			root.fakeChildren = [child]
+			root.hasFakeChildren = true
+			root.expectedBridgeDelegateToken = token
+
+			let node = MCAccessibilityNodeForElementWithBridgeDelegateToken(root, 64, 20_000, token)
+
+			runner.expectEqual(node?["role"] as? String, "AXWindow", "root role")
+			runner.expectEqual(
+				(node?["children"] as? [[String: Any]])?.first?["role"] as? String,
+				"AXButton",
+				"child role")
+			runner.expectEqual(root.translation.bridgeDelegateToken, token, "root bridge token")
+			runner.expectEqual(child.translation.bridgeDelegateToken, token, "child bridge token")
 		}
 	}
 

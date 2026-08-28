@@ -1,14 +1,27 @@
 #import "AccessibilityTestSupport.h"
 
+@implementation MCFakeAXTranslation
+@end
+
 @implementation MCFakeAXElement
 
 - (instancetype)init
 {
     self = [super init];
     if (self != nil) {
+        _translation = [[MCFakeAXTranslation alloc] init];
         _fakeChildren = @[];
     }
     return self;
+}
+
+- (void)requireExpectedBridgeDelegateToken
+{
+    if (self.expectedBridgeDelegateToken != nil &&
+        ![self.translation.bridgeDelegateToken isEqualToString:self.expectedBridgeDelegateToken]) {
+        [NSException raise:NSInternalInconsistencyException
+                    format:@"Accessibility attribute read before bridge token propagation"];
+    }
 }
 
 // Only "responds" to the bounded/typed selectors when the matching test explicitly set a value,
@@ -36,6 +49,7 @@
 
 - (nullable NSString *)accessibilityRole
 {
+    [self requireExpectedBridgeDelegateToken];
     return self.fakeRole;
 }
 
@@ -81,6 +95,7 @@
 
 - (NSArray<MCFakeAXElement *> *)accessibilityChildren
 {
+    [self requireExpectedBridgeDelegateToken];
     return self.fakeChildren;
 }
 

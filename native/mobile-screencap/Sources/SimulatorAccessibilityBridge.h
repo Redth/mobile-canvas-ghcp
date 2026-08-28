@@ -86,4 +86,13 @@ extern NSDictionary<NSString *, id> *_Nullable MCAccessibilityNodeForElement(id 
                                                                               NSInteger maxDepth,
                                                                               NSInteger maxNodes);
 
+/// Token-aware form used by the live translator path. The token is attached to each translated
+/// element before any lazy accessibility attribute is read; returns `nil` if an element cannot
+/// carry the token so the managed caller can fall back to IDB instead of accepting a partial tree.
+extern NSDictionary<NSString *, id> *_Nullable MCAccessibilityNodeForElementWithBridgeDelegateToken(
+    id element,
+    NSInteger maxDepth,
+    NSInteger maxNodes,
+    NSString *bridgeDelegateToken);
+
 NS_ASSUME_NONNULL_END

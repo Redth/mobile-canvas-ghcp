@@ -9,8 +9,16 @@ NS_ASSUME_NONNULL_BEGIN
 /// unset (`nil` for objects, the `has*` flag left `NO` for scalars) reproduces an element that does
 /// not respond to that selector, exactly like a real `AXPMacPlatformElement` that has nothing to say
 /// for a given attribute.
+@interface MCFakeAXTranslation : NSObject
+
+@property (nonatomic, copy, nullable) NSString *bridgeDelegateToken;
+
+@end
+
 @interface MCFakeAXElement : NSObject
 
+@property (nonatomic, strong) MCFakeAXTranslation *translation;
+@property (nonatomic, copy, nullable) NSString *expectedBridgeDelegateToken;
 @property (nonatomic, copy, nullable) NSString *fakeRole;
 @property (nonatomic, copy, nullable) NSString *fakeSubrole;
 @property (nonatomic, copy, nullable) NSString *fakeLabel;
