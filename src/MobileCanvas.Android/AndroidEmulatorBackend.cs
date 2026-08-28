@@ -26,6 +26,9 @@ namespace MobileCanvas.Android;
 public sealed partial class AndroidEmulatorBackend : IDeviceBackend, IAsyncDisposable
 {
 	private const string ProviderId = "android-emulator";
+	private const string AndroidSetupUrl =
+		"https://github.com/Redth/mobile-canvas-ghcp/blob/main/docs/android-setup.md";
+	private static readonly string[] RequiredSdkChecks = ["android-sdk", "adb", "emulator"];
 
 	private readonly AndroidSdkLocator _locator = new();
 	private readonly EmulatorConnectionPool _connections = new();
@@ -33,6 +36,9 @@ public sealed partial class AndroidEmulatorBackend : IDeviceBackend, IAsyncDispo
 	private readonly IProcessRunner _processRunner;
 	private readonly ILogger<AndroidEmulatorBackend> _logger;
 	private readonly AndroidRecordingManager _recordings;
+	private readonly SemaphoreSlim _avdManagerProbeGate = new(1, 1);
+	private AvdManagerProbe? _avdManagerProbe;
+	private volatile bool _avdManagementReady;
 
 	// Running-instance cache. Reading discovery files is a handful of file reads rather than a
 	// process spawn, but the iOS work proved that anything on the per-event path needs a cache, and
@@ -66,39 +72,88 @@ public sealed partial class AndroidEmulatorBackend : IDeviceBackend, IAsyncDispo
 	public string Platform => DevicePlatforms.Android;
 
 	private sealed record CachedInstance(EmulatorInstance Instance, long Timestamp);
+	private sealed record AvdManagerProbe(
+		bool Ready,
+		DeviceType[] DeviceTypes,
+		DependencyCheck Check);
 
 	#region Catalog
 
 	public async Task<DeviceCatalog> GetCatalogAsync(CancellationToken cancellationToken = default)
 	{
 		var checks = _locator.Check();
+		if (!HasRequiredSdkTools(checks))
+		{
+			return new DeviceCatalog
+			{
+				Diagnostics = [BuildAndroidUnavailableDiagnostics()],
+			};
+		}
+
+		var avdManager = await GetAvdManagerProbeAsync(
+			force: true,
+			cancellationToken).ConfigureAwait(false);
+		_avdManagementReady = avdManager.Ready;
+		checks = [.. checks.Select(check =>
+			check.Name.Equals("avdmanager", StringComparison.OrdinalIgnoreCase)
+				? avdManager.Check
+				: check)];
+
 		var diagnostics = new HostDiagnostics
 		{
 			Platform = DevicePlatforms.Android,
-			Ready = checks.All(c => c.Status != "missing" && c.Status != "error"),
+			Ready = true,
 			Checks = checks,
 		};
 
-		if (!diagnostics.Ready)
-			return new DeviceCatalog { Diagnostics = [diagnostics] };
-
 		var devices = await ListDevicesCoreAsync(cancellationToken).ConfigureAwait(false);
-		var deviceTypes = await ListDeviceTypesAsync(cancellationToken).ConfigureAwait(false);
 
 		return new DeviceCatalog
 		{
 			Devices = devices,
 			Runtimes = BuildRuntimes(devices),
-			DeviceTypes = deviceTypes,
+			DeviceTypes = avdManager.DeviceTypes,
 			Diagnostics = [diagnostics],
 		};
 	}
+
+	internal static bool HasRequiredSdkTools(IReadOnlyList<DependencyCheck> checks) =>
+		RequiredSdkChecks.All(required => checks.Any(
+			check => check.Name.Equals(required, StringComparison.OrdinalIgnoreCase)
+				&& check.Status.Equals("ok", StringComparison.OrdinalIgnoreCase)));
+
+	internal static HostDiagnostics BuildAndroidUnavailableDiagnostics() =>
+		new()
+		{
+			Platform = DevicePlatforms.Android,
+			Available = false,
+			Ready = false,
+			Checks =
+			[
+				new DependencyCheck
+				{
+					Name = "Android",
+					Status = "error",
+					Message = "Android requires the Android SDK.",
+					Actions =
+					[
+						new DiagnosticAction
+						{
+							Type = DiagnosticActionTypes.OpenUrl,
+							Target = AndroidSetupUrl,
+							Label = "Learn more",
+						},
+					],
+				},
+			],
+		};
 
 	public async Task<DeviceTarget[]> ListDevicesAsync(CancellationToken cancellationToken = default)
 	{
 		if (_locator.Emulator is null)
 			return [];
 
+		await GetAvdManagerProbeAsync(force: false, cancellationToken).ConfigureAwait(false);
 		return await ListDevicesCoreAsync(cancellationToken).ConfigureAwait(false);
 	}
 
@@ -145,6 +200,7 @@ public sealed partial class AndroidEmulatorBackend : IDeviceBackend, IAsyncDispo
 
 	public async Task<DeviceTarget> GetDeviceAsync(string deviceId, CancellationToken cancellationToken = default)
 	{
+		await GetAvdManagerProbeAsync(force: false, cancellationToken).ConfigureAwait(false);
 		var devices = await ListDevicesCoreAsync(cancellationToken).ConfigureAwait(false);
 		return devices.FirstOrDefault(d => string.Equals(d.Id, deviceId, StringComparison.OrdinalIgnoreCase))
 			?? throw new DeviceNotFoundException(deviceId);
@@ -199,7 +255,7 @@ public sealed partial class AndroidEmulatorBackend : IDeviceBackend, IAsyncDispo
 	/// without gRPC genuinely cannot stream or take low-latency input. Reporting it honestly lets the
 	/// canvas explain the restart instead of presenting a dead viewport.
 	/// </summary>
-	private static DeviceCapabilities BuildCapabilities(EmulatorInstance? instance)
+	private DeviceCapabilities BuildCapabilities(EmulatorInstance? instance)
 	{
 		var grpc = instance?.HasGrpc == true;
 		return new DeviceCapabilities
@@ -208,7 +264,7 @@ public sealed partial class AndroidEmulatorBackend : IDeviceBackend, IAsyncDispo
 			Shutdown = true,
 			Restart = true,
 			Erase = true,
-			Delete = true,
+			Delete = _avdManagementReady,
 			Reveal = true,
 			Tap = true,
 			LongPress = true,
@@ -245,21 +301,57 @@ public sealed partial class AndroidEmulatorBackend : IDeviceBackend, IAsyncDispo
 			.OrderBy(r => r.Name, StringComparer.OrdinalIgnoreCase)];
 	}
 
-	private async Task<DeviceType[]> ListDeviceTypesAsync(CancellationToken cancellationToken)
+	private async Task<AvdManagerProbe> GetAvdManagerProbeAsync(
+		bool force,
+		CancellationToken cancellationToken)
+	{
+		if (!force && _avdManagerProbe is not null)
+			return _avdManagerProbe;
+
+		await _avdManagerProbeGate.WaitAsync(cancellationToken).ConfigureAwait(false);
+		try
+		{
+			if (!force && _avdManagerProbe is not null)
+				return _avdManagerProbe;
+
+			var probe = await ProbeAvdManagerAsync(cancellationToken).ConfigureAwait(false);
+			_avdManagerProbe = probe;
+			_avdManagementReady = probe.Ready;
+			return probe;
+		}
+		finally
+		{
+			_avdManagerProbeGate.Release();
+		}
+	}
+
+	private async Task<AvdManagerProbe> ProbeAvdManagerAsync(CancellationToken cancellationToken)
 	{
 		if (_locator.AvdManager is null)
-			return [];
+		{
+			return new AvdManagerProbe(
+				false,
+				[],
+				BuildAvdManagerUnavailableCheck());
+		}
 
 		try
 		{
 			var result = await _processRunner
-				.RunAsync(new ProcessRequest(_locator.AvdManager, ["list", "device", "-c"]), cancellationToken)
+				.RunAsync(
+					_locator.CreateAvdManagerRequest(["list", "device", "-c"]),
+					cancellationToken)
 				.ConfigureAwait(false);
 
 			if (result.ExitCode != 0)
-				return [];
+			{
+				return new AvdManagerProbe(
+					false,
+					[],
+					BuildAvdManagerUnavailableCheck(_locator.AvdManager));
+			}
 
-			return [.. result.StandardOutput
+			DeviceType[] deviceTypes = [.. result.StandardOutput
 				.Split('\n', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
 				.Where(static line => line.Length > 0 && line[0] != '[' && !line.Contains(':', StringComparison.Ordinal))
 				.Distinct(StringComparer.OrdinalIgnoreCase)
@@ -270,12 +362,45 @@ public sealed partial class AndroidEmulatorBackend : IDeviceBackend, IAsyncDispo
 					Platform = DevicePlatforms.Android,
 					ProductFamily = DevicePlatforms.Android,
 				})];
+			return new AvdManagerProbe(
+				true,
+				deviceTypes,
+				new DependencyCheck
+				{
+					Name = "avdmanager",
+					Status = "ok",
+					Message = "avdmanager and Java are available.",
+					Path = _locator.AvdManager,
+				});
 		}
 		catch (Exception exception) when (exception is not OperationCanceledException)
 		{
 			_logger.LogDebug(exception, "Failed to enumerate Android device types.");
-			return [];
+			return new AvdManagerProbe(
+				false,
+				[],
+				BuildAvdManagerUnavailableCheck(_locator.AvdManager));
 		}
+	}
+
+	internal static DependencyCheck BuildAvdManagerUnavailableCheck(string? path = null) =>
+		new()
+		{
+			Name = "avdmanager",
+			Status = "warning",
+			Message = "AVD management requires cmdline-tools and a working Java runtime. "
+				+ "Existing emulators remain available.",
+			Path = path,
+		};
+
+	private async Task<string> RequireAvdManagerAsync(CancellationToken cancellationToken)
+	{
+		var probe = await GetAvdManagerProbeAsync(
+			force: true,
+			cancellationToken).ConfigureAwait(false);
+		return probe.Ready
+			? _locator.AvdManager!
+			: throw new DeviceCapabilityException(probe.Check.Message);
 	}
 
 	#endregion
@@ -286,16 +411,11 @@ public sealed partial class AndroidEmulatorBackend : IDeviceBackend, IAsyncDispo
 		CreateDeviceRequest request,
 		CancellationToken cancellationToken = default)
 	{
-		if (_locator.AvdManager is null)
-		{
-			throw new DeviceCapabilityException(
-				"avdmanager was not found. Install the Android SDK 'cmdline-tools;latest' package to create AVDs.");
-		}
-
 		if (string.IsNullOrWhiteSpace(request.RuntimeId))
 			throw new ArgumentException("A system image (runtimeId) is required to create an AVD.", nameof(request));
 
 		var name = SanitizeAvdName(request.Name);
+		var avdManager = await RequireAvdManagerAsync(cancellationToken).ConfigureAwait(false);
 		var arguments = new List<string>
 		{
 			"create", "avd", "--name", name, "--package", request.RuntimeId, "--force",
@@ -309,11 +429,13 @@ public sealed partial class AndroidEmulatorBackend : IDeviceBackend, IAsyncDispo
 
 		// avdmanager prompts on stdin for a custom hardware profile; "no" accepts the image default.
 		var result = await _processRunner
-			.RunAsync(new ProcessRequest(_locator.AvdManager, [.. arguments], StandardInput: "no\n"), cancellationToken)
+			.RunAsync(
+				_locator.CreateAvdManagerRequest([.. arguments], standardInput: "no\n"),
+				cancellationToken)
 			.ConfigureAwait(false);
 
 		if (result.ExitCode != 0)
-			throw new ProcessExecutionException(_locator.AvdManager, arguments, result);
+			throw new ProcessExecutionException(avdManager, arguments, result);
 
 		return await GetDeviceAsync(
 			DeviceIdentity.Create(Platform, ProviderId, name),
@@ -565,22 +687,17 @@ public sealed partial class AndroidEmulatorBackend : IDeviceBackend, IAsyncDispo
 
 	public async Task DeleteAsync(string deviceId, CancellationToken cancellationToken = default)
 	{
-		if (_locator.AvdManager is null)
-		{
-			throw new DeviceCapabilityException(
-				"avdmanager was not found. Install the Android SDK 'cmdline-tools;latest' package to delete AVDs.");
-		}
-
+		var avdManager = await RequireAvdManagerAsync(cancellationToken).ConfigureAwait(false);
 		var avdId = DeviceIdentity.GetNativeId(deviceId);
 		await ShutdownAsync(deviceId, cancellationToken).ConfigureAwait(false);
 
 		var arguments = new[] { "delete", "avd", "--name", avdId };
 		var result = await _processRunner
-			.RunAsync(new ProcessRequest(_locator.AvdManager, arguments), cancellationToken)
+			.RunAsync(_locator.CreateAvdManagerRequest(arguments), cancellationToken)
 			.ConfigureAwait(false);
 
 		if (result.ExitCode != 0)
-			throw new ProcessExecutionException(_locator.AvdManager, arguments, result);
+			throw new ProcessExecutionException(avdManager, arguments, result);
 
 		InvalidateCache(avdId);
 	}
@@ -3726,6 +3843,7 @@ public sealed partial class AndroidEmulatorBackend : IDeviceBackend, IAsyncDispo
 	{
 		await _recordings.DisposeAsync().ConfigureAwait(false);
 		await _connections.DisposeAsync().ConfigureAwait(false);
+		_avdManagerProbeGate.Dispose();
 		_cacheGate.Dispose();
 	}
 }

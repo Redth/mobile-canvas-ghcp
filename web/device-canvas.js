@@ -6,6 +6,8 @@ import {
 } from "./create-device-options.js";
 import {
   canBootDeviceState,
+  canUseDeviceCapability,
+  catalogPlatforms,
   clearStoredDeviceId,
   createFramePrimer,
   createLatestCatalogLoader,
@@ -343,8 +345,6 @@ const PLATFORMS = {
   },
 };
 
-const PLATFORM_ORDER = ["ios", "android"];
-
 function platformInfo(platform) {
   return PLATFORMS[platform] || { label: "Devices", noun: "device", icon: "#icon-device", provider: "" };
 }
@@ -353,25 +353,19 @@ function capitalize(value) {
   return value ? value[0].toUpperCase() + value.slice(1) : value;
 }
 
-/** Platforms that actually reported something, in a stable order, so headings never flicker. */
 function availablePlatforms() {
-  const seen = new Set();
-  for (const device of state.catalog?.devices || []) seen.add(device.platform);
-  for (const runtime of state.catalog?.runtimes || []) seen.add(runtime.platform);
-  const known = PLATFORM_ORDER.filter((platform) => seen.has(platform));
-  const extra = [...seen].filter((platform) => platform && !PLATFORM_ORDER.includes(platform)).sort();
-  return [...known, ...extra];
+  return catalogPlatforms(state.catalog);
 }
 
 function renderDeviceList() {
   const devices = state.catalog?.devices || [];
+  const { unavailable } = organizeDiagnostics(state.catalog?.diagnostics);
   elements.list.replaceChildren();
 
   // Every group is headed, including on a single-platform machine: the heading now carries the
   // count, so dropping it would leave the menu with no total at all.
   for (const platform of availablePlatforms()) {
     const group = devices.filter((device) => device.platform === platform);
-    if (group.length === 0) continue;
 
     const heading = document.createElement("div");
     heading.className = "device-group";
@@ -382,7 +376,33 @@ function renderDeviceList() {
     elements.list.append(heading);
 
     for (const device of group) elements.list.append(createDeviceCard(device));
+    for (const diagnostic of unavailable.filter((entry) => entry.platform === platform)) {
+      for (const check of diagnostic.checks) {
+        elements.list.append(createPlatformDiagnostic(check));
+      }
+    }
   }
+}
+
+function createPlatformDiagnostic(check) {
+  const item = document.createElement("div");
+  item.className = "platform-diagnostic";
+  item.setAttribute("role", "status");
+
+  const message = document.createElement("span");
+  message.textContent = check.message;
+  item.append(message);
+
+  for (const action of check.actions ?? []) {
+    const link = document.createElement("a");
+    link.className = "platform-diagnostic-link";
+    link.href = action.target;
+    link.target = "_blank";
+    link.rel = "noopener noreferrer";
+    link.textContent = action.label;
+    item.append(link);
+  }
+  return item;
 }
 
 function createDeviceCard(device) {
@@ -662,8 +682,8 @@ function updateControlAvailability() {
 
   const erase = document.querySelector("#erase-button");
   const remove = document.querySelector("#delete-button");
-  erase.disabled = !state.selected;
-  remove.disabled = !state.selected;
+  erase.disabled = !canUseDeviceCapability(state.selected, "erase");
+  remove.disabled = !canUseDeviceCapability(state.selected, "delete");
 
   const identifier = identifierLabels(state.selected?.platform);
   elements.udidLabel.textContent = identifier.label;

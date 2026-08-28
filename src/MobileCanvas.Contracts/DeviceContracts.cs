@@ -129,6 +129,7 @@ public sealed record DeviceType
 public static class DiagnosticActionTypes
 {
 	public const string OpenSystemSettings = "open-system-settings";
+	public const string OpenUrl = "open-url";
 }
 
 public static class SystemSettingsTargets
@@ -157,6 +158,7 @@ public sealed record DependencyCheck
 public sealed record HostDiagnostics
 {
 	public string Platform { get; init; } = "";
+	public bool Available { get; init; } = true;
 	public bool Ready { get; init; }
 	public DependencyCheck[] Checks { get; init; } = [];
 }

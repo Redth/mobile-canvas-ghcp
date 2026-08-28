@@ -91,7 +91,20 @@ internal sealed class AndroidSdkLocator
 
 		checks.Add(Tool("adb", Adb, "adb not found. Install platform-tools."));
 		checks.Add(Tool("emulator", Emulator, "emulator not found. Install the Android Emulator package."));
-		checks.Add(Tool("avdmanager", AvdManager, "avdmanager not found. Install cmdline-tools; creating AVDs will be unavailable."));
+		checks.Add(AvdManager is null
+			? new DependencyCheck
+			{
+				Name = "avdmanager",
+				Status = "warning",
+				Message = "avdmanager not found. Install cmdline-tools to create or delete AVDs.",
+			}
+			: new DependencyCheck
+			{
+				Name = "avdmanager",
+				Status = "ok",
+				Message = "avdmanager found.",
+				Path = AvdManager,
+			});
 
 		return [.. checks];
 
@@ -99,6 +112,60 @@ internal sealed class AndroidSdkLocator
 			path is null
 				? new DependencyCheck { Name = name, Status = "missing", Message = missingMessage }
 				: new DependencyCheck { Name = name, Status = "ok", Message = $"{name} found.", Path = path };
+	}
+
+	public ProcessRequest CreateAvdManagerRequest(
+		IReadOnlyList<string> arguments,
+		string? standardInput = null)
+	{
+		var avdManager = AvdManager
+			?? throw new InvalidOperationException("avdmanager was not found.");
+		return BuildAvdManagerRequest(
+			avdManager,
+			arguments,
+			standardInput,
+			RuntimeInformation.IsOSPlatform(OSPlatform.Windows));
+	}
+
+	internal static ProcessRequest BuildAvdManagerRequest(
+		string avdManager,
+		IReadOnlyList<string> arguments,
+		string? standardInput,
+		bool windows)
+	{
+		if (!windows)
+			return new ProcessRequest(avdManager, arguments, standardInput);
+
+		ValidateCmdValue(avdManager, nameof(avdManager));
+		var environment = new Dictionary<string, string?>
+		{
+			["MOBILE_CANVAS_AVDMANAGER"] = avdManager,
+		};
+		var command = "\"%MOBILE_CANVAS_AVDMANAGER%\"";
+		for (var index = 0; index < arguments.Count; index++)
+		{
+			ValidateCmdValue(arguments[index], nameof(arguments));
+			var name = $"MOBILE_CANVAS_AVD_ARG_{index}";
+			environment[name] = arguments[index];
+			command += $" \"%{name}%\"";
+		}
+
+		return new ProcessRequest(
+			"cmd.exe",
+			[],
+			standardInput,
+			environment,
+			RawArguments: $"/d /v:off /s /c \"{command}\"");
+	}
+
+	private static void ValidateCmdValue(string value, string parameterName)
+	{
+		if (value.IndexOfAny(['\0', '\r', '\n', '"', '%', '!', '&', '|', '<', '>', '^']) >= 0)
+		{
+			throw new ArgumentException(
+				"avdmanager paths and arguments cannot contain Windows command-shell metacharacters.",
+				parameterName);
+		}
 	}
 
 	private string? Resolve(string relativePath)

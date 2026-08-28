@@ -454,6 +454,27 @@ summary:focus-visible,
   background: var(--accent-muted);
 }
 
+.platform-diagnostic {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 8px 10px;
+  color: var(--attention-fg);
+  font-size: 12px;
+}
+
+.platform-diagnostic-link {
+  flex: none;
+  color: var(--accent-fg);
+  font-weight: 600;
+  text-decoration: none;
+}
+
+.platform-diagnostic-link:hover {
+  text-decoration: underline;
+}
+
 .device-glyph {
   display: grid;
   place-items: center;

@@ -31,3 +31,8 @@ test("device interaction preserves the normal cursor and click feedback", () => 
   assert.match(rule("#device-screen"), /touch-action:\s*none/);
   assert.match(rule(".input-indicator.active"), /animation:\s*input-ping/);
 });
+
+test("unavailable platforms use an inline picker status with a help link", () => {
+  assert.match(rule(".platform-diagnostic"), /justify-content:\s*space-between/);
+  assert.match(rule(".platform-diagnostic-link"), /color:\s*var\(--accent-fg\)/);
+});
