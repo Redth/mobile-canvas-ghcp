@@ -20,7 +20,8 @@ LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
 OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 
-Portions of the CoreSimulator HID implementation are adapted from Meta's idb.
+Portions of the CoreSimulator HID implementation and the CoreSimulator accessibility-hierarchy
+reader are adapted from Meta's idb.
 
 Copyright (c) Meta Platforms, Inc. and affiliates.
 

@@ -99,6 +99,23 @@ public sealed class UiTreeTests
 		Assert.Null(root!.Label);
 	}
 
+	[Theory]
+	[InlineData("0.75", "0.75")]
+	[InlineData("true", "true")]
+	public void ParseIos_PreservesScalarControlValues(string jsonValue, string expected)
+	{
+		var root = AccessibilityParser.Parse(
+			$$"""
+			{
+			  "role": "AXSlider",
+			  "AXValue": {{jsonValue}},
+			  "children": []
+			}
+			""");
+
+		Assert.Equal(expected, root!.Value);
+	}
+
 	[Fact]
 	public void ParseAndroid_ConvertsPixelBoundsToPoints()
 	{

@@ -5,4 +5,6 @@
 #import "SimulatorDeviceBridge.h"
 #import "SimulatorIndigoHid.h"
 #import "SimulatorDtuHid.h"
+#import "SimulatorAccessibilityBridge.h"
 #import "IndigoTestSupport.h"
+#import "AccessibilityTestSupport.h"

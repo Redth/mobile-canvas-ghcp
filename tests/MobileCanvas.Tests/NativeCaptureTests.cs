@@ -114,6 +114,29 @@ public class NativeCaptureTests
 	}
 
 	[Fact]
+	public void HidCheck_MentionsIdbOnlyWhenNativeInputNeedsIt()
+	{
+		var healthy = IosSimulatorBackend.BuildHidCheck(
+			new CoreSimulatorHidDoctorResult
+			{
+				Negotiable = true,
+				Detail = "DTUHID is available.",
+			},
+			companion: null);
+		var unavailable = IosSimulatorBackend.BuildHidCheck(
+			new CoreSimulatorHidDoctorResult
+			{
+				Negotiable = false,
+				Detail = "DTUHID is unavailable.",
+			},
+			companion: null);
+
+		Assert.DoesNotContain("IDB", healthy.Message, StringComparison.OrdinalIgnoreCase);
+		Assert.Equal("error", unavailable.Status);
+		Assert.Contains("IDB input fallback is unavailable", unavailable.Message);
+	}
+
+	[Fact]
 	public void ScreencapCheck_DoesNotPromptForOptionalFallbackPermissions()
 	{
 		var check = IosSimulatorBackend.BuildScreencapCheck(
@@ -123,7 +146,8 @@ public class NativeCaptureTests
 				ScreenRecordingGranted = false,
 				AccessibilityGranted = false,
 			},
-			framebufferReady: true);
+			framebufferReady: true,
+			idbAvailable: false);
 
 		Assert.Equal("ok", check.Status);
 		Assert.Contains("fallback grants are optional", check.Message);
@@ -140,7 +164,8 @@ public class NativeCaptureTests
 				ScreenRecordingGranted = false,
 				AccessibilityGranted = false,
 			},
-			framebufferReady: false);
+			framebufferReady: false,
+			idbAvailable: true);
 
 		Assert.Equal("warning", check.Status);
 		Assert.StartsWith("Grant Screen Recording and Accessibility", check.Message);
@@ -148,6 +173,25 @@ public class NativeCaptureTests
 			check.Actions,
 			action => Assert.Equal(SystemSettingsTargets.ScreenRecording, action.Target),
 			action => Assert.Equal(SystemSettingsTargets.Accessibility, action.Target));
+	}
+
+	[Fact]
+	public void ScreencapCheck_ReportsIdbOnlyWhenNativeVideoNeedsIt()
+	{
+		var healthy = IosSimulatorBackend.BuildScreencapCheck(
+			"/tmp/mobile-screencap",
+			new ScreencapDiagnostics(),
+			framebufferReady: true,
+			idbAvailable: false);
+		var unavailable = IosSimulatorBackend.BuildScreencapCheck(
+			"/tmp/mobile-screencap",
+			new ScreencapDiagnostics(),
+			framebufferReady: false,
+			idbAvailable: false);
+
+		Assert.DoesNotContain("IDB", healthy.Message, StringComparison.OrdinalIgnoreCase);
+		Assert.Equal("error", unavailable.Status);
+		Assert.Contains("IDB fallback is also unavailable", unavailable.Message);
 	}
 
 	[Fact]

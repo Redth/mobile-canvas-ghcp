@@ -1,11 +1,12 @@
 #!/usr/bin/env bash
-# Builds and runs the native mobile-screencap HID tests.
+# Builds and runs the native mobile-screencap HID and accessibility tests.
 #
-# The tests link the HID sources plus test-only fakes into their own executable, so nothing under
-# Tests/ is ever compiled into the shipped `mobile-screencap`. They cover the private-API-adjacent
-# logic that can be exercised without a booted simulator: transport selection, framework layout,
-# Indigo wire layout and allocator ownership, DTUHID envelope types, contact tracking, and the
-# NDJSON protocol. Live delivery is only provable against a booted device.
+# The tests link the HID and accessibility sources plus test-only fakes into their own executable,
+# so nothing under Tests/ is ever compiled into the shipped `mobile-screencap`. They cover the
+# private-API-adjacent logic that can be exercised without a booted simulator: transport selection,
+# framework layout, Indigo wire layout and allocator ownership, DTUHID envelope types, contact
+# tracking, the NDJSON protocol, and the accessibility reader's serialization/traversal bounds
+# (fed a fake NSAccessibility element tree). Live delivery is only provable against a booted device.
 #
 # Usage:
 #   ./test.sh                 # host architecture
@@ -53,14 +54,18 @@ SWIFT_SOURCES=(
 	"$SCRIPT_DIR/Sources/HidCommand.swift"
 	"$SCRIPT_DIR/Sources/HidProtocol.swift"
 	"$SCRIPT_DIR/Sources/HidSession.swift"
+	"$SCRIPT_DIR/Sources/AccessibilityCommand.swift"
 	"$SCRIPT_DIR/Tests/HidCommandTestSupport.swift"
+	"$SCRIPT_DIR/Tests/AccessibilityTests.swift"
 	"$SCRIPT_DIR/Tests/HidTests.swift"
 )
 OBJC_SOURCES=(
 	"$SCRIPT_DIR/Sources/SimulatorDeviceBridge.m"
 	"$SCRIPT_DIR/Sources/SimulatorIndigoHid.m"
 	"$SCRIPT_DIR/Sources/SimulatorDtuHid.m"
+	"$SCRIPT_DIR/Sources/SimulatorAccessibilityBridge.m"
 	"$SCRIPT_DIR/Tests/IndigoTestSupport.m"
+	"$SCRIPT_DIR/Tests/AccessibilityTestSupport.m"
 )
 
 echo "building native HID tests for $ARCH..."
@@ -148,6 +153,34 @@ PY
 		exit 1
 	}
 	printf '' | "$HELPER" encode --width 2 --height 2 > /dev/null 2>&1 || true
+
+	# The accessibility reader must fail the same startup-frame way as `hid` for a device that does
+	# not exist -- no protocolVersion field (it never emitted one), but the same
+	# type/code/message/non-zero-exit shape a managed caller already knows how to fall back from.
+	"$HELPER" --help 2>&1 | grep -q "accessibility" || {
+		echo "the helper no longer advertises 'accessibility'" >&2
+		exit 1
+	}
+	set +e
+	"$HELPER" accessibility --udid 00000000-0000-0000-0000-000000000000 \
+		> "$BUILD_DIR/accessibility-unavailable.ndjson" 2> "$BUILD_DIR/accessibility-unavailable.log"
+	status=$?
+	set -e
+	python3 - "$BUILD_DIR/accessibility-unavailable.ndjson" "$status" <<'PY'
+import json, sys
+lines = [line for line in open(sys.argv[1]).read().splitlines() if line.strip()]
+if len(lines) != 1:
+    raise SystemExit(f"expected exactly one frame on stdout, got {len(lines)}")
+frame = json.loads(lines[0])
+if frame.get("type") != "unavailable":
+    raise SystemExit(f"expected an 'unavailable' frame, got {frame!r}")
+if not frame.get("code") or not frame.get("message"):
+    raise SystemExit(f"the frame is missing code/message: {frame!r}")
+if sys.argv[2] == "0":
+    raise SystemExit("a nonexistent device must exit non-zero")
+print("accessibility startup ok")
+PY
+
 	echo "shipped helper commands ok"
 else
 	echo "note: $HELPER is not built; skipping shipped-helper checks" >&2

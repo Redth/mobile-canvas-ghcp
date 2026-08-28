@@ -118,16 +118,18 @@ and take over at any time.
 |---|---|
 | **iOS** | macOS and a full Xcode installation with Simulator runtimes |
 | **Android** | Android SDK with `emulator`, `avdmanager`, and `adb` on `PATH` |
-| **Optional iOS accessibility/fallbacks** | [`idb`](https://fbidb.io) (provides `idb_companion`), plus Screen Recording and Accessibility permission for ScreenCaptureKit window capture |
+| **Optional iOS fallbacks** | [`idb`](https://fbidb.io) (provides `idb_companion`), plus Screen Recording and Accessibility permission for ScreenCaptureKit window capture |
 
 The bundled `mobile-screencap` helper provides iOS touch, keyboard, buttons,
-rotation, and direct video capture. Xcode 26 uses Simulator.app; Xcode 27 uses
-Device Hub. Neither visible app needs to be open for headless input.
+rotation, accessibility hierarchy, and direct video capture. Xcode 26 uses
+Simulator.app; Xcode 27 uses Device Hub. Neither visible app needs to be open
+for headless input or hierarchy reads.
 
-Install Meta's `idb` metapackage only when you need the iOS accessibility
-hierarchy (`ui_tree`, `ui_find`, or `ui_tap`), compatibility input fallback, or
-the final live-video fallback. It provides `idb_companion`; current Homebrew
-versions require explicitly trusting the third-party tap:
+Meta's `idb` metapackage is not required for `ui_tree`, `ui_find`, or `ui_tap`.
+It remains an optional compatibility input fallback and the final live-video
+fallback if the bundled native paths cannot start. Mobile Canvas only reports
+its absence when an operation actually needs it. To install it, current
+Homebrew versions require explicitly trusting the third-party tap:
 
 ```bash
 brew tap facebook/fb
@@ -293,8 +295,8 @@ Two things to know before you change anything:
   directly and is not part of the binary.
 - **`dotnet publish` does not build the Swift helper.** `scripts/build.sh`
   builds both. A stale helper fails only later, at stream start; check it with
-  `mobile-screencap --help` and confirm `framebuffer`, `hid`, `hid-doctor`, and
-  Android's `encode` subcommands exist.
+  `mobile-screencap --help` and confirm `accessibility`, `framebuffer`, `hid`,
+  `hid-doctor`, and Android's `encode` subcommands exist.
 
 Changing `src/` or `native/` requires the **Release runtimes** workflow. It builds
 each Native AOT RID on its native OS, publishes checksummed release assets, and

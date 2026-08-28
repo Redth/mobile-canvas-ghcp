@@ -46,6 +46,8 @@ struct MobileScreencap {
 					try HidCommand.run(options)
 				case "hid-doctor":
 					try HidDoctorCommand.run(options)
+				case "accessibility":
+					try AccessibilityCommand.run(options)
 				case "doctor":
 					try await runDoctor()
 				case "--help", "-h", "help":
@@ -81,6 +83,7 @@ struct MobileScreencap {
 			  rotate                   Rotate an iOS Simulator device.
 			  hid                      Persistent NDJSON HID session on stdin/stdout.
 			  hid-doctor               Report bundled HID transport negotiability as JSON.
+			  accessibility            Print the frontmost app's accessibility tree as JSON.
 
 			Framebuffer options:
 			  --udid <udid>            Simulator UDID. Required.
@@ -111,6 +114,14 @@ struct MobileScreencap {
 			HID options:
 			  --udid <udid>            Simulator device identifier. Required.
 			  --developer-dir <path>   Override the selected developer directory.
+
+			Accessibility options:
+			  --udid <udid>            Simulator device identifier. Required.
+			  --developer-dir <path>   Override the selected developer directory.
+			  --max-depth <n>          Maximum tree depth (root is 0). Default 64.
+			  --max-nodes <n>          Maximum total nodes returned. Default 20000.
+			  --timeout <seconds>      Max wait for the simulator's translation round trip.
+			                           Default 5.0.
 
 			"""
 		FileHandle.standardError.write(Data(usage.utf8))

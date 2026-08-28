@@ -181,4 +181,33 @@ static BOOL MCLoadCoreSimulatorFramework(void)
     }
 }
 
+- (nullable NSString *)stateDescription
+{
+    @try {
+        NSString *description = [(SimDevice *)self.device stateString];
+        return [description isKindOfClass:NSString.class] ? description : nil;
+    } @catch (__unused NSException *exception) {
+        return nil;
+    }
+}
+
+- (BOOL)isBooted
+{
+    NSString *stateDescription = self.stateDescription;
+    if (stateDescription != nil &&
+        [stateDescription caseInsensitiveCompare:@"Booted"] == NSOrderedSame) {
+        return YES;
+    }
+    // `stateString` is preferred, but fall back to the raw enum (`3` is `SimDeviceStateBooted`) in
+    // case a future CoreSimulator ever stops answering `stateString`.
+    if (stateDescription == nil) {
+        @try {
+            return [(SimDevice *)self.device state] == 3;
+        } @catch (__unused NSException *exception) {
+            return NO;
+        }
+    }
+    return NO;
+}
+
 @end

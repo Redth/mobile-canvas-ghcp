@@ -1,7 +1,7 @@
 import Foundation
 
-// HidCommand is compiled into the native test target without Entry.swift (which owns @main).
-// These minimal test-only definitions satisfy the two command-shell dependencies.
+// HidCommand and AccessibilityCommand are compiled into the native test target without Entry.swift
+// (which owns @main). These minimal test-only definitions satisfy their command-shell dependencies.
 struct HelperError: Error {
 	init(_: String) {}
 }
@@ -15,6 +15,14 @@ struct CommandLineOptions {
 
 	func string(_ key: String) -> String? {
 		values[key]
+	}
+
+	func int(_ key: String) -> Int? {
+		values[key].flatMap(Int.init)
+	}
+
+	func double(_ key: String) -> Double? {
+		values[key].flatMap(Double.init)
 	}
 }
 

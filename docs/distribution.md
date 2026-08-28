@@ -256,6 +256,22 @@ to the app hosting the canvas, and updates never disturb it.
 prompting. If the private framebuffer API changes, capture falls through to
 ScreenCaptureKit and then idb rather than failing.
 
+### Native CoreSimulator accessibility
+
+The bundled helper also reads the frontmost simulator application's
+accessibility hierarchy through CoreSimulator's host-side accessibility
+translation service:
+
+```text
+mobile-screencap accessibility --udid <udid> [--developer-dir <path>]
+```
+
+The command returns bounded nested JSON in logical screen points. The managed
+backend normalizes that payload, and the shared `UiTree` implementation provides
+`ui_find`; `ui_tap` resolves the match to its center and sends it through the
+same native HID path as coordinate input. An installed IDB companion is tried
+silently only if the native hierarchy read fails.
+
 ### Persistent CoreSimulator HID and Xcode 27
 
 The same bundled helper owns iOS input. `mobile-screencap hid --udid <udid>`
@@ -291,10 +307,12 @@ separate concerns:
   optional visible simulator host while preserving Simulator.app support for
   Xcode 26.
 
-`idb_companion` remains optional. It supplies the accessibility hierarchy,
-compatibility input fallback when native HID cannot start before delivery, and
-the final live-video fallback. A native failure after an event may have been
-delivered is surfaced directly and is never replayed through IDB.
+`idb_companion` remains optional. It supplies compatibility input fallback when
+native HID cannot start before delivery, a hierarchy fallback if the bundled
+reader cannot run against a changed CoreSimulator, and the final live-video
+fallback. Its absence is reported only when one of those fallbacks is required.
+A native input failure after an event may have been delivered is surfaced
+directly and is never replayed through IDB.
 
 ## Supported platforms
 
