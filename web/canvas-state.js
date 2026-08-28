@@ -91,32 +91,85 @@ export function createLatestCatalogLoader(fetchCatalog, applyCatalog) {
   };
 }
 
+const PLATFORM_ORDER = ["android", "ios"];
+
+export function catalogPlatforms(catalog) {
+  const seen = new Set();
+  for (const device of catalog?.devices ?? []) addPlatform(seen, device?.platform);
+  for (const runtime of catalog?.runtimes ?? []) addPlatform(seen, runtime?.platform);
+  for (const diagnostic of catalog?.diagnostics ?? []) addPlatform(seen, diagnostic?.platform);
+
+  const known = PLATFORM_ORDER.filter((platform) => seen.has(platform));
+  const extra = [...seen].filter((platform) => !PLATFORM_ORDER.includes(platform)).sort();
+  return [...known, ...extra];
+}
+
 export function organizeDiagnostics(diagnostics) {
-  const failures = (diagnostics ?? [])
-    .flatMap((entry) => entry?.checks ?? [])
-    .filter((check) => check?.status !== "ok")
-    .filter(isActionableDiagnostic)
-    .map((check) => ({
-      ...check,
-      message: formatUserFacingMessage(check.message),
-    }));
   const notices = [];
   const popover = [];
+  const unavailable = [];
 
-  for (const check of failures) {
-    const actions = (check.actions ?? []).filter(
-      (action) =>
-        action?.type === "open-system-settings" &&
-        typeof action.target === "string" &&
-        action.target.length > 0 &&
-        typeof action.label === "string" &&
-        action.label.length > 0,
+  for (const entry of diagnostics ?? []) {
+    const failures = (entry?.checks ?? [])
+      .filter((check) => check?.status !== "ok")
+      .filter(isActionableDiagnostic)
+      .map((check) => ({
+        ...check,
+        message: formatUserFacingMessage(check.message),
+      }));
+
+    const platformChecks = failures.map((check) => ({
+      ...check,
+      actions: (check.actions ?? []).filter(isSafeDocumentationAction),
+    }));
+    const hasUnavailablePlatform = (
+      entry?.available === false
+      && typeof entry.platform === "string"
+      && entry.platform
     );
-    if (actions.length > 0) notices.push({ ...check, actions });
-    else popover.push(check);
+    if (hasUnavailablePlatform) {
+      unavailable.push({
+        platform: entry.platform.toLowerCase(),
+        checks: platformChecks,
+      });
+    }
+
+    for (const check of failures) {
+      if (hasUnavailablePlatform) {
+        continue;
+      }
+      const actions = (check.actions ?? []).filter(isSystemSettingsAction);
+      if (actions.length > 0) notices.push({ ...check, actions });
+      else popover.push(check);
+    }
   }
 
-  return { notices, popover };
+  return { notices, popover, unavailable };
+}
+
+function addPlatform(platforms, value) {
+  const platform = String(value ?? "").trim().toLowerCase();
+  if (platform) platforms.add(platform);
+}
+
+function hasActionLabel(action) {
+  return typeof action?.label === "string" && action.label.length > 0;
+}
+
+function isSystemSettingsAction(action) {
+  return action?.type === "open-system-settings"
+    && typeof action.target === "string"
+    && action.target.length > 0
+    && hasActionLabel(action);
+}
+
+function isSafeDocumentationAction(action) {
+  if (action?.type !== "open-url" || !hasActionLabel(action)) return false;
+  try {
+    return new URL(action.target).protocol === "https:";
+  } catch {
+    return false;
+  }
 }
 
 function isActionableDiagnostic(check) {
@@ -141,6 +194,10 @@ export function canBootDeviceState(deviceState) {
   return normalized !== "booted"
     && normalized !== "booting"
     && normalized !== "shutting-down";
+}
+
+export function canUseDeviceCapability(device, capability) {
+  return Boolean(device) && device.capabilities?.[capability] !== false;
 }
 
 const DEVICE_STATE_LABELS = {

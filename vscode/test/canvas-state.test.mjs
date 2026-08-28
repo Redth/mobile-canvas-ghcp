@@ -2,6 +2,8 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import {
   canBootDeviceState,
+  canUseDeviceCapability,
+  catalogPlatforms,
   clearStoredDeviceId,
   deviceStatusPresentation,
   formatDeviceState,
@@ -26,6 +28,12 @@ test("boots stable non-running states but not lifecycle transitions", () => {
   assert.equal(canBootDeviceState("booted"), false);
   assert.equal(canBootDeviceState("booting"), false);
   assert.equal(canBootDeviceState("shutting-down"), false);
+});
+
+test("gates destructive actions on backend capabilities", () => {
+  assert.equal(canUseDeviceCapability(undefined, "delete"), false);
+  assert.equal(canUseDeviceCapability({ capabilities: { delete: false } }, "delete"), false);
+  assert.equal(canUseDeviceCapability({ capabilities: { delete: true } }, "delete"), true);
 });
 
 test("presents readable device state labels", () => {
@@ -221,6 +229,7 @@ test("promotes actionable diagnostics into main notices", () => {
   assert.equal(result.notices[0].name, actionable.name);
   assert.deepEqual(result.notices[0].actions, [actionable.actions[0]]);
   assert.deepEqual(result.popover, [ordinary]);
+  assert.deepEqual(result.unavailable, []);
 });
 
 test("keeps unsupported diagnostic actions in the selector", () => {
@@ -234,6 +243,95 @@ test("keeps unsupported diagnostic actions in the selector", () => {
   assert.deepEqual(organizeDiagnostics([{ checks: [check] }]), {
     notices: [],
     popover: [check],
+    unavailable: [],
   });
-  assert.deepEqual(organizeDiagnostics(null), { notices: [], popover: [] });
+  assert.deepEqual(organizeDiagnostics(null), { notices: [], popover: [], unavailable: [] });
+});
+
+test("orders Android before diagnostic-only unavailable iOS", () => {
+  assert.deepEqual(catalogPlatforms({
+    devices: [{ platform: "ios" }, { platform: "android" }],
+    diagnostics: [{ platform: "ios", ready: false, checks: [] }],
+  }), ["android", "ios"]);
+  assert.deepEqual(catalogPlatforms({
+    devices: [{ platform: "android" }],
+    diagnostics: [{ platform: "ios", ready: false, checks: [] }],
+  }), ["android", "ios"]);
+});
+
+test("keeps safe unavailable-platform help links in the picker", () => {
+  const result = organizeDiagnostics([
+    {
+      platform: "ios",
+      available: false,
+      ready: false,
+      checks: [
+        {
+          name: "iOS",
+          status: "error",
+          message: "iOS requires Xcode.",
+          actions: [
+            { type: "open-url", target: "https://example.com/ios", label: "Learn more" },
+            { type: "open-url", target: "javascript:alert(1)", label: "Unsafe" },
+          ],
+        },
+      ],
+    },
+  ]);
+
+  assert.deepEqual(result.notices, []);
+  assert.deepEqual(result.popover, []);
+  assert.equal(result.unavailable[0].platform, "ios");
+  assert.deepEqual(result.unavailable[0].checks[0].actions, [
+    { type: "open-url", target: "https://example.com/ios", label: "Learn more" },
+  ]);
+});
+
+test("retains system settings actions when a configured platform is not fully ready", () => {
+  const action = {
+    type: "open-system-settings",
+    target: "accessibility",
+    label: "Open Accessibility",
+  };
+  const result = organizeDiagnostics([
+    {
+      platform: "ios",
+      available: true,
+      ready: false,
+      checks: [
+        {
+          name: "Bundled CoreSimulator HID",
+          status: "error",
+          message: "Input fallback needs Accessibility.",
+          actions: [action],
+        },
+      ],
+    },
+  ]);
+
+  assert.deepEqual(result.unavailable, []);
+  assert.deepEqual(result.popover, []);
+  assert.deepEqual(result.notices[0].actions, [action]);
+});
+
+test("renders unavailable platforms even when they have no documentation action", () => {
+  const result = organizeDiagnostics([
+    {
+      platform: "ios",
+      available: false,
+      ready: false,
+      checks: [
+        {
+          name: "macOS",
+          status: "error",
+          message: "iOS Simulator is only available on macOS.",
+        },
+      ],
+    },
+  ]);
+
+  assert.deepEqual(result.notices, []);
+  assert.deepEqual(result.popover, []);
+  assert.equal(result.unavailable[0].checks[0].message, "iOS Simulator is only available on macOS.");
+  assert.deepEqual(result.unavailable[0].checks[0].actions, []);
 });

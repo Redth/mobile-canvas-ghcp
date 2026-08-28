@@ -116,14 +116,21 @@ and take over at any time.
 
 | | Requirement |
 |---|---|
-| **iOS** | macOS and a full Xcode installation with Simulator runtimes |
-| **Android** | Android SDK with `emulator`, `avdmanager`, and `adb` on `PATH` |
+| **iOS** | macOS and a [full Xcode installation with Simulator runtimes](docs/ios-setup.md) |
+| **Android** | [Android SDK](docs/android-setup.md) with `emulator` and `adb`; `avdmanager` and Java are needed only to create or delete AVDs |
 | **Optional iOS fallbacks** | [`idb`](https://fbidb.io) (provides `idb_companion`), plus Screen Recording and Accessibility permission for ScreenCaptureKit window capture |
 
 The bundled `mobile-screencap` helper provides iOS touch, keyboard, buttons,
 rotation, accessibility hierarchy, and direct video capture. Xcode 26 uses
 Simulator.app; Xcode 27 uses Device Hub. Neither visible app needs to be open
 for headless input or hierarchy reads.
+
+Android-only workflows do not require Xcode. When Xcode is unavailable, Mobile
+Canvas keeps Android emulators usable and marks iOS as unavailable.
+
+Likewise, Java is not required to run or control existing Android emulators.
+It is used indirectly by `avdmanager` only when Mobile Canvas creates or deletes
+an AVD.
 
 Meta's `idb` metapackage is not required for `ui_tree`, `ui_find`, or `ui_tap`.
 It remains an optional compatibility input fallback and the final live-video

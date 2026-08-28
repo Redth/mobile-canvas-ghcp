@@ -10,7 +10,11 @@ namespace MobileCanvas.iOS;
 
 public sealed class IosSimulatorBackend : IDeviceBackend, IAsyncDisposable
 {
+	private const string IosSetupUrl =
+		"https://github.com/Redth/mobile-canvas-ghcp/blob/main/docs/ios-setup.md";
+
 	private readonly IProcessRunner _processRunner;
+	private readonly Func<CancellationToken, Task<string>> _resolveDeveloperDirectory;
 	private readonly CoreSimulatorHidManager _hid;
 	private readonly IdbCompanionManager _companions;
 	private readonly NativeAccessibilityReader _accessibility;
@@ -34,8 +38,20 @@ public sealed class IosSimulatorBackend : IDeviceBackend, IAsyncDisposable
 	private static readonly TimeSpan BootedCacheLifetime = TimeSpan.FromSeconds(15);
 
 	public IosSimulatorBackend(IProcessRunner processRunner)
+		: this(
+			processRunner,
+			cancellationToken => XcodeDeveloperDirectory.ResolveSelectedAsync(
+				processRunner,
+				cancellationToken))
+	{
+	}
+
+	internal IosSimulatorBackend(
+		IProcessRunner processRunner,
+		Func<CancellationToken, Task<string>> resolveDeveloperDirectory)
 	{
 		_processRunner = processRunner;
+		_resolveDeveloperDirectory = resolveDeveloperDirectory;
 		_hid = new CoreSimulatorHidManager();
 		_companions = new IdbCompanionManager(processRunner);
 		_accessibility = new NativeAccessibilityReader(processRunner);
@@ -56,6 +72,7 @@ public sealed class IosSimulatorBackend : IDeviceBackend, IAsyncDisposable
 					new HostDiagnostics
 					{
 						Platform = DevicePlatforms.Ios,
+						Available = false,
 						Ready = false,
 						Checks =
 						[
@@ -71,13 +88,25 @@ public sealed class IosSimulatorBackend : IDeviceBackend, IAsyncDisposable
 			};
 		}
 
-		var result = await RunAsync(["list", "--json"], cancellationToken).ConfigureAwait(false);
-		EnsureSuccess("xcrun", ["simctl", "list", "--json"], result);
+		var xcodePath = await TryResolveFullXcodeAsync(cancellationToken).ConfigureAwait(false);
+		if (xcodePath is null)
+			return new DeviceCatalog { Diagnostics = [BuildXcodeUnavailableDiagnostics()] };
+
+		ProcessResult result;
+		try
+		{
+			result = await RunAsync(["list", "--json"], cancellationToken).ConfigureAwait(false);
+			EnsureSuccess("xcrun", ["simctl", "list", "--json"], result);
+		}
+		catch (ProcessExecutionException)
+		{
+			return new DeviceCatalog { Diagnostics = [BuildSimctlUnavailableDiagnostics()] };
+		}
 		var catalog = SimctlCatalogParser.Parse(result.StandardOutput);
 		RefreshBootedCache(catalog.Devices);
 		return catalog with
 		{
-			Diagnostics = [await GetDiagnosticsAsync(cancellationToken).ConfigureAwait(false)],
+			Diagnostics = [await GetDiagnosticsAsync(xcodePath, cancellationToken).ConfigureAwait(false)],
 		};
 	}
 
@@ -2466,16 +2495,14 @@ public sealed class IosSimulatorBackend : IDeviceBackend, IAsyncDisposable
 			new ProcessRequest("xcrun", ["simctl", .. arguments]),
 			cancellationToken);
 
-	private async Task<HostDiagnostics> GetDiagnosticsAsync(CancellationToken cancellationToken)
+	private async Task<string?> TryResolveFullXcodeAsync(CancellationToken cancellationToken)
 	{
-		var checks = new List<DependencyCheck>();
-		string? xcodePath = null;
-		string? xcodeFailure = null;
 		try
 		{
-			xcodePath = await XcodeDeveloperDirectory.ResolveSelectedAsync(
-				_processRunner,
-				cancellationToken).ConfigureAwait(false);
+			var developerDirectory = await _resolveDeveloperDirectory(cancellationToken).ConfigureAwait(false);
+			return SimulatorHostLocator.TryResolve(developerDirectory, out _)
+				? developerDirectory
+				: null;
 		}
 		catch (OperationCanceledException)
 		{
@@ -2484,21 +2511,77 @@ public sealed class IosSimulatorBackend : IDeviceBackend, IAsyncDisposable
 		catch (Exception exception) when (
 			exception is ProcessExecutionException
 				or InvalidOperationException
-				or ArgumentException)
+				or ArgumentException
+				or IOException
+				or UnauthorizedAccessException)
 		{
-			xcodeFailure = exception.Message;
+			return null;
 		}
-		var xcodeReady = !string.IsNullOrWhiteSpace(xcodePath);
+	}
+
+	internal static HostDiagnostics BuildXcodeUnavailableDiagnostics() =>
+		new()
+		{
+			Platform = DevicePlatforms.Ios,
+			Available = false,
+			Ready = false,
+			Checks =
+			[
+				new DependencyCheck
+				{
+					Name = "iOS",
+					Status = "error",
+					Message = "iOS requires Xcode.",
+					Actions =
+					[
+						new DiagnosticAction
+						{
+							Type = DiagnosticActionTypes.OpenUrl,
+							Target = IosSetupUrl,
+							Label = "Learn more",
+						},
+					],
+				},
+			],
+		};
+
+	internal static HostDiagnostics BuildSimctlUnavailableDiagnostics() =>
+		new()
+		{
+			Platform = DevicePlatforms.Ios,
+			Available = false,
+			Ready = false,
+			Checks =
+			[
+				new DependencyCheck
+				{
+					Name = "iOS",
+					Status = "error",
+					Message = "iOS Simulator is unavailable.",
+					Actions =
+					[
+						new DiagnosticAction
+						{
+							Type = DiagnosticActionTypes.OpenUrl,
+							Target = IosSetupUrl,
+							Label = "Learn more",
+						},
+					],
+				},
+			],
+		};
+
+	private async Task<HostDiagnostics> GetDiagnosticsAsync(
+		string xcodePath,
+		CancellationToken cancellationToken)
+	{
+		var checks = new List<DependencyCheck>();
 		var companion = IdbCompanionLocator.Find();
 		checks.Add(new DependencyCheck
 		{
 			Name = "Xcode",
-			Status = xcodeReady ? "ok" : "error",
-			Message = xcodeReady
-				? "Full Xcode developer directory is selected."
-				: string.IsNullOrWhiteSpace(xcodeFailure)
-					? "xcode-select did not return a developer directory."
-					: xcodeFailure,
+			Status = "ok",
+			Message = "Full Xcode developer directory is selected.",
 			Path = xcodePath,
 		});
 
@@ -2510,8 +2593,7 @@ public sealed class IosSimulatorBackend : IDeviceBackend, IAsyncDisposable
 		checks.Add(BuildHidCheck(hid, companion));
 
 		SimulatorKitInstallation? simulatorKit = null;
-		if (xcodeReady)
-			SimulatorKitLocator.TryResolve(xcodePath!, out simulatorKit);
+		SimulatorKitLocator.TryResolve(xcodePath, out simulatorKit);
 		var simulatorKitRequired = string.Equals(
 			hid.TransportPolicy,
 			"indigo",
@@ -2525,9 +2607,7 @@ public sealed class IosSimulatorBackend : IDeviceBackend, IAsyncDisposable
 					? "error"
 					: "warning",
 			Message = simulatorKit is null
-				? xcodeReady
-					? SimulatorKitLocator.GetMissingFrameworkMessage(xcodePath!)
-					: "Select a full Xcode installation before checking SimulatorKit.framework."
+				? SimulatorKitLocator.GetMissingFrameworkMessage(xcodePath)
 				: simulatorKit.Layout == SimulatorKitLayout.SharedFrameworks
 					? "Xcode 27 shared-framework layout is available for HID interactions."
 					: "Legacy Xcode private-framework layout is available for HID interactions.",
@@ -2562,7 +2642,7 @@ public sealed class IosSimulatorBackend : IDeviceBackend, IAsyncDisposable
 		return new HostDiagnostics
 		{
 			Platform = DevicePlatforms.Ios,
-			Ready = xcodeReady && (nativeHidReady || companion is not null),
+			Ready = nativeHidReady || companion is not null,
 			Checks = checks.ToArray(),
 		};
 	}
