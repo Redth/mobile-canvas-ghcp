@@ -169,9 +169,19 @@ public sealed class IosSimulatorBackend : IDeviceBackend, IAsyncDisposable
 		var result = await RunAsync(arguments, cancellationToken).ConfigureAwait(false);
 		EnsureSuccess("xcrun", ["simctl", .. arguments], result);
 		var udid = result.StandardOutput.Trim();
-		return await GetDeviceAsync(
-			DeviceIdentity.Create(DevicePlatforms.Ios, "core-simulator", udid),
+		var deviceId = DeviceIdentity.Create(DevicePlatforms.Ios, "core-simulator", udid);
+		return await CreationRollback.ResolveAsync(
+			resolve: token => GetDeviceAsync(deviceId, token),
+			rollback: token => DeleteCreatedSimulatorAsync(udid, token),
+			resourceDescription: $"iOS simulator '{udid}'",
 			cancellationToken).ConfigureAwait(false);
+	}
+
+	private async Task DeleteCreatedSimulatorAsync(string udid, CancellationToken cancellationToken)
+	{
+		var arguments = new[] { "delete", udid };
+		var result = await RunAsync(arguments, cancellationToken).ConfigureAwait(false);
+		EnsureSuccess("xcrun", ["simctl", .. arguments], result);
 	}
 
 	public async Task<DeviceTarget> BootAsync(string deviceId, CancellationToken cancellationToken = default)
