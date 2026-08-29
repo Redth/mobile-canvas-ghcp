@@ -148,7 +148,8 @@ PY
 
 	# Existing commands must keep working: a rename or a new dispatch arm cannot regress Android's
 	# use of the same executable.
-	"$HELPER" --help 2>&1 | grep -q "encode" || {
+	"$HELPER" --help > "$BUILD_DIR/help.txt" 2>&1
+	grep -q "encode" "$BUILD_DIR/help.txt" || {
 		echo "the helper no longer advertises 'encode'" >&2
 		exit 1
 	}
@@ -157,7 +158,7 @@ PY
 	# The accessibility reader must fail the same startup-frame way as `hid` for a device that does
 	# not exist -- no protocolVersion field (it never emitted one), but the same
 	# type/code/message/non-zero-exit shape a managed caller already knows how to fall back from.
-	"$HELPER" --help 2>&1 | grep -q "accessibility" || {
+	grep -q "accessibility" "$BUILD_DIR/help.txt" || {
 		echo "the helper no longer advertises 'accessibility'" >&2
 		exit 1
 	}

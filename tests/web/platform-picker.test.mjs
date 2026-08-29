@@ -13,7 +13,14 @@ test("destructive actions respect backend capabilities", () => {
   assert.equal(canUseDeviceCapability({ capabilities: {} }, "delete"), true);
 });
 
-test("diagnostic-only platforms remain visible after platforms with devices", () => {
+test("orders usable iOS before Android", () => {
+  assert.deepEqual(catalogPlatforms({
+    devices: [{ platform: "android" }, { platform: "ios" }],
+    diagnostics: [{ platform: "ios", available: true, ready: false, checks: [] }],
+  }), ["ios", "android"]);
+});
+
+test("orders Android before unavailable iOS", () => {
   assert.deepEqual(catalogPlatforms({
     devices: [{ platform: "android" }],
     diagnostics: [{ platform: "ios", available: false, ready: false, checks: [] }],
