@@ -102,6 +102,66 @@ public class NativeCaptureTests
 	}
 
 	[Fact]
+	public async Task FramebufferStartup_RetriesOneTimeoutThenSucceeds()
+	{
+		var attempts = new List<TimeSpan>();
+
+		var result = await IosSimulatorBackend.StartFramebufferWithRetryAsync(
+			(timeout, _) =>
+			{
+				attempts.Add(timeout);
+				return attempts.Count == 1
+					? Task.FromException<string>(new TimeoutException("first timeout"))
+					: Task.FromResult("framebuffer");
+			},
+			CancellationToken.None,
+			static (_, _) => Task.CompletedTask);
+
+		Assert.Equal("framebuffer", result);
+		Assert.Equal([TimeSpan.FromSeconds(15), TimeSpan.FromSeconds(8)], attempts);
+	}
+
+	[Fact]
+	public async Task FramebufferStartup_DoesNotRetryExplicitFailure()
+	{
+		var attempts = 0;
+
+		var exception = await Assert.ThrowsAsync<InvalidOperationException>(() =>
+			IosSimulatorBackend.StartFramebufferWithRetryAsync<string>(
+				(_, _) =>
+				{
+					attempts++;
+					return Task.FromException<string>(new InvalidOperationException("unsupported"));
+				},
+				CancellationToken.None,
+				static (_, _) => Task.CompletedTask));
+
+		Assert.Equal("unsupported", exception.Message);
+		Assert.Equal(1, attempts);
+	}
+
+	[Fact]
+	public async Task FramebufferStartup_PreservesBothTimeoutFailures()
+	{
+		var attempts = 0;
+
+		var exception = await Assert.ThrowsAsync<InvalidOperationException>(() =>
+			IosSimulatorBackend.StartFramebufferWithRetryAsync<string>(
+				(_, _) =>
+				{
+					attempts++;
+					return Task.FromException<string>(
+						new TimeoutException(attempts == 1 ? "first timeout" : "second timeout"));
+				},
+				CancellationToken.None,
+				static (_, _) => Task.CompletedTask));
+
+		Assert.Contains("first timeout", exception.Message);
+		Assert.Contains("second timeout", exception.Message);
+		Assert.Equal(2, attempts);
+	}
+
+	[Fact]
 	public void VideoUnavailable_ReportsNativeAndOptionalIdbFailures()
 	{
 		var exception = IosSimulatorBackend.BuildVideoUnavailableException(

@@ -36,7 +36,8 @@ internal sealed class IosScreenCaptureVideoSession : ILiveVideoSession
 		StreamOptions options,
 		DisplayGeometry display,
 		Action release,
-		CancellationToken cancellationToken) =>
+		CancellationToken cancellationToken,
+		TimeSpan? startupTimeout = null) =>
 		StartProcessAsync(
 			CreateFramebufferStartInfo(helperPath, nativeId, options, display),
 			options,
@@ -44,7 +45,8 @@ internal sealed class IosScreenCaptureVideoSession : ILiveVideoSession
 			"framebuffer",
 			sourceDetail: null,
 			release,
-			cancellationToken);
+			cancellationToken,
+			startupTimeout ?? TimeSpan.FromSeconds(15));
 
 	public static async Task<IosScreenCaptureVideoSession> StartAsync(
 		string helperPath,
@@ -61,7 +63,8 @@ internal sealed class IosScreenCaptureVideoSession : ILiveVideoSession
 			"screencapturekit",
 			sourceDetail,
 			release,
-			cancellationToken).ConfigureAwait(false);
+			cancellationToken,
+			TimeSpan.FromSeconds(15)).ConfigureAwait(false);
 
 	internal static ProcessStartInfo CreateFramebufferStartInfo(
 		string helperPath,
@@ -134,7 +137,8 @@ internal sealed class IosScreenCaptureVideoSession : ILiveVideoSession
 		string source,
 		string? sourceDetail,
 		Action release,
-		CancellationToken cancellationToken)
+		CancellationToken cancellationToken,
+		TimeSpan startupTimeout)
 	{
 		var process = new Process { StartInfo = startInfo };
 		if (!process.Start())
@@ -146,7 +150,8 @@ internal sealed class IosScreenCaptureVideoSession : ILiveVideoSession
 
 		try
 		{
-			var ready = await WaitForReadyAsync(process, cancellationToken).ConfigureAwait(false);
+			var ready = await WaitForReadyAsync(process, startupTimeout, cancellationToken)
+				.ConfigureAwait(false);
 			var session = new IosScreenCaptureVideoSession(
 				process,
 				new StreamDescriptor
@@ -174,10 +179,13 @@ internal sealed class IosScreenCaptureVideoSession : ILiveVideoSession
 	/// The helper reports startup as newline-delimited JSON on stderr so stdout stays a byte-exact
 	/// Annex-B stream.
 	/// </summary>
-	private static async Task<ReadyEvent> WaitForReadyAsync(Process process, CancellationToken cancellationToken)
+	private static async Task<ReadyEvent> WaitForReadyAsync(
+		Process process,
+		TimeSpan startupTimeout,
+		CancellationToken cancellationToken)
 	{
 		using var timeout = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
-		timeout.CancelAfter(TimeSpan.FromSeconds(15));
+		timeout.CancelAfter(startupTimeout);
 
 		try
 		{
@@ -215,7 +223,8 @@ internal sealed class IosScreenCaptureVideoSession : ILiveVideoSession
 		catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested)
 		{
 			throw new TimeoutException(
-				$"{ScreenCaptureHelper.ExecutableName} did not start capturing within 15 seconds.");
+				$"{ScreenCaptureHelper.ExecutableName} did not start capturing within "
+				+ $"{startupTimeout.TotalSeconds:g} seconds.");
 		}
 	}
 

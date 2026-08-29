@@ -248,14 +248,24 @@ test("keeps unsupported diagnostic actions in the selector", () => {
   assert.deepEqual(organizeDiagnostics(null), { notices: [], popover: [], unavailable: [] });
 });
 
-test("orders Android before diagnostic-only unavailable iOS", () => {
+test("orders usable iOS before Android", () => {
   assert.deepEqual(catalogPlatforms({
     devices: [{ platform: "ios" }, { platform: "android" }],
-    diagnostics: [{ platform: "ios", ready: false, checks: [] }],
+    diagnostics: [{ platform: "ios", available: true, ready: false, checks: [] }],
+  }), ["ios", "android"]);
+  assert.deepEqual(catalogPlatforms({
+    devices: [{ platform: "android" }, { platform: "ios" }],
+  }), ["ios", "android"]);
+});
+
+test("orders Android before unavailable iOS", () => {
+  assert.deepEqual(catalogPlatforms({
+    devices: [{ platform: "ios" }, { platform: "android" }],
+    diagnostics: [{ platform: "ios", available: false, ready: false, checks: [] }],
   }), ["android", "ios"]);
   assert.deepEqual(catalogPlatforms({
     devices: [{ platform: "android" }],
-    diagnostics: [{ platform: "ios", ready: false, checks: [] }],
+    diagnostics: [{ platform: "ios", available: false, ready: false, checks: [] }],
   }), ["android", "ios"]);
 });
 

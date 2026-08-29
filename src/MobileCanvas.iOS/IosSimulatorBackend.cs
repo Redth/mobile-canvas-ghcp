@@ -36,6 +36,9 @@ public sealed class IosSimulatorBackend : IDeviceBackend, IAsyncDisposable
 		new(StringComparer.OrdinalIgnoreCase);
 	private readonly SemaphoreSlim _inputRemovalGate = new(1, 1);
 	private static readonly TimeSpan BootedCacheLifetime = TimeSpan.FromSeconds(15);
+	private static readonly TimeSpan FramebufferStartupTimeout = TimeSpan.FromSeconds(15);
+	private static readonly TimeSpan FramebufferRetryTimeout = TimeSpan.FromSeconds(8);
+	private static readonly TimeSpan FramebufferRetryDelay = TimeSpan.FromMilliseconds(250);
 
 	public IosSimulatorBackend(IProcessRunner processRunner)
 		: this(
@@ -519,12 +522,15 @@ public sealed class IosSimulatorBackend : IDeviceBackend, IAsyncDisposable
 			var device = await RequireBootedAsync(deviceId, cancellationToken).ConfigureAwait(false);
 			try
 			{
-				return await IosScreenCaptureVideoSession.StartFramebufferAsync(
-					helperPath,
-					device.NativeId,
-					options,
-					display,
-					static () => { },
+				return await StartFramebufferWithRetryAsync(
+					(startupTimeout, token) => IosScreenCaptureVideoSession.StartFramebufferAsync(
+						helperPath,
+						device.NativeId,
+						options,
+						display,
+						static () => { },
+						token,
+						startupTimeout),
 					cancellationToken).ConfigureAwait(false);
 			}
 			catch (Exception exception) when (exception is not OperationCanceledException)
@@ -584,6 +590,35 @@ public sealed class IosSimulatorBackend : IDeviceBackend, IAsyncDisposable
 		catch (Exception exception) when (IdbCompanionManager.IsAvailabilityFailure(exception))
 		{
 			throw BuildVideoUnavailableException(nativeFailure, exception.Message);
+		}
+	}
+
+	internal static async Task<T> StartFramebufferWithRetryAsync<T>(
+		Func<TimeSpan, CancellationToken, Task<T>> start,
+		CancellationToken cancellationToken,
+		Func<TimeSpan, CancellationToken, Task>? delay = null)
+	{
+		try
+		{
+			return await start(FramebufferStartupTimeout, cancellationToken).ConfigureAwait(false);
+		}
+		catch (TimeoutException firstTimeout)
+		{
+			await (delay ?? Task.Delay)(FramebufferRetryDelay, cancellationToken).ConfigureAwait(false);
+			try
+			{
+				return await start(FramebufferRetryTimeout, cancellationToken).ConfigureAwait(false);
+			}
+			catch (OperationCanceledException)
+			{
+				throw;
+			}
+			catch (Exception retryFailure)
+			{
+				throw new InvalidOperationException(
+					$"{firstTimeout.Message} Retry failed: {retryFailure.Message}",
+					retryFailure);
+			}
 		}
 	}
 

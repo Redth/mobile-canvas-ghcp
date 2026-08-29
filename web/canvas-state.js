@@ -91,7 +91,8 @@ export function createLatestCatalogLoader(fetchCatalog, applyCatalog) {
   };
 }
 
-const PLATFORM_ORDER = ["android", "ios"];
+const PLATFORM_ORDER = ["ios", "android"];
+const IOS_UNAVAILABLE_PLATFORM_ORDER = ["android", "ios"];
 
 export function catalogPlatforms(catalog) {
   const seen = new Set();
@@ -99,7 +100,11 @@ export function catalogPlatforms(catalog) {
   for (const runtime of catalog?.runtimes ?? []) addPlatform(seen, runtime?.platform);
   for (const diagnostic of catalog?.diagnostics ?? []) addPlatform(seen, diagnostic?.platform);
 
-  const known = PLATFORM_ORDER.filter((platform) => seen.has(platform));
+  const iosUnavailable = (catalog?.diagnostics ?? []).some(
+    (diagnostic) => platformKey(diagnostic?.platform) === "ios" && diagnostic?.available === false,
+  );
+  const order = iosUnavailable ? IOS_UNAVAILABLE_PLATFORM_ORDER : PLATFORM_ORDER;
+  const known = order.filter((platform) => seen.has(platform));
   const extra = [...seen].filter((platform) => !PLATFORM_ORDER.includes(platform)).sort();
   return [...known, ...extra];
 }
@@ -148,8 +153,12 @@ export function organizeDiagnostics(diagnostics) {
 }
 
 function addPlatform(platforms, value) {
-  const platform = String(value ?? "").trim().toLowerCase();
+  const platform = platformKey(value);
   if (platform) platforms.add(platform);
+}
+
+function platformKey(value) {
+  return String(value ?? "").trim().toLowerCase();
 }
 
 function hasActionLabel(action) {
