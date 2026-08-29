@@ -27,7 +27,8 @@ public sealed class IosSimulatorBackend : IDeviceBackend, IAsyncDisposable
 	// shutdown, and the latter surfaces as a companion failure anyway.
 	private readonly ConcurrentDictionary<string, (DeviceTarget Device, long Stamp)> _bootedCache = new();
 	private readonly ConcurrentDictionary<string, bool> _revalidating = new();
-	private readonly ConcurrentDictionary<string, string> _orientations = new(StringComparer.OrdinalIgnoreCase);
+	private readonly ConcurrentDictionary<string, CachedOrientation> _orientations =
+		new(StringComparer.OrdinalIgnoreCase);
 	private readonly ConcurrentDictionary<string, ActiveHidRoute> _activeTouches =
 		new(StringComparer.OrdinalIgnoreCase);
 	private readonly ConcurrentDictionary<string, SemaphoreSlim> _inputGates =
@@ -39,6 +40,8 @@ public sealed class IosSimulatorBackend : IDeviceBackend, IAsyncDisposable
 	private static readonly TimeSpan FramebufferStartupTimeout = TimeSpan.FromSeconds(15);
 	private static readonly TimeSpan FramebufferRetryTimeout = TimeSpan.FromSeconds(8);
 	private static readonly TimeSpan FramebufferRetryDelay = TimeSpan.FromMilliseconds(250);
+	private static readonly TimeSpan OrientationCacheLifetime = TimeSpan.FromSeconds(5);
+	private sealed record CachedOrientation(string Orientation, long Stamp);
 
 	public IosSimulatorBackend(IProcessRunner processRunner)
 		: this(
@@ -134,9 +137,20 @@ public sealed class IosSimulatorBackend : IDeviceBackend, IAsyncDisposable
 		var result = await RunAsync(arguments, cancellationToken).ConfigureAwait(false);
 		EnsureSuccess("xcrun", ["simctl", .. arguments], result);
 		var display = SimctlDisplayParser.Parse(result.StandardOutput);
-		display = SimulatorOrientation.Apply(
-			display,
-			_orientations.GetValueOrDefault(device.NativeId, "portrait"));
+		display = SimulatorOrientation.Apply(display, display.Orientation);
+		if (_orientations.TryGetValue(device.NativeId, out var cached))
+		{
+			var reconciled = ReconcileOrientation(
+				display,
+				cached.Orientation,
+				Stopwatch.GetElapsedTime(cached.Stamp));
+			display = reconciled.Display;
+			if (!reconciled.RetainCache)
+			{
+				((ICollection<KeyValuePair<string, CachedOrientation>>)_orientations)
+					.Remove(new KeyValuePair<string, CachedOrientation>(device.NativeId, cached));
+			}
+		}
 
 		var cornerRadius = await _profiles.TryGetCornerRadiusAsync(
 			device.DeviceTypeId,
@@ -478,7 +492,24 @@ public sealed class IosSimulatorBackend : IDeviceBackend, IAsyncDisposable
 			new ProcessRequest(helperPath, arguments),
 			cancellationToken).ConfigureAwait(false);
 		EnsureSuccess(helperPath, arguments, result);
-		_orientations[device.NativeId] = normalizedOrientation;
+		_orientations[device.NativeId] = new CachedOrientation(
+			normalizedOrientation,
+			Stopwatch.GetTimestamp());
+	}
+
+	internal static (DisplayGeometry Display, bool RetainCache) ReconcileOrientation(
+		DisplayGeometry authoritativeDisplay,
+		string? cachedOrientation,
+		TimeSpan cacheAge)
+	{
+		if (string.IsNullOrWhiteSpace(cachedOrientation) ||
+			cachedOrientation.Equals(authoritativeDisplay.Orientation, StringComparison.Ordinal) ||
+			cacheAge >= OrientationCacheLifetime)
+		{
+			return (authoritativeDisplay, false);
+		}
+
+		return (SimulatorOrientation.Apply(authoritativeDisplay, cachedOrientation), true);
 	}
 
 	public async Task<byte[]> ScreenshotAsync(string deviceId, CancellationToken cancellationToken = default)

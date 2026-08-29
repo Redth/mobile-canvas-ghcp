@@ -57,6 +57,9 @@ public sealed partial class AndroidEmulatorBackend : IDeviceBackend, IAsyncDispo
 	private static readonly TimeSpan DisplayStateProbeTimeout = TimeSpan.FromSeconds(2);
 	private static readonly TimeSpan RotationSettleTimeout = TimeSpan.FromSeconds(5);
 	private static readonly TimeSpan InputCommandTimeout = TimeSpan.FromSeconds(8);
+	private static readonly TimeSpan ShutdownCommandTimeout = TimeSpan.FromSeconds(5);
+	private static readonly TimeSpan ShutdownExitTimeout = TimeSpan.FromSeconds(45);
+	private static readonly TimeSpan ShutdownPollInterval = TimeSpan.FromMilliseconds(400);
 
 	private readonly Lock _geometryLock = new();
 	private readonly Dictionary<string, DisplayGeometry> _geometryCache = new(StringComparer.OrdinalIgnoreCase);
@@ -695,13 +698,31 @@ public sealed partial class AndroidEmulatorBackend : IDeviceBackend, IAsyncDispo
 			try
 			{
 				var connection = await _connections.GetAsync(instance, cancellationToken).ConfigureAwait(false);
-				await connection.Client
-					.setVmStateAsync(
-						new VmRunState { State = VmRunState.Types.RunState.Shutdown },
-						connection.Metadata,
-						cancellationToken: cancellationToken)
-					.ConfigureAwait(false);
-				stopped = true;
+				stopped = await TryRunShutdownCommandAsync(
+					async token =>
+					{
+						await connection.Client
+							.setVmStateAsync(
+								new VmRunState { State = VmRunState.Types.RunState.Shutdown },
+								connection.Metadata,
+								cancellationToken: token)
+							.ConfigureAwait(false);
+					},
+					ShutdownCommandTimeout,
+					cancellationToken).ConfigureAwait(false);
+				if (!stopped)
+				{
+					_logger.LogDebug(
+						"gRPC shutdown timed out for {Avd}; falling back to adb.",
+						avdId);
+				}
+			}
+			catch (RpcException exception) when (cancellationToken.IsCancellationRequested)
+			{
+				throw new OperationCanceledException(
+					"Android emulator shutdown was canceled.",
+					exception,
+					cancellationToken);
 			}
 			catch (RpcException exception)
 			{
@@ -710,32 +731,113 @@ public sealed partial class AndroidEmulatorBackend : IDeviceBackend, IAsyncDispo
 		}
 
 		if (!stopped && instance.Serial is { } serial)
-			await RunAdbAsync(serial, ["emu", "kill"], cancellationToken).ConfigureAwait(false);
+		{
+			var fallbackCompleted = await TryRunShutdownCommandAsync(
+				async token =>
+				{
+					await RunAdbAsync(serial, ["emu", "kill"], token).ConfigureAwait(false);
+				},
+				ShutdownCommandTimeout,
+				cancellationToken).ConfigureAwait(false);
+			if (!fallbackCompleted)
+				_logger.LogDebug("adb shutdown timed out for {Avd}; waiting for process exit.", avdId);
+		}
 
 		await _connections.RemoveAsync(avdId).ConfigureAwait(false);
-		await WaitForExitAsync(avdId, cancellationToken).ConfigureAwait(false);
+		await WaitForExitAsync(instance, cancellationToken).ConfigureAwait(false);
 		InvalidateCache(avdId);
 
 		return await GetDeviceAsync(deviceId, cancellationToken).ConfigureAwait(false);
 	}
 
 	/// <summary>
-	/// Waits for the emulator's discovery file to disappear. Relaunching before it does produces a
-	/// second instance that silently starts without gRPC, because the ports are still held.
+	/// Waits for both the emulator's discovery file and original process to disappear. Relaunching
+	/// before either does can produce a second instance without gRPC because the ports are still held.
 	/// </summary>
-	private async Task WaitForExitAsync(string avdId, CancellationToken cancellationToken)
+	private async Task WaitForExitAsync(EmulatorInstance instance, CancellationToken cancellationToken)
 	{
-		using var timeout = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
-		timeout.CancelAfter(TimeSpan.FromSeconds(45));
+		await WaitForTerminalStateAsync(
+			instance.AvdId,
+			() => IsShutdownTerminal(
+				FindRunning(instance.AvdId) is null,
+				HasProcessExited(instance.ProcessId)),
+			ShutdownExitTimeout,
+			ShutdownPollInterval,
+			cancellationToken).ConfigureAwait(false);
+	}
+
+	internal static bool IsShutdownTerminal(bool discoveryEntryRemoved, bool processExited) =>
+		discoveryEntryRemoved && processExited;
+
+	private static bool HasProcessExited(int processId)
+	{
+		if (processId <= 0)
+			return false;
 
 		try
 		{
-			while (FindRunning(avdId) is not null)
-				await Task.Delay(TimeSpan.FromMilliseconds(400), timeout.Token).ConfigureAwait(false);
+			using var process = Process.GetProcessById(processId);
+			return process.HasExited;
 		}
-		catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested)
+		catch (ArgumentException)
 		{
-			_logger.LogWarning("Emulator {Avd} did not release its ports within 45 seconds.", avdId);
+			return true;
+		}
+		catch (InvalidOperationException)
+		{
+			return true;
+		}
+	}
+
+	internal static async Task<bool> TryRunShutdownCommandAsync(
+		Func<CancellationToken, Task> command,
+		TimeSpan timeout,
+		CancellationToken cancellationToken)
+	{
+		using var commandTimeout = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+		commandTimeout.CancelAfter(timeout);
+
+		try
+		{
+			await command(commandTimeout.Token).ConfigureAwait(false);
+			return true;
+		}
+		catch (OperationCanceledException exception) when (cancellationToken.IsCancellationRequested)
+		{
+			throw new OperationCanceledException(
+				"Android emulator shutdown was canceled.",
+				exception,
+				cancellationToken);
+		}
+		catch (OperationCanceledException) when (
+			!cancellationToken.IsCancellationRequested &&
+			commandTimeout.IsCancellationRequested)
+		{
+			return false;
+		}
+	}
+
+	internal static async Task WaitForTerminalStateAsync(
+		string avdId,
+		Func<bool> hasExited,
+		TimeSpan timeout,
+		TimeSpan pollInterval,
+		CancellationToken cancellationToken)
+	{
+		using var exitTimeout = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+		exitTimeout.CancelAfter(timeout);
+
+		try
+		{
+			while (!hasExited())
+				await Task.Delay(pollInterval, exitTimeout.Token).ConfigureAwait(false);
+		}
+		catch (OperationCanceledException) when (
+			!cancellationToken.IsCancellationRequested &&
+			exitTimeout.IsCancellationRequested)
+		{
+			throw new TimeoutException(
+				$"Emulator '{avdId}' did not shut down within {timeout.TotalSeconds:0} seconds.");
 		}
 	}
 
