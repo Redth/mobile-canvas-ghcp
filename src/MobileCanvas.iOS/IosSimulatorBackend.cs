@@ -221,6 +221,7 @@ public sealed class IosSimulatorBackend : IDeviceBackend, IAsyncDisposable
 	{
 		InvalidateBootedCache(deviceId);
 		var nativeId = DeviceIdentity.GetNativeId(deviceId);
+		await _recordings.FinalizeOrAbandonAsync(deviceId).ConfigureAwait(false);
 		try
 		{
 			var device = await GetDeviceAsync(deviceId, cancellationToken).ConfigureAwait(false);

@@ -690,7 +690,7 @@ public sealed partial class AndroidEmulatorBackend : IDeviceBackend, IAsyncDispo
 		if (instance is null)
 			return await GetDeviceAsync(deviceId, cancellationToken).ConfigureAwait(false);
 
-		await _recordings.StopQuietlyAsync(deviceId).ConfigureAwait(false);
+		await _recordings.FinalizeOrAbandonAsync(deviceId).ConfigureAwait(false);
 
 		var stopped = false;
 		if (instance.HasGrpc)
