@@ -430,6 +430,67 @@ public sealed class AndroidEmulatorBackendTests
 			GetAvdManagerArguments(runner.Calls[^1].Request));
 	}
 
+	[Fact]
+	public async Task ShutdownCommand_TimeoutAllowsFallback()
+	{
+		var stopped = await AndroidEmulatorBackend.TryRunShutdownCommandAsync(
+			async token => await Task.Delay(Timeout.InfiniteTimeSpan, token),
+			TimeSpan.FromMilliseconds(20),
+			CancellationToken.None);
+
+		Assert.False(stopped);
+	}
+
+	[Fact]
+	public async Task ShutdownCommand_PreservesCallerCancellation()
+	{
+		using var cancellation = new CancellationTokenSource();
+		cancellation.Cancel();
+
+		var exception = await Assert.ThrowsAnyAsync<OperationCanceledException>(() =>
+			AndroidEmulatorBackend.TryRunShutdownCommandAsync(
+				token => Task.Delay(Timeout.InfiniteTimeSpan, token),
+				TimeSpan.FromSeconds(1),
+				cancellation.Token));
+
+		Assert.Equal(cancellation.Token, exception.CancellationToken);
+	}
+
+	[Fact]
+	public async Task ShutdownExitWait_CompletesOnlyAfterTerminalState()
+	{
+		var probes = 0;
+
+		await AndroidEmulatorBackend.WaitForTerminalStateAsync(
+			"test_avd",
+			() =>
+			{
+				probes++;
+				return AndroidEmulatorBackend.IsShutdownTerminal(
+					discoveryEntryRemoved: probes >= 2,
+					processExited: probes >= 3);
+			},
+			TimeSpan.FromSeconds(1),
+			TimeSpan.FromMilliseconds(1),
+			CancellationToken.None);
+
+		Assert.Equal(3, probes);
+	}
+
+	[Fact]
+	public async Task ShutdownExitWait_ThrowsWhileEmulatorRemainsAlive()
+	{
+		var exception = await Assert.ThrowsAsync<TimeoutException>(() =>
+			AndroidEmulatorBackend.WaitForTerminalStateAsync(
+				"test_avd",
+				() => false,
+				TimeSpan.FromMilliseconds(20),
+				TimeSpan.FromMilliseconds(1),
+				CancellationToken.None));
+
+		Assert.Contains("did not shut down", exception.Message, StringComparison.Ordinal);
+	}
+
 	private static IReadOnlyList<string> GetAvdManagerArguments(ProcessRequest request)
 	{
 		if (request.Environment is null)
