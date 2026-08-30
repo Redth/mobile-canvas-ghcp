@@ -1,0 +1,11 @@
+{
+  "mcpServers": {
+    "mobile-canvas": {
+      "type": "stdio",
+      "command": "node",
+      "args": [
+        "/home/kabuteyy/.antigravity-ide/extensions/redth.mobile-canvas-0.1.16-linux-x64/dist/scripts/mcp-standalone.mjs"
+      ]
+    }
+  }
+}
