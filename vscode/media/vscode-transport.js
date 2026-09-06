@@ -2,10 +2,12 @@
   const vscode = acquireVsCodeApi();
   const pending = new Map();
   const sockets = new Map();
+  const BOOTSTRAP_TIMEOUT_MS = 20_000;
   let context = null;
   let contextPromise = null;
   let resolveContext = null;
   let rejectContext = null;
+  let bootstrapTimer = null;
   let visibilityHandler = null;
   let refreshHandler = null;
   let automationHandler = null;
@@ -14,6 +16,22 @@
 
   function id() {
     return crypto.randomUUID();
+  }
+
+  function clearBootstrapTimer() {
+    if (bootstrapTimer !== null) {
+      if (typeof clearTimeout === "function") {
+        clearTimeout(bootstrapTimer);
+      }
+      bootstrapTimer = null;
+    }
+  }
+
+  function setBootstrapTimer(callback, ms) {
+    if (typeof setTimeout === "function") {
+      return setTimeout(callback, ms);
+    }
+    return null;
   }
 
   function request(message) {
@@ -73,12 +91,15 @@
     const message = event.data;
     switch (message.type) {
       case "context":
+        clearBootstrapTimer();
         context = { sessionId: message.sessionId, instanceId: message.instanceId };
         resolveContext?.(context);
         resolveContext = null;
         rejectContext = null;
         break;
       case "fatal":
+        clearBootstrapTimer();
+        contextPromise = null;
         rejectContext?.(new Error(message.message));
         rejectContext = null;
         resolveContext = null;
@@ -139,6 +160,13 @@
         contextPromise = new Promise((resolve, reject) => {
           resolveContext = resolve;
           rejectContext = reject;
+          bootstrapTimer = setBootstrapTimer(() => {
+            bootstrapTimer = null;
+            contextPromise = null;
+            resolveContext = null;
+            rejectContext = null;
+            reject(new Error("Timed out waiting for Mobile Canvas host bridge to connect."));
+          }, BOOTSTRAP_TIMEOUT_MS);
           vscode.postMessage({ type: "ready" });
         });
       }

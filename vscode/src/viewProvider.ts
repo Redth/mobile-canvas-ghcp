@@ -57,7 +57,28 @@ export class MobileCanvasViewProvider implements vscode.WebviewViewProvider {
         vscode.Uri.joinPath(this.context.extensionUri, "media"),
       ],
     };
-    const runtime = await resolveMobileCanvas(this.context);
+    let runtime;
+    try {
+      runtime = await resolveMobileCanvas(this.context);
+    } catch (error) {
+      if (!this.lifecycle.isCurrent(generation)) {
+        return;
+      }
+      const message = error instanceof Error ? error.message : String(error);
+      this.output.appendLine(`Mobile Canvas runtime resolution failed: ${message}`);
+      void vscode.window.showErrorMessage(`Mobile Canvas: ${message}`);
+      const messageSubscription = webviewView.webview.onDidReceiveMessage(
+        (msg: WebviewMessage) => {
+          if (msg.type === "ready") {
+            void webviewView.webview.postMessage({ type: "fatal", message });
+          }
+        },
+      );
+      this.context.subscriptions.push(messageSubscription);
+      webviewView.webview.html = createWebviewHtml(this.context, webviewView.webview);
+      return;
+    }
+
     if (!this.lifecycle.isCurrent(generation)) {
       return;
     }
@@ -108,7 +129,11 @@ export class MobileCanvasViewProvider implements vscode.WebviewViewProvider {
       await vscode.commands.executeCommand(`${VIEW_ID}.focus`);
       return;
     }
-    await this.lifecycle.current?.restart();
+    if (!this.lifecycle.current) {
+      await this.resolveWebviewView(this.view);
+      return;
+    }
+    await this.lifecycle.current.restart();
     this.view.webview.html = createWebviewHtml(this.context, this.view.webview);
   }
 
