@@ -69,9 +69,10 @@ They use the authenticated extension-host bridge; no host cookie or bootstrap
 secret is exposed to the chat input or webview.
 
 VS Code's API for arbitrary custom context providers is still proposed, so the
-extension uses the stable attachable-tool API instead. The GitHub Copilot canvas
-SDK does not currently expose a composer attachment API; its equivalent device,
-screenshot, and UI-tree data remains available through canvas actions and MCP.
+extension uses the stable attachable-tool API instead. The GitHub App canvas uses
+the extension SDK's attachment push API for its `attach_screenshot` action, which
+adds the PNG to the next composer turn without changing the persistent
+`take_screenshot` artifact action.
 
 ## Local execution and remote workspaces
 
