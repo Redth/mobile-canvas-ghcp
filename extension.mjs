@@ -1,4 +1,5 @@
 import { execFile } from "node:child_process";
+import { readFile } from "node:fs/promises";
 import { fileURLToPath } from "node:url";
 import { sep } from "node:path";
 import { promisify } from "node:util";
@@ -43,6 +44,24 @@ async function runCli(args) {
 function contextArgs(ctx) {
   return ["--session", ctx.sessionId, "--instance", ctx.instanceId];
 }
+
+async function captureScreenshot(deviceId, ctx) {
+  const artifact = await runCli(["screenshot", deviceId, ...contextArgs(ctx)]);
+  if (!artifact?.path) {
+    throw new Error("Mobile Canvas did not return a screenshot artifact path.");
+  }
+  return readFile(artifact.path);
+}
+
+async function selectedDevice(ctx) {
+  const selection = await runCli(["devices", "selected", ...contextArgs(ctx)]);
+  if (selection?.hasSelection !== true || !selection.device?.id) {
+    throw new Error("Select a device in Mobile Canvas before attaching a screenshot.");
+  }
+  return selection.device;
+}
+
+let extensionSession;
 
 function targetAction(name, description, verb) {
   return {
@@ -361,6 +380,44 @@ const canvas = createCanvas({
       ]),
     },
     {
+      name: "attach_screenshot",
+      description:
+        "Capture the selected device and attach the PNG to the next Copilot conversation message.",
+      inputSchema: {
+        type: "object",
+        properties: {
+          deviceId: {
+            type: "string",
+            description: "Optional provider-qualified device ID; defaults to the selected device.",
+          },
+        },
+        additionalProperties: false,
+      },
+      handler: async (ctx) => {
+        const device = ctx.input?.deviceId
+          ? await runCli(["devices", "get", ctx.input.deviceId])
+          : await selectedDevice(ctx);
+        const bytes = await captureScreenshot(device.id, ctx);
+        const displayName = `${device.name || device.id}-screenshot.png`;
+        await extensionSession.extensions.sendAttachmentsToMessage({
+          instanceId: ctx.instanceId,
+          attachments: [
+            {
+              type: "blob",
+              data: bytes.toString("base64"),
+              mimeType: "image/png",
+              displayName,
+            },
+          ],
+        });
+        return {
+          attached: true,
+          deviceId: device.id,
+          displayName,
+        };
+      },
+    },
+    {
       name: "start_recording",
       description: "Start a bounded H.264 MP4 recording of a booted device.",
       inputSchema: {
@@ -424,4 +481,4 @@ const canvas = createCanvas({
 // tab in the desktop app draws its own glyph from the canvas type and ignores this.
 canvas.declaration.icon = "assets/icon.png";
 
-await joinSession({ canvases: [canvas] });
+extensionSession = await joinSession({ canvases: [canvas] });

@@ -105,7 +105,7 @@ and take over at any time.
 
 **Agent control**
 
-- 24 MCP tools mirroring the 24 canvas actions one-to-one.
+- Canvas actions and MCP tools for device discovery, lifecycle, input, UI, and media.
 - Every target-changing call returns the full device record, including the
   `udid`/serial you need to hand to a deploy command.
 - When an agent drives the device, the canvas shows an accent-coloured glow and
@@ -215,7 +215,7 @@ with `jq`.
 
 ## Agent tools
 
-All 24 tools are available both as canvas actions and as MCP tools named
+The device tools are available both as canvas actions and as MCP tools named
 `mobile_device_*`:
 
 | Group | Tools |
@@ -226,7 +226,10 @@ All 24 tools are available both as canvas actions and as MCP tools named
 | Media | `screenshot`, `recording_start`, `recording_stop`, `recording_status` |
 
 A typical agent flow is `list` → `select` → read `udid` from the result → deploy
-your app to that exact device → drive it with the input tools.
+your app to that exact device → drive it with the input tools. In the GitHub App,
+use the additional `attach_screenshot` canvas action after opening Mobile Canvas
+to place the current PNG in the next conversation composer turn; `screenshot`
+remains the persistent local-artifact action.
 
 ## VS Code integration
 
