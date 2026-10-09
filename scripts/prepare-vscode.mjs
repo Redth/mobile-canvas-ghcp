@@ -76,12 +76,13 @@ for (const relative of [
   "lib/runtime.mjs",
   "lib/runtime-assets.mjs",
   "lib/mcp-vscode-proxy.mjs",
+  "lib/ailoha",
   "scripts/mcp-vscode.mjs",
   "LICENSE",
 ]) {
   const destination = join(output, relative);
   mkdirSync(dirname(destination), { recursive: true });
-  cpSync(join(root, relative), destination);
+  cpSync(join(root, relative), destination, { recursive: true });
 }
 
 mkdirSync(join(root, ".build"), { recursive: true });
