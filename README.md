@@ -105,7 +105,10 @@ and take over at any time.
 
 **Agent control**
 
-- 24 MCP tools mirroring the 24 canvas actions one-to-one.
+- 24 canvas actions for common device operations, plus 61 MCP tools covering
+  device, app, file, diagnostics, settings, and hardware operations. See the
+  [compatibility baseline](docs/compatibility-baseline.md) for the exact names
+  and migration invariants.
 - Every target-changing call returns the full device record, including the
   `udid`/serial you need to hand to a deploy command.
 - When an agent drives the device, the canvas shows an accent-coloured glow and
@@ -317,6 +320,12 @@ attributes require LF text checkouts so clean snapshots are byte-stable across
 platforms. Ailoha uses the manifest to pin and verify imports while this
 repository remains the implementation source of truth. Pass `--require-clean`
 for an importable release snapshot.
+
+The [approved Ailoha integration roadmap](docs/ailoha-integration-roadmap.md)
+describes the intended engine migration; it is not a claim that the cutover has
+been implemented. The [compatibility baseline](docs/compatibility-baseline.md)
+records the current product identities, tool/action inventory, and behavior
+that migration adapters must preserve.
 
 Changing `src/` or `native/` requires the **Release runtimes** workflow. It builds
 each Native AOT RID on its native OS, publishes checksummed release assets, and

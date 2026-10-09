@@ -10,12 +10,18 @@ const extensionRoot = join(dirname(fileURLToPath(import.meta.url)), "..");
 test("prepared extension assets contain the shared runtime and UI", () => {
   for (const relative of [
     "dist/web/index.html",
+    "dist/web/ailoha-video-protocol.js",
+    "dist/web/ailoha-video-receiver.js",
     "dist/web/canvas-state.js",
     "dist/web/create-device-options.js",
     "dist/web/device-canvas.js",
     "dist/lib/runtime.mjs",
     "dist/lib/runtime-assets.mjs",
     "dist/lib/mcp-vscode-proxy.mjs",
+    "dist/lib/ailoha/index.mjs",
+    "dist/lib/ailoha/index.d.mts",
+    "dist/lib/ailoha/errors.mjs",
+    "dist/lib/ailoha/protocol.mjs",
     "dist/scripts/mcp-vscode.mjs",
     "dist/runtimes/manifest.json",
     "dist/LICENSE",

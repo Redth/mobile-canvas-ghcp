@@ -10,6 +10,12 @@ import {
 } from "../../scripts/ailoha-source-manifest.mjs";
 
 const root = join(dirname(fileURLToPath(import.meta.url)), "..", "..");
+const compatibilityBaseline = JSON.parse(
+  readFileSync(
+    join(root, "tests", "scripts", "ailoha-compatibility-baseline.json"),
+    "utf8",
+  ),
+);
 
 test("Ailoha source manifest covers the complete product source", () => {
   const manifest = buildAilohaSourceManifest();
@@ -29,8 +35,11 @@ test("Ailoha source manifest covers the complete product source", () => {
   );
   assert.ok(manifest.surfaces.backendOperations.length > 40);
   assert.ok(manifest.surfaces.httpRoutes.length > 50);
-  assert.ok(manifest.surfaces.mcpTools.length > 30);
-  assert.ok(manifest.surfaces.canvasActions.length > 20);
+  assert.deepEqual(manifest.surfaces.mcpTools, compatibilityBaseline.mcpTools);
+  assert.deepEqual(
+    manifest.surfaces.canvasActions,
+    compatibilityBaseline.canvasActions,
+  );
 
   for (const required of [
     "extension.mjs",

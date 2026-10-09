@@ -5,6 +5,12 @@ the same MCP tools used by the GitHub Copilot canvas. Marketplace target package
 include the matching native runtime; the universal fallback downloads and
 verifies its pinned runtime on first use.
 
+The [approved Ailoha integration roadmap](ailoha-integration-roadmap.md) keeps
+VS Code and the GitHub canvas as hosts of the same Mobile Canvas product. The
+[compatibility baseline](compatibility-baseline.md) records the extension's
+current public IDs and behavior that an engine migration must preserve; Ailoha
+is not yet the runtime behind this extension.
+
 ## Install
 
 Install **Mobile Canvas** from the
@@ -140,8 +146,11 @@ stages the shared assets before opening an Extension Development Host.
 ```text
 vscode/dist/
   web/
+    ailoha-video-protocol.js
+    ailoha-video-receiver.js
   lib/runtime.mjs
   lib/mcp-vscode-proxy.mjs
+  lib/ailoha/
   scripts/mcp-vscode.mjs
   runtimes/
   LICENSE
@@ -150,6 +159,13 @@ vscode/dist/
 The extension imports the same content-addressed runtime resolver as the Copilot
 plugin. The matching archive is downloaded, extracted, and checksum-verified on
 first use.
+
+The shared `lib/ailoha/` lifecycle client, ALHV parser, and owner-bound receiver
+are original Mobile Canvas consumer foundations, staged identically in both
+hosts but not selected by the production engine. They do not bundle an Ailoha
+runtime or remove the licensing
+and public-distribution gates described in the
+[integration roadmap](ailoha-integration-roadmap.md).
 
 The MCP definition uses the positional VS Code API constructor:
 

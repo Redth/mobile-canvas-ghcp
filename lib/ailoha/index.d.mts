@@ -1,0 +1,233 @@
+export const TARGET_HOST_PROFILE: "ailoha.target-host/v1";
+
+export interface TargetHostConnection {
+  origin: string;
+  hostId: string;
+  profile: typeof TARGET_HOST_PROFILE;
+  controlCredential: string;
+}
+
+export type PublicConnection = Readonly<Omit<TargetHostConnection, "controlCredential">>;
+
+export interface RequestOptions {
+  signal?: AbortSignal;
+}
+
+export interface ClientOptions extends RequestOptions {
+  timeoutMs?: number;
+  maxResponseBytes?: number;
+}
+
+export interface Capability {
+  id: string;
+  version: number;
+  features?: string[];
+}
+
+export interface HostStatus {
+  profile: typeof TARGET_HOST_PROFILE;
+  hostId: string;
+  version: string;
+  state: "ready" | "degraded" | "maintenance";
+  capabilities: Capability[];
+}
+
+export interface Provider {
+  providerId: string;
+  name: string;
+  version: string;
+  state: "ready" | "degraded" | "unavailable" | "disabled";
+  capabilities: Capability[];
+  description?: string;
+}
+
+export interface Bounds {
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+  coordinate?: "window" | "screen";
+  [extension: string]: unknown;
+}
+
+export interface Surface {
+  surfaceId: string;
+  kind: "display" | "window" | "webview" | "remote-display";
+  bounds: Bounds;
+  geometryRevision: number;
+  capabilities: Capability[];
+  name?: string;
+  pixelDensity?: number;
+  orientation?: "portrait" | "landscape" | "unknown";
+}
+
+export interface NativeIdentity {
+  platform: string;
+  nativeId: string;
+  serial?: string;
+  provider?: string;
+  modelIdentifier?: string;
+  osVersion?: string;
+  isVirtual?: boolean;
+}
+
+export type TargetStatus =
+  | "provisioning" | "stopped" | "starting" | "running" | "stopping"
+  | "rebooting" | "resetting" | "deleting" | "error";
+
+export interface Target {
+  targetId: string;
+  providerId: string;
+  targetTypeId: string;
+  status: TargetStatus;
+  surfaces: Surface[];
+  runtimeId?: string;
+  templateId?: string;
+  name?: string;
+  createdAt?: string | null;
+  updatedAt?: string;
+  labels?: Record<string, string>;
+  nativeIdentity?: NativeIdentity;
+}
+
+export interface TargetListOptions extends RequestOptions {
+  providerId?: string;
+  status?: TargetStatus;
+}
+
+export type JsonValue = string | number | boolean | null | JsonValue[] | JsonObject;
+export interface JsonObject {
+  [key: string]: JsonValue;
+}
+
+export interface TargetCreateRequest {
+  providerId: string;
+  targetTypeId: string;
+  runtimeId?: string;
+  templateId?: string;
+  name?: string;
+  labels?: Record<string, string>;
+  configuration?: JsonObject;
+  start?: boolean;
+}
+
+export interface LifecycleRequest {
+  reason?: string;
+  options?: JsonObject;
+  requestId?: string;
+}
+
+export interface LifecycleOptions extends RequestOptions {
+  request?: LifecycleRequest;
+}
+
+/** A caller-side gate, not evidence that user consent has been obtained. */
+export interface ConfirmationOptions extends RequestOptions {
+  confirmed: true;
+}
+
+export interface ConfirmedLifecycleOptions extends LifecycleOptions, ConfirmationOptions {}
+
+export type OperationStatus =
+  | "queued" | "running" | "succeeded" | "failed" | "cancelling" | "cancelled";
+
+export interface Operation {
+  operationId: string;
+  kind: string;
+  status: OperationStatus;
+  destructive: boolean;
+  createdAt: string;
+  targetId?: string;
+  providerId?: string;
+  requestId?: string;
+  progress?: number;
+  startedAt?: string;
+  completedAt?: string;
+  result?: JsonObject;
+  artifactIds?: string[];
+  problem?: ProblemDetails;
+  cancelRequested?: boolean;
+  cancellationProblem?: ProblemDetails;
+  cleanupProblem?: ProblemDetails;
+}
+
+export interface OperationListOptions extends RequestOptions {
+  targetId?: string;
+  status?: OperationStatus;
+}
+
+export interface OperationWaitOptions extends RequestOptions {
+  timeoutMs?: number;
+  pollIntervalMs?: number;
+}
+
+export interface SucceededOperation extends Operation {
+  status: "succeeded";
+}
+
+export interface ProblemDetails {
+  readonly type: string;
+  readonly title: string;
+  readonly status: number;
+  readonly detail?: string;
+  readonly instance?: string;
+  readonly errorCode?: string;
+  readonly [extension: string]: unknown;
+}
+
+export type ProtocolErrorCode =
+  | "invalid_connection" | "invalid_options" | "invalid_identifier"
+  | "invalid_request" | "confirmation_required" | "request_too_large"
+  | "incompatible_profile" | "host_identity_mismatch" | "target_identity_mismatch"
+  | "operation_identity_mismatch" | "operation_failed" | "operation_cancelled"
+  | "invalid_response" | "credential_exposure" | "redirect_rejected"
+  | "response_too_large" | "timeout" | "cancelled" | "transport_error"
+  | "client_disposed" | "request_limit" | "http_error";
+
+export interface ProtocolErrorResult {
+  name: "AilohaProtocolError";
+  code: ProtocolErrorCode;
+  message: string;
+  status?: number;
+  problem?: ProblemDetails;
+  operationId?: string;
+  operation?: Operation;
+}
+
+export class AilohaProtocolError extends Error {
+  private constructor();
+  readonly name: "AilohaProtocolError";
+  readonly code: ProtocolErrorCode;
+  readonly status?: number;
+  readonly problem?: ProblemDetails;
+  readonly operationId?: string;
+  readonly operation?: Operation;
+  toJSON(): ProtocolErrorResult;
+}
+
+export interface TargetHostClient {
+  readonly connection: PublicConnection;
+  getHostStatus(options?: RequestOptions): Promise<HostStatus>;
+  listProviders(options?: RequestOptions): Promise<Provider[]>;
+  listTargets(options?: TargetListOptions): Promise<Target[]>;
+  getTarget(targetId: string, options?: RequestOptions): Promise<Target>;
+  getTargetCapabilities(targetId: string, options?: RequestOptions): Promise<Capability[]>;
+  listTargetSurfaces(targetId: string, options?: RequestOptions): Promise<Surface[]>;
+  createTarget(request: TargetCreateRequest, options?: RequestOptions): Promise<Operation>;
+  startTarget(targetId: string, options?: LifecycleOptions): Promise<Operation>;
+  stopTarget(targetId: string, options?: LifecycleOptions): Promise<Operation>;
+  rebootTarget(targetId: string, options?: LifecycleOptions): Promise<Operation>;
+  resetTarget(targetId: string, options: ConfirmedLifecycleOptions): Promise<Operation>;
+  deleteTarget(targetId: string, options: ConfirmationOptions): Promise<Operation>;
+  listOperations(options?: OperationListOptions): Promise<Operation[]>;
+  getOperation(operationId: string, options?: RequestOptions): Promise<Operation>;
+  cancelOperation(operationId: string, options?: RequestOptions): Promise<Operation>;
+  waitForOperation(operationId: string, options?: OperationWaitOptions): Promise<SucceededOperation>;
+  toJSON(): PublicConnection;
+  dispose(): void;
+}
+
+export function connectTargetHost(
+  connection: TargetHostConnection,
+  options?: ClientOptions,
+): Promise<TargetHostClient>;

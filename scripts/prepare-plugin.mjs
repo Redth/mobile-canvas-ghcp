@@ -39,6 +39,7 @@ for (const relative of [
   "web",
   "lib/runtime.mjs",
   "lib/runtime-assets.mjs",
+  "lib/ailoha",
   "scripts/mcp.mjs",
 ]) {
   const destination = join(output, relative);
