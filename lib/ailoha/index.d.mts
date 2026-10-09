@@ -95,6 +95,76 @@ export interface TargetListOptions extends RequestOptions {
   status?: TargetStatus;
 }
 
+export type JsonValue = string | number | boolean | null | JsonValue[] | JsonObject;
+export interface JsonObject {
+  [key: string]: JsonValue;
+}
+
+export interface TargetCreateRequest {
+  providerId: string;
+  targetTypeId: string;
+  runtimeId?: string;
+  templateId?: string;
+  name?: string;
+  labels?: Record<string, string>;
+  configuration?: JsonObject;
+  start?: boolean;
+}
+
+export interface LifecycleRequest {
+  reason?: string;
+  options?: JsonObject;
+  requestId?: string;
+}
+
+export interface LifecycleOptions extends RequestOptions {
+  request?: LifecycleRequest;
+}
+
+/** A caller-side gate, not evidence that user consent has been obtained. */
+export interface ConfirmationOptions extends RequestOptions {
+  confirmed: true;
+}
+
+export interface ConfirmedLifecycleOptions extends LifecycleOptions, ConfirmationOptions {}
+
+export type OperationStatus =
+  | "queued" | "running" | "succeeded" | "failed" | "cancelling" | "cancelled";
+
+export interface Operation {
+  operationId: string;
+  kind: string;
+  status: OperationStatus;
+  destructive: boolean;
+  createdAt: string;
+  targetId?: string;
+  providerId?: string;
+  requestId?: string;
+  progress?: number;
+  startedAt?: string;
+  completedAt?: string;
+  result?: JsonObject;
+  artifactIds?: string[];
+  problem?: ProblemDetails;
+  cancelRequested?: boolean;
+  cancellationProblem?: ProblemDetails;
+  cleanupProblem?: ProblemDetails;
+}
+
+export interface OperationListOptions extends RequestOptions {
+  targetId?: string;
+  status?: OperationStatus;
+}
+
+export interface OperationWaitOptions extends RequestOptions {
+  timeoutMs?: number;
+  pollIntervalMs?: number;
+}
+
+export interface SucceededOperation extends Operation {
+  status: "succeeded";
+}
+
 export interface ProblemDetails {
   readonly type: string;
   readonly title: string;
@@ -107,7 +177,9 @@ export interface ProblemDetails {
 
 export type ProtocolErrorCode =
   | "invalid_connection" | "invalid_options" | "invalid_identifier"
+  | "invalid_request" | "confirmation_required" | "request_too_large"
   | "incompatible_profile" | "host_identity_mismatch" | "target_identity_mismatch"
+  | "operation_identity_mismatch" | "operation_failed" | "operation_cancelled"
   | "invalid_response" | "credential_exposure" | "redirect_rejected"
   | "response_too_large" | "timeout" | "cancelled" | "transport_error"
   | "client_disposed" | "request_limit" | "http_error";
@@ -118,6 +190,8 @@ export interface ProtocolErrorResult {
   message: string;
   status?: number;
   problem?: ProblemDetails;
+  operationId?: string;
+  operation?: Operation;
 }
 
 export class AilohaProtocolError extends Error {
@@ -126,6 +200,8 @@ export class AilohaProtocolError extends Error {
   readonly code: ProtocolErrorCode;
   readonly status?: number;
   readonly problem?: ProblemDetails;
+  readonly operationId?: string;
+  readonly operation?: Operation;
   toJSON(): ProtocolErrorResult;
 }
 
@@ -137,6 +213,16 @@ export interface TargetHostClient {
   getTarget(targetId: string, options?: RequestOptions): Promise<Target>;
   getTargetCapabilities(targetId: string, options?: RequestOptions): Promise<Capability[]>;
   listTargetSurfaces(targetId: string, options?: RequestOptions): Promise<Surface[]>;
+  createTarget(request: TargetCreateRequest, options?: RequestOptions): Promise<Operation>;
+  startTarget(targetId: string, options?: LifecycleOptions): Promise<Operation>;
+  stopTarget(targetId: string, options?: LifecycleOptions): Promise<Operation>;
+  rebootTarget(targetId: string, options?: LifecycleOptions): Promise<Operation>;
+  resetTarget(targetId: string, options: ConfirmedLifecycleOptions): Promise<Operation>;
+  deleteTarget(targetId: string, options: ConfirmationOptions): Promise<Operation>;
+  listOperations(options?: OperationListOptions): Promise<Operation[]>;
+  getOperation(operationId: string, options?: RequestOptions): Promise<Operation>;
+  cancelOperation(operationId: string, options?: RequestOptions): Promise<Operation>;
+  waitForOperation(operationId: string, options?: OperationWaitOptions): Promise<SucceededOperation>;
   toJSON(): PublicConnection;
   dispose(): void;
 }

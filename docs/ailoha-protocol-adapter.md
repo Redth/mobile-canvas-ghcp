@@ -1,4 +1,4 @@
-# Ailoha protocol adapter foundation
+# Ailoha protocol consumer
 
 `lib/ailoha/index.mjs` is an original Mobile Canvas-owned, host-side consumer of
 the Target Host v1 interface. It is opt-in: both product hosts still use the
@@ -49,7 +49,9 @@ projections are not trusted connection sources.
 The public API is `connectTargetHost`, `TARGET_HOST_PROFILE`, and
 `AilohaProtocolError`; adjacent `index.d.mts` supplies TypeScript declarations.
 Clients expose `getHostStatus`, `listProviders`, `listTargets`,
-`getTarget`, `getTargetCapabilities`, `listTargetSurfaces`, and `dispose`.
+`getTarget`, `getTargetCapabilities`, `listTargetSurfaces`, `createTarget`,
+`startTarget`, `stopTarget`, `rebootTarget`, `resetTarget`, `deleteTarget`,
+`listOperations`, `getOperation`, `cancelOperation`, `waitForOperation`, and `dispose`.
 `listTargets` accepts only optional `providerId`, `status`, and `signal`;
 other reads accept only `signal`. No arbitrary API paths or caller headers exist.
 
@@ -74,13 +76,14 @@ The HTTP transport never follows redirects or consults proxy environment
 settings. It pins the request authority and Origin to the supplied literal
 loopback endpoint. Response headers are capped at 16 KiB; bodies at 2 MiB by
 default (configurable up to 8 MiB); total request time, including streaming, at
-15 seconds by default (configurable up to 60 seconds). At most eight reads are
-in flight per client. Extensible response data is limited to 64 nesting levels.
+15 seconds by default (configurable up to 60 seconds). At most eight requests
+or operation waits are admitted per client. A wait retains its slot between
+polls and never issues parallel polls. Extensible response data is limited to 64 nesting levels.
 Cancellation and disposal destroy pending requests;
 disposal never stops the external host or its targets. Compressed responses are
 rejected rather than risking unbounded decompression.
 
-Non-200 successes, malformed JSON/UTF-8, invalid resource shapes, mismatched
+Unexpected success statuses, malformed JSON/UTF-8, invalid resource shapes, mismatched
 identities, non-JSON errors, and transport failures remain explicit failures.
 `AilohaProtocolError` has a stable `code`, optional HTTP `status`, and sanitized
 `problem` for valid `application/problem+json` errors. Problem Details preserve
@@ -89,6 +92,88 @@ credential-bearing fields. Raw transport exceptions, headers, and response
 bodies are never attached as causes or included in messages. Successful resource
 responses containing protected connection data are rejected, not rewritten.
 Serializing or inspecting a client never exposes its private credential.
+
+## Target lifecycle and operations
+
+Mutation methods **submit work**, returning a validated `Operation`, not a
+success flag or completed target. Create, lifecycle, target deletion, and
+operation cancellation require HTTP `202` with an operation JSON body.
+Reads still require `200`. The accepted `Location` must identify the same
+opaque operation ID under `/api/v1/operations/`, relative to or on the selected
+origin. It is validated, never followed. Both ordinary and fully escaped path
+segments are supported without decoding an ID into a native device selector.
+The host supplies `Retry-After: 1`; the explicit wait defaults to one-second polls.
+
+`createTarget(request, { signal }?)` posts to `/api/v1/targets`. The request
+requires `providerId` and `targetTypeId`; optional fields are `runtimeId`,
+`templateId`, `name`, string-valued `labels`, JSON-object `configuration`, and
+boolean `start`. The client snapshots these fields without synthesizing defaults.
+**Omitting `start` preserves the existing server default of `true`; explicit
+`false` requests stopped creation.** No separate start action is issued.
+Create is itself explicitly requested and its operation is destructive; it does
+not use the reset/delete confirmation gate.
+
+`startTarget`, `stopTarget`, and `rebootTarget` post to
+`/api/v1/targets/{encoded targetId}/actions/{action}`. Their options accept only
+`signal` and optional `request`, whose wire fields are `reason`, JSON-object
+`options`, and opaque `requestId`. An omitted request sends no body; `{}` remains
+an explicitly empty body. `resetTarget` has the same shape plus mandatory
+`confirmed: true`. `deleteTarget(targetId, { confirmed: true, signal? })` uses
+`DELETE /api/v1/targets/{encoded targetId}` without a body.
+
+Reset and deletion reject missing, inherited, false, or non-boolean confirmation
+**before any network IO**. `confirmed` is a consumer-side gate and is never sent
+to the server. It does not claim user consent has been obtained: the eventual
+product adapter must obtain and scope the real confirmation before setting it.
+No UI/MCP adapter or public compatibility tool is changed by this slice.
+
+Mutation bodies are strict JSON snapshots, capped at 64 KiB of serialized UTF-8
+and 64 nesting levels. Unknown request fields, non-JSON values, accessors,
+malformed identifiers, and protected connection data are rejected before IO.
+There are no arbitrary paths, caller headers, mutation retries, or legacy
+fallbacks, including after an uncertain transport outcome.
+
+`listOperations({ targetId?, status?, signal? })` reads a bare operation array;
+`getOperation(operationId, { signal }?)` reads one matching operation.
+`cancelOperation(operationId, { signal }?)` uses `DELETE` without a body and
+returns the current accepted operation. `cancelRequested: true` acknowledges a
+request only. `queued`, `running`, and `cancelling` are nonterminal; only the
+provider's eventual `succeeded`, `failed`, or `cancelled` is authoritative.
+Cancellation may lose a race to normal success or failure. Failed cancellation
+delivery leaves the operation pollable, with `cancellationProblem`; secondary
+creation cleanup uses `cleanupProblem`. Neither replaces `status` or the
+primary `problem`.
+
+```js
+const submitted = await client.createTarget({
+  providerId,
+  targetTypeId,
+  start: false,
+}, { signal });
+const completed = await client.waitForOperation(submitted.operationId, {
+  signal, timeoutMs: 30_000, pollIntervalMs: 1000,
+});
+// Only this helper's resolved result has status "succeeded".
+```
+
+`waitForOperation` is explicit and read-only. It resolves a `SucceededOperation`
+only at `succeeded`, rejects `failed` as `operation_failed`, and rejects terminal
+`cancelled` as `operation_cancelled`. Its total budget includes HTTP polling and
+idle delays: by default the client's request timeout, configurable from 1 to
+60,000 ms; each poll also honors the client's shorter request timeout. Poll
+intervals are bounded from 1 to 60,000 ms. Timeout, caller abort, and disposal
+stop local reads/timers only; they never cancel the external operation.
+
+Operation errors retain `operationId`, the latest validated `operation` when
+available, and sanitized primary Problem Details. HTTP errors remain `http_error`
+(including explicit `501` unsupported-capability evidence); cancellation and
+cleanup problems remain separate in the operation DTO. A valid accepted
+`Location` retains the recovery ID even if the body later times out or truncates,
+without claiming completion or replaying the mutation. Operation results and
+identities containing protected connection data are rejected; nested Problem
+Details are validated and redacted without discarding context or extensions.
+Optional operation fields remain absent when omitted, including `cancelRequested`.
+Operation kinds remain nonempty extensible strings for read/list.
 
 ## Both product hosts
 
@@ -102,14 +187,15 @@ resource DTOs and sanitized errors may cross a renderer boundary.
 Both packages also stage the original browser-safe
 `web/ailoha-video-protocol.js` ALHV/1 parser. Prepared-asset tests import each
 host's actual client and parser copies, compare them byte-for-byte with shared
-source, and exercise authenticated fake-loopback reads, sanitized errors, and
+source, and exercise authenticated fake-loopback reads, lifecycle submissions,
+confirmation gates, operation cancellation/terminal waits, sanitized errors, and
 zero-copy frame parsing. Package verifiers require these files. The VS Code
 unit-test command prepares the GitHub thin plugin with the existing packaging
 script; its script checks also validate `index.d.mts` with TypeScript.
 
 Remaining integration includes a trusted discovery/connection owner, selection
 and execution-context adapters, existing-action compatibility mapping,
-streaming/input transports, lifecycle/runtime supervision, and full device
+streaming/input transports, product lifecycle adapters/runtime supervision, and full device
 workflow parity in both hosts. Licensing and verified public distribution are
 separate gates. No Ailoha implementation, UI, skill, or schema files are vendored.
 
@@ -125,4 +211,5 @@ Focused checks use only Node and fake loopback HTTP servers:
 node scripts/prepare-plugin.mjs --thin
 node scripts/prepare-vscode.mjs --thin
 node --test tests/scripts/ailoha-client.test.mjs tests/web/ailoha-video-protocol.test.mjs vscode/test/prepared-assets.test.mjs
+vscode/node_modules/.bin/tsc --noEmit --strict --target ES2022 --module Node16 --moduleResolution Node16 lib/ailoha/index.d.mts tests/scripts/ailoha-client-types.mts
 ```
