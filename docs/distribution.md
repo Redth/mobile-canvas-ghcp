@@ -10,6 +10,16 @@ new runtime/client/skill dependencies must be exact, public, tested artifacts,
 and distribution rights must be confirmed independently. Ailoha is not yet a
 production dependency of this package.
 
+The current readiness check found `microsoft/ailoha` private, with no anonymous
+Target Host artifact/spec available. The anonymously resolvable `@ailoha/cli`
+`0.2.4` and its seven native packages predate Target Host/`targets`, and the
+`Ailoha.Targets.Client` NuGet index returns 404. These are concrete
+availability blockers, not merely a future packaging preference. Do not direct
+users to private raw/spec or installer URLs as normal setup. Original
+Mobile Canvas consumer code can be implemented and tested against documented
+contracts, but default runtime cutover requires a public versioned engine
+release and independent licensing authorization.
+
 ## What a plugin install actually does
 
 A Copilot plugin install is a **plain file copy**. Verified against a real

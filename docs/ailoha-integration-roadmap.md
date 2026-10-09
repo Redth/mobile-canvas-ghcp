@@ -154,6 +154,24 @@ not require a sibling checkout, private feed/registry credential, local SDK
 build, `file:` dependency, or .NET SDK for device runtime use. Release
 publication remains a separate decision.
 
+**Current availability blocker (verified 2026-10-09):** the
+`microsoft/ailoha` GitHub repository is private (`private: true`,
+`visibility: private`). Anonymous registry checks resolve `@ailoha/cli`
+`0.2.4` and its seven native packages, but that release predates Target Host
+and `targets` and is not the required engine distribution. The
+`Ailoha.Targets.Client` NuGet index returns 404, and no anonymous, publicly
+available Target Host artifact or specification was found. Therefore Ailoha is
+not presently an available default runtime dependency. Do not document private
+raw/spec or installer URLs as normal publicly accessible setup. A public,
+versioned engine release with verified artifacts is a prerequisite for default
+runtime cutover.
+
+Mobile Canvas-owned consumer/adaptor code may be implemented and tested against
+documented contracts without copying Ailoha code. That does not make the
+engine available for normal installs or authorize redistribution; default
+runtime cutover remains blocked until both the public-artifact prerequisite and
+the independent licensing gate are resolved.
+
 **Licensing is unresolved and blocks Ailoha source changes and redistribution.**
 Mobile Canvas is MIT; Ailoha has a restrictive source-available license. No
 authorization to modify or redistribute Ailoha-owned source, UI, schemas,
