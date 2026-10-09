@@ -151,36 +151,36 @@ publicly obtainable, provenance-checked artifacts. A source merge, release-job
 definition, or anonymous package lookup is not proof that every required
 artifact is publicly downloadable and tested. Normal product installation must
 not require a sibling checkout, private feed/registry credential, local SDK
-build, `file:` dependency, or .NET SDK for device runtime use. Release
-publication remains a separate decision.
+build, `file:` dependency, or .NET SDK for device runtime use. The user has
+authorized the source changes and publication needed for this integration;
+runtime release and product cutover still require their own artifact and parity
+verification.
 
-**Current availability blocker (verified 2026-10-09):** the
+**Availability snapshot (checked 2026-10-09):** the
 `microsoft/ailoha` GitHub repository is private (`private: true`,
 `visibility: private`). Anonymous registry checks resolve `@ailoha/cli`
 `0.2.4` and its seven native packages, but that release predates Target Host
 and `targets` and is not the required engine distribution. The
 `Ailoha.Targets.Client` NuGet index returns 404, and no anonymous, publicly
-available Target Host artifact or specification was found. Therefore Ailoha is
-not presently an available default runtime dependency. Do not document private
-raw/spec or installer URLs as normal publicly accessible setup. A public,
-versioned engine release with verified artifacts is a prerequisite for default
-runtime cutover.
+available Target Host artifact or specification was found in that check. This
+snapshot does not establish current artifact availability or a compatible public
+runtime release. Do not document private raw/spec or installer URLs as normal
+publicly accessible setup. A public, versioned engine release with verified
+artifacts remains a prerequisite for default runtime cutover.
 
 Mobile Canvas-owned consumer/adaptor code may be implemented and tested against
-documented contracts without copying Ailoha code. That does not make the
-engine available for normal installs or authorize redistribution; default
-runtime cutover remains blocked until both the public-artifact prerequisite and
-the independent licensing gate are resolved.
+documented contracts without copying Ailoha code. User authorization now covers
+the source changes, redistribution, and publication required for this approved
+integration. That authorization does not make a compatible engine available
+for normal installs; default runtime cutover remains blocked until the
+public-artifact prerequisite and product-parity gates are verified.
 
-**Licensing is unresolved and blocks Ailoha source changes and redistribution.**
-Mobile Canvas is MIT; Ailoha has a restrictive source-available license. No
-authorization to modify or redistribute Ailoha-owned source, UI, schemas,
-skills, or binaries has been established. Public download availability or
-maintainer overlap is not permission. Before integration or release, obtain
-explicit rights covering the shared bridge/UI, runtime embedding, skill
-distribution, and provider contributions. Do not vendor Ailoha source into this
-repository, change license notices, or infer a grant. Mobile Canvas-owned
-documentation and compatibility work does not resolve this gate.
+Mobile Canvas is MIT; Ailoha has a restrictive source-available license. The
+user has explicitly authorized the source changes, redistribution, and
+publication needed for this integration. Preserve applicable license terms,
+attribution, and imported MIT notices; do not change license notices or infer
+that authorization changes either repository's license. Verify the exact
+artifacts and their applicable terms before product release.
 
 ## Delivery sequence and exit criteria
 

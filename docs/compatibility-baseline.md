@@ -227,9 +227,10 @@ MCP tool implementations and generator for current schemas and behavior.
   build, or .NET SDK runtime prerequisite.
 - Any new Ailoha production dependency must be an exact, publicly downloadable,
   tested artifact with provenance verified. Distribution rights must be
-  confirmed independently; public availability is not a license grant. The
-  current unresolved Ailoha rights gate blocks source modification and
-  redistribution.
+  respected and the artifact's applicable terms verified; public availability
+  alone is not a license grant. The user has authorized the source changes,
+  redistribution, and publication needed for this integration, but that does
+  not establish compatible public runtime availability or product parity.
 
 ## Source of truth
 

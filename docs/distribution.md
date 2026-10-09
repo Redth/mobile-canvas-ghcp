@@ -7,18 +7,18 @@ verified, and how the Copilot and VS Code hosts obtain the matching runtime.
 Any future Ailoha integration is subject to the
 [approved roadmap's distribution and licensing gates](ailoha-integration-roadmap.md#runtime-distribution-and-licensing-gates):
 new runtime/client/skill dependencies must be exact, public, tested artifacts,
-and distribution rights must be confirmed independently. Ailoha is not yet a
-production dependency of this package.
+and their availability and applicable terms must be verified. The user has
+authorized the source changes and publication needed for this integration;
+Ailoha is not yet a production dependency of this package.
 
-The current readiness check found `microsoft/ailoha` private, with no anonymous
-Target Host artifact/spec available. The anonymously resolvable `@ailoha/cli`
-`0.2.4` and its seven native packages predate Target Host/`targets`, and the
-`Ailoha.Targets.Client` NuGet index returns 404. These are concrete
-availability blockers, not merely a future packaging preference. Do not direct
-users to private raw/spec or installer URLs as normal setup. Original
-Mobile Canvas consumer code can be implemented and tested against documented
-contracts, but default runtime cutover requires a public versioned engine
-release and independent licensing authorization.
+The availability check dated 2026-10-09 found `microsoft/ailoha` private, with
+no anonymous Target Host artifact/spec available. The anonymously resolvable
+`@ailoha/cli` `0.2.4` and its seven native packages predate Target Host/`targets`,
+and the `Ailoha.Targets.Client` NuGet index returned 404. This dated snapshot
+does not establish current artifact availability or a compatible public runtime
+release. Do not direct users to private raw/spec or installer URLs as normal
+setup. Default runtime cutover still requires a publicly obtainable, compatible
+versioned engine, verified applicable terms, and product parity.
 
 ## What a plugin install actually does
 
