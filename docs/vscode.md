@@ -147,6 +147,7 @@ stages the shared assets before opening an Extension Development Host.
 vscode/dist/
   web/
     ailoha-video-protocol.js
+    ailoha-video-receiver.js
   lib/runtime.mjs
   lib/mcp-vscode-proxy.mjs
   lib/ailoha/
@@ -159,9 +160,10 @@ The extension imports the same content-addressed runtime resolver as the Copilot
 plugin. The matching archive is downloaded, extracted, and checksum-verified on
 first use.
 
-The shared `lib/ailoha/` read client and ALHV parser are original Mobile Canvas
-consumer foundations, staged identically in both hosts but not selected by the
-production engine. They do not bundle an Ailoha runtime or remove the licensing
+The shared `lib/ailoha/` lifecycle client, ALHV parser, and owner-bound receiver
+are original Mobile Canvas consumer foundations, staged identically in both
+hosts but not selected by the production engine. They do not bundle an Ailoha
+runtime or remove the licensing
 and public-distribution gates described in the
 [integration roadmap](ailoha-integration-roadmap.md).
 

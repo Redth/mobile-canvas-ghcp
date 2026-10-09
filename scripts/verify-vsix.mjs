@@ -39,6 +39,7 @@ function verifyExtracted(directory) {
     "extension/media/vscode-transport.js",
     "extension/dist/web/index.html",
     "extension/dist/web/ailoha-video-protocol.js",
+    "extension/dist/web/ailoha-video-receiver.js",
     "extension/dist/web/canvas-state.js",
     "extension/dist/web/create-device-options.js",
     "extension/dist/web/device-canvas.css",

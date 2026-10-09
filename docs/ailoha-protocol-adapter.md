@@ -100,7 +100,8 @@ success flag or completed target. Create, lifecycle, target deletion, and
 operation cancellation require HTTP `202` with an operation JSON body.
 Reads still require `200`. The accepted `Location` must identify the same
 opaque operation ID under `/api/v1/operations/`, relative to or on the selected
-origin. It is validated, never followed. Both ordinary and fully escaped path
+origin. It is validated, never followed; raw backslashes, queries, and fragments
+are rejected. Both ordinary and fully escaped path
 segments are supported without decoding an ID into a native device selector.
 The host supplies `Retry-After: 1`; the explicit wait defaults to one-second polls.
 
@@ -121,7 +122,8 @@ an explicitly empty body. `resetTarget` has the same shape plus mandatory
 `confirmed: true`. `deleteTarget(targetId, { confirmed: true, signal? })` uses
 `DELETE /api/v1/targets/{encoded targetId}` without a body.
 
-Reset and deletion reject missing, inherited, false, or non-boolean confirmation
+Reset and deletion require an own data property with value exactly `true`;
+missing, inherited, accessor, false, or non-boolean confirmation is rejected
 **before any network IO**. `confirmed` is a consumer-side gate and is never sent
 to the server. It does not claim user consent has been obtained: the eventual
 product adapter must obtain and scope the real confirmation before setting it.
@@ -163,13 +165,17 @@ idle delays: by default the client's request timeout, configurable from 1 to
 60,000 ms; each poll also honors the client's shorter request timeout. Poll
 intervals are bounded from 1 to 60,000 ms. Timeout, caller abort, and disposal
 stop local reads/timers only; they never cancel the external operation.
+The explicit/default polling interval remains the wait policy; server
+`Retry-After` hints cannot override or extend the caller's total deadline.
 
 Operation errors retain `operationId`, the latest validated `operation` when
 available, and sanitized primary Problem Details. HTTP errors remain `http_error`
 (including explicit `501` unsupported-capability evidence); cancellation and
 cleanup problems remain separate in the operation DTO. A valid accepted
 `Location` retains the recovery ID even if the body later times out or truncates,
-without claiming completion or replaying the mutation. Operation results and
+without claiming completion or replaying the mutation. A mismatched body cannot
+replace that recovery ID; a caller-selected operation ID takes precedence over
+both response sources. Operation results and
 identities containing protected connection data are rejected; nested Problem
 Details are validated and redacted without discarding context or extensions.
 Optional operation fields remain absent when omitted, including `cancelRequested`.
@@ -191,7 +197,8 @@ source, and exercise authenticated fake-loopback reads, lifecycle submissions,
 confirmation gates, operation cancellation/terminal waits, sanitized errors, and
 zero-copy frame parsing. Package verifiers require these files. The VS Code
 unit-test command prepares the GitHub thin plugin with the existing packaging
-script; its script checks also validate `index.d.mts` with TypeScript.
+script; its script checks also validate `index.d.mts` and the declaration usage
+fixture with TypeScript.
 
 Remaining integration includes a trusted discovery/connection owner, selection
 and execution-context adapters, existing-action compatibility mapping,

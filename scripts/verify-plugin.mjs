@@ -42,6 +42,7 @@ for (const relative of [
   "lib/ailoha/errors.mjs",
   "lib/ailoha/protocol.mjs",
   "web/ailoha-video-protocol.js",
+  "web/ailoha-video-receiver.js",
 ]) {
   if (!existsSync(join(root, relative))) {
     fail(`plugin is missing shared foundation ${relative}`);

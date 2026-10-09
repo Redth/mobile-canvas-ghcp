@@ -34,19 +34,21 @@ function captureContext(context) {
   ) {
     throw new TypeError("context must contain only videoSessionId and ownerId.");
   }
+  const captured = {
+    videoSessionId: context.videoSessionId,
+    ownerId: context.ownerId,
+  };
   for (const key of ["videoSessionId", "ownerId"]) {
+    const value = captured[key];
     if (
-      typeof context[key] !== "string"
-      || context[key].trim().length === 0
-      || context[key].length > 256
+      typeof value !== "string"
+      || value.trim().length === 0
+      || value.length > 256
     ) {
       throw new TypeError(`context.${key} must be a nonempty string of at most 256 characters.`);
     }
   }
-  return Object.freeze({
-    videoSessionId: context.videoSessionId,
-    ownerId: context.ownerId,
-  });
+  return Object.freeze(captured);
 }
 
 function parseControl(input) {
@@ -260,13 +262,17 @@ export function createAilohaVideoReceiver({ context, onFrame, onControl, onError
     },
     attach(transport) {
       if (disposed) throw new Error("The video receiver is disposed.");
-      if (!transport || typeof transport.send !== "function" || typeof transport.close !== "function") {
+      if (!transport) {
+        throw new TypeError("transport must provide send and close callbacks.");
+      }
+      const { protocol, send, close } = transport;
+      if (typeof send !== "function" || typeof close !== "function") {
         throw new TypeError("transport must provide send and close callbacks.");
       }
       const capturedTransport = {
-        protocol: transport.protocol,
-        send: transport.send.bind(transport),
-        close: transport.close.bind(transport),
+        protocol,
+        send: send.bind(transport),
+        close: close.bind(transport),
       };
       const previous = current;
       const connection = createConnection({
@@ -481,6 +487,8 @@ function createConnection({
     if (control.resumeFromSequence < minimumResume()) {
       throw failure("SequenceMismatch", "The retained video session cannot rewind on reconnect.");
     }
+    // An exhausted ready floor is still authoritative for the retained session.
+    advanceResume(control.resumeFromSequence);
     if (control.resumeFromSequence > UINT32_MAX) {
       throw failure("SequenceExhausted", "The video session has no remaining ALHV sequence; a new session is required.");
     }
@@ -488,7 +496,6 @@ function createConnection({
     phase = "streaming";
     nextSequence = control.resumeFromSequence;
     dropBeforeSequence = nextSequence;
-    advanceResume(nextSequence);
     maxInFlightFrames = control.maxInFlightFrames;
     wireGeometryRevision = control.geometryRevision;
     const observed = readGeometry();

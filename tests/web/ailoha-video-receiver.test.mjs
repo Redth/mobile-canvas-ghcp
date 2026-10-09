@@ -42,7 +42,7 @@ function harness(options = {}) {
   const frames = [];
   const controls = [];
   const errors = [];
-  const receiver = createAilohaVideoReceiver({
+  const receiver = (options.createReceiver ?? createAilohaVideoReceiver)({
     context: options.context ?? {
       videoSessionId: "video-session",
       ownerId: "view-owner",
@@ -156,6 +156,27 @@ test("captures only an immutable non-secret video session and owner projection",
   await receiver.dispose();
 });
 
+test("captures context fields once before validating the selected owner/session", async (t) => {
+  const reads = { videoSessionId: 0, ownerId: 0 };
+  const context = {
+    get videoSessionId() {
+      reads.videoSessionId += 1;
+      return reads.videoSessionId === 1 ? "video-session" : "different-session";
+    },
+    get ownerId() {
+      reads.ownerId += 1;
+      return reads.ownerId === 1 ? "view-owner" : "different-owner";
+    },
+  };
+  const state = harness({ context });
+  t.after(() => state.receiver.dispose());
+  assert.deepEqual(state.receiver.context, { videoSessionId: "video-session", ownerId: "view-owner" });
+  assert.deepEqual(reads, { videoSessionId: 1, ownerId: 1 });
+  assert.equal(await state.connection.start(), true);
+  assert.equal(state.sent[0].videoSessionId, "video-session");
+  assert.equal(await receiveControl(state, ready()), true);
+});
+
 test("rejects invalid context and callback configuration before attaching", () => {
   const callbacks = { onFrame() {}, onControl() {}, onError() {} };
   for (const context of [
@@ -241,6 +262,42 @@ test("captures transport callbacks and the negotiated protocol at attachment tim
   assert.equal(state.closed.length, 1);
   assert.equal(state.errors.length, 1);
   assert.equal(state.errors[0].error.code, "ProtocolMismatch");
+});
+
+test("captures transport fields once before validating and binding callbacks", async (t) => {
+  const state = harness();
+  t.after(() => state.receiver.dispose());
+  const reads = { protocol: 0, send: 0, close: 0 };
+  const sentBy = [];
+  const closedBy = [];
+  const transport = {
+    get protocol() {
+      reads.protocol += 1;
+      return AILOHA_VIDEO_SUBPROTOCOL;
+    },
+    get send() {
+      const version = ++reads.send;
+      return function () {
+        assert.equal(this, transport);
+        sentBy.push(version);
+      };
+    },
+    get close() {
+      const version = ++reads.close;
+      return function () {
+        assert.equal(this, transport);
+        closedBy.push(version);
+      };
+    },
+  };
+  const connection = state.receiver.attach(transport);
+  assert.deepEqual(reads, { protocol: 1, send: 1, close: 1 });
+  assert.equal(await connection.start(), true);
+  assert.equal(await connection.receive(JSON.stringify(ready())), true);
+  assert.equal(await connection.control("pause"), true);
+  assert.equal(await connection.close(), true);
+  assert.deepEqual(sentBy, [1, 1]);
+  assert.deepEqual(closedBy, [1]);
 });
 
 test("reentrant abort callbacks cannot close a connection twice", async () => {
@@ -1425,6 +1482,22 @@ test("uint32 exhaustion is explicit and never becomes wrap or resynchronization"
   await dropped.receiver.dispose();
 });
 
+test("an exhausted ready floor cannot rewind to zero on a later attachment", async (t) => {
+  const state = harness();
+  t.after(() => state.receiver.dispose());
+  assert.equal(await state.connection.start(), true);
+  assert.equal(await receiveControl(state, ready({ resumeFromSequence: 0x100000000 })), false);
+  assert.equal(state.errors.at(-1).error.code, "SequenceExhausted");
+  const wrapped = state.receiver.attach(state.transport);
+  assert.equal(await wrapped.start(), true);
+  assert.equal(await wrapped.receive(JSON.stringify(ready({ resumeFromSequence: 0 }))), false);
+  assert.equal(wrapped.signal.aborted, true);
+  assert.equal(state.errors.at(-1).error.code, "SequenceMismatch");
+  assert.deepEqual(acknowledgements(state.sent), []);
+  assert.equal(state.receiver.lastAcknowledgedSequence, -1);
+  assert.equal(state.frames.length, 0);
+});
+
 test("terminal exhaustion need not drain the maximum sequence or acknowledge it", { timeout: 2000 }, async () => {
   const started = deferred();
   const gate = deferred();
@@ -1473,16 +1546,52 @@ test("backpressure updates the local window without resetting consumed state whe
   await state.receiver.dispose();
 });
 
-for (const style of ["github-canvas", "vscode-webview"]) {
-  test(`${style} host-style adapter calls the same receiver without network or device dependencies`, async () => {
+for (const [style, preparedRoot] of [
+  ["github-canvas", new URL("../../.build/copilot-plugin-thin/mobile-canvas/", import.meta.url)],
+  ["vscode-webview", new URL("../../vscode/dist/", import.meta.url)],
+]) {
+  test(`${style} prepared receiver consumes, ACKs, controls, and retires its own generation`, {
+    timeout: 2000,
+  }, async (t) => {
+    for (const relative of ["ailoha-video-protocol.js", "ailoha-video-receiver.js"]) {
+      assert.deepEqual(
+        readFileSync(new URL(`../../web/${relative}`, import.meta.url)),
+        readFileSync(new URL(`web/${relative}`, preparedRoot)),
+        `${style}: ${relative}`,
+      );
+    }
+    const module = await import(new URL("web/ailoha-video-receiver.js", preparedRoot).href);
+    assert.equal(module.AILOHA_VIDEO_SUBPROTOCOL, AILOHA_VIDEO_SUBPROTOCOL);
+    assert.deepEqual(module.AILOHA_VIDEO_RECEIVER_LIMITS, AILOHA_VIDEO_RECEIVER_LIMITS);
     const consumed = [];
+    const retired = [];
+    const latePaint = [];
+    const lateCommit = [];
+    const gate = deferred();
+    const pendingStarted = deferred();
     const state = await streaming({
+      createReceiver: module.createAilohaVideoReceiver,
       context: { videoSessionId: "video-session", ownerId: style },
-      onFrame(frame, delivery) {
-        consumed.push([frame.sequence, delivery.context, delivery.canPresent]);
+      async onFrame(frame, delivery) {
+        assert.equal(delivery.context.ownerId, style);
+        assert.equal(Object.isFrozen(delivery.context), true);
+        if (frame.sequence === 22) {
+          pendingStarted.resolve(delivery);
+          await gate.promise;
+          lateCommit.push(delivery.commit(() => latePaint.push(frame.sequence)));
+        } else if (delivery.canDecode) {
+          assert.equal(delivery.commit(() => consumed.push([
+            frame.sequence, delivery.context, delivery.canPresent,
+            delivery.geometry?.geometryRevision ?? null, frame.timestampMicroseconds,
+          ])), true);
+        } else {
+          assert.equal(delivery.commit(() => latePaint.push(frame.sequence)), false);
+          retired.push(frame.sequence);
+        }
         return true;
       },
     }, { resumeFromSequence: 8, maxInFlightFrames: 1 });
+    t.after(() => state.receiver.dispose());
     const events = new EventTarget();
     let receipt;
     events.addEventListener("message", (event) => {
@@ -1506,18 +1615,101 @@ for (const style of ["github-canvas", "vscode-webview"]) {
       assert.equal(await deliver(makeFrame({ sequence: 999 }), "another-channel"), false);
       assert.equal(state.errors.length, 0);
     }
+    assert.equal(await deliver(JSON.stringify(geometryChanged())), true);
     assert.equal(await deliver(makeFrame({ sequence: 8, flags: 2 }).buffer), true);
     assert.equal(await deliver(makeFrame({ sequence: 9 })), true);
     assert.deepEqual(consumed, [
-      [8, state.receiver.context, false],
-      [9, state.receiver.context, true],
+      [8, state.receiver.context, false, 1, 0x0102030405060708n],
+      [9, state.receiver.context, true, 1, 0x0102030405060708n],
     ]);
     assert.deepEqual(acknowledgements(state.sent), [8, 9]);
+    for (const command of ["requestKeyFrame", "pause", "resume"]) {
+      assert.equal(await state.connection.control(command), true);
+    }
+    assert.deepEqual(state.sent.filter(({ type }) => type === "control"), [
+      { type: "control", command: "requestKeyFrame" },
+      { type: "control", command: "pause" },
+      { type: "control", command: "resume" },
+    ]);
     assert.equal(await deliver(JSON.stringify(serverError())), true);
     assert.equal(state.connection.signal.aborted, false);
-    assert.equal(await deliver('{"type":"ready"}'), false);
-    assert.equal(state.errors.at(-1).error.code, "InvalidControl");
-    assert.equal(state.errors.at(-1).delivery.context.ownerId, style);
+    assert.equal(state.receiver.lastAcknowledgedSequence, 9);
+    assert.equal(await deliver(JSON.stringify({
+      type: "backpressure", maxInFlight: 1, dropBeforeSequence: 18,
+    })), true);
+    assert.deepEqual(acknowledgements(state.sent), [8, 9]);
+    assert.equal(await deliver(JSON.stringify(geometryChanged({ geometryRevision: 2 }))), true);
+    assert.equal(await deliver(makeFrame({ sequence: 18, flags: 2, geometryRevision: 2 })), true);
+    assert.equal(await deliver(makeFrame({ sequence: 19, flags: 0, geometryRevision: 2 })), true);
+    assert.deepEqual(retired, [19]);
+    assert.equal(await deliver(makeFrame({ sequence: 20, geometryRevision: 2 })), true);
+    assert.equal(await deliver(makeFrame({ sequence: 21, flags: 0, geometryRevision: 2 })), true);
+    assert.deepEqual(acknowledgements(state.sent), [8, 9, 18, 19, 20, 21]);
+    const pending = deliver(makeFrame({ sequence: 22, flags: 0, geometryRevision: 2 }));
+    const oldScope = await pendingStarted.promise;
+    const replacementSent = [];
+    const replacementClosed = [];
+    const replacement = state.receiver.attach({
+      protocol: module.AILOHA_VIDEO_SUBPROTOCOL,
+      send(text, delivery) {
+        assert.equal(delivery.context, state.receiver.context);
+        return delivery.commit(() => replacementSent.push(JSON.parse(text)));
+      },
+      close() {
+        replacementClosed.push(true);
+        return true;
+      },
+    });
+    assert.equal(await pending, false);
+    assert.equal(oldScope.signal.aborted, true);
+    assert.equal(await replacement.start(), true);
+    assert.equal(replacementSent[0].lastAcknowledgedSequence, 21);
+    assert.equal(await replacement.receive(JSON.stringify(ready({
+      geometryRevision: 3, resumeFromSequence: 23, maxInFlightFrames: 1,
+    }))), true);
+    assert.equal(await replacement.receive(makeFrame({ sequence: 23, geometryRevision: 3 })), true);
+    assert.equal(consumed.at(-1)[3], null);
+    assert.equal(await deliver(makeFrame({ sequence: 23, geometryRevision: 3 })), false);
+    gate.resolve();
+    await new Promise((resolve) => setImmediate(resolve));
+    assert.deepEqual(lateCommit, [false]);
+    assert.deepEqual(latePaint, []);
+    assert.deepEqual(acknowledgements(state.sent), [8, 9, 18, 19, 20, 21]);
+    assert.deepEqual(acknowledgements(replacementSent), [23]);
+    assert.equal(state.receiver.lastAcknowledgedSequence, 23);
+    assert.equal(await replacement.control("cancel"), true);
+    assert.deepEqual(replacementSent.at(-1), { type: "control", command: "cancel" });
+    assert.equal(await replacement.receive('{"type":"cancelled","reason":"client-requested"}'), false);
+    assert.equal(replacement.signal.aborted, true);
+    assert.equal(await replacement.close(), true);
+    assert.deepEqual(replacementClosed, [true]);
+    assert.equal(state.errors.at(-1).error.code, "ServerCancelled");
+    assert.deepEqual(Object.keys(state.receiver.context).sort(), ["ownerId", "videoSessionId"]);
+    assert.ok([...state.sent, ...replacementSent].every((control) =>
+      !Object.hasOwn(control, "afterSequence") && !Object.hasOwn(control, "authorization")
+      && !Object.hasOwn(control, "controlCredential")));
+    const exhaustionSent = [];
+    const exhaustionTransport = {
+      protocol: module.AILOHA_VIDEO_SUBPROTOCOL,
+      send(text, delivery) {
+        return delivery.commit(() => exhaustionSent.push(JSON.parse(text)));
+      },
+      close() { return true; },
+    };
+    const exhausted = state.receiver.attach(exhaustionTransport);
+    assert.equal(await exhausted.start(), true);
+    assert.equal(await exhausted.receive(JSON.stringify(ready({
+      geometryRevision: 3, resumeFromSequence: 0x100000000,
+    }))), false);
+    assert.equal(state.errors.at(-1).error.code, "SequenceExhausted");
+    const rewound = state.receiver.attach(exhaustionTransport);
+    assert.equal(await rewound.start(), true);
+    assert.equal(await rewound.receive(JSON.stringify(ready({
+      geometryRevision: 3, resumeFromSequence: 24,
+    }))), false);
+    assert.equal(state.errors.at(-1).error.code, "SequenceMismatch");
+    assert.deepEqual(acknowledgements(exhaustionSent), []);
+    assert.equal(state.receiver.lastAcknowledgedSequence, 23);
     await state.receiver.dispose();
     assert.equal(state.closed.length, 1);
   });

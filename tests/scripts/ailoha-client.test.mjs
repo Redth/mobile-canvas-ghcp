@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { createServer } from "node:http";
 import { readFile } from "node:fs/promises";
+import { performance } from "node:perf_hooks";
 import { inspect } from "node:util";
 import test from "node:test";
 import {
@@ -825,13 +826,28 @@ test("requires an own literal true confirmation for reset/delete before any netw
     });
   });
   const client = await fixture.connect();
+  let confirmationReads = 0;
+  const computedConfirmation = {
+    get confirmed() {
+      confirmationReads += 1;
+      return true;
+    },
+  };
+  const throwingConfirmation = {
+    get confirmed() {
+      confirmationReads += 1;
+      throw new Error(credential);
+    },
+  };
   for (const options of [
     undefined, {}, { confirmed: false }, { confirmed: 1 }, { confirmed: "true" },
     { confirmed: null }, Object.create({ confirmed: true }),
+    computedConfirmation, throwingConfirmation,
   ]) {
     await rejects(client.resetTarget(targetId, options), "confirmation_required");
     await rejects(client.deleteTarget(targetId, options), "confirmation_required");
   }
+  assert.equal(confirmationReads, 0);
   for (const options of [null, [], { confirmation: true }, { confirmed: true, consent: true }]) {
     await rejects(client.resetTarget(targetId, options), "invalid_options");
     await rejects(client.deleteTarget(targetId, options), "invalid_options");
@@ -976,6 +992,15 @@ test("validates accepted operation and same-origin Location identity without fol
     location = path;
     await rejects(client.startTarget(targetId), "operation_identity_mismatch", 202);
   }
+  body = operationFixture("queued", { operationId: "operation\\native" });
+  for (const path of [
+    `/api/v1/operations/${body.operationId}`,
+    `${fixture.origin}/api/v1/operations/${body.operationId}`,
+  ]) {
+    location = path;
+    await rejects(client.startTarget(targetId), "operation_identity_mismatch", 202);
+  }
+  body = operationFixture();
   location = `/api/v1/operations/${encoded}`;
   for (const fields of [
     { operationId: "wrong-operation" }, { kind: "stopTarget" }, { destructive: true },
@@ -994,6 +1019,39 @@ test("validates accepted operation and same-origin Location identity without fol
   body = operationFixture("queued", { requestId: "wrong-request" });
   await rejects(client.startTarget(targetId, { request: { requestId: "requested" } }), "operation_identity_mismatch", 202);
   assert.equal(destination.requests.length, 0);
+});
+
+test("a mismatched mutation body cannot replace the accepted Location recovery ID", async (t) => {
+  const wrongId = "unrelated:/operation ?#%2F+";
+  let creations = 0;
+  const fixture = await host(t, (request, response) => {
+    if (request.method === "POST") {
+      assert.equal(request.url, "/api/v1/targets");
+      receiveBody(request, (body) => {
+        assert.deepEqual(JSON.parse(body), { providerId, targetTypeId: "fixture", start: false });
+        creations += 1;
+        accepted(response, operationFixture("queued", {
+          operationId: wrongId, kind: "createTarget", destructive: true,
+        }), { location: `/api/v1/operations/${encodeURIComponent(operationId)}` });
+      });
+    } else {
+      assert.equal(request.method, "GET");
+      assert.equal(request.url, `/api/v1/operations/${encodeURIComponent(operationId)}`);
+      json(response, operationFixture("running", { kind: "createTarget", destructive: true }));
+    }
+  });
+  const client = await fixture.connect();
+  let recoveryId;
+  await assert.rejects(client.createTarget({ providerId, targetTypeId: "fixture", start: false }), (error) => {
+    safeError(error, "operation_identity_mismatch", 202);
+    assert.equal(error.operationId, operationId);
+    assert.equal(error.operation.operationId, wrongId);
+    recoveryId = error.operationId;
+    return true;
+  });
+  assert.equal((await client.getOperation(recoveryId)).operationId, operationId);
+  assert.equal(creations, 1);
+  assert.deepEqual(fixture.requests.map(({ method }) => method), ["GET", "POST", "GET"]);
 });
 
 test("preserves optional operation omission and permits already terminal accepted bodies", async (t) => {
@@ -1321,6 +1379,33 @@ test("wait deadline includes stalled polls and preserves ID when no operation bo
   assert.equal(fixture.requests.length, 2);
 });
 
+test("Retry-After hints cannot extend the caller's total wait deadline", async (t) => {
+  let hint;
+  const fixture = await host(t, (request, response) => {
+    assert.equal(request.method, "GET");
+    json(response, operationFixture("cancelling", { cancelRequested: true }), 200, {
+      "retry-after": hint,
+    });
+  });
+  const client = await fixture.connect({ timeoutMs: 1000 });
+  for (const value of ["999999999999999999", "Fri, 01 Jan 2100 00:00:00 GMT", "not-a-delay"]) {
+    hint = value;
+    const before = fixture.requests.length;
+    const started = performance.now();
+    await assert.rejects(client.waitForOperation(operationId, { timeoutMs: 80 }), (error) => {
+      safeError(error, "timeout");
+      assert.equal(error.operationId, operationId);
+      assert.equal(error.operation.status, "cancelling");
+      assert.equal(error.operation.cancelRequested, true);
+      return true;
+    });
+    const elapsed = performance.now() - started;
+    assert.ok(elapsed >= 70 && elapsed < 1000, `wait exceeded its bounded deadline: ${elapsed}ms`);
+    assert.equal(fixture.requests.length, before + 1);
+  }
+  assert.equal(fixture.requests.some(({ method }) => method === "DELETE"), false);
+});
+
 test("wait read failures preserve operation ID and sanitized HTTP Problem Details", async (t) => {
   const fixture = await host(t, (_request, response) => {
     json(response, { ...problemFixture(404), detail: credential }, 404);
@@ -1394,6 +1479,52 @@ test("wait reservations bound combined request concurrency and release slots on 
   }
   const replacement = await fixture.connect();
   assert.equal((await replacement.getOperation(operationId)).operationId, operationId);
+  assert.equal(fixture.requests.some(({ method }) => method === "DELETE"), false);
+});
+
+test("eight waits can poll together and release exactly one admission slot each", {
+  timeout: 3000,
+}, async (t) => {
+  const ids = Array.from({ length: 8 }, (_, index) => `wait:/slot-${index}`);
+  const held = new Map();
+  const counts = new Map();
+  let allStarted;
+  const ready = new Promise((resolve) => { allStarted = resolve; });
+  const fixture = await host(t, (request, response) => {
+    assert.equal(request.method, "GET");
+    const id = decodeURIComponent(request.url.slice("/api/v1/operations/".length));
+    const count = (counts.get(id) ?? 0) + 1;
+    counts.set(id, count);
+    if (ids.includes(id) && count === 1) {
+      held.set(id, response);
+      if (held.size === ids.length) allStarted();
+      return;
+    }
+    json(response, operationFixture("succeeded", { operationId: id }));
+  });
+  const client = await fixture.connect();
+  const waits = ids.map((id) => client.waitForOperation(id, {
+    timeoutMs: 1000, pollIntervalMs: 1,
+  }));
+  const outcomes = Promise.allSettled(waits);
+  await ready;
+  await rejects(client.waitForOperation("ninth"), "request_limit");
+  await rejects(client.getOperation("extra"), "request_limit");
+  assert.equal(fixture.requests.length, 9);
+  json(held.get(ids[0]), operationFixture("succeeded", { operationId: ids[0] }));
+  assert.equal((await waits[0]).status, "succeeded");
+  assert.equal((await client.getOperation("extra")).status, "succeeded");
+  for (const id of ids.slice(1)) {
+    json(held.get(id), operationFixture("queued", { operationId: id }));
+  }
+  for (const [index, outcome] of (await outcomes).entries()) {
+    assert.equal(outcome.status, "fulfilled", outcome.reason?.message);
+    assert.equal(outcome.value.operationId, ids[index]);
+    assert.equal(outcome.value.status, "succeeded");
+    assert.equal(counts.get(ids[index]), index === 0 ? 1 : 2);
+  }
+  const reused = await Promise.all(ids.map((id) => client.getOperation(id)));
+  assert.ok(reused.every((entry) => entry.status === "succeeded"));
   assert.equal(fixture.requests.some(({ method }) => method === "DELETE"), false);
 });
 

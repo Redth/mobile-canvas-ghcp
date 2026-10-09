@@ -38,9 +38,12 @@ and `ownerId` strings, each at most 256 characters. The trusted host issues the
 opaque owner ID for its captured view/target/surface context; the receiver does
 not select or authenticate that owner. Credentials, endpoints, and mutable
 selection state must not be added. A different session/owner needs a new receiver.
+Context fields are captured once before validation, including accessor-backed
+host projections.
 
 `attach` snapshots `protocol`, `send`, and `close`, invalidates the previous
-attachment immediately, and returns an independent handle. `start()` sends
+attachment immediately, and returns an independent handle. Transport fields are
+read once; the same captured callbacks are validated and bound. `start()` sends
 hello once; success means hello was sent, not that ready arrived.
 `receive(string | ArrayBuffer | Uint8Array | Blob)` returns a promise resolving
 `true` after the control is applied or the unit is consumed and its ACK is sent.
@@ -92,7 +95,9 @@ arrival, picture count, timestamp, or a drop watermark. Already received units
 drain in order before a discontinuity; only declared unsent gaps are skipped.
 Reconnect honors the new ready floor, does not replay disconnected history, and
 rejects rewind. Exhausted uint32 sequence space needs a new host-created session,
-not wrapping, a keyframe request, or a different provider.
+not wrapping, a keyframe request, or a different provider. A valid exhausted
+ready floor is retained even though the attachment cannot stream; later
+attachments of that same receiver cannot rewind it to zero.
 
 ## Bounds, errors, and integration
 
@@ -112,8 +117,15 @@ terminal errors/cancelled immediately retire the attachment, including a pending
 Blob/consumer. Malformed messages, overflow, callback failure, or send failure
 stop and release it explicitly. There is no legacy retry.
 
+Both packaging scripts stage this receiver beside the unchanged shared parser.
+Prepared-asset tests import the actual GitHub plugin and VS Code copies, compare
+both files byte-for-byte, and exercise synthetic host-style consumption, ACK,
+control, geometry, reconnect, and stale-generation retirement. Plugin and VSIX
+verifiers require the receiver; build checks validate its syntax. These checks
+carry only the non-secret session/owner projection, not private HTTP credentials.
+
 Production legacy video remains unchanged. Integration still needs both trusted
-host adapters and prepared asset paths, a shared codec/presentation consumer
+production host adapters, a shared codec/presentation consumer
 with actual consumption accounting and guarded geometry, and gated end-to-end
 runtime evidence. Ailoha rights/public-artifact readiness remain independent
 product gates; synthetic receiver tests do not satisfy them.
