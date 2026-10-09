@@ -4,6 +4,12 @@ Mobile Canvas is a JavaScript canvas extension in front of a Native AOT .NET
 executable. This describes how CI builds each platform, how release assets are
 verified, and how the Copilot and VS Code hosts obtain the matching runtime.
 
+Any future Ailoha integration is subject to the
+[approved roadmap's distribution and licensing gates](ailoha-integration-roadmap.md#runtime-distribution-and-licensing-gates):
+new runtime/client/skill dependencies must be exact, public, tested artifacts,
+and distribution rights must be confirmed independently. Ailoha is not yet a
+production dependency of this package.
+
 ## What a plugin install actually does
 
 A Copilot plugin install is a **plain file copy**. Verified against a real

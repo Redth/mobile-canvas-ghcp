@@ -5,6 +5,12 @@ the same MCP tools used by the GitHub Copilot canvas. Marketplace target package
 include the matching native runtime; the universal fallback downloads and
 verifies its pinned runtime on first use.
 
+The [approved Ailoha integration roadmap](ailoha-integration-roadmap.md) keeps
+VS Code and the GitHub canvas as hosts of the same Mobile Canvas product. The
+[compatibility baseline](compatibility-baseline.md) records the extension's
+current public IDs and behavior that an engine migration must preserve; Ailoha
+is not yet the runtime behind this extension.
+
 ## Install
 
 Install **Mobile Canvas** from the
