@@ -36,6 +36,18 @@ try {
   fail(error.message);
 }
 
+for (const relative of [
+  "lib/ailoha/index.mjs",
+  "lib/ailoha/index.d.mts",
+  "lib/ailoha/errors.mjs",
+  "lib/ailoha/protocol.mjs",
+  "web/ailoha-video-protocol.js",
+]) {
+  if (!existsSync(join(root, relative))) {
+    fail(`plugin is missing shared foundation ${relative}`);
+  }
+}
+
 const marketplacePlugin = marketplace.plugins?.find(
   (plugin) => plugin.name === manifest.name,
 );

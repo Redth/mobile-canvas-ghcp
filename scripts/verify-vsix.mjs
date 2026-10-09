@@ -38,12 +38,17 @@ function verifyExtracted(directory) {
     "extension/media/vscode-theme.js",
     "extension/media/vscode-transport.js",
     "extension/dist/web/index.html",
+    "extension/dist/web/ailoha-video-protocol.js",
     "extension/dist/web/canvas-state.js",
     "extension/dist/web/create-device-options.js",
     "extension/dist/web/device-canvas.css",
     "extension/dist/web/device-canvas.js",
     "extension/dist/lib/runtime.mjs",
     "extension/dist/lib/mcp-vscode-proxy.mjs",
+    "extension/dist/lib/ailoha/index.mjs",
+    "extension/dist/lib/ailoha/index.d.mts",
+    "extension/dist/lib/ailoha/errors.mjs",
+    "extension/dist/lib/ailoha/protocol.mjs",
     "extension/dist/scripts/mcp-vscode.mjs",
     "extension/dist/runtimes/manifest.json",
   ]) {
@@ -111,4 +116,3 @@ function verifyExtracted(directory) {
     + `${sizeMiB.toFixed(1)} MiB`,
   );
 }
-

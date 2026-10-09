@@ -187,3 +187,48 @@ test("shared source is a browser-safe ES module", () => {
   const source = readFileSync(protocolPath, "utf8");
   assert.doesNotMatch(source, /\bfrom\s+["']node:|require\s*\(|\bprocess\b|\bBuffer\b/);
 });
+
+test("both prepared product hosts ship the exact zero-copy ALHV parser", async () => {
+  const root = join(dirname(protocolPath), "..");
+  for (const relative of [
+    ".build/copilot-plugin-thin/mobile-canvas/web/ailoha-video-protocol.js",
+    "vscode/dist/web/ailoha-video-protocol.js",
+  ]) {
+    const preparedPath = join(root, relative);
+    const preparedBytes = readFileSync(preparedPath);
+    assert.deepEqual(preparedBytes, readFileSync(protocolPath), relative);
+    // Web assets are ES modules; the VS Code host package itself remains CommonJS.
+    const prepared = await import(
+      `data:text/javascript;base64,${preparedBytes.toString("base64")}#${relative}`
+    );
+    assert.equal(prepared.MAX_AILOHA_VIDEO_PAYLOAD_BYTES, MAX_AILOHA_VIDEO_PAYLOAD_BYTES);
+    const packet = makePacket({
+      sequence: 0xffffffff,
+      timestampMicroseconds: 0xffffffffffffffffn,
+      geometryRevision: 0xffffffff,
+      flags: 3,
+      payload: [1, 2, 3],
+    });
+    const surrounding = new Uint8Array(packet.length + 10).fill(0xff);
+    surrounding.set(packet, 5);
+    const input = surrounding.subarray(5, 5 + packet.length);
+    const frame = prepared.parseAilohaVideoFrame(input, { maxPayloadBytes: 3 });
+    assert.deepEqual(frame, parseAilohaVideoFrame(input));
+    assert.equal(frame.payload.buffer, surrounding.buffer);
+    assert.equal(frame.payload.byteOffset, input.byteOffset + HEADER_BYTES);
+    frame.payload[0] = 0x7f;
+    assert.equal(input[HEADER_BYTES], 0x7f);
+    assert.throws(
+      () => prepared.parseAilohaVideoFrame(makePacket({ payload: [1, 2, 3, 4] }), {
+        maxPayloadBytes: 3,
+      }),
+      /exceeds 3 bytes/,
+    );
+    assert.throws(
+      () => prepared.parseAilohaVideoFrame(input.subarray(0, input.length - 1)),
+      /length does not match/,
+    );
+    packet[5] = 4;
+    assert.throws(() => prepared.parseAilohaVideoFrame(packet), /unknown flags/);
+  }
+});

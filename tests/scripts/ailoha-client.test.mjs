@@ -146,8 +146,8 @@ async function host(t, handler, { status = statusFixture(), hostname = "127.0.0.
   };
 }
 
-function safeError(error, code, status) {
-  assert.ok(error instanceof AilohaProtocolError);
+function safeError(error, code, status, ErrorType = AilohaProtocolError) {
+  assert.ok(error instanceof ErrorType);
   assert.equal(error.code, code);
   if (status !== undefined) assert.equal(error.status, status);
   for (const output of [error.message, error.stack, inspect(error), JSON.stringify(error)]) {
@@ -715,29 +715,86 @@ test("does not forward credentials through HTTP proxy environment settings", asy
   assert.equal(proxy.requests.length, 0);
 });
 
-test("both product host import patterns return only resource DTOs across their renderer boundary", async (t) => {
-  const vscodePath = new URL("../../vscode/dist/lib/ailoha/index.mjs", import.meta.url);
-  const modules = [
-    { name: "GitHub canvas", connectTargetHost },
-    { name: "VS Code extension host", ...(await import(vscodePath.href)) },
+test("both prepared product hosts ship exact client bytes and safe loopback roundtrips", async (t) => {
+  const hosts = [
+    {
+      name: "GitHub canvas plugin",
+      root: new URL("../../.build/copilot-plugin-thin/mobile-canvas/", import.meta.url),
+    },
+    {
+      name: "VS Code extension host",
+      root: new URL("../../vscode/dist/", import.meta.url),
+    },
   ];
-  for (const module of modules) {
-    const fixture = await host(t, (_request, response) => json(response, [targetFixture()]));
+  for (const prepared of hosts) {
+    for (const relative of ["index.mjs", "index.d.mts", "errors.mjs", "protocol.mjs"]) {
+      assert.deepEqual(
+        await readFile(new URL(`../../lib/ailoha/${relative}`, import.meta.url)),
+        await readFile(new URL(`lib/ailoha/${relative}`, prepared.root)),
+        `${prepared.name}: ${relative}`,
+      );
+    }
+    const module = await import(new URL("lib/ailoha/index.mjs", prepared.root).href);
+    assert.equal(module.TARGET_HOST_PROFILE, TARGET_HOST_PROFILE);
+    const target = targetFixture();
+    target.surfaces[0].bounds.extension = { unit: "logical", display: "fixture/main" };
+    const route = `/api/v1/targets/${encodeURIComponent(targetId)}`;
+    const missingId = "missing:/target ?#%2F+";
+    const problem = {
+      ...problemFixture(),
+      detail: `${credential}; encoded ${encodeURIComponent(credential)}`,
+    };
+    const fixture = await host(t, (request, response) => {
+      if (request.url === `/api/v1/targets/${encodeURIComponent(missingId)}`) {
+        json(response, problem, 404);
+        return;
+      }
+      const results = {
+        "/api/v1/providers": [providerFixture("unavailable")],
+        "/api/v1/targets": [target],
+        [route]: target,
+        [`${route}/capabilities`]: statusFixture().capabilities,
+        [`${route}/surfaces`]: target.surfaces,
+      };
+      assert.ok(Object.hasOwn(results, request.url), `unexpected route ${request.url}`);
+      json(response, results[request.url]);
+    });
     const client = await module.connectTargetHost(fixture.connection);
     t.after(() => client.dispose());
+    assert.deepEqual(fixture.requests.map((request) => request.url), ["/api/v1/host/status"]);
+    assert.deepEqual(await client.getHostStatus(), statusFixture());
+    assert.deepEqual(await client.listProviders(), [providerFixture("unavailable")]);
+    assert.deepEqual(await client.getTarget(targetId), target);
+    assert.deepEqual(await client.getTargetCapabilities(targetId), statusFixture().capabilities);
+    assert.deepEqual(await client.listTargetSurfaces(targetId), target.surfaces);
     const action = { handler: () => client.listTargets() };
     const rendererMessages = [];
     const sink = { postMessage: (message) => rendererMessages.push(structuredClone(message)) };
     const result = await action.handler();
     sink.postMessage({ type: "inventory", targets: result });
-    assert.deepEqual(rendererMessages, [{ type: "inventory", targets: [targetFixture()] }], module.name);
+    assert.deepEqual(rendererMessages, [{ type: "inventory", targets: [target] }], prepared.name);
     assert.equal(JSON.stringify(rendererMessages).includes(credential), false);
     assert.equal(JSON.stringify(client).includes(credential), false);
-  }
-  for (const relative of ["index.mjs", "index.d.mts", "errors.mjs", "protocol.mjs"]) {
-    assert.deepEqual(
-      await readFile(new URL(`../../lib/ailoha/${relative}`, import.meta.url)),
-      await readFile(new URL(`../../vscode/dist/lib/ailoha/${relative}`, import.meta.url)),
-    );
+    await assert.rejects(client.getTarget(missingId), (error) => {
+      safeError(error, "http_error", 404, module.AilohaProtocolError);
+      assert.equal(error.problem.detail, "[REDACTED]; encoded [REDACTED]");
+      assert.deepEqual(error.problem["x-ailoha-target-host"], problem["x-ailoha-target-host"]);
+      assert.deepEqual(error.problem.trace, problem.trace);
+      sink.postMessage({ type: "error", error: error.toJSON() });
+      return true;
+    });
+    assert.equal(JSON.stringify(rendererMessages).includes(credential), false);
+    assert.equal(JSON.stringify(rendererMessages).includes(encodeURIComponent(credential)), false);
+    for (const request of fixture.requests) {
+      assert.equal(request.method, "GET");
+      assert.equal(request.authorization, `Bearer ${credential}`);
+      assert.equal(request.origin, fixture.origin);
+      assert.equal(request.authority, fixture.authority);
+      assert.equal(request.url.includes(credential), false);
+      assert.equal(request.url.includes(encodeURIComponent(credential)), false);
+    }
+    client.dispose();
+    await assert.rejects(client.listTargets(), (error) =>
+      safeError(error, "client_disposed", undefined, module.AilohaProtocolError));
   }
 });

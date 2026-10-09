@@ -99,6 +99,14 @@ its existing runtime adapter does. Both packaging scripts include the same
 module; it must not be imported by `web/` or a VS Code webview. Only validated
 resource DTOs and sanitized errors may cross a renderer boundary.
 
+Both packages also stage the original browser-safe
+`web/ailoha-video-protocol.js` ALHV/1 parser. Prepared-asset tests import each
+host's actual client and parser copies, compare them byte-for-byte with shared
+source, and exercise authenticated fake-loopback reads, sanitized errors, and
+zero-copy frame parsing. Package verifiers require these files. The VS Code
+unit-test command prepares the GitHub thin plugin with the existing packaging
+script; its script checks also validate `index.d.mts` with TypeScript.
+
 Remaining integration includes a trusted discovery/connection owner, selection
 and execution-context adapters, existing-action compatibility mapping,
 streaming/input transports, lifecycle/runtime supervision, and full device
@@ -114,6 +122,7 @@ repository access; anonymous public availability has not been established.
 Focused checks use only Node and fake loopback HTTP servers:
 
 ```sh
+node scripts/prepare-plugin.mjs --thin
 node scripts/prepare-vscode.mjs --thin
-node --test tests/scripts/ailoha-client.test.mjs vscode/test/prepared-assets.test.mjs
+node --test tests/scripts/ailoha-client.test.mjs tests/web/ailoha-video-protocol.test.mjs vscode/test/prepared-assets.test.mjs
 ```

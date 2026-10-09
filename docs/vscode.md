@@ -146,8 +146,10 @@ stages the shared assets before opening an Extension Development Host.
 ```text
 vscode/dist/
   web/
+    ailoha-video-protocol.js
   lib/runtime.mjs
   lib/mcp-vscode-proxy.mjs
+  lib/ailoha/
   scripts/mcp-vscode.mjs
   runtimes/
   LICENSE
@@ -156,6 +158,12 @@ vscode/dist/
 The extension imports the same content-addressed runtime resolver as the Copilot
 plugin. The matching archive is downloaded, extracted, and checksum-verified on
 first use.
+
+The shared `lib/ailoha/` read client and ALHV parser are original Mobile Canvas
+consumer foundations, staged identically in both hosts but not selected by the
+production engine. They do not bundle an Ailoha runtime or remove the licensing
+and public-distribution gates described in the
+[integration roadmap](ailoha-integration-roadmap.md).
 
 The MCP definition uses the positional VS Code API constructor:
 
