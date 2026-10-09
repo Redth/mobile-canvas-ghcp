@@ -72,7 +72,12 @@ test("accepts ArrayBuffer, Buffer, and typed-array subviews with exact offsets",
   const surrounding = new Uint8Array(packet.length + 8).fill(0xff);
   surrounding.set(packet, 4);
   const subview = surrounding.subarray(4, 4 + packet.length);
-  assert.equal(parseAilohaVideoFrame(subview).sequence, 0x12345678);
+  const frame = parseAilohaVideoFrame(subview);
+  assert.equal(frame.sequence, 0x12345678);
+  assert.equal(frame.payload.buffer, surrounding.buffer);
+  assert.equal(frame.payload.byteOffset, subview.byteOffset + HEADER_BYTES);
+  frame.payload[0] = 0x7f;
+  assert.equal(surrounding[4 + HEADER_BYTES], 0x7f);
 });
 
 test("returns a zero-copy payload view without mutating the packet", () => {
@@ -97,6 +102,20 @@ test("accepts a payload exactly at the configured bound and rejects bound plus o
       maxPayloadBytes: 3,
     }),
     /exceeds 3 bytes/,
+  );
+});
+
+test("accepts a real payload at the default bound and rejects bound plus one", () => {
+  const atBound = parseAilohaVideoFrame(makePacket({
+    payload: new Uint8Array(MAX_AILOHA_VIDEO_PAYLOAD_BYTES),
+  }));
+  assert.equal(atBound.payload.byteLength, MAX_AILOHA_VIDEO_PAYLOAD_BYTES);
+
+  assert.throws(
+    () => parseAilohaVideoFrame(makePacket({
+      payload: new Uint8Array(MAX_AILOHA_VIDEO_PAYLOAD_BYTES + 1),
+    })),
+    /exceeds 8388608 bytes/,
   );
 });
 
@@ -140,6 +159,7 @@ test("rejects invalid magic, version, flags, and reserved bytes", () => {
     [4, 2, /version/],
     [5, 4, /unknown flags/],
     [6, 1, /reserved/],
+    [7, 1, /reserved/],
   ]) {
     const packet = makePacket();
     packet[offset] = value;
