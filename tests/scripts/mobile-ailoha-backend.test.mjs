@@ -4,6 +4,7 @@ import { productModule } from "../ailoha-test-module.mjs";
 const { AilohaMobileBackend } = await import(productModule("lib/ailoha/mobile-backend.mjs"));
 const { mobileCanvasBackend } = await import(productModule("lib/backend.mjs"));
 const { createAilohaMediaAdapter } = await import(productModule("lib/ailoha/media-adapter.mjs"));
+const { createAilohaRevealAdapter } = await import(productModule("lib/ailoha/reveal-adapter.mjs"));
 const { AilohaProtocolError } = await import(productModule("lib/ailoha/errors.mjs"));
 const { publicSnapshot, MobileAilohaError } = await import(productModule("lib/ailoha/mobile-projection.mjs"));
 const { createAilohaContextStore } = await import(productModule("lib/ailoha/context-adapter.mjs"));
@@ -361,6 +362,28 @@ test("timeout with HTTP metadata never clears an uncertain reveal receipt", asyn
   } });
   t.after(() => state.backend.dispose());
   await assert.rejects(state.backend.reveal("one"), { code: "timeout" });
+  await assert.rejects(state.backend.reveal("one"), { code: "reveal_outcome_uncertain" });
+  assert.equal(posts, 1);
+  assert.equal(revealState.size, 1);
+});
+
+test("server HTTP 408 with response metadata never authorizes a second reveal POST", async (t) => {
+  const revealState = new Map();
+  let posts = 0;
+  const reveal = createAilohaRevealAdapter({ transport: {
+    async response() {
+      posts += 1;
+      const error = new Error("server timed out after receiving the POST");
+      Object.assign(error, {
+        name: "TargetHostTransportError", status: 408, code: "HttpError",
+        response: { status: 408, contentType: "application/problem+json" },
+      });
+      throw error;
+    },
+  } });
+  const state = fixture({ revealState, reveal });
+  t.after(() => state.backend.dispose());
+  await assert.rejects(state.backend.reveal("one"), { code: "http_error", status: 408 });
   await assert.rejects(state.backend.reveal("one"), { code: "reveal_outcome_uncertain" });
   assert.equal(posts, 1);
   assert.equal(revealState.size, 1);

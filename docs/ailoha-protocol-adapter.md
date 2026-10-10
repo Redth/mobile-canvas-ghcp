@@ -467,8 +467,9 @@ provider, native deployment and private full process-incarnation reference
 remain captured; a changed view cannot turn the result into a different
 selection. A validated successful reply is retained privately through
 read-back/selection errors and can be reconciled against the original authority
-without another POST. A proven pre-acceptance 4xx rejection releases its
-receipt; uncertain POSTs remain retained and are never replayed, including
+without another POST. A proven pre-acceptance refusal releases its receipt;
+HTTP 408, timeout, abort and other uncertain POSTs remain retained and are never
+replayed, including
 across same-ID process replacement. Stale authority and different process
 incarnations cannot claim the retained completion. This is a source-only
 compatibility path and depends on a matching released native runtime; it does
