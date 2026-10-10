@@ -240,6 +240,53 @@ function stagedCleanup(receipt) {
   });
 }
 
+test("parent: file staging keeps the original destination across asynchronous capture", async (t) => {
+  const input = {
+    deviceId: "one", input: "/owned/original.bin", path: "/Documents/original.bin",
+  };
+  const commands = [];
+  const state = canonicalFixture({
+    client: {
+      async getTargetCapabilities() {
+        input.path = "/Documents/replacement.bin";
+        return [{ id: "target.files", version: 1, features: ["importStagedTargetFile"] }];
+      },
+    },
+    async runCli(args) {
+      commands.push(args);
+      throw Object.assign(new Error("Stop the owned probe before native upload"), { code: "probe_stopped" });
+    },
+  });
+  t.after(() => state.backend.dispose());
+  await assert.rejects(state.backend.stageArtifact("mobile_device_file_push", input), { code: "probe_stopped" });
+  assert.equal(commands.length, 1);
+  assert.equal(commands[0][commands[0].indexOf("--destination") + 1], "/Documents/original.bin");
+});
+
+test("parent: media staging retains original source identity after capture and unknown upload", async (t) => {
+  const input = { deviceId: "one", paths: ["/owned/original.png"] };
+  const commands = [];
+  const state = canonicalFixture({
+    client: {
+      async getTargetCapabilities() {
+        input.paths[0] = "/owned/replacement.png";
+        return [{ id: "target.media", version: 1, features: ["importStagedTargetMediaBatch"] }];
+      },
+    },
+    async runCli(args) {
+      commands.push(args);
+      throw Object.assign(new Error("The owned fixture lost the upload response"), { code: "probe_upload_unknown" });
+    },
+  });
+  t.after(() => state.backend.dispose());
+  await assert.rejects(state.backend.stageArtifact("mobile_device_media_add", input), { code: "probe_upload_unknown" });
+  await assert.rejects(state.backend.stageArtifact("mobile_device_media_add", {
+    deviceId: "one", paths: ["/owned/original.png"],
+  }), { code: "artifact_acceptance_unknown" });
+  assert.equal(commands.length, 1);
+  assert.deepEqual(JSON.parse(commands[0][commands[0].indexOf("--sources") + 1]), ["/owned/original.png"]);
+});
+
 test("owned zero-byte file push uses exact native receipt, captured approval and GET-only completion", async (t) => {
   const dir = await mkdtemp(join(process.cwd(), "tests/scripts/fixtures/staged-owned-"));
   t.after(() => rm(dir, { recursive: true, force: true }));
