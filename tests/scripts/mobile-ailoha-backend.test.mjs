@@ -400,3 +400,100 @@ test("unknown lifecycle outcomes cannot be replayed and mismatched completion ne
   t.after(() => mismatch.backend.dispose());
   await assert.rejects(mismatch.backend.lifecycle("boot", "one"), { code: "operation_owner_mismatch" });
 });
+
+test("succeeded reboot receipt survives target-read failure and selection/reopen without another POST", async (t) => {
+  const operationState = new Map();
+  let posts = 0;
+  let polls = 0;
+  let completed = false;
+  let rejectRead = true;
+  const first = fixture({ operationState });
+  const getTarget = first.client.getTarget;
+  first.client.rebootTarget = async (id) => { posts += 1; return { operationId: `reboot-${id}` }; };
+  first.client.waitForOperation = async (id) => {
+    polls += 1;
+    completed = true;
+    return {
+      operationId: id, kind: "rebootTarget", targetId: "one", providerId: "provider",
+      status: "succeeded", destructive: false, createdAt: "2026-10-09T23:00:00Z",
+    };
+  };
+  first.client.getTarget = async (id, options) => {
+    if (completed && id === "one" && rejectRead) {
+      rejectRead = false;
+      throw new AilohaProtocolError("timeout");
+    }
+    return getTarget(id, options);
+  };
+  await first.backend.select("one");
+  await assert.rejects(first.backend.lifecycle("restart", "one"), { code: "timeout" });
+  await first.backend.select("two");
+  await first.backend.dispose();
+  const second = fixture({ operationState, client: {
+    async rebootTarget() { posts += 1; return { operationId: "do-not-submit" }; },
+    async waitForOperation() { polls += 1; throw new Error("Completed receipt should only re-read target output."); },
+  } });
+  t.after(() => second.backend.dispose());
+  await second.backend.select("two");
+  const result = await second.backend.lifecycle("restart", "one");
+  assert.equal(result.id, "one");
+  assert.equal(result.invocation.targetId, "one");
+  assert.equal((await second.backend.getSelected()).device.id, "two");
+  assert.equal(posts, 1);
+  assert.equal(polls, 1);
+  assert.equal(operationState.size, 0);
+});
+
+test("succeeded lifecycle receipt survives a state mismatch while unrelated explicit action remains usable", async (t) => {
+  const state = fixture();
+  t.after(() => state.backend.dispose());
+  const reboot = state.client.rebootTarget;
+  let reboots = 0;
+  state.client.rebootTarget = async (id, options) => { reboots += 1; return reboot(id, options); };
+  const wait = state.client.waitForOperation;
+  state.client.waitForOperation = async (id, options) => {
+    const result = await wait(id, options);
+    if (id === "reboot-one") state.targets.get("one").status = "starting";
+    return result;
+  };
+  await assert.rejects(state.backend.lifecycle("restart", "one"), { code: "operation_state_mismatch" });
+  await state.backend.lifecycle("shutdown", "two");
+  state.targets.get("one").status = "running";
+  const result = await state.backend.lifecycle("restart", "one");
+  assert.equal(result.id, "one");
+  assert.equal(reboots, 1);
+  assert.equal(state.calls.filter(([name, id]) => name === "wait" && id === "reboot-one").length, 1);
+});
+
+test("receipt admission remains exactly64 after concurrent asynchronous destructive approvals", async (t) => {
+  const approval = deferred();
+  const operationState = new Map();
+  let approvals = 0;
+  const state = fixture({
+    operationState,
+    async confirmDestructive() { approvals += 1; await approval.promise; return true; },
+    client: {
+      async waitForOperation(id) { throw new AilohaProtocolError("timeout", { operationId: id }); },
+    },
+  });
+  t.after(() => state.backend.dispose());
+  for (let index = 0; index < 65; index += 1) {
+    const id = `target-${index}`;
+    state.targets.set(id, { ...structuredClone(state.targets.get("one")), targetId: id });
+  }
+  const work = Array.from({ length: 65 }, (_, index) =>
+    state.backend.lifecycle("erase", `target-${index}`, { confirm: true }));
+  const results = Promise.allSettled(work);
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(approvals, 65);
+  assert.equal(operationState.size, 0);
+  approval.resolve();
+  const completed = await results;
+  assert.equal(completed.filter((result) => result.status === "rejected" && result.reason.code === "operation_receipt_limit").length, 1);
+  assert.equal(completed.filter((result) => result.status === "rejected" && result.reason.code === "timeout").length, 64);
+  assert.equal(operationState.size, 64);
+  assert.equal(state.calls.filter(([name]) => name === "reset").length, 64);
+  const before = state.calls.filter(([name]) => name === "reset").length;
+  await assert.rejects(state.backend.lifecycle("erase", "target-0", { confirm: true }), { code: "timeout" });
+  assert.equal(state.calls.filter(([name]) => name === "reset").length, before);
+});

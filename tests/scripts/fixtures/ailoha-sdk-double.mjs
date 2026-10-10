@@ -2,7 +2,9 @@ import { readFileSync } from "node:fs";
 import { randomUUID } from "node:crypto";
 import { fileURLToPath } from "node:url";
 
-export const scenario = { calls: [], leases: new Map(), videos: new Map(), operations: new Map(), status: "running" };
+export const scenario = {
+  calls: [], leases: new Map(), videos: new Map(), operations: new Map(), status: "running", geometryRevision: 13,
+};
 export const sourceSha = "0000000000000000000000000000000000000000";
 const targetId = "opaque/target";
 const surfaceId = "opaque/surface";
@@ -22,7 +24,7 @@ const surface = {
 function target() {
   return {
     targetId, providerId: "synthetic-provider", targetTypeId: "opaque/type", name: "Synthetic device",
-    status: scenario.status, surfaces: scenario.status === "running" ? [surface] : [],
+    status: scenario.status, surfaces: scenario.status === "running" ? [{ ...surface, geometryRevision: scenario.geometryRevision }] : [],
     nativeIdentity: { platform: "ios", nativeId: "native-deployment-not-opaque-target", isVirtual: true },
   };
 }
@@ -82,7 +84,7 @@ export async function openTargetHostTransport(leaseId) {
       if (path === "/api/v1/targets") return reply([target()]);
       if (path === "/api/v1/targets/opaque%2Ftarget") return reply(target());
       if (path.endsWith("/capabilities")) return reply(captures);
-      if (path.endsWith("/surfaces")) return reply([surface]);
+      if (path.endsWith("/surfaces")) return reply([{ ...surface, geometryRevision: scenario.geometryRevision }]);
       if (/\/actions\/(start|stop|reboot)$/.test(path)) {
         const action = path.split("/").at(-1);
         const operationId = randomUUID();
@@ -105,10 +107,11 @@ export async function openTargetHostTransport(leaseId) {
         }, 201, "/api/v1/artifacts/synthetic%2Fscreenshot");
       }
       if (path.includes("/input/actions/")) return reply({
-        success: true, "x-ailoha-target-host": { targetId, surfaceId, geometryRevision: 13 },
+        success: true, "x-ailoha-target-host": { targetId, surfaceId, geometryRevision: scenario.geometryRevision },
       });
       const collection = "/api/v1/targets/opaque%2Ftarget/surfaces/opaque%2Fsurface/video/sessions";
       if (path === collection && options.method === "POST") {
+        scenario.geometryRevision = 13;
         const videoSessionId = randomUUID();
         const session = {
           videoSessionId, targetId, surfaceId, codec: "h264", state: "ready",
@@ -152,6 +155,7 @@ export async function openTargetHostTransport(leaseId) {
         if (!active || next >= fixture.units.length) return;
         const unit = fixture.units[next++];
         if (unit.sequence === 0 || unit.sequence === 3) {
+          scenario.geometryRevision = unit.geometryRevision;
           text({ type: "geometryChanged", ...fixture.geometry.find((geometry) => geometry.geometryRevision === unit.geometryRevision) });
         }
         callbacks.onMessage(new Uint8Array(readFileSync(new URL(unit.filename, packetRoot))), true);

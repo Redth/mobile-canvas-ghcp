@@ -18,8 +18,10 @@ import {
   readStoredDeviceId,
   resumeAuthenticatedPanel,
   shouldRetainDeviceFrame,
+  shouldRetainAilohaStream,
   shouldDrainIdleDecoder,
   storeDeviceId,
+  supportsLegacyStreamOptions,
 } from "./canvas-state.js";
 import {
   ailohaDisplayGeometry,
@@ -709,8 +711,8 @@ function updateControlAvailability() {
   if (state.selected?.backend === "ailoha") {
     elements.copyUdid.disabled = !state.selected.nativeId;
   }
-  elements.fps.disabled = state.selected?.backend === "ailoha";
-  elements.scale.disabled = state.selected?.backend === "ailoha";
+  elements.fps.disabled = !supportsLegacyStreamOptions(state.selected);
+  elements.scale.disabled = !supportsLegacyStreamOptions(state.selected);
 }
 
 const MAX_SCREEN_WIDTH = 480;
@@ -839,11 +841,12 @@ function setLinkExpanded(expanded) {
  * the auto scale actually lands in a different bucket rather than on every resize observation.
  */
 function reconcileAutoScale() {
-  if (elements.scale.value !== "auto" || !state.socket) return;
+  if (!supportsLegacyStreamOptions(state.selected) || elements.scale.value !== "auto" || !state.socket) return;
   if (resolveScale() === state.activeScale) return;
   clearTimeout(state.scaleTimer);
   state.scaleTimer = setTimeout(() => {
-    if (elements.scale.value === "auto" && resolveScale() !== state.activeScale) startStream();
+    if (supportsLegacyStreamOptions(state.selected)
+      && elements.scale.value === "auto" && resolveScale() !== state.activeScale) startStream();
   }, 400);
 }
 
@@ -1764,6 +1767,7 @@ async function reconcileCanvasSelection(socket) {
     || automation.selectionGeneration !== generation
   ) return;
   if (selection?.hasSelection && selection.device) {
+    if (state.socket && shouldRetainAilohaStream(state.selected, selection.device)) return;
     await reconcileAnnouncedSelection(
       selection.device.id,
       () =>

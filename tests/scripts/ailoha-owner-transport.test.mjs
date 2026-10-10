@@ -117,3 +117,32 @@ test("slash, dot-containing and percent-literal opaque IDs are encoded/decoded e
   assert.equal(result.operationId, operationId);
   assert.equal(calls[1].path, `/api/v1/targets/${encodeURIComponent(targetId)}/actions/start`);
 });
+
+for (const reason of ["timeout", "cancelled"]) {
+  test(`owner accepted Location survives ${reason} without retrying the mutation`, async (t) => {
+    const { client, calls } = await fixture(t, (_path, options) => new Promise((_resolve, reject) => {
+      options.signal.addEventListener("abort", () => {
+        const error = new Error("typed sanitized owner failure");
+        Object.assign(error, {
+          name: "TargetHostTransportError", code: "RequestAborted", status: 202, problem: null,
+          response: {
+            status: 202, location: "/api/v1/operations/accepted%2Fopaque",
+            retryAfterMs: 1000, contentType: "application/json",
+          },
+        });
+        reject(error);
+      }, { once: true });
+    }), { timeoutMs: reason === "timeout" ? 10 : 1000 });
+    const controller = new AbortController();
+    const pending = client.startTarget("target/one", { signal: controller.signal });
+    if (reason === "cancelled") controller.abort();
+    await assert.rejects(pending, (error) => {
+      assert.equal(error.code, reason);
+      assert.equal(error.operationId, "accepted/opaque");
+      assert.equal(error.status, 202);
+      assert.equal(error.transportCode, "RequestAborted");
+      return true;
+    });
+    assert.equal(calls.filter((call) => call.request.method === "POST").length, 1);
+  });
+}

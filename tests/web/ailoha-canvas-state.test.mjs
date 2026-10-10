@@ -1,5 +1,7 @@
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
 import test from "node:test";
+import vm from "node:vm";
 import { productModule } from "../ailoha-test-module.mjs";
 const {
   ailohaDisplayGeometry,
@@ -8,6 +10,7 @@ const {
   isCanvasInvocationCurrent,
   pointInLogicalBounds,
 } = await import(productModule("web/ailoha-canvas-state.js"));
+const { supportsLegacyStreamOptions, shouldRetainAilohaStream } = await import(productModule("web/canvas-state.js"));
 
 function state() {
   return {
@@ -54,4 +57,54 @@ test("legacy input payload and coordinate origin remain unchanged", () => {
   assert.equal(ailohaInputPayload(captureCanvasInvocation(current), payload), payload);
   assert.deepEqual(pointInLogicalBounds({ clientX: 0, clientY: 0 },
     { left: 0, top: 0, width: 390, height: 844 }, current.display), { x: 0, y: 0 });
+});
+
+test("Ailoha dimensions/geometry updates never activate legacy scale-session recreation", () => {
+  assert.equal(supportsLegacyStreamOptions({ backend: "ailoha" }), false);
+  assert.equal(supportsLegacyStreamOptions({ backend: "legacy" }), true);
+  assert.equal(supportsLegacyStreamOptions({ id: "old-runtime-device" }), true);
+});
+
+test("an unchanged named Ailoha selection announcement retains its one live resource", () => {
+  const device = {
+    backend: "ailoha", id: "target", targetHostId: "host", surfaceId: "surface",
+    provider: "provider", providerState: "ready", state: "booted", capabilities: { liveStream: true },
+  };
+  assert.equal(shouldRetainAilohaStream(device, structuredClone(device)), true);
+  for (const changed of [
+    { targetHostId: "other-host" }, { id: "other-target" }, { surfaceId: "other-surface" },
+    { state: "shutdown" }, { providerState: "unavailable" }, { capabilities: { liveStream: false } },
+    { backend: "legacy" },
+  ]) {
+    assert.equal(shouldRetainAilohaStream(device, { ...device, ...changed }), false);
+  }
+  assert.equal(shouldRetainAilohaStream({ ...device, backend: "legacy" }, device), false);
+});
+
+test("actual legacy autoscale debounce still works and a queued callback cannot restart an Ailoha resource", () => {
+  const source = readFileSync(new URL(productModule("web/device-canvas.js")), "utf8");
+  const definition = /function reconcileAutoScale\(\) \{[\s\S]*?\n\}/.exec(source)?.[0];
+  assert.ok(definition);
+  const queued = [];
+  let restarts = 0;
+  const state = { selected: { backend: "legacy" }, socket: {}, activeScale: 0.5, scaleTimer: null };
+  const reconcile = vm.runInNewContext(`(${definition})`, {
+    state,
+    elements: { scale: { value: "auto" } },
+    supportsLegacyStreamOptions,
+    resolveScale: () => 0.75,
+    clearTimeout() {},
+    setTimeout(callback, delay) { queued.push({ callback, delay }); return queued.length; },
+    startStream() { restarts += 1; },
+  });
+  reconcile();
+  assert.equal(queued.length, 1);
+  assert.equal(queued[0].delay, 400);
+  queued[0].callback();
+  assert.equal(restarts, 1);
+  state.selected = { backend: "ailoha" };
+  queued[0].callback();
+  reconcile();
+  assert.equal(restarts, 1);
+  assert.equal(queued.length, 1);
 });

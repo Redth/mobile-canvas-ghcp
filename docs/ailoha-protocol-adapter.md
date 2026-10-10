@@ -311,6 +311,21 @@ prepared players; all I420 planes matched references. RGB conversion differences
 in baseline PNG comparison are diagnostic, not a rendering-parity assertion.
 Fixtures are test-only; FFmpeg is not a product dependency.
 
+The full prepared `device-canvas.js` browser check also resizes the actual
+painted canvas and performs real mouse tap/drag input. It asserts exactly one
+video POST and no DELETE during startup, four resizes and idle; logical
+coordinates/revision, hidden unsupported controls, and owned hide/resume cleanup.
+Legacy FPS/scale reconciliation is not run for Ailoha, including queued timers;
+an unchanged scoped selection announcement does not recreate the live resource.
+`tests/web/ailoha-device-browser-server.mjs` serves only the synthetic fixture;
+`ailoha-device-browser-check.mjs` is a Playwright MCP code file to repeat that
+check. On a blank page set `window.ailohaBrowserTestOptions` to the server's
+`{url, evidenceUrl}`, then run the code file; it navigates once into a fresh
+fixture host and verifies resource counts, pointer input and hide/resume.
+Prepared VS Code shared renderer checks use the same host adapter; the separately
+tested compiled extension/webview bridge is not replaced by a browser-only proxy
+claim.
+
 ```sh
 npm ci --ignore-scripts --omit=optional
 npm ci --prefix vscode --ignore-scripts

@@ -198,6 +198,17 @@ export function shouldDrainIdleDecoder(source) {
   return source === "idb" || source === "emulator-grpc";
 }
 
+export function supportsLegacyStreamOptions(device) {
+  return device?.backend !== "ailoha";
+}
+
+export function shouldRetainAilohaStream(device, announced) {
+  return device?.backend === "ailoha" && announced?.backend === "ailoha"
+    && ["targetHostId", "id", "surfaceId", "provider", "providerState", "state"]
+      .every((key) => device[key] === announced[key])
+    && JSON.stringify(device.capabilities) === JSON.stringify(announced.capabilities);
+}
+
 export function canBootDeviceState(deviceState) {
   const normalized = String(deviceState || "unknown").toLowerCase();
   return normalized !== "booted"
