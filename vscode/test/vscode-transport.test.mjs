@@ -145,3 +145,96 @@ test("bridges bootstrap, API responses, and socket frames", async () => {
   socket.close();
   assert.equal(outbound.shift().type, "socket-close");
 });
+
+test("rejects bootstrap when host posts a fatal message", async () => {
+  const outbound = [];
+  const listeners = new Map();
+  const window = {
+    addEventListener(type, listener) {
+      const entries = listeners.get(type) ?? [];
+      entries.push(listener);
+      listeners.set(type, entries);
+    },
+  };
+  const sandbox = {
+    window,
+    acquireVsCodeApi: () => ({
+      postMessage: (message) => outbound.push(message),
+    }),
+    crypto: { randomUUID: () => "id" },
+    WebSocket: { CONNECTING: 0, OPEN: 1, CLOSING: 2, CLOSED: 3 },
+    EventTarget,
+    Event,
+    MessageEvent,
+    CloseEvent: class extends Event {},
+    Response,
+    ArrayBuffer,
+    Blob,
+    Uint8Array,
+    console,
+  };
+  const script = readFileSync(
+    join(dirname(fileURLToPath(import.meta.url)), "..", "media", "vscode-transport.js"),
+    "utf8",
+  );
+  vm.runInNewContext(script, sandbox);
+  const transport = window.mobileCanvasTransport;
+  const receive = (data) => {
+    for (const listener of listeners.get("message") ?? []) listener({ data });
+  };
+
+  const bootstrap = transport.bootstrap();
+  assert.equal(outbound.shift().type, "ready");
+  receive({ type: "fatal", message: "Missing runtime for linux-x64" });
+  await assert.rejects(bootstrap, /Missing runtime for linux-x64/);
+});
+
+test("times out bootstrap when host bridge does not respond", async () => {
+  const outbound = [];
+  const listeners = new Map();
+  let scheduledCallback = null;
+  const window = {
+    addEventListener(type, listener) {
+      const entries = listeners.get(type) ?? [];
+      entries.push(listener);
+      listeners.set(type, entries);
+    },
+  };
+  const sandbox = {
+    window,
+    acquireVsCodeApi: () => ({
+      postMessage: (message) => outbound.push(message),
+    }),
+    crypto: { randomUUID: () => "id" },
+    WebSocket: { CONNECTING: 0, OPEN: 1, CLOSING: 2, CLOSED: 3 },
+    EventTarget,
+    Event,
+    MessageEvent,
+    CloseEvent: class extends Event {},
+    Response,
+    ArrayBuffer,
+    Blob,
+    Uint8Array,
+    console,
+    setTimeout: (callback) => {
+      scheduledCallback = callback;
+      return 123;
+    },
+    clearTimeout: () => {
+      scheduledCallback = null;
+    },
+  };
+  const script = readFileSync(
+    join(dirname(fileURLToPath(import.meta.url)), "..", "media", "vscode-transport.js"),
+    "utf8",
+  );
+  vm.runInNewContext(script, sandbox);
+  const transport = window.mobileCanvasTransport;
+
+  const bootstrap = transport.bootstrap();
+  assert.equal(outbound.shift().type, "ready");
+  assert.ok(scheduledCallback, "Expected a bootstrap timeout to be scheduled");
+  scheduledCallback();
+  await assert.rejects(bootstrap, /Timed out waiting for Mobile Canvas host bridge to connect/);
+});
+
