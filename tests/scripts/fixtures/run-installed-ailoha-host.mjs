@@ -214,6 +214,8 @@ async function checkSourceConditionalFeatures(selected, androidId) {
           await new Promise((resolve) => setTimeout(resolve, 5));
         }
       }
+      assert.equal(captureSignal?.aborted, true,
+        `${host} installed ${channel} must retire the captured canonical read on caller cancellation`);
       if (channel === "mcp") {
         resumeCapture();
         const { result, error } = await outcome;
