@@ -364,6 +364,39 @@ test("completed terminate readback cannot launch on a replaced target or replay 
   assert.equal(unknown.calls.filter(([name]) => name === "app-launch").length, 0);
 });
 
+test("completed terminate is not resubmitted after failed readback and view reopening", async (t) => {
+  const operationState = new Map();
+  let stops = 0;
+  const original = fixture({ app: true, operationState });
+  t.after(() => original.backend.dispose());
+  original.client.terminateTargetApp = async () => {
+    stops += 1;
+    return { operationId: "app-terminate" };
+  };
+  original.client.waitForOperation = async (id) => ({
+    operationId: id, kind: "terminateTargetApp", targetId: "one",
+    providerId: "provider", status: "succeeded", destructive: false,
+  });
+  original.client.getTargetApp = async () => { throw new AilohaProtocolError("transport_error"); };
+  await assert.rejects(original.backend.launchApp("one", "com.example.native", true), { code: "transport_error" });
+  await original.backend.dispose();
+
+  const reopened = fixture({ app: true, operationState });
+  t.after(() => reopened.backend.dispose());
+  reopened.client.terminateTargetApp = async () => {
+    stops += 1;
+    return { operationId: "unwanted-second-stop" };
+  };
+  reopened.client.waitForOperation = async (id) => ({
+    operationId: id, kind: "launchTargetApp", targetId: "one",
+    providerId: "provider", status: "succeeded", destructive: false,
+  });
+  assert.equal((await reopened.backend.launchApp("one", "com.example.native", true)).success, true);
+  assert.equal(stops, 1);
+  assert.equal(reopened.calls.filter(([name]) => name === "app-get").length, 1);
+  assert.equal(reopened.calls.filter(([name]) => name === "app-launch").length, 1);
+});
+
 test("concurrent cold relaunch calls share the original stop and launch", async (t) => {
   const state = fixture({ app: true });
   t.after(() => state.backend.dispose());
