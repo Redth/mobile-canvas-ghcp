@@ -148,8 +148,9 @@ async function checkSourceConditionalFeatures(selected, androidId) {
     });
     assert.equal(bootstrap.status, 204);
     const cookie = bootstrap.headers.get("set-cookie").split(";", 1)[0];
-    api = (path, { method = "GET", body } = {}) => fetch(new URL(path, url), {
+    api = (path, { method = "GET", body, signal } = {}) => fetch(new URL(path, url), {
       method, headers: { Cookie: cookie, ...(body === undefined ? {} : { "Content-Type": "application/json" }) },
+      signal,
       ...(body === undefined ? {} : { body }),
     });
   } else {
@@ -165,6 +166,7 @@ async function checkSourceConditionalFeatures(selected, androidId) {
       const id = randomUUID();
       await bridge.handleMessage({ type: "api", id, path, method, body });
       const result = messages.find((message) => message.id === id);
+      if (result.type === "api-error") throw new Error(result.message);
       assert.equal(result.type, "api-result");
       return new Response(result.body, { status: result.status, headers: result.headers });
     };
@@ -176,6 +178,64 @@ async function checkSourceConditionalFeatures(selected, androidId) {
   });
   const ios = "opaque/target";
   const nativePackage = "com.example.synthetic";
+  async function verifyCancelledCapture(channel) {
+    let resumeCapture;
+    let enteredCapture;
+    const gate = new Promise((resolve) => { resumeCapture = resolve; });
+    const entered = new Promise((resolve) => { enteredCapture = resolve; });
+    const controller = new AbortController();
+    const before = scenario.calls.filter(({ method }) => ["POST", "PUT"].includes(method)).length;
+    let captureSignal;
+    scenario.beforeFeatureRead = async (signal) => {
+      captureSignal = signal;
+      enteredCapture();
+      await gate;
+    };
+    const route = `/api/v1/devices/${encodeURIComponent(ios)}/${channel === "api"
+      ? "hardware/battery" : "notifications"}`;
+    const input = channel === "api" ? { level: 37 }
+      : { bundleId: nativePackage, payload: '{"aps":{"alert":"cancel"}}' };
+    let pending;
+    const originalTimeout = AbortSignal.timeout;
+    try {
+      if (host === "vscode" && channel === "api") {
+        AbortSignal.timeout = () => controller.signal;
+      }
+      pending = channel === "api"
+        ? api(route, { method: "POST", body: JSON.stringify(input), signal: controller.signal })
+        : sourceMcp.handle(mcpCall("mobile_device_notification_push", { deviceId: ios, ...input }),
+          { signal: controller.signal });
+      const outcome = pending.then((result) => ({ result }), (error) => ({ error }));
+      await entered;
+      controller.abort();
+      if (channel === "api") {
+        const deadline = Date.now() + 1_000;
+        while (!captureSignal?.aborted && Date.now() < deadline) {
+          await new Promise((resolve) => setTimeout(resolve, 5));
+        }
+      }
+      if (channel === "mcp") {
+        resumeCapture();
+        const { result, error } = await outcome;
+        if (error) throw error;
+        assert.ok(["cancelled", "request_cancelled"].includes(JSON.parse(result.result.content[0].text).code));
+      } else {
+        const { result, error } = await outcome;
+        if (error) {
+          assert.equal(controller.signal.aborted, true);
+          assert.match(String(error), /abort/i);
+        } else assert.ok(["cancelled", "request_cancelled"].includes((await result.json()).code));
+        resumeCapture();
+        await new Promise((resolve) => setTimeout(resolve, 5));
+      }
+      assert.equal(scenario.calls.filter(({ method }) => ["POST", "PUT"].includes(method)).length, before,
+        `${host} installed ${channel} cannot mutate after cancelled capture: ${JSON.stringify(scenario.calls.filter(({ method }) => ["POST", "PUT"].includes(method)).slice(before))}`);
+    } finally {
+      AbortSignal.timeout = originalTimeout;
+      resumeCapture();
+      scenario.beforeFeatureRead = null;
+    }
+  }
   const cases = [
     ["hardware_get", ios, "hardware", "GET", {}, "batteryLevel", 80],
     ["battery_set", ios, "hardware/battery", "POST", { level: 75 }, "batteryLevel", 75],
@@ -207,6 +267,8 @@ async function checkSourceConditionalFeatures(selected, androidId) {
       { bundleId: nativePackage, permission: "camera", action: "grant" }, "action", "grant"],
   ];
   try {
+    await verifyCancelledCapture("api");
+    await verifyCancelledCapture("mcp");
     for (const [name, id, path, method, input, field, value] of cases) {
       const route = `/api/v1/devices/${encodeURIComponent(id)}/${path}`;
       const response = await api(route, {

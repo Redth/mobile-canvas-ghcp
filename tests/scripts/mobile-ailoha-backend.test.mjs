@@ -836,6 +836,59 @@ test("feature results require original provider and resolved native package cann
   assert.equal(state.wire.filter(({ method }) => method === "POST").length, 0);
 });
 
+test("cancelled API and MCP callers cannot submit a feature after native app lookup", async (t) => {
+  const input = { deviceId: "one", bundleId: "com.example.native", payload: '{"aps":{}}' };
+  for (const host of ["api", "mcp"]) {
+    const state = featureFixture({ appGate: deferred() });
+    t.after(() => state.backend.dispose());
+    const caller = new AbortController();
+    const dispatcher = host === "mcp" ? await createAilohaMcpDispatcher({
+      version: "synthetic", binding: {
+        contextRef: "ctx", scopeEpoch: "epoch", ownerProcessId: 1234,
+        scope: { sessionId: "unique-session", viewId: "unique-view" },
+      },
+      createBackend: async () => state.backend,
+    }) : null;
+    if (dispatcher) t.after(() => dispatcher.dispose());
+    const pending = host === "api"
+      ? state.backend.request("/api/v1/devices/one/notifications", {
+        method: "POST", body: JSON.stringify(input), signal: caller.signal,
+      })
+      : dispatcher.handle({
+        jsonrpc: "2.0", id: 1, method: "tools/call",
+        params: { name: "mobile_device_notification_push", arguments: input },
+      }, { signal: caller.signal });
+    const deadline = Date.now() + 2_000;
+    while (Date.now() < deadline
+      && !state.wire.some(({ path }) => path.endsWith("/apps?includeSystem=true"))) {
+      await new Promise((resolve) => setTimeout(resolve, 5));
+    }
+    assert.equal(state.wire.some(({ path }) => path.endsWith("/apps?includeSystem=true")), true);
+    caller.abort();
+    state.releaseApps();
+    const result = await pending;
+    assert.equal(host === "api" ? (await result.json()).code
+      : JSON.parse(result.result.content[0].text).code, "request_cancelled");
+    assert.equal(state.wire.filter(({ method }) => method === "POST").length, 0);
+  }
+});
+
+test("caller cancellation after feature submission does not abandon its captured receipt", async (t) => {
+  const state = featureFixture({ smsGate: deferred() });
+  t.after(() => state.backend.dispose());
+  const caller = new AbortController();
+  const input = { deviceId: "one", from: "+123", body: "hello" };
+  const pending = state.backend.invokeAction("send_sms", input, { signal: caller.signal });
+  for (let tries = 0; tries < 100 && !state.wire.some(({ method }) => method === "POST"); tries += 1) {
+    await new Promise((resolve) => setImmediate(resolve));
+  }
+  assert.equal(state.wire.filter(({ method }) => method === "POST").length, 1);
+  caller.abort();
+  state.releaseSms();
+  assert.equal((await pending).operation, "sms-send");
+  assert.equal(state.wire.filter(({ method }) => method === "POST").length, 1);
+});
+
 test("trusted backend captures the original full lease evidence without serializing it", async (t) => {
   const state = fixture();
   t.after(() => state.backend.dispose());

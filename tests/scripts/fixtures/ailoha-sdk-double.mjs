@@ -169,6 +169,9 @@ export async function openTargetHostTransport(leaseId) {
         throw new Error("Official-shaped fixture does not support this HTTP verb");
       }
       scenario.calls.push({ path, method: options.method ?? "GET", body });
+      if (options.method === "GET" && path === "/api/v1/targets/opaque%2Ftarget") {
+        await scenario.beforeFeatureRead?.(options.signal);
+      }
       if (path === "/api/v1/host/status") return reply({
         hostId: "synthetic-host", profile: "ailoha.target-host/v1", version: "synthetic",
         state: "ready", capabilities: mergedCapabilities([...captures, ...(scenario.catalog?.status.capabilities ?? [])]),
