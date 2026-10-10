@@ -68,7 +68,14 @@ async function fixture(t, options = {}) {
     client.waitForOperation = (id, options) => wait(id, { ...options, timeoutMs: state.waitMs ?? 1000, pollIntervalMs: 1 });
     const backend = new AilohaMobileBackend({
       scope, client, selectionStore: store, operationState, onEvent: (event) => events.push(event),
-      owner: { hostId: host.connection.hostId, registerCleanup: () => () => {}, release: async () => {} },
+      owner: {
+        hostId: host.connection.hostId,
+        connectionRef: {
+          schema: "ailoha.target-host.connection/v1", serviceId: "catalog-fixture-service", pid: process.pid,
+          startedAt: "2026-10-10T03:00:00Z", processStartedAt: "2026-10-10T02:59:59Z",
+        },
+        registerCleanup: () => () => {}, release: async () => {},
+      },
     });
     backends.push(backend);
     return { backend, client };
