@@ -22,6 +22,7 @@ process.env.MOBILE_CANVAS_BACKEND = "ailoha";
 const scope = { sessionId: `live-test-session-${process.pid}`, viewId: `${host}-view` };
 const { createAilohaVideoReceiver } = await import(pathToFileURL(join(root, "web", "ailoha-video-receiver.js")).href);
 const { createAilohaMcpDispatcher } = await import(pathToFileURL(join(root, "lib", "ailoha", "mcp-host.mjs")).href);
+const { ARTIFACT_FEATURE_GATES } = await import(pathToFileURL(join(root, "lib", "ailoha", "artifact-features.mjs")).href);
 const { createRuntimeCanvasHost, getRuntimeContextBinding } = await import(pathToFileURL(join(root, "lib", "ailoha", "runtime-backend.mjs")).href);
 let release;
 let receiver;
@@ -76,10 +77,51 @@ async function checkEmptyContext(selection) {
     assert.equal(inventory.result.structuredContent.result[0].id, "opaque/target");
     assert.deepEqual(JSON.parse(inventory.result.content[0].text), inventory.result.structuredContent);
     assert.equal(scenario.calls.some((call) => call.method === "POST" || call.method === "DELETE"), false);
+    const callsBeforeGates = scenario.calls.length;
+    for (const [name, input] of Object.entries({
+      mobile_device_file_list: { deviceId: "opaque/target", bundleId: "com.example.app" },
+      mobile_device_file_pull: { deviceId: "opaque/target", path: "empty", output: "/owned/output" },
+      mobile_device_file_push: { deviceId: "opaque/target", path: "empty", input: "/owned/input" },
+      mobile_device_file_delete: { deviceId: "opaque/target", path: "/directory", recursive: false },
+      mobile_device_file_mkdir: { deviceId: "opaque/target", path: "/directory" },
+      mobile_device_media_add: { deviceId: "opaque/target", paths: ["/owned/photo.png"] },
+      mobile_device_log: { deviceId: "opaque/target", text: "fault" },
+      mobile_device_crashes: { deviceId: "opaque/target", text: "example" },
+      mobile_device_crash_report: { deviceId: "opaque/target", crashId: "report" },
+    })) {
+      const result = await emptyDispatcher.handle(mcpCall(name, input));
+      assert.deepEqual(JSON.parse(result.result.content[0].text), {
+        code: "artifact_contract_unavailable", message: ARTIFACT_FEATURE_GATES[name], status: 501,
+      });
+    }
+    assert.equal(scenario.calls.length, callsBeforeGates);
     assert.equal(statSync(process.env.AILOHA_TEST_CONTEXT_STATE, { bigint: true }).mtimeNs, contextWrittenAt);
   } finally {
     await emptyDispatcher.dispose();
   }
+}
+
+async function checkArtifactApi(api) {
+  const callsBefore = scenario.calls.length;
+  for (const [name, method, suffix] of [
+    ["mobile_device_file_list", "GET", "/files?bundleId=com.example.app&path=Documents"],
+    ["mobile_device_file_pull", "POST", "/files/pull"],
+    ["mobile_device_file_push", "POST", "/files/push"],
+    ["mobile_device_file_delete", "POST", "/files/delete"],
+    ["mobile_device_file_mkdir", "POST", "/files/mkdir"],
+    ["mobile_device_media_add", "POST", "/media"],
+    ["mobile_device_log", "GET", "/log?text=fault"],
+    ["mobile_device_crashes", "GET", "/crashes?text=example"],
+    ["mobile_device_crash_report", "GET", "/crashes/report"],
+  ]) {
+    const response = await api(`/api/v1/devices/opaque%2Ftarget${suffix}`, method,
+      method === "POST" ? { path: "/directory" } : undefined);
+    assert.equal(response.status, 501, name);
+    assert.deepEqual(await response.json(), {
+      code: "artifact_contract_unavailable", message: ARTIFACT_FEATURE_GATES[name], status: 501,
+    });
+  }
+  assert.equal(scenario.calls.length, callsBefore);
 }
 
 try {
@@ -182,6 +224,10 @@ try {
     });
     assert.equal(bootstrap.status, 204);
     const cookie = bootstrap.headers.get("set-cookie").split(";", 1)[0];
+    await checkArtifactApi((path, method, body) => fetch(new URL(path, url), {
+      method, headers: { Cookie: cookie, ...(method === "POST" ? { "Content-Type": "application/json" } : {}) },
+      ...(method === "POST" ? { body: JSON.stringify(body) } : {}),
+    }));
     const socketUrl = new URL("/ws/video?deviceId=opaque%2Ftarget", url);
     socketUrl.protocol = "ws:";
     const socket = new WebSocket(socketUrl, "ailoha.video.v1", { headers: { Cookie: cookie } });
@@ -254,7 +300,7 @@ try {
       const id = randomUUID();
       await bridge.handleMessage({ type: "api", id, path, method, body: body === undefined ? undefined : JSON.stringify(body) });
       const result = messages.find((message) => message.id === id);
-      assert.equal(result.type, "api-result");
+      assert.equal(result.type, "api-result", `${path}: ${result.message ?? ""}`);
       return new Response(result.body, { status: result.status, headers: result.headers });
     }
     readCatalog = async () => (await api("/api/v1/catalog")).json();
@@ -267,6 +313,7 @@ try {
     const catalog = await (await api("/api/v1/catalog")).json();
     assert.equal(catalog.devices[0].nativeId, "native-deployment-not-opaque-target");
     await checkEmptyContext(await (await api("/api/v1/selection")).json());
+    await checkArtifactApi(api);
     await api("/api/v1/selection", "POST", { deviceId: "opaque/target" });
     const selected = await bridge.getSelectedDeviceContext();
     selectedContext = selected.selection;

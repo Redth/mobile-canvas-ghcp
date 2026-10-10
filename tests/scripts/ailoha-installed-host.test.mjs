@@ -37,6 +37,7 @@ for (const [host, product] of [
     assert.equal(evidence.creationRecords[1].platform, "android");
     assert.equal(evidence.creationRecords.every((record) => record.state === "booted" && record.nativeId !== record.id), true);
     assert.equal(evidence.creationRecords[2].selectionApplied, false);
-    assert.deepEqual(evidence.logs, host === "vscode" ? ["capability_not_supported"] : []);
+    assert.deepEqual(evidence.logs, host === "vscode"
+      ? [...Array(9).fill("artifact_contract_unavailable"), "capability_not_supported"] : []);
   });
 }

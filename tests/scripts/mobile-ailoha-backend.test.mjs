@@ -7,6 +7,7 @@ const { createAilohaMediaAdapter } = await import(productModule("lib/ailoha/medi
 const { AilohaProtocolError } = await import(productModule("lib/ailoha/errors.mjs"));
 const { publicSnapshot, MobileAilohaError } = await import(productModule("lib/ailoha/mobile-projection.mjs"));
 const { createAilohaContextStore } = await import(productModule("lib/ailoha/context-adapter.mjs"));
+const { ARTIFACT_FEATURE_GATES } = await import(productModule("lib/ailoha/artifact-features.mjs"));
 
 function deferred() {
   let resolve;
@@ -218,6 +219,41 @@ test("real compatibility action paths project inventory/selection/native identit
   const unsupported = await state.backend.request("/api/v1/devices/one/ui");
   assert.equal(unsupported.status, 501);
   assert.equal((await unsupported.json()).code, "capability_not_supported");
+});
+
+test("artifact routes and direct actions do not approximate native output or dispatch device IO", async (t) => {
+  const state = fixture();
+  t.after(() => state.backend.dispose());
+  const cases = [
+    ["mobile_device_file_list", "GET", "/files?bundleId=com.example.app&path=Documents"],
+    ["mobile_device_file_pull", "POST", "/files/pull"],
+    ["mobile_device_file_push", "POST", "/files/push"],
+    ["mobile_device_file_delete", "POST", "/files/delete"],
+    ["mobile_device_file_mkdir", "POST", "/files/mkdir"],
+    ["mobile_device_media_add", "POST", "/media"],
+    ["mobile_device_log", "GET", "/log?text=fault&seconds=300"],
+    ["mobile_device_crashes", "GET", "/crashes?text=example"],
+    ["mobile_device_crash_report", "GET", "/crashes/report-id"],
+  ];
+  for (const [identity, method, suffix] of cases) {
+    await assert.rejects(state.backend.invokeAction(identity, { deviceId: "one" }), {
+      code: "artifact_contract_unavailable", message: ARTIFACT_FEATURE_GATES[identity], status: 501,
+    });
+    const response = await state.backend.request(`/api/v1/devices/one${suffix}`, {
+      method, ...(method === "POST" ? { body: JSON.stringify({ devicePath: "/fixture", hostPath: "/owned" }) } : {}),
+    });
+    assert.equal(response.status, 501, identity);
+    assert.deepEqual(await response.json(), {
+      code: "artifact_contract_unavailable", message: ARTIFACT_FEATURE_GATES[identity], status: 501,
+    });
+  }
+  assert.deepEqual(state.calls, []);
+  const wrongMethod = await state.backend.request("/api/v1/devices/one/files/delete", { method: "GET" });
+  assert.equal(wrongMethod.status, 501);
+  assert.equal((await wrongMethod.json()).code, "capability_not_supported");
+  const wrongPath = await state.backend.request("/api/v1/devices/one/files/unknown", { method: "POST" });
+  assert.equal(wrongPath.status, 501);
+  assert.equal((await wrongPath.json()).code, "capability_not_supported");
 });
 
 test("an open empty canonical view projects its verified binding without inferring a target", async (t) => {

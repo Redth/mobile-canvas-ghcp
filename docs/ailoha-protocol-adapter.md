@@ -407,6 +407,37 @@ tooling is not a ready-shaped empty inventory.
 
 ### Scope and verification
 
+The nine legacy file/media/diagnostics identities remain registered with their
+original MCP input/output schemas. The opt-in now returns a named
+`artifact_contract_unavailable` (501) for each identity, including the matching
+panel API routes in both hosts, before opening a device transport. This is a
+delivery gate, **not** file/media/diagnostics parity. The shared gate records the
+specific native mismatch in `lib/ailoha/artifact-features.mjs`; ordinary installs
+still use the legacy backend unless explicitly opted in.
+
+At canonical `microsoft/ailoha` source
+`f5eadd9f7a31b6da9322bf74e7549286d8844668`, the root Target Host feature
+API and provider adapter do not yet supply the legacy guarantees:
+
+| Legacy surface | Missing native compatibility semantics |
+| --- | --- |
+| File list | A resolved listing path, complete total and reusable per-entry paths. The provider limits results to 5,000; an array length cannot stand in for an uncapped total. |
+| File pull/push | Completed host destination/overwrite and verified transferred byte count, including successful zero-byte copies. The root API exports/imports artifacts and returns operation receipts, not completed transfer results. Push must not be replayed after uncertain acceptance. |
+| File delete/mkdir | Nonrecursive directory-delete refusal and scoped human deletion consent; the current provider forces recursive deletion. The reviewed root file-service contract does not expose a compatible mkdir and resolved-path result. |
+| Media add | A host-path list with accepted-path result and iOS vCard handling; root import takes a single staged photo/video/audio artifact. |
+| Log | Device-side text filter, complete match total, guaranteed newest-first ordering and process/subsystem fields. Root log query has app/level/time/limit but no text or total. |
+| Crash list/report | Process-name text filter, complete match total, guaranteed newest-first ordering, and full detail content. Root detail is a summary; full content is a separate artifact export. |
+
+The root Target Host supports `app://<bundleId>/<relative-path>` and absolute
+device paths in its file adapter, but that address mapping alone cannot repair
+missing result fields or policy. The `imports/mobile-canvas` subtree contains
+the historical API and contracts; calling its standalone service instead of
+the root Target Host would reintroduce a second native engine. The required
+native work is to expose exact result/filter/ordering evidence and a
+lease-owned, server-fenced staging and artifact flow before enabling any of
+these identities. Neither a bounded JSON body nor a successful operation
+receipt can prove a completed copy or justify invented output metadata.
+
 Implemented: authoritative advertised catalogs and compatible create+boot,
 inventory/select, advertised start/stop/reboot, PNG screenshot,
 basic geometry-bound pointer gestures and shared ALHV WebCodecs display.
