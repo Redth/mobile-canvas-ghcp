@@ -585,14 +585,17 @@ public binary, real-device parity or default migration is claimed.
 
 The locally implemented guarded pull, delete and mkdir adapters prepare
 against the original named view and native owner and recover accepted
-operations by original-operation GET without resubmission. Pull projects only
-the backend-confirmed export `devicePath` associated with the original
+operations by original-operation GET without resubmission, even if the view
+retires after admission. New admission remains bound to the open original
+view; cancelled readback retains the accepted receipt for later recovery.
+Pull projects only the backend-confirmed export `devicePath` associated with the original
 operation's artifact, actual verified byte count (including zero), and native
 resolved absolute host destination. The canonical CLI owns bounded streaming,
 SHA-256 verification, destination overwrite and repeat-readback checks; JS
 never downloads or substitutes a guessed source path. Delete and mkdir require
-backend-confirmed mutation paths on terminal success. Pull and delete require
-scoped human approval; a literal confirmation flag is not approval. The
+backend-confirmed mutation paths on terminal success, correlated with the
+original operation result. Pull and delete require scoped human approval;
+a literal confirmation flag is not approval. The
 corresponding GitHub API and VS Code API/MCP routes are conditionally mapped
 in local source only, pending consumer review and publication against the
 reviewed native source. No public native runtime pin or device execution is

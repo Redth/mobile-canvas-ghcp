@@ -303,6 +303,7 @@ test("local guarded delete uses original scoped consent and backend-confirmed mu
       }
       assert.equal(args[args.indexOf("--guarded") + 1], JSON.stringify(receipt));
       const operation = guardedOperation("delete", receipt, action === "continue" ? "queued" : "succeeded");
+      if (action === "recover") operation.result = { path: "Documents/fixture" };
       return JSON.stringify({ status: action === "continue" ? "accepted" : "succeeded",
         receipt, operationId: operation.operationId, operation,
         ...(action === "recover" ? { mutation: { path: "Documents/fixture" } } : {}) });
@@ -338,6 +339,7 @@ test("local guarded mkdir retains accepted original receipt after failed GET and
       if (action === "recover" && ++recovery === 1) {
         throw Object.assign(new Error("Original GET was unavailable"), { code: "owned_get_failed" });
       }
+      if (action === "recover") operation.result = { path: "/Documents/new" };
       return JSON.stringify({ status: action === "continue" ? "accepted" : "succeeded",
         receipt, operationId: operation.operationId, operation,
         ...(action === "recover" ? { mutation: { path: "/Documents/new" } } : {}) });
@@ -371,6 +373,7 @@ test("guarded readback rejects another operation ID, retaining the original GET-
       }
       const operation = guardedOperation("mkdir", receipt, action === "continue" ? "queued" : "succeeded");
       if (action === "recover" && wrongReadback) operation.operationId = "another-operation";
+      if (action === "recover") operation.result = { path: "/Documents/owned" };
       return JSON.stringify({ status: action === "continue" ? "accepted" : "succeeded",
         receipt, operationId: operation.operationId, operation,
         ...(action === "recover" ? { mutation: { path: "/Documents/owned" } } : {}) });
@@ -512,6 +515,7 @@ test("guarded unknown acceptance retries original recovery without another devic
           errorCode: "GuardedReadbackUnconfirmed" });
       }
       const operation = guardedOperation("mkdir", receipt, "succeeded");
+      operation.result = { path: "/Documents/uncertain" };
       return JSON.stringify({ status: "succeeded", receipt,
         operationId: operation.operationId, operation, mutation: { path: "/Documents/uncertain" } });
     },
@@ -520,6 +524,92 @@ test("guarded unknown acceptance retries original recovery without another devic
   const input = { deviceId: "one", path: "/Documents/uncertain" };
   await assert.rejects(state.backend.guardedFile("mobile_device_file_mkdir", input),
     { code: "GuardedReadbackUnconfirmed" });
+  assert.equal((await state.backend.guardedFile("mobile_device_file_mkdir", input)).path, input.path);
+  assert.deepEqual(actions, ["prepare", "continue", "recover", "recover"]);
+});
+
+test("accepted guarded files recover their original operation after view retirement", async (t) => {
+  let receipt;
+  let recoveries = 0;
+  const actions = [];
+  const state = canonicalFixture({
+    client: {
+      async getTargetCapabilities() {
+        return [{ id: "target.files", version: 1, features: ["createTargetDirectory"] }];
+      },
+    },
+    async runCli(args) {
+      const action = args[args.indexOf("native-file") + 1];
+      actions.push(action);
+      if (action === "prepare") {
+        receipt = guardedFixture("mkdir", "/Documents/original", state.owner);
+        return JSON.stringify({ status: "prepared", receipt });
+      }
+      const operation = guardedOperation("mkdir", receipt,
+        action === "continue" ? "queued" : "succeeded");
+      if (action === "recover" && ++recoveries === 1) {
+        throw Object.assign(new Error("Original GET reply was lost"), { code: "owned_get_failed" });
+      }
+      if (action === "recover") operation.result = { path: "/Documents/original" };
+      return JSON.stringify({
+        status: action === "continue" ? "accepted" : "succeeded",
+        receipt, operationId: operation.operationId, operation,
+        ...(action === "recover" ? { mutation: { path: "/Documents/original" } } : {}),
+      });
+    },
+  });
+  t.after(() => state.backend.dispose());
+  const input = { deviceId: "one", path: "/Documents/original" };
+  await assert.rejects(state.backend.guardedFile("mobile_device_file_mkdir", input),
+    { code: "owned_get_failed" });
+  await state.retireAuthority({ observe: false });
+  assert.equal((await state.backend.guardedFile("mobile_device_file_mkdir", input)).path, input.path);
+  assert.deepEqual(actions, ["prepare", "continue", "recover", "recover"]);
+});
+
+test("cancelled guarded readback retains the original receipt for GET-only recovery", async (t) => {
+  const entered = deferred();
+  const release = deferred();
+  const caller = new AbortController();
+  const actions = [];
+  let receipt;
+  let recoveries = 0;
+  const state = canonicalFixture({
+    client: {
+      async getTargetCapabilities() {
+        return [{ id: "target.files", version: 1, features: ["createTargetDirectory"] }];
+      },
+    },
+    async runCli(args) {
+      const action = args[args.indexOf("native-file") + 1];
+      actions.push(action);
+      if (action === "prepare") {
+        receipt = guardedFixture("mkdir", "/Documents/original", state.owner);
+        return JSON.stringify({ status: "prepared", receipt });
+      }
+      const operation = guardedOperation("mkdir", receipt,
+        action === "continue" ? "queued" : "succeeded");
+      if (action === "recover" && ++recoveries === 1) {
+        entered.resolve();
+        await release.promise;
+      }
+      if (action === "recover") operation.result = { path: "/Documents/original" };
+      return JSON.stringify({
+        status: action === "continue" ? "accepted" : "succeeded",
+        receipt, operationId: operation.operationId, operation,
+        ...(action === "recover" ? { mutation: { path: "/Documents/original" } } : {}),
+      });
+    },
+  });
+  t.after(() => state.backend.dispose());
+  const input = { deviceId: "one", path: "/Documents/original" };
+  const cancelled = state.backend.guardedFile("mobile_device_file_mkdir", input,
+    { signal: caller.signal });
+  const cancelledResult = assert.rejects(cancelled, { code: "cancelled" });
+  await entered.promise;
+  caller.abort();
+  release.resolve();
+  await cancelledResult;
   assert.equal((await state.backend.guardedFile("mobile_device_file_mkdir", input)).path, input.path);
   assert.deepEqual(actions, ["prepare", "continue", "recover", "recover"]);
 });

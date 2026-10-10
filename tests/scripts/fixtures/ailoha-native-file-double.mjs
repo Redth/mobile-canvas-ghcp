@@ -124,6 +124,7 @@ export function runNativeFile(args, contexts) {
         } };
     }
   }
+  if (action === "recover") operation.result = { path: receipt.path };
   appendFileSync(journalPath(), `${JSON.stringify({ action, receipt, operation })}\n`);
   return { status: action === "continue" ? "accepted" : "succeeded",
     receipt, operationId: operation.operationId, operation,

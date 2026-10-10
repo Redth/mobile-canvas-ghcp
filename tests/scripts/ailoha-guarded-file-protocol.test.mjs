@@ -180,16 +180,28 @@ test("delete and mkdir only report backend-confirmed terminal mutation paths", (
     const options = { ...expected, kind, path: "app://package/Documents/fixture",
       appId: null, destinationPath: null, overwrite: false, recursive: kind === "delete" };
     const result = parseGuardedFileOutcome(outcome("succeeded", options, {
-      operationId: "operation", operation: nativeOperation(options, "succeeded"),
+      operationId: "operation", operation: {
+        ...nativeOperation(options, "succeeded"), result: { path: "Documents/fixture" },
+      },
       mutation: { path: "Documents/fixture" },
     }), options);
     assert.equal(result.mutation.path, "Documents/fixture");
     failure(() => parseGuardedFileOutcome(outcome("succeeded", options, {
-      operationId: "operation", operation: nativeOperation(options, "succeeded"),
+      operationId: "operation", operation: {
+        ...nativeOperation(options, "succeeded"), result: { path: "Documents/fixture" },
+      },
     }), options), "guarded_file_mutation_mismatch");
     failure(() => parseGuardedFileOutcome(outcome("succeeded", options, {
-      operationId: "operation", operation: nativeOperation(options, "succeeded"),
+      operationId: "operation", operation: {
+        ...nativeOperation(options, "succeeded"), result: { path: "Documents/fixture" },
+      },
       mutation: { path: "" },
+    }), options), "guarded_file_mutation_mismatch");
+    failure(() => parseGuardedFileOutcome(outcome("succeeded", options, {
+      operationId: "operation", operation: {
+        ...nativeOperation(options, "succeeded"), result: { path: "Documents/fixture" },
+      },
+      mutation: { path: "Documents/unrelated" },
     }), options), "guarded_file_mutation_mismatch");
   }
 });
