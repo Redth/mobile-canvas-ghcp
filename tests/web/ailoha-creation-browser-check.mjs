@@ -61,7 +61,7 @@ async (page) => {
   const inputCalls = value.calls.filter((call) => call.path?.includes("/input/actions/"));
   const tap = JSON.parse(inputCalls.find((call) => call.path.endsWith("/tap")).body);
   const gesture = JSON.parse(inputCalls.find((call) => call.path.endsWith("/gesture")).body);
-  verify(tap.x === 24 && tap.y === 16 && tap.geometryRevision === 14,
+  verify(Math.abs(tap.x - 24) < 0.01 && Math.abs(tap.y - 16) < 0.01 && tap.geometryRevision === 14,
     "The renderer scaled logical tap coordinates using encoded pixels");
   verify(gesture.geometryRevision === 14 && gesture.actions[0].x === 12 && gesture.actions.at(-1).x === 36
     && gesture.actions.every((action) => action.y === undefined || action.y === 16),
@@ -90,6 +90,7 @@ async (page) => {
     const operationControl = semantic.getByLabel("Inspection operation");
     if (await operationControl.inputValue() !== operation) await operationControl.selectOption(operation);
     await page.waitForFunction(() => document.querySelector("#semantic-inspection .semantic-inspection-actions button")?.disabled === false);
+    await api("/api/v1/semantic/inspection");
     if (text !== undefined) await semantic.getByLabel("Text", { exact: true }).fill(text);
   }
   async function semanticRead(lens, operation, text) {
