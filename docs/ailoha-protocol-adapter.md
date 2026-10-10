@@ -347,7 +347,7 @@ verb; reviewed runtime PR 67 source at `5abe074c7a91bb64aaf2691300e4bd39e9807079
 includes the fixed PUT method/type/private guard and is merged at
 `1c82c6b65b9ef099f49f42386bd0e875c91b3339`. Reviewed native PR 76 source
 at `00c8eda7e9e01145e0493d2ed45d2a455042d71d` includes the fidelity
-fields; its current draft head is `7efed525628b6d53e2760d49a660bebf0fcdf95f`
+fields; its current draft head is `75b165e2c51bb194980d5a88c0acc47de8d05eef`
 after a normal merge of main. Native PR 76 is not merged, and neither source
 head is an approved public SDK pin. Internal
 source-only fixtures explicitly enable these contracts and exercise 21 API plus
