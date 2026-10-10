@@ -2,11 +2,13 @@ import assert from "node:assert/strict";
 import { existsSync, mkdirSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { createRequire } from "node:module";
 import { WebSocket } from "ws";
 import { enableCatalogCreation, scenario, sourceSha } from "./ailoha-sdk-double.mjs";
 import { catalogIds } from "./ailoha-catalog-creation.mjs";
+import { stageEvents } from "./ailoha-native-stage-double.mjs";
+import { copilotUi } from "./copilot-sdk-double.mjs";
 
 const root = resolve(process.argv[2]);
 const host = process.argv[3];
@@ -18,6 +20,7 @@ let previousPin;
 try { previousPin = readFileSync(pinPath); }
 catch (error) { if (error.code !== "ENOENT") throw error; }
 process.env.AILOHA_TEST_CONTEXT_STATE = join(scratch, "context.json");
+process.env.AILOHA_TEST_STAGE_JOURNAL = join(scratch, "native-stage.jsonl");
 process.env.MOBILE_CANVAS_BACKEND = "ailoha";
 const scope = { sessionId: `live-test-session-${process.pid}`, viewId: `${host}-view` };
 process.env.AILOHA_TEST_SESSION_ID = scope.sessionId;
@@ -82,10 +85,8 @@ async function checkEmptyContext(selection) {
     const callsBeforeGates = scenario.calls.length;
     for (const [name, input] of Object.entries({
       mobile_device_file_pull: { deviceId: "opaque/target", path: "empty", output: "/owned/output" },
-      mobile_device_file_push: { deviceId: "opaque/target", path: "empty", input: "/owned/input" },
       mobile_device_file_delete: { deviceId: "opaque/target", path: "/directory", recursive: false },
       mobile_device_file_mkdir: { deviceId: "opaque/target", path: "/directory" },
-      mobile_device_media_add: { deviceId: "opaque/target", paths: ["/owned/photo.png"] },
     })) {
       const result = await emptyDispatcher.handle(mcpCall(name, input));
       assert.deepEqual(JSON.parse(result.result.content[0].text), {
@@ -103,10 +104,8 @@ async function checkArtifactApi(api) {
   const callsBefore = scenario.calls.length;
   for (const [name, method, suffix] of [
     ["mobile_device_file_pull", "POST", "/files/pull"],
-    ["mobile_device_file_push", "POST", "/files/push"],
     ["mobile_device_file_delete", "POST", "/files/delete"],
     ["mobile_device_file_mkdir", "POST", "/files/mkdir"],
-    ["mobile_device_media_add", "POST", "/media"],
   ]) {
     const response = await api(`/api/v1/devices/opaque%2Ftarget${suffix}`, method,
       method === "POST" ? { path: "/directory" } : undefined);
@@ -165,6 +164,117 @@ async function checkArtifactReads(api, selection) {
   }
   assert.equal(scenario.calls.filter((call) => call.method === "POST"
     && /\/(files|logs|crashes|media)/.test(call.path ?? "")).length, 0);
+}
+
+async function checkArtifactStaging(api, selection, { answerConsent } = {}) {
+  scenario.artifactStaging = true;
+  const target = "/api/v1/devices/opaque%2Ftarget";
+  const empty = join(scratch, "empty.txt");
+  const contact = join(scratch, "contact.vcf");
+  const image = join(scratch, "image.png");
+  writeFileSync(empty, "");
+  writeFileSync(contact, "BEGIN:VCARD\nVERSION:3.0\nEND:VCARD\n");
+  writeFileSync(image, Buffer.from([137, 80, 78, 71]));
+  const media = async (paths) => {
+    const reply = await api(`${target}/media`, "POST", { hostPaths: paths });
+    assert.equal(reply.status, 200);
+    assert.deepEqual(await reply.json(), {
+      schemaVersion: "1.0", deviceId: "opaque/target", platform: "ios", added: paths,
+    });
+  };
+  const pushInput = { hostPath: empty, devicePath: "/Documents/empty.txt" };
+  const pushMcpInput = { deviceId: "opaque/target", input: empty, path: pushInput.devicePath };
+  try {
+    await media([contact, image]);
+    const before = stageEvents().length;
+    const pending = api(`${target}/files/push`, "POST", pushInput);
+    await answerConsent();
+    const result = await pending;
+    assert.equal(result.status, 200);
+    assert.deepEqual(await result.json(), {
+      schemaVersion: "1.0", success: true, deviceId: "opaque/target",
+      devicePath: pushInput.devicePath, hostPath: empty, size: 0, operation: "push",
+    });
+    assert.deepEqual(stageEvents().slice(before).map((event) => event.action),
+      ["stage", "continue", "cleanup"]);
+    const requests = [];
+    const dispatcher = await createAilohaMcpDispatcher({
+      version: "synthetic-only", binding: returnedBinding(selection),
+      async requestElicitation(params) {
+        requests.push(params);
+        assert.equal(params.requestedSchema.properties.decision.default, "cancel");
+        assert.match(params.message, /Documents\/(?:empty|uncertain)\.txt/);
+        assert.match(params.message, /native-deployment-not-opaque-target/);
+        return { action: "accept", content: { decision: "approve" } };
+      },
+    });
+    try {
+      const initialized = await dispatcher.handle({
+        jsonrpc: "2.0", id: randomUUID(), method: "initialize",
+        params: { protocolVersion: "2025-06-18", capabilities: { elicitation: { form: {} } } },
+      });
+      assert.equal(initialized.result.protocolVersion, "2025-06-18");
+      const mediaOutput = await dispatcher.handle(mcpCall("mobile_device_media_add",
+        { deviceId: "opaque/target", paths: [contact, image] }));
+      assert.notEqual(mediaOutput.result.isError, true);
+      assert.deepEqual(mediaOutput.result.structuredContent.added, [contact, image]);
+      assert.deepEqual(JSON.parse(mediaOutput.result.content[0].text), mediaOutput.result.structuredContent);
+      scenario.failStageOperationReadOnce = true;
+      const first = await dispatcher.handle(mcpCall("mobile_device_file_push", pushMcpInput));
+      assert.equal(first.result.isError, true);
+      const beforeRecovery = stageEvents().length;
+      const second = await dispatcher.handle(mcpCall("mobile_device_file_push", pushMcpInput));
+      assert.notEqual(second.result.isError, true, JSON.stringify(second.result));
+      assert.deepEqual(second.result.structuredContent, {
+        schemaVersion: "1.0", success: true, deviceId: "opaque/target",
+        devicePath: pushInput.devicePath, hostPath: empty, size: 0, operation: "push",
+      });
+      assert.deepEqual(JSON.parse(second.result.content[0].text), second.result.structuredContent);
+      assert.equal(stageEvents().length - beforeRecovery, 1);
+      assert.equal(stageEvents().at(-1).action, "cleanup");
+      assert.equal(requests.length, 1, "A recovered device operation cannot request approval twice.");
+      const uncertainInput = { ...pushMcpInput, path: "/Documents/uncertain.txt" };
+      process.env.AILOHA_TEST_STAGE_UNCERTAIN = "1";
+      const uncertain = await dispatcher.handle(mcpCall("mobile_device_file_push", uncertainInput));
+      assert.equal(uncertain.result.isError, true);
+      assert.equal(JSON.parse(uncertain.result.content[0].text).code, "device_acceptance_unknown");
+      const afterAttempt = stageEvents();
+      assert.equal(afterAttempt.at(-1).action, "continue");
+      assert.equal(afterAttempt.at(-1).uncertain, true);
+      const repeated = await dispatcher.handle(mcpCall("mobile_device_file_push", uncertainInput));
+      assert.equal(repeated.result.isError, true);
+      assert.equal(JSON.parse(repeated.result.content[0].text).code, "device_acceptance_unknown");
+      assert.deepEqual(stageEvents(), afterAttempt, "An uncertain device attempt cannot stage or POST again.");
+      assert.equal(requests.length, 2, "One scoped approval per original device attempt.");
+    } finally { await dispatcher.dispose(); }
+    const stages = stageEvents();
+    assert.deepEqual(stages.filter((event) => event.action === "stage").map((event) => event.sources),
+      [[contact, image], [empty], [contact, image], [empty], [empty]]);
+    const host = scenario.connectionRef;
+    const ticks = (value) => (BigInt(Date.parse(value)) + 62135596800000n) * 10000n;
+    const expectedHost = `host-${createHash("sha256").update(
+      `${host.serviceId}\0${host.pid}\0${ticks(host.startedAt)}\0${ticks(host.processStartedAt)}`,
+    ).digest("hex")}`;
+    for (const stage of stages.filter((event) => event.action === "stage")) {
+      assert.equal(stage.receipt.artifacts.every((entry) =>
+        entry.proof.contextRef === selection.contextBinding.contextRef
+          && entry.proof.scopeEpoch === selection.contextBinding.scopeEpoch
+          && entry.proof.revision === selection.contextBinding.revision
+          && entry.proof.ownerProcessId === process.pid
+          && entry.proof.targetHostId === "synthetic-host"
+          && entry.proof.providerId === scenario.providerId
+          && entry.proof.nativeTargetId === scenario.nativeId
+          && entry.proof.hostInstanceId === expectedHost), true);
+      assert.equal(stages.filter((event) => event.action === "continue"
+        && event.receipt.artifacts[0].proof.stageId === stage.receipt.artifacts[0].proof.stageId).length, 1);
+    }
+    return { mediaBatches: stages.filter((event) => event.action === "continue"
+      && event.receipt.kind === "media").length, approvals: requests.length,
+    uncertainPosts: stages.filter((event) => event.action === "continue" && event.uncertain).length };
+  } finally {
+    scenario.artifactStaging = false;
+    delete process.env.AILOHA_TEST_STAGE_UNCERTAIN;
+  }
 }
 
 try {
@@ -283,6 +393,20 @@ try {
     await checkArtifactReads((path, method) => fetch(new URL(path, url), {
       method, headers: { Cookie: cookie },
     }), selected);
+    var stagedEvidence = await checkArtifactStaging((path, method, body) => fetch(new URL(path, url), {
+      method, headers: { Cookie: cookie, ...(method === "POST" ? { "Content-Type": "application/json" } : {}) },
+      ...(method === "POST" ? { body: JSON.stringify(body) } : {}),
+    }), selected, {
+      async answerConsent() {
+        const count = copilotUi.prompts.length;
+        await waitFor(() => copilotUi.prompts.length > count);
+        const prompt = copilotUi.prompts.at(-1);
+        assert.match(prompt.message, /Documents\/empty\.txt/);
+        assert.equal(prompt.requestedSchema.properties.decision.default, "cancel");
+        assert.equal(copilotUi.respond(prompt.requestId,
+          { action: "accept", content: { decision: "approve" } }), true);
+      },
+    });
     const socketUrl = new URL("/ws/video?deviceId=opaque%2Ftarget", url);
     socketUrl.protocol = "ws:";
     const socket = new WebSocket(socketUrl, "ailoha.video.v1", { headers: { Cookie: cookie } });
@@ -310,10 +434,14 @@ try {
     await receiver.dispose();
   } else if (host === "vscode") {
     const require = createRequire(import.meta.url);
+    const vscode = require("vscode");
     const extensionRoot = resolve(process.argv[4] ?? join(source, "vscode"));
     const { HostBridge } = require(join(extensionRoot, "out", "hostBridge.js"));
     const { createRuntimeCanvasHost } = await import(pathToFileURL(join(root, "lib", "ailoha", "runtime-backend.mjs")).href);
-    const hostAdapter = createRuntimeCanvasHost({ scope, onError: (error) => logs.push(error.code) });
+    const { createDestructivePrompt } = require(join(extensionRoot, "out", "destructiveConsent.js"));
+    const hostAdapter = createRuntimeCanvasHost({
+      scope, onError: (error) => logs.push(error.code), confirmDestructive: createDestructivePrompt(),
+    });
     const messages = [];
     let connection;
     let bridge;
@@ -375,6 +503,15 @@ try {
     selectedContext = selected.selection;
     assert.equal(selected.deviceId, "opaque/target");
     returnedBinding(selected.selection);
+    stagedEvidence = await checkArtifactStaging(api, selected.selection, {
+      async answerConsent() {
+        const count = vscode.testUi.pickers.length;
+        await waitFor(() => vscode.testUi.pickers.length > count);
+        const picker = vscode.testUi.pickers.at(-1);
+        assert.match(picker.items[1].detail, /Documents\/empty\.txt/);
+        assert.equal(picker.answer(true), true);
+      },
+    });
     const screenshot = await bridge.getSelectedScreenshot();
     assert.equal(screenshot.bytes[0], 137);
     assert.equal((await api("/api/v1/devices/opaque%2Ftarget/shutdown", "POST")).status, 200);
@@ -512,6 +649,7 @@ try {
       selectionApplied: record.selectionApplied, operationId: record.acceptedOperation.operationId,
     })),
     createPosts: creationCalls.length, noSeparateBootPost: true,
+    stagedEvidence,
     connectionRefCapturedInternally: true, connectionRefNotSerialized: true,
   }));
 } finally {
@@ -522,5 +660,7 @@ try {
   else rmSync(pinPath, { force: true });
   rmSync(join(scratch, "screen.png"), { force: true });
   rmSync(join(scratch, "context.json"), { force: true });
+  rmSync(join(scratch, "native-stage.jsonl"), { force: true });
+  for (const name of ["empty.txt", "contact.vcf", "image.png"]) rmSync(join(scratch, name), { force: true });
   rmSync(scratch, { recursive: true, force: true });
 }

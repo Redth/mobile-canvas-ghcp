@@ -10,6 +10,15 @@ if (args[0] === "--fixture-state") {
 if (args[0] === "mcp-serve") {
   await import("./semantic-mcp-server.mjs");
 } else {
+if (args[0] === "target" && args.includes("native-stage")) {
+  if (!process.env.AILOHA_TEST_STAGE_JOURNAL || !process.env.AILOHA_TEST_CONTEXT_STATE) {
+    throw new Error("Native stage requires an owned isolated fixture journal and context.");
+  }
+  const { runNativeStage } = await import("./ailoha-native-stage-double.mjs");
+  const contexts = JSON.parse(readFileSync(process.env.AILOHA_TEST_CONTEXT_STATE, "utf8"));
+  process.stdout.write(JSON.stringify(runNativeStage(args, contexts)));
+  process.exit();
+}
 if (args[0] === "workspace") {
   const { runWorkspaceDouble } = await import("./ailoha-workspace-double.mjs");
   process.exitCode = await runWorkspaceDouble(args);

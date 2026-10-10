@@ -541,9 +541,14 @@ tooling is not a ready-shaped empty inventory.
 The nine legacy file/media/diagnostics identities remain registered with their
 original MCP input/output schemas. Four read-only identities (`file_list`,
 `log`, `crashes`, `crash_report`) now have shared, capability-checked source
-adapters for the reviewed native read-result subset. The other five still
-return `artifact_contract_unavailable` (501) in both hosts without dispatch;
-unadvertised read capabilities return `capability_not_supported` (501).
+adapters for the reviewed native read-result subset. File push and media add
+now have source-compatible staging, conditional on the
+verified native-stage CLI, target capabilities and original-owner receipts.
+File push requires captured human overwrite approval; unsupported MCP clients
+cannot substitute `confirm=true`. File pull, delete and mkdir still return
+`artifact_contract_unavailable` (501) without dispatch because their direct
+native routes lack a server-owned original-view admission and recovery fence.
+Unadvertised read capabilities return `capability_not_supported` (501).
 Ordinary installs still use the legacy backend unless explicitly opted in.
 This is **not** nine-tool file/media/diagnostics parity.
 
@@ -563,12 +568,18 @@ crash detail is bounded to 1 MiB UTF-8; larger reports are not silently
 truncated or marked successful. A streamed export/readback path remains a
 delivery gate.
 
-These adapters target the coordinator-reviewed **source** subset frozen at
-`microsoft/ailoha` native draft `2618b6c`; that is not a public SDK/runtime
-pin. The normal Ailoha opt-in remains unavailable until an approved public
-runtime graph is prepared. Native staged file/media writes and mutation
-receipts are still under review, and no public binary or real-device parity
-is claimed.
+The read adapters target the coordinator-reviewed **source** subset frozen at
+`microsoft/ailoha` native draft `2618b6c`. The staged push/media adapters use
+the separately source-cleared typed stage, confirm, continue and cleanup
+receipts at native draft `e003ea7`; incomplete artifact readback confirms
+by original-host GET only, uncertain device acceptance never triggers another
+device POST, and original-host cleanup is receipt-conditional. A completed
+zero-byte push is distinguished from a failed copy; media output requires the
+native accepted artifact IDs in stage order. Media batches beyond 16 paths
+fail explicitly instead of silently truncating. These are **source-only**
+compatibility paths, not a public SDK/runtime pin. The normal Ailoha opt-in
+remains unavailable until an approved public runtime graph is prepared; no
+public binary, real-device parity or default migration is claimed.
 
 For comparison, at the earlier canonical `microsoft/ailoha` source
 `f5eadd9f7a31b6da9322bf74e7549286d8844668`, the root Target Host feature

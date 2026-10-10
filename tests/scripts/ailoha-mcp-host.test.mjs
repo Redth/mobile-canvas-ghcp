@@ -80,14 +80,20 @@ test("unsupported/invalid/cross-scope calls are positive failures before any run
   assert.equal(backendCalls, 0);
 });
 
-test("five mutation identities stay gated and four read identities retain their installed MCP schemas", async (t) => {
+test("three direct mutations remain gated while staged and read identities retain installed MCP schemas", async (t) => {
   let backendCalls = 0;
   const dispatcher = await createAilohaMcpDispatcher({
     binding, version: "test", createBackend() {
       backendCalls += 1;
-      return { async readArtifact(name, input) {
-        return { schemaVersion: "1.0", deviceId: input.deviceId, operation: name };
-      }, async dispose() {} };
+      return {
+        async readArtifact(name, input) {
+          return { schemaVersion: "1.0", deviceId: input.deviceId, operation: name };
+        },
+        async stageArtifact(name, input) {
+          return { schemaVersion: "1.0", deviceId: input.deviceId, operation: name };
+        },
+        async dispose() {},
+      };
     },
   });
   t.after(() => dispatcher.dispose());
@@ -106,17 +112,24 @@ test("five mutation identities stay gated and four read identities retain their 
   };
   for (const [name, input] of Object.entries(inputs)) {
     const readable = ["mobile_device_file_list", "mobile_device_log",
-      "mobile_device_crashes", "mobile_device_crash_report"].includes(name);
+      "mobile_device_crashes", "mobile_device_crash_report", "mobile_device_media_add"].includes(name);
+    const gated = ["mobile_device_file_pull", "mobile_device_file_delete", "mobile_device_file_mkdir"].includes(name);
     const tool = tools.find((entry) => entry.name === name);
     assert.ok(tool);
-    assert.equal(tool.description.includes(ARTIFACT_FEATURE_GATES[name]), !readable);
+    assert.equal(tool.description.includes(ARTIFACT_FEATURE_GATES[name]), gated);
     assert.deepEqual(tool.inputSchema, original.find((entry) => entry.name === name).inputSchema);
     assert.deepEqual(tool.outputSchema, original.find((entry) => entry.name === name).outputSchema);
     const result = await dispatcher.handle(call(name, input));
     assert.equal(result.result.isError === true, !readable, name);
     assert.deepEqual(JSON.parse(result.result.content[0].text), readable
       ? { schemaVersion: "1.0", deviceId: input.deviceId, operation: name }
-      : { code: "artifact_contract_unavailable", message: ARTIFACT_FEATURE_GATES[name], status: 501 });
+      : name === "mobile_device_file_push"
+        ? {
+          code: "consent_not_supported",
+          message: "This MCP client cannot request genuine captured form approval; confirm=true is not authorization.",
+          status: 501,
+        }
+        : { code: "artifact_contract_unavailable", message: ARTIFACT_FEATURE_GATES[name], status: 501 });
   }
   for (const [name, input] of [
     ["mobile_device_media_add", { deviceId: "target", paths: ["/owned/photo.png", null] }],

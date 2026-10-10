@@ -2,6 +2,7 @@ import { readFileSync } from "node:fs";
 import { randomUUID } from "node:crypto";
 import { fileURLToPath } from "node:url";
 import { createCatalogModel } from "./ailoha-catalog-creation.mjs";
+import { stageEvents } from "./ailoha-native-stage-double.mjs";
 
 export const scenario = {
   calls: [], leases: new Map(), videos: new Map(), operations: new Map(), status: "running", geometryRevision: 13,
@@ -58,6 +59,10 @@ function providerRecords() {
       features: ["queryTargetLogs", "queryTargetCrashes", "getTargetCrashDetail"] },
     { id: "target.apps", version: 1, features: ["listTargetApps"] },
   ] : [];
+  if (scenario.artifactStaging) readCapabilities.push(
+    { id: "target.files", version: 1, features: ["importStagedTargetFile"] },
+    { id: "target.media", version: 1, features: ["importStagedTargetMediaBatch"] },
+  );
   return [{
     providerId: scenario.providerId, name: "Synthetic provider", version: "synthetic", state: "ready",
     capabilities: [...captures, ...readCapabilities],
@@ -270,6 +275,19 @@ export async function openTargetHostTransport(leaseId) {
         return reply(operation, 202, `/api/v1/operations/${operationId}`);
       }
       if (path.startsWith("/api/v1/operations/")) {
+        const stage = scenario.artifactStaging && stageEvents().find((event) =>
+          event.action === "continue" && `/api/v1/operations/${encodeURIComponent(event.operation.operationId)}` === path);
+        if (stage) {
+          if (scenario.failStageOperationReadOnce) {
+            scenario.failStageOperationReadOnce = false;
+            throw new Error("Owned operation GET interrupted");
+          }
+          return reply({
+            ...stage.operation, status: "succeeded", completedAt: "2026-10-10T00:00:02Z",
+            result: stage.receipt.kind === "file" ? { size: stage.receipt.artifacts[0].artifact.size }
+              : { addedArtifactIds: stage.operation.artifactIds },
+          });
+        }
         if (scenario.beforeOperationRead) await scenario.beforeOperationRead(path, options);
         if (scenario.operationUnavailable) return reply({ status: 503, title: "Synthetic operation observation unavailable" }, 503);
         const id = decodeURIComponent(path.split("/").at(-1));
