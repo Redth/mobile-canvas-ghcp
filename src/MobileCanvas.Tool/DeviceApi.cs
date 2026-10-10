@@ -136,6 +136,7 @@ internal static class DeviceApi
 		path == "/ailoha-video-protocol.js" ||
 		path == "/ailoha-video-receiver.js" ||
 		path == "/ailoha-video-player.js" ||
+		path == "/ailoha-workspace-view.js" ||
 		path == "/create-device-options.js" ||
 		path == "/device-canvas.js" ||
 		path == "/device-canvas.css" ||
@@ -159,6 +160,9 @@ internal static class DeviceApi
 		app.MapGet(
 			"/ailoha-video-player.js",
 			() => EmbeddedAsset("ailoha-video-player.js", "text/javascript; charset=utf-8"));
+		app.MapGet(
+			"/ailoha-workspace-view.js",
+			() => EmbeddedAsset("ailoha-workspace-view.js", "text/javascript; charset=utf-8"));
 		app.MapGet(
 			"/create-device-options.js",
 			() => EmbeddedAsset("create-device-options.js", "text/javascript; charset=utf-8"));

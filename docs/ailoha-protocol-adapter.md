@@ -319,7 +319,8 @@ tooling is not a ready-shaped empty inventory.
 ### Scope and verification
 
 Implemented: inventory/select, advertised start/stop/reboot, PNG screenshot,
-basic geometry-bound pointer gestures and shared ALHV WebCodecs display.
+basic geometry-bound pointer gestures, shared ALHV WebCodecs display, and
+[read-only explicit-root workspace/application evidence](ailoha-workspace-inspection.md).
 Unsupported: compatibility creation/catalog, reveal/rotation/keyboard/buttons,
 reset/delete without scoped consent, app/system semantic trees, app deployment,
 recording and broader settings/diagnostics/file/hardware operations. No claim of

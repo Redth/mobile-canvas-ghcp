@@ -12,6 +12,7 @@ public sealed class DeviceApiTests
 	[InlineData("/ailoha-video-protocol.js")]
 	[InlineData("/ailoha-video-receiver.js")]
 	[InlineData("/ailoha-video-player.js")]
+	[InlineData("/ailoha-workspace-view.js")]
 	[InlineData("/create-device-options.js")]
 	[InlineData("/device-canvas.js")]
 	[InlineData("/device-canvas.css")]
@@ -28,6 +29,7 @@ public sealed class DeviceApiTests
 		{
 			"canvas-state.js", "create-device-options.js", "ailoha-canvas-state.js",
 			"ailoha-video-protocol.js", "ailoha-video-receiver.js", "ailoha-video-player.js",
+			"ailoha-workspace-view.js",
 		})
 		{
 			using var stream = typeof(DeviceApi).Assembly.GetManifestResourceStream(
@@ -41,6 +43,7 @@ public sealed class DeviceApiTests
 	public void DeviceApi_RemainsProtected()
 	{
 		Assert.False(DeviceApi.IsPublicPath(new PathString("/api/v1/catalog")));
+		Assert.False(DeviceApi.IsPublicPath(new PathString("/api/v1/workspace/inspection")));
 		Assert.False(DeviceApi.IsPublicPath(
 			new PathString("/api/v1/host/settings/screen-recording")));
 	}
