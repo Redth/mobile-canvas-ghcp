@@ -202,7 +202,8 @@ function featureFixture(options = {}) {
   const wire = [];
   const platform = options.platform ?? "ios";
   let appearance = "light";
-  let batteryLevel = 0.57;
+  let batteryLevel = options.batteryLevel === undefined ? 0.57 : options.batteryLevel;
+  let batteryState = "charging";
   let clipboardText = "pasteboard";
   let latencyMs = null;
   let readsFail = false;
@@ -224,7 +225,7 @@ function featureFixture(options = {}) {
         if (hardwareGate) await hardwareGate.promise;
         if (hardwareReadsFail) throw new Error("private hardware readback diagnostics");
         return reply({
-          targetId: "one", platform, batteryLevel, batteryState: "charging",
+          targetId: "one", platform, batteryLevel, batteryState,
           downloadBitsPerSecond: null, uploadBitsPerSecond: null, latencyMs,
           networkIsIndicatorOnly: platform === "ios", unreadable: ["location"],
           "x-ailoha-target-host": options.wrongOwner ? { ...context, providerId: "other" }
@@ -236,8 +237,14 @@ function featureFixture(options = {}) {
         return reply({ contentType: "text/plain", text: clipboardText, "x-ailoha-target-host": context });
       }
       if (path.endsWith("/battery") && request.method === "PUT") {
-        batteryLevel = JSON.parse(request.body).level;
-        return reply({ simulated: true, level: batteryLevel, "x-ailoha-target-host": context });
+        const input = JSON.parse(request.body);
+        if (input.level !== undefined) batteryLevel = input.level;
+        if (input.state !== undefined) batteryState = input.state;
+        return reply({
+          simulated: true, level: batteryLevel ?? 0,
+          state: batteryLevel === null ? "unknown" : batteryState,
+          "x-ailoha-target-host": context,
+        });
       }
       if (path.endsWith("/network") && request.method === "PUT") {
         latencyMs = JSON.parse(request.body).latencyMs;
@@ -581,6 +588,21 @@ test("source-conditional official PUT routes preserve all four legacy setter out
     ["/api/v1/targets/one/location", { latitude: 1.5, longitude: -2.5 }],
     ["/api/v1/targets/one/clipboard", { contentType: "text/plain", text: "new native text" }],
   ]);
+});
+
+test("state-only battery update preserves an unreadable level instead of projecting the native zero placeholder", async (t) => {
+  const state = featureFixture({ platform: "android", allowPut: true, batteryLevel: null });
+  t.after(() => state.backend.dispose());
+  const hardware = await state.backend.invokeAction("set_battery", {
+    deviceId: "one", state: "discharging",
+  });
+  assert.equal(hardware.batteryLevel, null);
+  assert.equal(hardware.batteryState, "discharging");
+  assert.deepEqual(state.wire.filter(({ method }) => method === "PUT")
+    .map(({ path, body }) => [path, JSON.parse(body)]), [
+    ["/api/v1/targets/one/battery", { state: "discharging" }],
+  ]);
+  assert.equal((await state.backend.deviceFeature("hardware_get", "one")).batteryLevel, null);
 });
 
 test("setter readback failures and wrong capability never resubmit an uncertain PUT", async (t) => {
