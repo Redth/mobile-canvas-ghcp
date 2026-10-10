@@ -229,8 +229,11 @@ including transitive dependencies, is retained without native optional packages
 or symlinks. Both archive verifiers compare the complete staged tree with its
 deterministic byte fingerprint and require matching package/runtime source pins,
 dependency versions and notices. A receipt checks staged-byte consistency; it
-does not establish anonymous publication of the upstream tarball. Required native
-RIDs and public pins remain upstream release evidence, not consumer assumptions.
+does not establish anonymous publication of the upstream tarball. VSIX validation
+permits upstream source maps only inside that verified pinned graph, preserving
+the publisher's bundled bytes; Mobile Canvas source, tests and generated maps
+remain excluded. Required native RIDs and public pins remain upstream release
+evidence, not consumer assumptions.
 
 `connectTargetHostTransport` applies the same strict validators and bounded
 operation waits to the factory's `response()` metadata without requiring or
