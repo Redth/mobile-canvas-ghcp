@@ -58,7 +58,7 @@
           "enum": ["legacy", "ailoha"],
           "default": "legacy",
           "scope": "application",
-          "markdownDescription": "Use the production legacy engine (default) or explicitly opt into the pinned official Ailoha Target Host. Reload the VS Code window after changing. Ailoha does not fall back after errors; app lifecycle uses canonical target operations, while complete app inventory, installation, recording and broader controls remain unsupported."
+          "markdownDescription": "Use the production legacy engine (default) or explicitly opt into the pinned official Ailoha Target Host. Reload the VS Code window after changing. Ailoha does not fall back after errors; app lifecycle uses canonical target operations, while app inventory without native classification, installation, recording and broader controls remain unsupported."
         }
       }
     },

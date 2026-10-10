@@ -190,6 +190,77 @@ test("missing canonical inventory fields never become invented user/system, proc
   assert.deepEqual(state.calls.filter(([name]) => name === "app-launch"), []);
 });
 
+test("reviewed optional native metadata projects exact legacy inventory and system filtering", async (t) => {
+  const state = fixture({ app: true, apps: [
+    { appId: "system-app", packageId: "com.example.system", name: "Alpha system",
+      version: "", buildNumber: "", state: "running", kind: "system", processId: 48 },
+    { appId: "opaque-app", packageId: "com.example.native", name: "Zed",
+      version: "2.0", buildNumber: "7", state: "running", kind: "user", processId: 4321,
+      path: "/apps/example.app", dataContainer: "/containers/example" },
+    { appId: "other-app", packageId: "com.example.other", name: "",
+      version: "", buildNumber: "", state: "installed", kind: "user" },
+  ] });
+  t.after(() => state.backend.dispose());
+  assert.deepEqual(await state.backend.listApps("one", { limit: 1 }), {
+    schemaVersion: "1.0", deviceId: "one", platform: "ios", total: 2,
+    apps: [{
+      bundleId: "com.example.other", name: null, version: null, build: null,
+      kind: "user", running: false, processId: null, path: null, dataContainer: null,
+    }],
+  });
+  assert.deepEqual(await state.backend.listApps("one", { includeSystem: true, text: "example", limit: 10 }), {
+    schemaVersion: "1.0", deviceId: "one", platform: "ios", total: 3,
+    apps: [
+      { bundleId: "com.example.other", name: null, version: null, build: null,
+        kind: "user", running: false, processId: null, path: null, dataContainer: null },
+      { bundleId: "com.example.native", name: "Zed", version: "2.0", build: "7",
+        kind: "user", running: true, processId: 4321,
+        path: "/apps/example.app", dataContainer: "/containers/example" },
+      { bundleId: "com.example.system", name: "Alpha system", version: null, build: null,
+        kind: "system", running: true, processId: 48, path: null, dataContainer: null },
+    ],
+  });
+  assert.deepEqual(state.calls.filter(([name]) => name === "app-list")
+    .map(([, , includeSystem]) => includeSystem), [false, true]);
+  const unclassified = fixture({ app: true, apps: [
+    { appId: "generic", packageId: "com.example.unknown", name: "Unknown",
+      version: "1", buildNumber: "1", state: "installed" },
+  ] });
+  t.after(() => unclassified.backend.dispose());
+  await assert.rejects(unclassified.backend.listApps("one", { includeSystem: true }), { code: "capability_not_supported" });
+  const installing = fixture({ app: true, apps: [
+    { appId: "installing", packageId: "com.example.pending", name: "Pending",
+      version: "1", buildNumber: "1", state: "installing", kind: "user" },
+  ] });
+  t.after(() => installing.backend.dispose());
+  await assert.rejects(installing.backend.listApps("one"), { code: "capability_not_supported" });
+});
+
+test("app mutation and app-op capabilities require the canonical inventory used for native ID lookup", async (t) => {
+  const state = fixture({ app: true });
+  t.after(() => state.backend.dispose());
+  state.client.getTargetCapabilities = async () => [
+    { id: "target.apps", version: 1, features: ["launchTargetApp", "terminateTargetApp", "uninstallTargetApp"] },
+    { id: "target.app-ops", version: 1, features: ["listTargetAppOps"] },
+  ];
+  for (const target of state.targets.values()) target.nativeIdentity.platform = "android";
+  const { capabilities } = await state.backend.getDevice("one");
+  assert.equal(capabilities.appList, false);
+  assert.equal(capabilities.appLaunch, false);
+  assert.equal(capabilities.appTerminate, false);
+  assert.equal(capabilities.appOpList, false);
+  await assert.rejects(state.backend.launchApp("one", "com.example.native"), { code: "capability_not_supported" });
+  await assert.rejects(state.backend.listAppOps("one", "com.example.native"), { code: "capability_not_supported" });
+  assert.equal(state.calls.some(([name]) => name === "app-launch" || name === "app-op-list"), false);
+  const otherPlatform = fixture({ app: true });
+  t.after(() => otherPlatform.backend.dispose());
+  otherPlatform.targets.get("one").nativeIdentity.platform = "browser";
+  const projected = await otherPlatform.backend.getDevice("one");
+  assert.equal(projected.capabilities.appList, false);
+  assert.equal(projected.capabilities.appLaunch, false);
+  assert.equal(projected.capabilities.appOpList, false);
+});
+
 test("stale named app authority before dispatch and failed terminate prevent the next mutation", async (t) => {
   const state = canonicalFixture({ app: true });
   t.after(() => state.backend.dispose());
@@ -450,6 +521,33 @@ test("app failures carry only captured ownership and operation receipt, not prov
   assert.equal(JSON.stringify(error).includes("sensitive"), false);
 });
 
+test("completed native launch metadata is projected only when typed and reported", async (t) => {
+  const reported = fixture({ app: true });
+  t.after(() => reported.backend.dispose());
+  reported.client.waitForOperation = async (id) => ({
+    operationId: id, kind: "launchTargetApp", targetId: "one", providerId: "provider",
+    status: "succeeded", destructive: false, result: { processId: 4321, detail: "com.example.native/.Main" },
+  });
+  assert.deepEqual(await reported.backend.launchApp("one", "com.example.native"), {
+    schemaVersion: "1.0", success: true, deviceId: "one", bundleId: "com.example.native",
+    operation: "launch", processId: 4321, detail: "com.example.native/.Main",
+  });
+  const malformed = fixture({ app: true });
+  t.after(() => malformed.backend.dispose());
+  let starts = 0;
+  malformed.client.launchTargetApp = async () => {
+    starts += 1;
+    return { operationId: "app-launch" };
+  };
+  malformed.client.waitForOperation = async (id) => ({
+    operationId: id, kind: "launchTargetApp", targetId: "one", providerId: "provider",
+    status: "succeeded", destructive: false, result: { processId: "not-a-PID" },
+  });
+  await assert.rejects(malformed.backend.launchApp("one", "com.example.native"), { code: "invalid_response" });
+  await assert.rejects(malformed.backend.launchApp("one", "com.example.native"), { code: "invalid_response" });
+  assert.equal(starts, 1);
+});
+
 test("failed native inventory before submission retains captured target and sanitizes diagnostics", async (t) => {
   const state = canonicalFixture({ app: true });
   t.after(() => state.backend.dispose());
@@ -479,7 +577,23 @@ test("install, destructive uninstall and Android app-op mutation remain explicit
   assert.deepEqual(await state.backend.listAppOps("one", "com.example.native"), {
     schemaVersion: "1.0", deviceId: "one", platform: "android", bundleId: "com.example.native", operations: [], total: 0,
   });
+  assert.deepEqual(state.calls.filter(([name]) => name === "app-op-list").at(-1), ["app-op-list", "one", "opaque-app"]);
   state.client.listTargetAppOps = async () => [{ appOpId: "SYSTEM_ALERT_WINDOW", appId: "com.example.native", mode: "allow" }];
+  await assert.rejects(state.backend.listAppOps("one", "com.example.native"), { code: "capability_not_supported" });
+  state.client.listTargetAppOps = async () => [
+    { appOpId: "SYSTEM_ALERT_WINDOW", appId: "opaque-app", mode: "ignored", uidScoped: true },
+    { appOpId: "WRITE_SETTINGS", appId: "opaque-app", mode: "allow", uidScoped: false },
+  ];
+  assert.deepEqual(await state.backend.listAppOps("one", "com.example.native"), {
+    schemaVersion: "1.0", deviceId: "one", platform: "android", bundleId: "com.example.native",
+    operations: [
+      { name: "SYSTEM_ALERT_WINDOW", mode: "ignore", uidScoped: true },
+      { name: "WRITE_SETTINGS", mode: "allow", uidScoped: false },
+    ], total: 2,
+  });
+  state.client.listTargetAppOps = async () => [
+    { appOpId: "SYSTEM_ALERT_WINDOW", appId: "opaque-app", mode: "foreground", uidScoped: true },
+  ];
   await assert.rejects(state.backend.listAppOps("one", "com.example.native"), { code: "capability_not_supported" });
 });
 

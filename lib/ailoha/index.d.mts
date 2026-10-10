@@ -183,12 +183,17 @@ export interface InstalledTargetApp {
   buildNumber: string;
   packageId: string;
   theme?: string | null;
+  kind?: "user" | "system" | null;
+  processId?: number | null;
+  path?: string | null;
+  dataContainer?: string | null;
 }
 
 export interface TargetAppOp {
   appOpId: string;
   appId?: string;
   mode: "allow" | "deny" | "foreground" | "default" | "ignored";
+  uidScoped?: boolean | null;
 }
 
 export interface AppLaunchRequest {

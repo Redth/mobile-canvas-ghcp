@@ -87,16 +87,19 @@ process identity with each HTTP mutation; this source slice does not claim safe
 same-ServiceId restart continuation pending reviewed lease evidence and a
 request-time native fence.
 
-This source-only slice **does not yet claim full app parity**. The current
-canonical `InstalledApp` omits the legacy kind, process ID, install path and data
-container, so a nonempty app list cannot be represented faithfully and
-`includeSystem=true` cannot distinguish system apps. Empty supported inventory
-is returned as empty, not inferred from a failed read. Canonical `AppOp` omits
-the legacy effective UID-scoped flag: nonempty app-op lists are explicitly
-unsupported, as is app-op mutation without scoped consent and readback.
-The current native adapter also discards the legacy launch result's optional
-process ID and detail, so the source adapter reports null for those nullable
-action fields rather than inventing a PID or platform launcher activity.
+This source-only slice **does not yet claim full app parity**. The reviewed
+native source contract adds optional `InstalledApp.kind`, process ID, path and
+data container; the shared adapter returns nonempty inventory only when each
+app reports user/system kind and a stable running state. Nullable fields with
+no native evidence remain null, never invented, and `includeSystem` is passed
+to the backend and sorted as in the legacy service. Empty supported inventory
+is returned as empty, not inferred from a failed read. Optional `AppOp.uidScoped`
+allows Android app-op results only when every operation reports effective UID
+scope and a legacy-compatible mode; otherwise the result is explicitly
+unsupported. App-op mutation still requires scoped consent and readback.
+The reviewed native adapter optionally preserves launch result process ID and
+detail in the completed operation, which are returned when present and valid;
+unknown optional values remain null rather than invented.
 Install remains unsupported until a reviewed host-owned package staging API can
 validate local paths, stream `.apk` files or archive `.app` directories, recheck
 the original named context before submission, and clean up the owned artifact.
