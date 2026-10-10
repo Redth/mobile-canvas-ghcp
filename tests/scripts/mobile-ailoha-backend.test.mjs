@@ -429,6 +429,55 @@ test("owned video closes its socket, deletes captured session, then releases wit
   assert.equal(order.includes("delete"), false);
 });
 
+test("known canonical replacement during accepted video creation cleans the original snapshot resource", async (t) => {
+  const createWait = deferred();
+  const state = canonicalFixture({ createWait });
+  t.after(() => state.backend.dispose());
+  const opening = state.backend.openVideo("one", () => {}, () => {});
+  const rejected = assert.rejects(opening, { code: "context_snapshot_superseded" });
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.deepEqual(state.calls.filter(([kind]) => kind === "video-create"), [["video-create", "one"]]);
+  await state.advanceSelection();
+  createWait.resolve();
+  await rejected;
+  assert.equal(state.calls.some(([kind]) => kind === "video-attach"), false);
+  assert.deepEqual(state.calls.filter(([kind]) => kind === "video-delete"), [["video-delete", "one"]]);
+});
+
+test("live video allows same-binding reads and retires callbacks without relabeling owned cleanup", async (t) => {
+  const state = canonicalFixture();
+  t.after(() => state.backend.dispose());
+  const delivered = [];
+  const errors = [];
+  let callbacks;
+  let cleanupInvocation;
+  const attach = state.media.attachVideo;
+  state.media.attachVideo = async (invocation, descriptor, captured) => {
+    callbacks = captured;
+    return attach(invocation, descriptor, captured);
+  };
+  const remove = state.media.deleteVideo;
+  state.media.deleteVideo = async (invocation, descriptor) => {
+    cleanupInvocation = invocation;
+    return remove(invocation, descriptor);
+  };
+  const video = await state.backend.openVideo("one", (value) => delivered.push(value), (error) => errors.push(error));
+  callbacks.onMessage("original");
+  await state.store.readSnapshot();
+  callbacks.onMessage("same-binding");
+  await state.advanceSelection();
+  callbacks.onMessage("retired");
+  callbacks.onError(new Error("retired protected channel"));
+  await video.close();
+  assert.deepEqual(delivered, ["original", "same-binding"]);
+  assert.deepEqual(errors, []);
+  assert.equal(cleanupInvocation.targetId, "one");
+  assert.equal(cleanupInvocation.executionContext.revision, "1");
+  assert.equal(cleanupInvocation.executionContext.scopeEpoch, "original-epoch");
+  assert.equal(state.calls.filter(([kind]) => kind === "video-create").length, 1);
+  assert.equal(state.calls.filter(([kind]) => kind === "video-delete").length, 1);
+});
+
 test("selection/close while creation is pending cannot attach the old video to a new view", async (t) => {
   const createWait = deferred();
   const state = fixture({ createWait });
