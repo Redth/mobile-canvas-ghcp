@@ -12,6 +12,155 @@ const binding = {
 const message = (method, params) => ({ jsonrpc: "2.0", id: 1, method, params });
 const call = (name, args) => message("tools/call", { name, arguments: args });
 
+function deferred() {
+  let resolve;
+  const promise = new Promise((complete) => { resolve = complete; });
+  return { promise, resolve };
+}
+
+for (const [name, original, replace] of [
+  ["mobile_device_boot", { deviceId: "original-target" },
+    (input) => { input.deviceId = "replacement-target"; }],
+  ["mobile_device_file_mkdir", { deviceId: "original-target", path: "/original" },
+    (input) => { input.deviceId = "replacement-target"; input.path = "/replacement"; }],
+  ["mobile_device_media_add", { deviceId: "original-target", paths: ["/owned/original.png"] },
+    (input) => { input.deviceId = "replacement-target"; input.paths[0] = "/owned/replacement.png"; }],
+]) {
+  test(`parent: ${name} keeps the original JSON arguments across backend acquisition`, async (t) => {
+    const entered = deferred();
+    const release = deferred();
+    const input = structuredClone(original);
+    let received;
+    const invoke = async (_name, args) => {
+      received = structuredClone(args);
+      return { success: true, deviceId: args.deviceId };
+    };
+    const dispatcher = await createAilohaMcpDispatcher({
+      binding, version: "test",
+      async createBackend() {
+        entered.resolve();
+        await release.promise;
+        return { invokeAction: invoke, guardedFile: invoke, stageArtifact: invoke, async dispose() {} };
+      },
+    });
+    t.after(() => dispatcher.dispose());
+    const pending = dispatcher.handle(call(name, input));
+    await entered.promise;
+    replace(input);
+    release.resolve();
+
+    const result = await pending;
+
+    assert.notEqual(result.result.isError, true);
+    assert.deepEqual(received, original);
+  });
+}
+
+test("parent: MCP response keeps its original request ID across backend acquisition", async (t) => {
+  const entered = deferred();
+  const release = deferred();
+  const dispatcher = await createAilohaMcpDispatcher({
+    binding, version: "test",
+    async createBackend() {
+      entered.resolve();
+      await release.promise;
+      return { async invokeAction() { return { success: true }; }, async dispose() {} };
+    },
+  });
+  t.after(() => dispatcher.dispose());
+  const request = call("mobile_device_boot", { deviceId: "original-target" });
+  const pending = dispatcher.handle(request);
+  await entered.promise;
+  request.id = 99;
+  release.resolve();
+
+  assert.equal((await pending).id, 1);
+});
+
+test("parent: MCP trusted named binding is captured before a caller can replace it", async (t) => {
+  const supplied = structuredClone(binding);
+  let received;
+  const dispatcher = await createAilohaMcpDispatcher({
+    binding: supplied, version: "test",
+    async createBackend(options) {
+      received = {
+        contextRef: options.contextRef, scopeEpoch: options.scopeEpoch,
+        ownerProcessId: options.ownerProcessId, scope: structuredClone(options.scope),
+      };
+      return { async invokeAction() { return { success: true }; }, async dispose() {} };
+    },
+  });
+  t.after(() => dispatcher.dispose());
+  supplied.contextRef = "replacement-context";
+  supplied.scope.viewId = "replacement-view";
+
+  await dispatcher.handle(call("mobile_device_boot", { deviceId: "original-target" }));
+
+  assert.deepEqual(received, binding);
+});
+
+test("parent: cancelled MCP caller cannot dispatch after shared backend acquisition completes", async (t) => {
+  const entered = deferred();
+  const release = deferred();
+  const caller = new AbortController();
+  let dispatched = 0;
+  const dispatcher = await createAilohaMcpDispatcher({
+    binding, version: "test",
+    async createBackend() {
+      entered.resolve();
+      await release.promise;
+      return {
+        async invokeAction() { dispatched++; return { success: true }; },
+        async dispose() {},
+      };
+    },
+  });
+  t.after(() => dispatcher.dispose());
+  const pending = dispatcher.handle(call("mobile_device_boot", { deviceId: "original-target" }),
+    { signal: caller.signal });
+  await entered.promise;
+  caller.abort();
+  release.resolve();
+
+  const result = await pending;
+
+  assert.equal(dispatched, 0);
+  assert.equal(result.result.isError, true);
+});
+
+test("a cancelled MCP caller does not abort a live peer sharing backend acquisition", async (t) => {
+  const entered = deferred();
+  const release = deferred();
+  const caller = new AbortController();
+  const dispatched = [];
+  const dispatcher = await createAilohaMcpDispatcher({
+    binding, version: "test",
+    async createBackend() {
+      entered.resolve();
+      await release.promise;
+      return {
+        async invokeAction(_name, args) {
+          dispatched.push(args.deviceId);
+          return { success: true, deviceId: args.deviceId };
+        },
+        async dispose() {},
+      };
+    },
+  });
+  t.after(() => dispatcher.dispose());
+  const cancelled = dispatcher.handle(call("mobile_device_boot", { deviceId: "cancelled-target" }),
+    { signal: caller.signal });
+  await entered.promise;
+  const live = dispatcher.handle(call("mobile_device_boot", { deviceId: "live-target" }));
+  caller.abort();
+  release.resolve();
+
+  assert.equal((await cancelled).result.isError, true);
+  assert.equal(JSON.parse((await cancelled).result.content[0].text).code, "cancelled");
+  assert.equal((await live).result.structuredContent.deviceId, "live-target");
+  assert.deepEqual(dispatched, ["live-target"]);
+});
+
 test("MCP preserves all61 installed identities and advertises broader opt-in limitations", async () => {
   const catalog = await ailohaMcpCatalog({ boundScope: binding.scope });
   const baseline = JSON.parse(readFileSync(new URL("./ailoha-compatibility-baseline.json", import.meta.url), "utf8"));
