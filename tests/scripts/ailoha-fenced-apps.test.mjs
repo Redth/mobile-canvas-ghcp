@@ -48,7 +48,7 @@ function captured(invocation, action = "app-op") {
 
 function accepted(kind, result) {
   return {
-    operationId: "accepted-op", kind, status: "queued", destructive: true,
+    operationId: "accepted-op", kind, status: "queued", destructive: kind === "uninstallFencedTargetApp",
     targetId: "target", providerId: "provider", createdAt: "2026-10-10T00:01:00Z",
     ...(result ? { result } : {}),
   };
@@ -384,6 +384,7 @@ test("verified CLI retains accepted native operation metadata even when its chil
       { targetId: "other-target" },
       { providerId: "other-provider" },
       { kind: "uninstallTargetApp" },
+      { destructive: false },
     ]) {
       const value = { ...accepted("uninstallFencedTargetApp"), ...mismatch };
       const cli = createFencedAppCli({

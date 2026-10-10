@@ -791,7 +791,8 @@ function fencedFixture(t, { answer = async () => true, capture, submit, readback
         if (wait) return wait(operationId);
         return {
           operationId, kind: operationId === "fenced-uninstall" ? "uninstallFencedTargetApp" : "updateFencedTargetAppOp",
-          targetId: "one", providerId: "provider", status: "succeeded", destructive: true,
+          targetId: "one", providerId: "provider", status: "succeeded",
+          destructive: operationId === "fenced-uninstall",
           createdAt: "2026-10-09T23:00:00Z", completedAt: "2026-10-09T23:00:02Z",
         };
       },
@@ -879,7 +880,7 @@ test("native accepted mismatch stays typed until explicit same-key GET recovery"
     wait(id) {
       return {
         operationId: id, kind: "updateFencedTargetAppOp", targetId: "one", providerId: "provider",
-        status: "succeeded", destructive: true,
+        status: "succeeded", destructive: false,
         createdAt: "2026-10-09T23:00:00Z", completedAt: "2026-10-09T23:00:02Z",
       };
     },
@@ -924,6 +925,25 @@ test("accepted mismatch with a foreign terminal target retains the ID without su
   await assert.rejects(state.backend.uninstallApp("one", "com.example.native", true),
     { code: "operation_owner_mismatch", operationId });
   assert.equal(state.events.filter(([event]) => event === "uninstall").length, 1);
+  assert.equal(state.events.filter(([event]) => event === "prompt").length, 1);
+});
+
+test("a setter cannot report success from a destructively marked terminal operation", async (t) => {
+  const state = fencedFixture(t, {
+    wait(operationId) {
+      return {
+        operationId, kind: "updateFencedTargetAppOp", targetId: "one", providerId: "provider",
+        status: "succeeded", destructive: true,
+        createdAt: "2026-10-09T23:00:00Z", completedAt: "2026-10-09T23:00:02Z",
+      };
+    },
+  });
+  state.targets.get("one").nativeIdentity.platform = "android";
+  await assert.rejects(state.backend.setAppOp("one", "com.example.native", "camera", "allow"),
+    { code: "operation_owner_mismatch" });
+  await assert.rejects(state.backend.setAppOp("one", "com.example.native", "camera", "allow"),
+    { code: "operation_owner_mismatch" });
+  assert.equal(state.events.filter(([event]) => event === "set-app-op").length, 1);
   assert.equal(state.events.filter(([event]) => event === "prompt").length, 1);
 });
 

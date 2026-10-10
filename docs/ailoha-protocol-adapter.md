@@ -115,7 +115,9 @@ native installation or UID evidence is unsupported, not guessed. The prompt
 shows the captured package, and for the setter the current-to-requested mode
 and whole-UID effects. Approval expires within the original 60-second budget;
 submission uses only `uninstall-fenced` or `set-app-op-fenced` with the captured
-receipt. It never uses ordinary DELETE/PUT, trusts `confirm=true` as human
+receipt. The accepted and completed uninstall Operation is destructive;
+the accepted and completed setter Operation is not. It never uses ordinary
+DELETE/PUT, trusts `confirm=true` as human
 approval, or sends private evidence to a renderer. The original accepted
 Operation ID remains available for GET-only recovery on uncertain delivery,
 including late acceptance; neither mutation is replayed. Known accepted IDs

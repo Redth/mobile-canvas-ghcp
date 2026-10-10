@@ -93,7 +93,8 @@ export function runFencedAppCli(args) {
     ?? `synthetic-fenced-${randomUUID()}`;
   const operation = {
     operationId, kind: args[2] === "uninstall-fenced" ? "uninstallFencedTargetApp" : "updateFencedTargetAppOp",
-    targetId, providerId: "synthetic-provider", status: "queued", destructive: true,
+    targetId, providerId: "synthetic-provider", status: "queued",
+    destructive: args[2] === "uninstall-fenced",
     createdAt: "2026-10-10T00:01:00Z",
   };
   const completed = {
