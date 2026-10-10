@@ -8,8 +8,28 @@ verifies its pinned runtime on first use.
 The [approved Ailoha integration roadmap](ailoha-integration-roadmap.md) keeps
 VS Code and the GitHub canvas as hosts of the same Mobile Canvas product. The
 [compatibility baseline](compatibility-baseline.md) records the extension's
-current public IDs and behavior that an engine migration must preserve; Ailoha
-is not yet the runtime behind this extension.
+current public IDs and behavior that an engine migration must preserve. The
+production default remains the legacy runtime; a bounded Ailoha source-preview
+adapter is now wired into the actual view, Chat tools and MCP entrypoint.
+
+### Ailoha source-preview opt-in
+
+Set the application setting `"mobileCanvas.backend": "ailoha"` and reload the
+VS Code window, or start the host with `MOBILE_CANVAS_BACKEND=ailoha`.
+Opt-in requires a prepared, approved public Ailoha SDK graph; until that release
+gate is supplied it reports unavailable instead of starting legacy. It keeps
+existing extension/view/tool identities and uses a unique live window/view
+context, not a workspace preference hash.
+
+The first slice supports inventory/select, advertised start/stop/reboot, PNG
+screenshots, observed-geometry pointer gestures and ALHV WebCodecs display.
+`#mobileDevice` and `#mobileScreenshot` use that captured owner;
+`#mobileUiTree`, recording, app deployment/inspection and broader controls report
+unsupported. Static unbound MCP cannot choose the first view; the extension
+supplies its named context explicitly. See the
+[shared adapter contract](ailoha-protocol-adapter.md) for tests and outstanding
+public SDK/native artifact gates. No default cutover or Marketplace publication
+is part of this source preview.
 
 ## Install
 

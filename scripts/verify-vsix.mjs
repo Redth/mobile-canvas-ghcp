@@ -40,6 +40,8 @@ function verifyExtracted(directory) {
     "extension/dist/web/index.html",
     "extension/dist/web/ailoha-video-protocol.js",
     "extension/dist/web/ailoha-video-receiver.js",
+    "extension/dist/web/ailoha-video-player.js",
+    "extension/dist/web/ailoha-canvas-state.js",
     "extension/dist/web/canvas-state.js",
     "extension/dist/web/create-device-options.js",
     "extension/dist/web/device-canvas.css",
@@ -50,11 +52,25 @@ function verifyExtracted(directory) {
     "extension/dist/lib/ailoha/index.d.mts",
     "extension/dist/lib/ailoha/errors.mjs",
     "extension/dist/lib/ailoha/protocol.mjs",
+    "extension/dist/lib/ailoha/mobile-backend.mjs",
+    "extension/dist/lib/ailoha/mobile-projection.mjs",
+    "extension/dist/lib/ailoha/media-adapter.mjs",
+    "extension/dist/lib/ailoha/runtime-sdk.mjs",
+    "extension/dist/lib/ailoha/runtime-backend.mjs",
+    "extension/dist/lib/ailoha/context-adapter.mjs",
+    "extension/dist/lib/ailoha/canvas-host.mjs",
+    "extension/dist/lib/ailoha/github-adapter.mjs",
+    "extension/dist/lib/ailoha/mcp-host.mjs",
+    "extension/dist/lib/ailoha/mcp-catalog.json",
+    "extension/dist/lib/backend.mjs",
     "extension/dist/scripts/mcp-vscode.mjs",
     "extension/dist/runtimes/manifest.json",
   ]) {
     if (!entries.has(path)) {
       throw new Error(`VSIX is missing ${path}`);
+    }
+    if (extensionPackage.contributes?.configuration?.properties?.["mobileCanvas.backend"]?.default !== "legacy") {
+      throw new Error("VSIX must preserve the explicit legacy-default backend setting.");
     }
   }
 

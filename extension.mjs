@@ -4,6 +4,9 @@ import { sep } from "node:path";
 import { promisify } from "node:util";
 import { createCanvas, joinSession } from "@github/copilot-sdk/extension";
 import { resolveCommand } from "./lib/runtime.mjs";
+import { mobileCanvasBackend } from "./lib/backend.mjs";
+import { withAilohaCanvas } from "./lib/ailoha/github-adapter.mjs";
+import { createRuntimeCanvasHost } from "./lib/ailoha/runtime-backend.mjs";
 
 const execFileAsync = promisify(execFile);
 const extensionPath = process.env.EXTENSION_PATH || fileURLToPath(import.meta.url);
@@ -63,7 +66,7 @@ function targetAction(name, description, verb) {
   };
 }
 
-const canvas = createCanvas({
+const canvasOptions = {
   id: canvasId,
   displayName: canvasName,
   description: "View, create, boot, and interact with local iOS simulators and Android emulators.",
@@ -416,7 +419,16 @@ const canvas = createCanvas({
   onClose: async (ctx) => {
     await runCli(["canvas", "close", ...contextArgs(ctx)]);
   },
-});
+};
+const ownedAilohaHosts = new Set();
+const canvas = createCanvas(withAilohaCanvas(canvasOptions, {
+  backend: mobileCanvasBackend(),
+  createHost(options) {
+    const host = createRuntimeCanvasHost(options);
+    ownedAilohaHosts.add(host);
+    return host;
+  },
+}));
 
 // The icon is a declaration field that has to be an extension-relative PNG path, but
 // createCanvas builds its declaration from a fixed field list that drops anything else, so it
@@ -424,4 +436,11 @@ const canvas = createCanvas({
 // tab in the desktop app draws its own glyph from the canvas type and ignores this.
 canvas.declaration.icon = "assets/icon.png";
 
-await joinSession({ canvases: [canvas] });
+await joinSession({
+  canvases: [canvas],
+  hooks: {
+    async onSessionEnd() {
+      await Promise.all([...ownedAilohaHosts].map((host) => host.closeCanvas()));
+    },
+  },
+});

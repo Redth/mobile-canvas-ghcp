@@ -104,7 +104,12 @@ jobs:
         with:
           node-version: 22
           cache: npm
-          cache-dependency-path: vscode/package-lock.json
+          cache-dependency-path: |
+            package-lock.json
+            vscode/package-lock.json
+
+      - name: Install host packaging dependencies
+        run: npm ci --ignore-scripts --omit=optional
 
       - uses: actions/download-artifact@v4
         with:

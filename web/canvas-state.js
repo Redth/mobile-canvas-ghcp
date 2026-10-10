@@ -206,6 +206,7 @@ export function canBootDeviceState(deviceState) {
 }
 
 export function canUseDeviceCapability(device, capability) {
+  if (device?.backend === "ailoha") return device.capabilities?.[capability] === true;
   return Boolean(device) && device.capabilities?.[capability] !== false;
 }
 

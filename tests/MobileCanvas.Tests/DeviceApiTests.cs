@@ -8,6 +8,10 @@ public sealed class DeviceApiTests
 	[Theory]
 	[InlineData("/")]
 	[InlineData("/canvas-state.js")]
+	[InlineData("/ailoha-canvas-state.js")]
+	[InlineData("/ailoha-video-protocol.js")]
+	[InlineData("/ailoha-video-receiver.js")]
+	[InlineData("/ailoha-video-player.js")]
 	[InlineData("/create-device-options.js")]
 	[InlineData("/device-canvas.js")]
 	[InlineData("/device-canvas.css")]
@@ -20,7 +24,11 @@ public sealed class DeviceApiTests
 	[Fact]
 	public void WebModules_AreEmbedded()
 	{
-		foreach (var name in new[] { "canvas-state.js", "create-device-options.js" })
+		foreach (var name in new[]
+		{
+			"canvas-state.js", "create-device-options.js", "ailoha-canvas-state.js",
+			"ailoha-video-protocol.js", "ailoha-video-receiver.js", "ailoha-video-player.js",
+		})
 		{
 			using var stream = typeof(DeviceApi).Assembly.GetManifestResourceStream(
 				$"MobileCanvas.Web.{name}");

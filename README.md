@@ -63,6 +63,29 @@ workspace behavior, manual MCP setup, and development commands.
 Both hosts still require Xcode for iOS or the Android SDK for Android; see
 [Requirements](#requirements).
 
+### Ailoha opt-in source preview
+
+The production **legacy backend remains the default** in both hosts. This source
+preview wires the same scoped Ailoha backend into the installed canvas, VS Code
+view/Chat tools, and MCP entrypoints. It does not change the product version,
+identifiers, Marketplace package, or stable runtime channel.
+
+After a reviewed package contains the approved public Ailoha launcher graph,
+start the GitHub Copilot host with `MOBILE_CANVAS_BACKEND=ailoha`, or set
+`"mobileCanvas.backend": "ailoha"` in VS Code's application settings and reload
+the window. Without that prepared, exact-pinned public graph, opt-in reports
+**unavailable** rather than starting the legacy engine. The public runtime pin
+and refreshed legacy embedded-web native artifacts are still release gates;
+this is not a normal-install-ready release.
+
+The opt-in covers inventory/selection, advertised start/stop/reboot, PNG
+screenshots, observed-geometry tap/held-press/swipe/scroll, and complete ALHV
+H.264 access units. It requires no app instrumentation. Creation/catalog
+mapping, destructive reset/delete without scoped human consent, app/system
+inspection, recording, keyboard/buttons and broader controls remain explicitly
+unsupported. See [the Ailoha adapter contract](docs/ailoha-protocol-adapter.md)
+for ownership, setup, package evidence and remaining gates.
+
 ## Give Copilot hands and eyes
 
 Mobile Canvas lets an agent work on the same device you see. Ask Copilot to
@@ -87,6 +110,9 @@ and take over at any time.
 </table>
 
 ## What it does
+
+The following feature list describes the production legacy default, not the
+bounded Ailoha opt-in preview.
 
 **Device management**
 

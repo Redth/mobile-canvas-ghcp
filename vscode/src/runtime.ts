@@ -1,5 +1,6 @@
 import { pathToFileURL } from "node:url";
 import type * as vscode from "vscode";
+import type { AilohaCanvasHost } from "./hostBridge";
 
 interface RuntimeResolution {
   command: string;
@@ -8,6 +9,21 @@ interface RuntimeResolution {
 
 interface RuntimeModule {
   resolveCommand(): Promise<RuntimeResolution>;
+}
+
+export interface AilohaContextBinding {
+  contextRef: string;
+  scopeEpoch: string;
+  scope: { sessionId: string; viewId: string };
+  ownerProcessId: number;
+}
+
+interface AilohaRuntimeModule {
+  createRuntimeCanvasHost(options: {
+    scope: { sessionId: string; viewId: string };
+    onError(error: { code: string; message: string }): void;
+  }): AilohaCanvasHost;
+  getRuntimeContextBinding(scope: { sessionId: string; viewId: string }): Promise<AilohaContextBinding>;
 }
 
 let resolution: Promise<RuntimeResolution> | undefined;
@@ -27,4 +43,25 @@ export async function resolveMobileCanvas(
     }
     throw error;
   }
+}
+
+export async function resolveAilohaCanvasHost(
+  context: vscode.ExtensionContext,
+  scope: { sessionId: string; viewId: string },
+  onError: (error: { code: string; message: string }) => void,
+): Promise<AilohaCanvasHost> {
+  const module: AilohaRuntimeModule = await import(
+    pathToFileURL(context.asAbsolutePath("dist/lib/ailoha/runtime-backend.mjs")).href
+  );
+  return module.createRuntimeCanvasHost({ scope, onError });
+}
+
+export async function resolveAilohaContextBinding(
+  context: vscode.ExtensionContext,
+  scope: { sessionId: string; viewId: string },
+): Promise<AilohaContextBinding> {
+  const module: AilohaRuntimeModule = await import(
+    pathToFileURL(context.asAbsolutePath("dist/lib/ailoha/runtime-backend.mjs")).href
+  );
+  return module.getRuntimeContextBinding(scope);
 }

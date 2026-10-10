@@ -27,6 +27,7 @@ const root = join(dirname(fileURLToPath(import.meta.url)), "..");
 const INPUTS = [
 	"src",
 	"native",
+	"web",
 	"Directory.Build.props",
 	"Directory.Packages.props",
 	"MobileCanvas.slnx",
@@ -34,7 +35,7 @@ const INPUTS = [
 	"scripts/build.sh",
 ];
 
-export function sourceHash() {
+export function sourceHash({ rootDirectory = root } = {}) {
 	// Include new source files before their first commit as well as tracked files. Ignored build
 	// output remains excluded, so a release prepared in the same change that adds a source file
 	// records the same hash it will have after that file is committed.
@@ -47,12 +48,12 @@ export function sourceHash() {
 		"--",
 		...INPUTS,
 	], {
-		cwd: root,
+		cwd: rootDirectory,
 		maxBuffer: 64 * 1024 * 1024,
 	})
 		.toString("utf8")
 		.split("\0")
-		.filter((relative) => relative && existsSync(join(root, relative)))
+		.filter((relative) => relative && existsSync(join(rootDirectory, relative)))
 		.sort();
 
 	if (listed.length === 0) {
@@ -65,7 +66,7 @@ export function sourceHash() {
 		// the hash even when its bytes are untouched.
 		digest.update(relative);
 		digest.update("\0");
-		digest.update(readFileSync(join(root, relative)));
+		digest.update(readFileSync(join(rootDirectory, relative)));
 		digest.update("\0");
 	}
 

@@ -18,9 +18,36 @@
 
   function request(message) {
     return new Promise((resolve, reject) => {
-      pending.set(message.id, { resolve, reject });
+      const key = message.requestId ?? message.id;
+      let timer;
+      if (message.type === "socket-send") {
+        if ([...pending.values()].filter((entry) => entry.socketId).length >= 32) {
+          reject(new Error("The bounded video control queue is full."));
+          return;
+        }
+        timer = setTimeout(() => {
+          pending.delete(key);
+          reject(new Error("The owned video control send exceeded its deadline."));
+        }, 30_000);
+      }
+      pending.set(key, { resolve, reject, timer, socketId: message.type === "socket-send" ? message.id : undefined });
       vscode.postMessage(message);
     });
+  }
+
+  function completePending(key, value, error) {
+    const entry = pending.get(key);
+    if (!entry) return;
+    if (entry.timer !== undefined) clearTimeout(entry.timer);
+    pending.delete(key);
+    if (error) entry.reject(error);
+    else entry.resolve(value);
+  }
+
+  function rejectSocketRequests(socketId) {
+    for (const [key, entry] of pending) {
+      if (entry.socketId === socketId) completePending(key, undefined, new Error("The owned video channel was closed."));
+    }
   }
 
   class BridgeSocket extends EventTarget {
@@ -29,6 +56,7 @@
       this.id = id();
       this.readyState = WebSocket.CONNECTING;
       this.binaryType = "arraybuffer";
+      this.protocol = "";
       sockets.set(this.id, this);
       vscode.postMessage({
         type: "socket-open",
@@ -38,16 +66,32 @@
       });
     }
 
-    close() {
-      if (this.readyState === WebSocket.CLOSING || this.readyState === WebSocket.CLOSED) {
-        return;
+    send(data) {
+      if (this.readyState !== WebSocket.OPEN) {
+        return Promise.reject(new Error("The owned video channel is not open."));
       }
-      this.readyState = WebSocket.CLOSING;
-      vscode.postMessage({ type: "socket-close", id: this.id });
+      return request({ type: "socket-send", id: this.id, requestId: id(), data });
     }
 
-    opened() {
+    close() {
+      if (this.readyState === WebSocket.CLOSING || this.readyState === WebSocket.CLOSED) {
+        return this.closePromise;
+      }
+      this.readyState = WebSocket.CLOSING;
+      rejectSocketRequests(this.id);
+      if (this.protocol === "ailoha.video.v1") {
+        this.closePromise = new Promise((resolve, reject) => {
+          this.finishClose = resolve;
+          this.closeTimer = setTimeout(() => reject(new Error("The owned video close exceeded its deadline.")), 30_000);
+        });
+      }
+      vscode.postMessage({ type: "socket-close", id: this.id });
+      return this.closePromise;
+    }
+
+    opened(protocol = "") {
       if (this.readyState !== WebSocket.CONNECTING) return;
+      this.protocol = protocol;
       this.readyState = WebSocket.OPEN;
       this.dispatchEvent(new Event("open"));
     }
@@ -65,6 +109,9 @@
       if (this.readyState === WebSocket.CLOSED) return;
       this.readyState = WebSocket.CLOSED;
       sockets.delete(this.id);
+      rejectSocketRequests(this.id);
+      if (this.closeTimer !== undefined) clearTimeout(this.closeTimer);
+      this.finishClose?.();
       this.dispatchEvent(new CloseEvent("close", { code, reason }));
     }
   }
@@ -84,26 +131,23 @@
         resolveContext = null;
         break;
       case "api-result":
-        pending.get(message.id)?.resolve(
+        completePending(message.id,
           new Response(message.body, {
             status: message.status,
             statusText: message.statusText,
             headers: message.headers,
           }),
         );
-        pending.delete(message.id);
         break;
       case "api-error":
       case "operation-error":
-        pending.get(message.id)?.reject(new Error(message.message));
-        pending.delete(message.id);
+        completePending(message.id, undefined, new Error(message.message));
         break;
       case "operation-result":
-        pending.get(message.id)?.resolve(message);
-        pending.delete(message.id);
+        completePending(message.id, message);
         break;
       case "socket-opened":
-        sockets.get(message.id)?.opened();
+        sockets.get(message.id)?.opened(message.protocol);
         break;
       case "socket-message":
         sockets.get(message.id)?.message(message.data);

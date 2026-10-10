@@ -50,6 +50,18 @@
   ],
   "main": "./out/extension.js",
   "contributes": {
+    "configuration": {
+      "title": "Mobile Canvas",
+      "properties": {
+        "mobileCanvas.backend": {
+          "type": "string",
+          "enum": ["legacy", "ailoha"],
+          "default": "legacy",
+          "scope": "application",
+          "markdownDescription": "Use the production legacy engine (default) or explicitly opt into the pinned official Ailoha Target Host. Reload the VS Code window after changing. Ailoha does not fall back after errors; app inspection, recording and broader controls remain unsupported."
+        }
+      }
+    },
     "viewsContainers": {
       "activitybar": [
         {
@@ -140,7 +152,7 @@
   },
   "scripts": {
     "compile": "tsc -p .",
-    "check:web": "node --check ../web/ailoha-video-protocol.js && node --check ../web/ailoha-video-receiver.js && node --check ../web/canvas-state.js && node --check ../web/device-canvas.js && node --check media/vscode-theme.js && node --check media/vscode-transport.js",
+    "check:web": "node ../scripts/check-ailoha.mjs && node --check ../web/canvas-state.js && node --check ../web/device-canvas.js && node --check media/vscode-theme.js && node --check media/vscode-transport.js",
     "check:scripts": "node --check ../lib/ailoha/index.mjs && node --check ../lib/ailoha/protocol.mjs && node --check ../lib/ailoha/errors.mjs && node --check ../lib/runtime.mjs && node --check ../lib/runtime-assets.mjs && node --check ../lib/mcp-vscode-proxy.mjs && node --check ../scripts/ailoha-source-manifest.mjs && node --check ../scripts/mcp-vscode.mjs && node --check ../scripts/prepare-vscode.mjs && node --check ../scripts/prepare-plugin.mjs && node --check ../scripts/prepare-remote-runtime-manifest.mjs && node --check ../scripts/package-runtime-assets.mjs && node --check ../scripts/package-vscode-thin.mjs && node --check ../scripts/package-vscode-targets.mjs && node --check ../scripts/smoke-runtime.mjs && node --check ../scripts/vsix.mjs && node --check ../scripts/verify-vsix.mjs && node --check ../scripts/publish-vscode.mjs && tsc --noEmit --strict --target ES2022 --module Node16 --moduleResolution Node16 ../lib/ailoha/index.d.mts ../tests/scripts/ailoha-client-types.mts",
     "prepare-assets": "node ../scripts/prepare-vscode.mjs",
     "build": "npm run compile && npm run check:web && npm run check:scripts && npm run prepare-assets",
@@ -153,7 +165,7 @@
     "package:targets": "npm run compile && npm run check:web && npm run check:scripts && node ../scripts/package-vscode-targets.mjs"
   },
   "dependencies": {
-    "ws": "^8.18.3"
+    "ws": "8.22.0"
   },
   "devDependencies": {
     "@types/node": "^22.0.0",

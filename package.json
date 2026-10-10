@@ -27,7 +27,8 @@
     "publish:vscode": "node scripts/publish-vscode.mjs"
   },
   "dependencies": {
-    "@github/copilot-sdk": "latest"
+    "@github/copilot-sdk": "latest",
+    "ws": "8.22.0"
   },
   "files": [
     "extension.mjs",

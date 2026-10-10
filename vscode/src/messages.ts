@@ -27,6 +27,7 @@ export type WebviewMessage =
       query?: string;
     }
   | { type: "socket-close"; id: string }
+  | { type: "socket-send"; id: string; requestId: string; data: string }
   | { type: "save"; id: string; suggestedName: string; bytes: ArrayBuffer }
   | { type: "copy"; id: string; text: string }
   | { type: "view-title"; title: string; description?: string };
@@ -42,7 +43,7 @@ export type ExtensionMessage =
       body: ArrayBuffer | null;
     }
   | { type: "api-error"; id: string; message: string }
-  | { type: "socket-opened"; id: string }
+  | { type: "socket-opened"; id: string; protocol?: string }
   | { type: "socket-message"; id: string; data: string | ArrayBuffer }
   | { type: "socket-error"; id: string; message: string }
   | { type: "socket-closed"; id: string; code: number; reason: string }

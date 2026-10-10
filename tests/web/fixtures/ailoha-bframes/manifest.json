@@ -1,0 +1,116 @@
+{
+  "schema": "mobile-canvas.synthetic-video-fixture/v1",
+  "source": "Locally generated FFmpeg testsrc2, H.264 High with two B-frames; no third-party or device media.",
+  "width": 96,
+  "height": 64,
+  "framesPerSecond": 2,
+  "codec": "h264",
+  "profile": "high",
+  "timestampBase": "9223372036854775808",
+  "referenceYuv": "reference.yuv",
+  "referenceFormat": "I420",
+  "referenceOrder": "presentation order by pictureIndex, not encoded unit sequence",
+  "expectedDecodedPictureIndices": [
+    0,
+    1,
+    2,
+    3,
+    4,
+    5
+  ],
+  "geometry": [
+    {
+      "geometryRevision": 21,
+      "bounds": {
+        "x": 0,
+        "y": 0,
+        "width": 48,
+        "height": 32,
+        "coordinate": "window"
+      },
+      "pixelDensity": 2
+    }
+  ],
+  "units": [
+    {
+      "filename": "00-config-key.alhv",
+      "sequence": 0,
+      "pictureIndex": 0,
+      "isKeyFrame": true,
+      "isCodecConfig": true,
+      "timestampMicroseconds": "9223372036854775808",
+      "relativeTimestampMicroseconds": "0",
+      "geometryRevision": 21,
+      "payloadBytes": 3400
+    },
+    {
+      "filename": "01-delta.alhv",
+      "sequence": 1,
+      "pictureIndex": 3,
+      "isKeyFrame": false,
+      "isCodecConfig": false,
+      "timestampMicroseconds": "9223372036856275808",
+      "relativeTimestampMicroseconds": "1500000",
+      "geometryRevision": 21,
+      "payloadBytes": 1460
+    },
+    {
+      "filename": "02-delta.alhv",
+      "sequence": 2,
+      "pictureIndex": 1,
+      "isKeyFrame": false,
+      "isCodecConfig": false,
+      "timestampMicroseconds": "9223372036855275808",
+      "relativeTimestampMicroseconds": "500000",
+      "geometryRevision": 21,
+      "payloadBytes": 686
+    },
+    {
+      "filename": "03-delta.alhv",
+      "sequence": 3,
+      "pictureIndex": 2,
+      "isKeyFrame": false,
+      "isCodecConfig": false,
+      "timestampMicroseconds": "9223372036855775808",
+      "relativeTimestampMicroseconds": "1000000",
+      "geometryRevision": 21,
+      "payloadBytes": 775
+    },
+    {
+      "filename": "04-delta.alhv",
+      "sequence": 4,
+      "pictureIndex": 5,
+      "isKeyFrame": false,
+      "isCodecConfig": false,
+      "timestampMicroseconds": "9223372036857275808",
+      "relativeTimestampMicroseconds": "2500000",
+      "geometryRevision": 21,
+      "payloadBytes": 678
+    },
+    {
+      "filename": "05-delta.alhv",
+      "sequence": 5,
+      "pictureIndex": 4,
+      "isKeyFrame": false,
+      "isCodecConfig": false,
+      "timestampMicroseconds": "9223372036856775808",
+      "relativeTimestampMicroseconds": "2000000",
+      "geometryRevision": 21,
+      "payloadBytes": 824
+    }
+  ],
+  "referenceI420": {
+    "filename": "reference.yuv",
+    "frameBytes": 9216,
+    "frames": 6
+  },
+  "sha256": {
+    "00-config-key.alhv": "8c6f56baa8496b8ab48cf8b638dd47afd5603b12927026eab8fc6b9c2364dc48",
+    "01-delta.alhv": "ab246f9378211346174315a065daaacf15ea5ada60eac3924a41ecfc8edb42f9",
+    "02-delta.alhv": "fcb33f0ac91d73ff613cb10c2b3592a3e6df39f16e3187b56de73c4fe6f2c57e",
+    "03-delta.alhv": "5586a2f08399eff00665428ff324357ce82bd8bb6ce1799f0edb339d01f0febd",
+    "04-delta.alhv": "1e4ea25a9c0a8f4e5c590e693aa8d2c3abc284ec14460758c2413fbd3995fb7c",
+    "05-delta.alhv": "fc7b88533409fb79b66310dc4b99288a17b6629c8fb7f235a8827d13679b768e",
+    "reference.yuv": "2b9356efe105993c5f251a7a70ea6b3138e146c25395945f11e13c52534bc188"
+  }
+}

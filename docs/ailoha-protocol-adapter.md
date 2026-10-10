@@ -200,11 +200,144 @@ unit-test command prepares the GitHub thin plugin with the existing packaging
 script; its script checks also validate `index.d.mts` and the declaration usage
 fixture with TypeScript.
 
-Remaining integration includes a trusted discovery/connection owner, selection
-and execution-context adapters, existing-action compatibility mapping,
-streaming/input transports, product lifecycle adapters/runtime supervision, and full device
-workflow parity in both hosts. Licensing and verified public distribution are
-separate gates. No Ailoha implementation, UI, skill, or schema files are vendored.
+## Installed opt-in vertical slice
+
+`MOBILE_CANVAS_BACKEND=ailoha` selects the GitHub canvas/MCP opt-in. VS Code also
+exposes the application setting `mobileCanvas.backend` with default `legacy`;
+reload the window after changing it. Both installed paths use
+`lib/ailoha/runtime-backend.mjs`, the original compatibility projection/client,
+and the shared `web/ailoha-video-player.js`. Legacy remains the default; an
+Ailoha refusal, timeout or operational failure never invokes the legacy engine.
+
+**Package readiness is gated.** No public runtime version, integrity or source
+pin is guessed. `lib/ailoha/runtime-package.json` is required before the official
+small launcher graph is staged. Until the owner supplies verified anonymous
+artifacts, the opt-in reports `ailoha_runtime_unavailable`. Normal installs must
+not require a private source checkout, another worktree, PATH-installed CLI,
+install hooks or end-user `npm install`.
+
+The approved SDK entry is `@ailoha/cli/runtime`. Acquisition calls
+`getRuntimePin`, `ensureTargetHost`, and `openTargetHostTransport`. The official
+SDK owns selected-RID lazy native acquisition, private metadata/process checks,
+direct bounded authenticated HTTP/WS and lease cleanup. Mobile Canvas adds no
+native downloader, private credential reader or bearer-bearing renderer URL.
+Only the approved small launcher/dependency graph is copied by the host
+preparers, with tarball/integrity and license notices retained. Required native
+RIDs and public pins remain upstream release evidence, not consumer assumptions.
+
+`connectTargetHostTransport` applies the same strict validators and bounded
+operation waits to the factory's `response()` metadata without requiring or
+projecting an origin/credential. Accepted `Location` evidence remains recoverable
+when a body truncates, times out or disagrees. JSON failures use failure HTTP
+statuses at the product boundary even when the upstream malformed response was
+201/202; accepted is never presented as completed.
+
+### Selection, input and cleanup
+
+Opaque host/target/surface IDs are separate from `nativeIdentity.nativeId` and
+serial/provider provenance. Missing providers, multiple surfaces and unknown
+native deployment identity are explicit. Target records expose `surfaces`;
+opt-in `open`/`select_device` and `mobile_device_select` accept an additive
+`surfaceId` to resolve a multiple-surface target. The existing 24 canvas and 61
+MCP identifiers are unchanged.
+
+The context adapter uses only the verified canonical CLI launch and
+`context open/get/select/detach` with returned opaque `contextRef`, string
+`scopeEpoch`/`revision`, and whole-tuple CAS. The owner PID is the product process,
+not the Target Host. A unique live session/window ID plus its view ID defines
+scope; workspace preference hashes are not view identity. Ordinary reads cannot
+create/reopen authority, stale reads cannot overwrite a tombstone, and bound MCP
+cannot revive a detached/closed view. Genuine view binding may reopen explicitly.
+Ordinary hide/reload preserves selection/epoch; destructive scope retirement
+does not silently restore a selection.
+
+The static GitHub plugin MCP path fails closed without explicit `--context`,
+`--context-epoch`, `--session`, `--instance` and `--owner-process`. It cannot
+infer the first panel or derive private context filenames. VS Code supplies its
+actual window/view binding and refreshes MCP definitions after a genuine context
+open. The first slice is target-only; app/agent/runtime-instance selectors are
+not adopted as native package identity.
+
+Input captures one view/host/target/surface tuple and observed logical bounds,
+coordinate space and geometry revision. Additive `surfaceId`, `coordinate` and
+`geometryRevision` inputs preserve that observation. Encoded frame size is never
+an input coordinate space. A queued/stale gesture is rejected, not retargeted.
+HTTP gestures preserve requested seconds as bounded millisecond pauses and
+intermediate pointer moves (maximum 30 seconds); held presses require the actual
+`long-press.point` surface capability, not just `tap.point`.
+
+Lifecycle submits an accepted operation and polls that captured ID to terminal
+success. Reset/delete require both the own literal confirmation gate and real
+scoped consent; the opt-in has no such human consent adapter and reports them
+unsupported. Create/start omission semantics in the underlying client remain
+unchanged, but the existing creation/catalog compatibility workflow is not
+enabled in this slice.
+
+PNG capture validates its 201 artifact/Location, ownership, MIME and applicable
+size/digest before reading content. Video session creation preserves omitted
+encoder settings; the renderer receives only owned session/geometry/source
+projection and ALHV units. Host callbacks buffer bounded early messages before
+that descriptor. Created sessions register captured cleanup: socket close,
+session DELETE, then authoritative operation wait before lease release. A lost
+202 cleanup body retains validated operation Location and retries only GET/wait,
+never DELETE or a broad 404-as-success fallback. Unknown create outcomes cannot
+automatically create a replacement on close/reopen.
+
+Hide/close/dispose retires only that view's sockets, receiver, decoder and owned
+resources. The shared host/broker/devices remain running. Provider state and
+description are projected separately from a connected control plane; unavailable
+tooling is not a ready-shaped empty inventory.
+
+### Scope and verification
+
+Implemented: inventory/select, advertised start/stop/reboot, PNG screenshot,
+basic geometry-bound pointer gestures and shared ALHV WebCodecs display.
+Unsupported: compatibility creation/catalog, reveal/rotation/keyboard/buttons,
+reset/delete without scoped consent, app/system semantic trees, app deployment,
+recording and broader settings/diagnostics/file/hardware operations. No claim of
+device or full feature parity is made.
+
+Tests exercise actual prepared GitHub entrypoints and compiled VS Code bridge
+imports with narrow official-shaped SDK/context doubles, not only repository
+helpers. The prepared-module runner repeats ownership/geometry/close/reopen,
+consent, provider readiness, lost201/202, unsupported/operational failures and
+decoder tests against each copied host. Real Chrome WebCodecs decoded the
+own-generated baseline/window-one and reordered High/two-B fixtures through both
+prepared players; all I420 planes matched references. RGB conversion differences
+in baseline PNG comparison are diagnostic, not a rendering-parity assertion.
+Fixtures are test-only; FFmpeg is not a product dependency.
+
+```sh
+npm ci --ignore-scripts --omit=optional
+npm ci --prefix vscode --ignore-scripts
+node scripts/prepare-plugin.mjs --thin
+node scripts/prepare-vscode.mjs --thin
+npm run compile --prefix vscode
+node --test tests/scripts/ailoha-installed-host.test.mjs
+node scripts/test-prepared-ailoha.mjs
+node tests/web/ailoha-player-browser-server.mjs
+```
+
+Native binaries embed `web/`, so native source fingerprints include those bytes,
+not just `.csproj` changes. Existing published payloads are not re-stamped to
+pretend they contain new assets. Build review-only payloads from the reviewed
+head and package them in an isolated directory:
+
+```sh
+./scripts/build.sh osx-arm64
+./scripts/build.sh osx-x64
+MOBILE_CANVAS_RELEASE_TAG=unpublished-review \
+  node scripts/bundle.mjs --rid osx-arm64 --from .build/bin/osx-arm64 --out .build/review/runtimes
+MOBILE_CANVAS_RELEASE_TAG=unpublished-review \
+  node scripts/bundle.mjs --rid osx-x64 --from .build/bin/osx-x64 --out .build/review/runtimes
+node scripts/prepare-plugin.mjs --runtime-dir .build/review/runtimes
+node scripts/prepare-vscode.mjs --runtime-dir .build/review/runtimes
+```
+
+These are pack-only artifacts, not published tags or normal-install manifests.
+Other native platforms, verified public SDK graph/pins, legal provenance and
+device parity remain release gates. No Ailoha implementation, UI, skill or schema
+source is vendored.
 
 The interface reference is the Target Host contract at
 `microsoft/ailoha@2175ed5c5a19dcd8a23148023978f9f7b811d6fb`, specifically

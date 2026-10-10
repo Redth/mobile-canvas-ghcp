@@ -6,8 +6,21 @@ import { appendFile } from "node:fs/promises";
 import { promisify } from "node:util";
 import { McpVsCodeContextProxy } from "../lib/mcp-vscode-proxy.mjs";
 import { resolveCommand } from "../lib/runtime.mjs";
+import { mobileCanvasBackend } from "../lib/backend.mjs";
+import { runAilohaMcp } from "../lib/ailoha/mcp-host.mjs";
+import { mobileErrorResult } from "../lib/ailoha/mobile-backend.mjs";
 
 const execFileAsync = promisify(execFile);
+if (mobileCanvasBackend() === "ailoha") {
+  try {
+    await runAilohaMcp(process.argv.slice(2), {
+      onEvent: (activity) => { void writeViewSignal({ type: "automation", activity }); },
+    });
+  } catch (error) {
+    process.stderr.write(`mobile-canvas: ${JSON.stringify(mobileErrorResult(error))}\n`);
+    process.exitCode = 1;
+  }
+} else {
 const options = parseOptions(process.argv.slice(2));
 if (!options.session || !options.instance) {
   process.stderr.write(
@@ -207,6 +220,7 @@ function commandOptions() {
 function errorDetail(error) {
   return String(error?.stderr || error?.message || error).trim();
 }
+}
 
 async function writeViewSignal(message) {
   const signal = process.env.MOBILE_CANVAS_VSCODE_REFRESH_SIGNAL;
@@ -219,7 +233,7 @@ async function writeViewSignal(message) {
     );
   } catch (error) {
     process.stderr.write(
-      `mobile-canvas: could not update the VS Code view: ${errorDetail(error)}\n`,
+      `mobile-canvas: could not update the VS Code view: ${String(error?.message || error)}\n`,
     );
   }
 }

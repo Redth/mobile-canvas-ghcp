@@ -5,7 +5,7 @@ import {
   type SelectedDeviceContext,
 } from "./hostBridge";
 import type { WebviewMessage } from "./messages";
-import { resolveMobileCanvas } from "./runtime";
+import { resolveAilohaCanvasHost, resolveMobileCanvas } from "./runtime";
 import { createWebviewHtml } from "./webviewHtml";
 
 export const VIEW_ID = "mobileCanvas.deviceView";
@@ -27,6 +27,8 @@ export function applyViewTitle(
 }
 
 export class MobileCanvasViewProvider implements vscode.WebviewViewProvider {
+  private readonly contextOpened = new vscode.EventEmitter<void>();
+  readonly onDidOpenAilohaContext = this.contextOpened.event;
   private view: vscode.WebviewView | undefined;
   // Serializes bridge replacement across overlapping resolveWebviewView calls: waits for a
   // retired bridge's asynchronous close before a replacement bridge is installed, and ensures
@@ -38,6 +40,7 @@ export class MobileCanvasViewProvider implements vscode.WebviewViewProvider {
     private readonly output: vscode.OutputChannel,
     private readonly refreshSignal: string,
     private readonly sessionId: string,
+    private readonly backend: "legacy" | "ailoha" = "legacy",
   ) {}
 
   async resolveWebviewView(webviewView: vscode.WebviewView): Promise<void> {
@@ -57,19 +60,26 @@ export class MobileCanvasViewProvider implements vscode.WebviewViewProvider {
         vscode.Uri.joinPath(this.context.extensionUri, "media"),
       ],
     };
-    const runtime = await resolveMobileCanvas(this.context);
+    const runtime = this.backend === "legacy" ? await resolveMobileCanvas(this.context) : undefined;
+    const ailohaHost = this.backend === "ailoha" ? await resolveAilohaCanvasHost(
+      this.context,
+      { sessionId: this.sessionId, viewId: VIEW_INSTANCE_ID },
+      (error) => this.output.appendLine(`Mobile Canvas Ailoha: ${error.code}: ${error.message}`),
+    ) : undefined;
     if (!this.lifecycle.isCurrent(generation)) {
       return;
     }
 
-    this.output.appendLine(`Mobile Canvas runtime: ${runtime.source}`);
+    this.output.appendLine(`Mobile Canvas runtime: ${runtime?.source ?? "official Ailoha opt-in"}`);
     const bridge = new HostBridge(
-      runtime.command,
+      runtime?.command,
       this.sessionId,
       VIEW_INSTANCE_ID,
       webviewView.webview,
       this.output,
       this.refreshSignal,
+      ailohaHost,
+      () => this.contextOpened.fire(),
     );
     this.lifecycle.setActive(bridge);
     const messageSubscription = webviewView.webview.onDidReceiveMessage(
@@ -82,7 +92,9 @@ export class MobileCanvasViewProvider implements vscode.WebviewViewProvider {
       },
     );
     const visibilitySubscription = webviewView.onDidChangeVisibility(
-      () => void bridge.setVisible(webviewView.visible),
+      () => void bridge.setVisible(webviewView.visible).catch((error: unknown) => {
+        this.output.appendLine(`Mobile Canvas visibility failed: ${error instanceof Error ? error.message : "unknown error"}`);
+      }),
     );
     const disposeSubscription = webviewView.onDidDispose(
       () => {
@@ -134,6 +146,7 @@ export class MobileCanvasViewProvider implements vscode.WebviewViewProvider {
     this.lifecycle.invalidate();
     this.view = undefined;
     void this.lifecycle.retire();
+    this.contextOpened.dispose();
   }
 
   private requireBridge(): HostBridge {
