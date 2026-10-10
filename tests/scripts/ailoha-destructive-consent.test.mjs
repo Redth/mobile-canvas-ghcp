@@ -58,13 +58,17 @@ test("uninstall approval binds one native package and rejects substituted app ac
   const authority = new ScopedDestructiveConsent(async (value) => { request = value; return true; }, owner.signal);
   t.after(() => authority.dispose());
   const captured = invocation();
-  const appAction = { appId: "app-one", packageId: "com.example.one" };
+  const appAction = {
+    appId: "app-one", packageId: "com.example.one",
+    receipt: { schema: "synthetic-app-action/v1", proof: "original" },
+  };
   const approval = authority.begin("uninstall", captured, { appAction });
   await approval.approved;
   assert.match(request.title, /com\.example\.one/);
   assert.match(request.message, /Native package: com\.example\.one/);
   assert.equal(JSON.stringify(request).includes("appId"), false);
   assert.equal(Object.isFrozen(request.appAction), true);
+  assert.equal(Object.isFrozen(request.appAction.receipt), true);
   assert.throws(() => approval.consume(captured, { ...appAction, appId: "app-two" }), {
     code: "consent_capture_mismatch",
   });
@@ -80,6 +84,7 @@ test("Android app-op approval names effective UID scope, mode transition and exa
   const appAction = {
     appId: "app-one", packageId: "com.example.one", operation: "SYSTEM_ALERT_WINDOW",
     currentMode: "deny", requestedMode: "allow", uidScoped: true,
+    receipt: { schema: "synthetic-app-action/v1", proof: "original" },
   };
   const approval = authority.begin("app-op", captured, { appAction });
   await approval.approved;
@@ -99,9 +104,11 @@ test("app approval rejects incomplete, untrusted, or cross-platform action proof
   const authority = new ScopedDestructiveConsent(() => { prompts++; return true; }, owner.signal);
   t.after(() => authority.dispose());
   const captured = invocation();
-  for (const appAction of [undefined, { appId: "one" }, { appId: "one", packageId: "com.one\nApprove" },
-    { appId: "one", packageId: "com.one", sourcePath: "/private/package" },
-    { appId: "one", packageId: "a".repeat(256) }]) {
+  for (const appAction of [undefined, { appId: "one" },
+    { appId: "one", packageId: "com.one", receipt: { schema: "synthetic/v1" }, sourcePath: "/private/package" },
+    { appId: "one", packageId: "com.one\nApprove", receipt: { schema: "synthetic/v1" } },
+    { appId: "one", packageId: "a".repeat(256), receipt: { schema: "synthetic/v1" } },
+    { appId: "one", packageId: "com.one", receipt: null }]) {
     assert.throws(() => authority.begin("uninstall", captured, { appAction }), {
       code: "consent_app_action_invalid",
     });
@@ -109,6 +116,7 @@ test("app approval rejects incomplete, untrusted, or cross-platform action proof
   assert.throws(() => authority.begin("app-op", captured, { appAction: {
     appId: "one", packageId: "com.one", operation: "SYSTEM_ALERT_WINDOW",
     currentMode: "deny", requestedMode: "allow", uidScoped: false,
+    receipt: { schema: "synthetic/v1" },
   } }), { code: "consent_app_action_invalid" });
   assert.equal(prompts, 0);
 });

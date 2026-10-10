@@ -751,6 +751,167 @@ test("ordinary app mutations or fenced feature claims without a trusted CLI neve
   }
 });
 
+function fencedFixture(t, { answer = async () => true, capture, submit, readback, wait } = {}) {
+  const events = [];
+  const fencedApps = {
+    async capture(invocation, request) {
+      events.push(["capture", invocation, request]);
+      return capture?.(invocation, request) ?? {
+        appId: request.appId, packageId: request.packageId,
+        ...(request.operation ? {
+          operation: request.operation, currentMode: "default",
+          requestedMode: request.mode, uidScoped: false,
+        } : {}),
+        receipt: { schema: "synthetic-fenced-action/v1", token: "captured-native-installation" },
+      };
+    },
+    async uninstall(invocation, receipt, options) {
+      events.push(["uninstall", invocation, receipt, options]);
+      return submit?.(invocation, receipt, options) ?? { operationId: "fenced-uninstall" };
+    },
+    async setAppOp(invocation, receipt, options) {
+      events.push(["set-app-op", invocation, receipt, options]);
+      return submit?.(invocation, receipt, options) ?? { operationId: "fenced-app-op" };
+    },
+    readback(operation, proof) {
+      return readback?.(operation, proof) ?? {
+        appId: proof.appId, appOpId: proof.operation, mode: proof.requestedMode, uidScoped: false,
+      };
+    },
+  };
+  const state = canonicalFixture({
+    app: true, fencedCapabilities: true, fencedApps,
+    confirmDestructive: async (request) => {
+      events.push(["prompt", request]);
+      return answer(request);
+    },
+    client: {
+      async waitForOperation(operationId) {
+        events.push(["wait", operationId]);
+        if (wait) return wait(operationId);
+        return {
+          operationId, kind: operationId === "fenced-uninstall" ? "uninstallTargetApp" : "updateFencedTargetAppOp",
+          targetId: "one", providerId: "provider", status: "succeeded", destructive: true,
+          createdAt: "2026-10-09T23:00:00Z", completedAt: "2026-10-09T23:00:02Z",
+        };
+      },
+    },
+  });
+  t.after(() => state.backend.dispose());
+  return { ...state, events };
+}
+
+async function waitForFencedEvent(events, kind) {
+  for (let attempt = 0; attempt < 100 && !events.some(([event]) => event === kind); attempt++) {
+    await new Promise((resolve) => setTimeout(resolve, 1));
+  }
+  assert.equal(events.some(([event]) => event === kind), true, `Expected captured ${kind} event.`);
+}
+
+test("fenced uninstall captures a private native receipt before the genuine prompt and never uses ordinary DELETE", async (t) => {
+  const decision = deferred();
+  const state = fencedFixture(t, { answer: () => decision.promise });
+  const work = state.backend.uninstallApp("one", "com.example.native", true);
+  await waitForFencedEvent(state.events, "prompt");
+  const prompt = state.events.find(([event]) => event === "prompt")[1];
+  assert.equal(state.events[0][0], "capture");
+  assert.match(prompt.message, /Native package: com\.example\.native/);
+  assert.equal(prompt.appAction.receipt.token, "captured-native-installation");
+  assert.equal(JSON.stringify(prompt).includes("captured-native-installation"), false);
+  assert.equal(state.events.some(([event]) => event === "uninstall"), false);
+  decision.resolve(true);
+  assert.deepEqual(await work, {
+    schemaVersion: "1.0", success: true, deviceId: "one", bundleId: "com.example.native",
+    operation: "uninstall", processId: null, detail: null,
+  });
+  assert.equal(state.events.filter(([event]) => event === "uninstall").length, 1);
+  assert.equal(state.calls.some(([event]) => event === "app-uninstall"), false);
+});
+
+test("fenced Android setter returns the effective legacy ignore mode only after complete native readback", async (t) => {
+  const state = fencedFixture(t);
+  for (const target of state.targets.values()) target.nativeIdentity.platform = "android";
+  assert.deepEqual(await state.backend.setAppOp("one", "com.example.native", "system_alert_window", "ignore"), {
+    schemaVersion: "1.0", success: true, deviceId: "one", bundleId: "com.example.native",
+    operation: "SYSTEM_ALERT_WINDOW", mode: "ignore",
+  });
+  const capture = state.events.find(([event]) => event === "capture")[2];
+  assert.equal(capture.mode, "ignored");
+  assert.equal(state.events.filter(([event]) => event === "set-app-op").length, 1);
+});
+
+test("fenced app-op mutation names UID effects and requires authoritative matching effective readback", async (t) => {
+  const state = fencedFixture(t, {
+    capture: (_invocation, request) => ({
+      appId: request.appId, packageId: request.packageId, operation: request.operation,
+      currentMode: "deny", requestedMode: request.mode, uidScoped: true,
+      receipt: { schema: "synthetic-fenced-action/v1", token: "captured-uid-state" },
+    }),
+    readback: (_completed, proof) => ({
+      appId: proof.appId, appOpId: proof.operation, mode: "deny", uidScoped: true,
+    }),
+  });
+  for (const target of state.targets.values()) target.nativeIdentity.platform = "android";
+  await assert.rejects(state.backend.setAppOp("one", "com.example.native", "system_alert_window", "allow"),
+    { code: "app_action_readback_mismatch" });
+  const prompt = state.events.find(([event]) => event === "prompt")[1];
+  assert.match(prompt.message, /SYSTEM_ALERT_WINDOW/);
+  assert.match(prompt.message, /deny \(whole UID scope\)/);
+  assert.match(prompt.message, /Requested package mode: allow/);
+  assert.equal(state.events.filter(([event]) => event === "set-app-op").length, 1);
+  assert.equal(state.calls.some(([event]) => event === "app-uninstall"), false);
+});
+
+test("fenced denial, definitive rejection and uncertain delivery never turn into implicit approval or replay", async (t) => {
+  const denied = fencedFixture(t, { answer: () => false });
+  await assert.rejects(denied.backend.uninstallApp("one", "com.example.native", true), { code: "consent_denied" });
+  assert.equal(denied.events.some(([event]) => event === "uninstall"), false);
+
+  let rejection = 403;
+  const state = fencedFixture(t, {
+    submit: () => { throw new AilohaProtocolError("http_error", { status: rejection }); },
+  });
+  await assert.rejects(state.backend.uninstallApp("one", "com.example.native", true), { code: "http_error" });
+  rejection = 408;
+  await assert.rejects(state.backend.uninstallApp("one", "com.example.native", true), { code: "http_error" });
+  await assert.rejects(state.backend.uninstallApp("one", "com.example.native", true), {
+    code: "app_action_outcome_uncertain",
+  });
+  assert.equal(state.events.filter(([event]) => event === "uninstall").length, 2);
+  assert.equal(state.events.filter(([event]) => event === "prompt").length, 2);
+});
+
+test("caller cancellation retires an app approval without dispatch and cannot be revived by a late answer", async (t) => {
+  const decision = deferred();
+  const state = fencedFixture(t, { answer: () => decision.promise });
+  const caller = new AbortController();
+  const work = state.backend.uninstallApp("one", "com.example.native", true, { signal: caller.signal });
+  const rejection = assert.rejects(work, { code: "consent_cancelled" });
+  await waitForFencedEvent(state.events, "prompt");
+  caller.abort();
+  await rejection;
+  decision.resolve(true);
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(state.events.some(([event]) => event === "uninstall"), false);
+});
+
+test("a late accepted fenced operation retains its original ID for GET-only recovery after approval expiry", async (t) => {
+  t.mock.timers.enable({ apis: ["setTimeout"] });
+  const delivery = deferred();
+  const state = fencedFixture(t, { submit: () => delivery.promise });
+  const work = state.backend.uninstallApp("one", "com.example.native", true);
+  const rejection = assert.rejects(work, { code: "submission_outcome_unknown" });
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(state.events.filter(([event]) => event === "uninstall").length, 1);
+  t.mock.timers.tick(60_000);
+  await rejection;
+  delivery.resolve({ operationId: "fenced-uninstall" });
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal((await state.backend.uninstallApp("one", "com.example.native", true)).success, true);
+  assert.equal(state.events.filter(([event]) => event === "uninstall").length, 1);
+  assert.deepEqual(state.events.filter(([event]) => event === "wait"), [["wait", "fenced-uninstall"]]);
+});
+
 async function stagedFixture(t, overrides = {}) {
   const { stagedApps: stagedOverrides, beginDestructiveApproval, ...fixtureOverrides } = overrides;
   const directory = await mkdtemp(join(process.cwd(), ".mobile-stage-"));
