@@ -111,6 +111,15 @@ test("all nine installed file, media and diagnostics identities retain schemas b
       code: "artifact_contract_unavailable", message: ARTIFACT_FEATURE_GATES[name], status: 501,
     });
   }
+  for (const [name, input] of [
+    ["mobile_device_media_add", { deviceId: "target", paths: ["/owned/photo.png", null] }],
+    ["mobile_device_file_pull", { deviceId: "target", path: "file" }],
+    ["mobile_device_log", { deviceId: "target", limit: "100" }],
+  ]) {
+    const result = await dispatcher.handle(call(name, input));
+    assert.equal(result.result.isError, true);
+    assert.equal(JSON.parse(result.result.content[0].text).code, "invalid_request");
+  }
   assert.equal(backendCalls, 0);
 });
 

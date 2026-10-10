@@ -254,6 +254,16 @@ test("artifact routes and direct actions do not approximate native output or dis
   const wrongPath = await state.backend.request("/api/v1/devices/one/files/unknown", { method: "POST" });
   assert.equal(wrongPath.status, 501);
   assert.equal((await wrongPath.json()).code, "capability_not_supported");
+  const malformed = await state.backend.request("/api/v1/devices/one/files/push", { method: "POST", body: "not-json" });
+  assert.equal(malformed.status, 400);
+  assert.equal((await malformed.json()).code, "invalid_request");
+  const malformedPath = await state.backend.request("/api/v1/devices/%ZZ/files");
+  assert.equal(malformedPath.status, 400);
+  assert.equal((await malformedPath.json()).code, "invalid_request");
+  const malformedCrash = await state.backend.request("/api/v1/devices/one/crashes/%ZZ");
+  assert.equal(malformedCrash.status, 400);
+  assert.equal((await malformedCrash.json()).code, "invalid_request");
+  assert.deepEqual(state.calls, []);
 });
 
 test("an open empty canonical view projects its verified binding without inferring a target", async (t) => {
