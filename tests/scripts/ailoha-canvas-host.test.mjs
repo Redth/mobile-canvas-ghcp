@@ -19,6 +19,10 @@ function fixture(options = {}) {
       const id = ++generation;
       calls.push(["create", id, scope]);
       return {
+        connectionRef: Object.freeze({
+          serviceId: `service-${id}`, pid: 12345,
+          startedAt: "2026-10-09T23:00:00Z", processStartedAt: "2026-10-09T22:59:59Z",
+        }),
         async ready() { return { backend: "ailoha" }; },
         async select(deviceId) { calls.push(["select", id, deviceId]); },
         async request(path) { return new Response(JSON.stringify({ path, backend: "ailoha" }), { headers: { "content-type": "application/json" } }); },
@@ -100,6 +104,10 @@ test("asynchronous close serializes a reopened owner and never tears down its re
   const closeWait = deferred();
   const { host, calls } = fixture({ closeWait });
   const first = await host.openCanvas();
+  const firstOwner = host.connectionRef;
+  assert.equal(firstOwner.serviceId, "service-1");
+  assert.equal(JSON.stringify(first).includes("connectionRef"), false);
+  assert.equal(JSON.stringify(host).includes("connectionRef"), false);
   const closing = host.closeCanvas();
   const reopening = host.openCanvas();
   await new Promise((resolve) => setImmediate(resolve));
@@ -107,7 +115,11 @@ test("asynchronous close serializes a reopened owner and never tears down its re
   closeWait.resolve();
   await closing;
   const second = await reopening;
+  assert.equal(host.connectionRef.serviceId, "service-2");
+  assert.notEqual(host.connectionRef, firstOwner);
+  assert.equal(firstOwner.serviceId, "service-1");
   assert.notEqual(first.url, second.url);
   assert.equal(calls.filter(([name]) => name === "create").length, 2);
   await host.closeCanvas();
+  assert.equal(host.connectionRef, undefined);
 });
