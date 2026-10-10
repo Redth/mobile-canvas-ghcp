@@ -486,6 +486,33 @@ test("cancelled recording start after canonical status never dispatches or retai
   await state.backend.dispose();
 });
 
+test("selection revision changed during recording status prevents a new start on the old target", async () => {
+  const entered = deferred();
+  const statusReady = deferred();
+  const commands = [];
+  const recording = new AilohaRecordingCoordinator({
+    output: async () => "/host/record.mp4",
+    async run(args) {
+      commands.push(args[1]);
+      if (args[1] !== "status") throw new Error("Superseded intent submitted recording start.");
+      entered.resolve();
+      await statusReady.promise;
+      return "null";
+    },
+  });
+  const state = canonicalFixture({ recording });
+  state.capabilities.push({ id: "surface.capture", version: 1,
+    features: ["startTargetRecording", "getTargetRecording", "stopTargetRecording"] });
+  const pending = state.backend.recordingStart("one");
+  await entered.promise;
+  await state.advanceSelection();
+  statusReady.resolve();
+  await assert.rejects(pending, { code: "context_snapshot_superseded" });
+  assert.deepEqual(commands, ["status"]);
+  assert.equal(recording.tracked, false);
+  await state.backend.dispose();
+});
+
 test("remote and non-virtual targets advertise no recording even when capture methods exist", async (t) => {
   const state = fixture({ recording: { async start() { throw new Error("must not reach"); } } });
   t.after(() => state.backend.dispose());
