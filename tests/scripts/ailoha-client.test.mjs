@@ -612,7 +612,7 @@ test("rejects secret-bearing public resource values and fields instead of return
   for (const value of [
     [{ ...providerFixture(), name: credential }],
     [{ ...providerFixture(), description: encodeURIComponent(credential) }],
-    [{ ...providerFixture(), description: encodeURIComponent(credential).replace("%2F", "%2f") }],
+    [{ ...providerFixture(), description: encodeURIComponent(credential).replaceAll("%2F", "%2f") }],
     [{ ...providerFixture(), controlCredential: credential }],
     [{ ...providerFixture(), description: "public", credentials: "unrelated-private-data" }],
   ]) {
@@ -624,7 +624,7 @@ test("rejects secret-bearing public resource values and fields instead of return
 });
 
 test("redacts mixed-case percent-encoded credentials in Problem Details without changing unrelated URIs", async (t) => {
-  const encoded = encodeURIComponent(credential).replace("%2F", "%2f");
+  const encoded = encodeURIComponent(credential).replaceAll("%2F", "%2f");
   const problem = { ...problemFixture(500), detail: encoded, documentation: "/help/%2funchanged" };
   const fixture = await host(t, (_request, response) => json(response, problem, 500));
   const client = await fixture.connect();
