@@ -423,12 +423,32 @@ tooling is not a ready-shaped empty inventory.
 ### Scope and verification
 
 The nine legacy file/media/diagnostics identities remain registered with their
-original MCP input/output schemas. The opt-in now returns a named
-`artifact_contract_unavailable` (501) for each identity, including the matching
-panel API routes in both hosts, before opening a device transport. This is a
-delivery gate, **not** file/media/diagnostics parity. The shared gate records the
-specific native mismatch in `lib/ailoha/artifact-features.mjs`; ordinary installs
-still use the legacy backend unless explicitly opted in.
+original MCP input/output schemas. Four read-only identities (`file_list`,
+`log`, `crashes`, `crash_report`) now have shared, capability-checked source
+adapters for the reviewed native read-result subset. The other five still
+return `artifact_contract_unavailable` (501) in both hosts without dispatch;
+unadvertised read capabilities return `capability_not_supported` (501).
+Ordinary installs still use the legacy backend unless explicitly opted in.
+This is **not** nine-tool file/media/diagnostics parity.
+
+The read adapter requires the captured target/provider/native identity and
+original context revision before each new native read. App selectors resolve
+through the installed-app inventory to its package ID, not a workspace ID.
+It rejects incomplete listings/totals, foreign entry ownership, unsupported
+native query bounds and ambiguous app selectors rather than fabricating
+results. File sizes include legitimate zero-byte files; native modification
+and platform path spelling are retained. Native log query results preserve
+the backend's chronological retained window and pre-limit total. Inline
+crash detail is bounded to 1 MiB UTF-8; larger reports are not silently
+truncated or marked successful. A streamed export/readback path remains a
+delivery gate.
+
+These adapters target the coordinator-reviewed **source** subset frozen at
+`microsoft/ailoha` native draft `2618b6c`; that is not a public SDK/runtime
+pin. The normal Ailoha opt-in remains unavailable until an approved public
+runtime graph is prepared. Native staged file/media writes and mutation
+receipts are still under review, and no public binary or real-device parity
+is claimed.
 
 At canonical `microsoft/ailoha` source
 `f5eadd9f7a31b6da9322bf74e7549286d8844668`, the root Target Host feature

@@ -80,15 +80,11 @@ async function checkEmptyContext(selection) {
     assert.equal(scenario.calls.some((call) => call.method === "POST" || call.method === "DELETE"), false);
     const callsBeforeGates = scenario.calls.length;
     for (const [name, input] of Object.entries({
-      mobile_device_file_list: { deviceId: "opaque/target", bundleId: "com.example.app" },
       mobile_device_file_pull: { deviceId: "opaque/target", path: "empty", output: "/owned/output" },
       mobile_device_file_push: { deviceId: "opaque/target", path: "empty", input: "/owned/input" },
       mobile_device_file_delete: { deviceId: "opaque/target", path: "/directory", recursive: false },
       mobile_device_file_mkdir: { deviceId: "opaque/target", path: "/directory" },
       mobile_device_media_add: { deviceId: "opaque/target", paths: ["/owned/photo.png"] },
-      mobile_device_log: { deviceId: "opaque/target", text: "fault" },
-      mobile_device_crashes: { deviceId: "opaque/target", text: "example" },
-      mobile_device_crash_report: { deviceId: "opaque/target", crashId: "report" },
     })) {
       const result = await emptyDispatcher.handle(mcpCall(name, input));
       assert.deepEqual(JSON.parse(result.result.content[0].text), {
@@ -105,15 +101,11 @@ async function checkEmptyContext(selection) {
 async function checkArtifactApi(api) {
   const callsBefore = scenario.calls.length;
   for (const [name, method, suffix] of [
-    ["mobile_device_file_list", "GET", "/files?bundleId=com.example.app&path=Documents"],
     ["mobile_device_file_pull", "POST", "/files/pull"],
     ["mobile_device_file_push", "POST", "/files/push"],
     ["mobile_device_file_delete", "POST", "/files/delete"],
     ["mobile_device_file_mkdir", "POST", "/files/mkdir"],
     ["mobile_device_media_add", "POST", "/media"],
-    ["mobile_device_log", "GET", "/log?text=fault"],
-    ["mobile_device_crashes", "GET", "/crashes?text=example"],
-    ["mobile_device_crash_report", "GET", "/crashes/report"],
   ]) {
     const response = await api(`/api/v1/devices/opaque%2Ftarget${suffix}`, method,
       method === "POST" ? { path: "/directory" } : undefined);
@@ -123,6 +115,47 @@ async function checkArtifactApi(api) {
     });
   }
   assert.equal(scenario.calls.length, callsBefore);
+}
+
+async function checkArtifactReads(api, selection) {
+  scenario.artifactReads = true;
+  const target = "/api/v1/devices/opaque%2Ftarget";
+  const files = await api(`${target}/files?bundleId=native-app&path=Documents`, "GET");
+  assert.equal(files.status, 200);
+  assert.deepEqual((await files.json()).files[0], {
+    name: "empty.db", path: "/Documents/empty.db", isDirectory: false, size: 0, modified: null,
+  });
+  const logs = await api(`${target}/log?bundleId=native-app&level=fatal&limit=2`, "GET");
+  assert.equal(logs.status, 200);
+  assert.deepEqual((await logs.json()).entries.map((entry) => entry.level), ["verbose", "fatal"]);
+  const crashes = await api(`${target}/crashes?text=App&limit=1`, "GET");
+  assert.equal(crashes.status, 200);
+  assert.equal((await crashes.json()).total, 2);
+  const detail = await api(`${target}/crashes/report`, "GET");
+  assert.equal(detail.status, 200);
+  assert.equal((await detail.json()).content, "full stack");
+  const dispatcher = await createAilohaMcpDispatcher({
+    version: "synthetic-only", binding: returnedBinding(selection),
+  });
+  try {
+    for (const [name, input, expected] of [
+      ["mobile_device_file_list", { deviceId: "opaque/target", bundleId: "native-app", path: "Documents" }, "empty.db"],
+      ["mobile_device_log", { deviceId: "opaque/target", level: "fatal", limit: 2 }, "verbose"],
+      ["mobile_device_crashes", { deviceId: "opaque/target", text: "App", limit: 1 }, "App"],
+      ["mobile_device_crash_report", { deviceId: "opaque/target", crashId: "report" }, "full stack"],
+    ]) {
+      const response = await dispatcher.handle(mcpCall(name, input));
+      assert.notEqual(response.result.isError, true, name);
+      const output = response.result.structuredContent;
+      assert.deepEqual(JSON.parse(response.result.content[0].text), output);
+      assert.equal(JSON.stringify(output).includes(expected), true, name);
+    }
+  } finally {
+    await dispatcher.dispose();
+    scenario.artifactReads = false;
+  }
+  assert.equal(scenario.calls.filter((call) => call.method === "POST"
+    && /\/(files|logs|crashes|media)/.test(call.path ?? "")).length, 0);
 }
 
 try {
@@ -238,6 +271,9 @@ try {
       method, headers: { Cookie: cookie, ...(method === "POST" ? { "Content-Type": "application/json" } : {}) },
       ...(method === "POST" ? { body: JSON.stringify(body) } : {}),
     }));
+    await checkArtifactReads((path, method) => fetch(new URL(path, url), {
+      method, headers: { Cookie: cookie },
+    }), selected);
     const socketUrl = new URL("/ws/video?deviceId=opaque%2Ftarget", url);
     socketUrl.protocol = "ws:";
     const socket = new WebSocket(socketUrl, "ailoha.video.v1", { headers: { Cookie: cookie } });
@@ -324,6 +360,7 @@ try {
     assert.equal(catalog.devices[0].nativeId, "native-deployment-not-opaque-target");
     await checkEmptyContext(await (await api("/api/v1/selection")).json());
     await checkArtifactApi(api);
+    await checkArtifactReads(api, await (await api("/api/v1/selection")).json());
     await api("/api/v1/selection", "POST", { deviceId: "opaque/target" });
     const selected = await bridge.getSelectedDeviceContext();
     selectedContext = selected.selection;

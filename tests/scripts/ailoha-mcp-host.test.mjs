@@ -80,10 +80,15 @@ test("unsupported/invalid/cross-scope calls are positive failures before any run
   assert.equal(backendCalls, 0);
 });
 
-test("all nine installed file, media and diagnostics identities retain schemas but fail before native dispatch", async (t) => {
+test("five mutation identities stay gated and four read identities retain their installed MCP schemas", async (t) => {
   let backendCalls = 0;
   const dispatcher = await createAilohaMcpDispatcher({
-    binding, version: "test", createBackend() { backendCalls += 1; throw new Error("do not reach"); },
+    binding, version: "test", createBackend() {
+      backendCalls += 1;
+      return { async readArtifact(name, input) {
+        return { schemaVersion: "1.0", deviceId: input.deviceId, operation: name };
+      }, async dispose() {} };
+    },
   });
   t.after(() => dispatcher.dispose());
   const tools = (await dispatcher.handle(message("tools/list"))).result.tools;
@@ -100,16 +105,18 @@ test("all nine installed file, media and diagnostics identities retain schemas b
     mobile_device_crash_report: { deviceId: "target", crashId: "report-id" },
   };
   for (const [name, input] of Object.entries(inputs)) {
+    const readable = ["mobile_device_file_list", "mobile_device_log",
+      "mobile_device_crashes", "mobile_device_crash_report"].includes(name);
     const tool = tools.find((entry) => entry.name === name);
     assert.ok(tool);
-    assert.equal(tool.description.includes(ARTIFACT_FEATURE_GATES[name]), true);
+    assert.equal(tool.description.includes(ARTIFACT_FEATURE_GATES[name]), !readable);
     assert.deepEqual(tool.inputSchema, original.find((entry) => entry.name === name).inputSchema);
     assert.deepEqual(tool.outputSchema, original.find((entry) => entry.name === name).outputSchema);
     const result = await dispatcher.handle(call(name, input));
-    assert.equal(result.result.isError, true, name);
-    assert.deepEqual(JSON.parse(result.result.content[0].text), {
-      code: "artifact_contract_unavailable", message: ARTIFACT_FEATURE_GATES[name], status: 501,
-    });
+    assert.equal(result.result.isError === true, !readable, name);
+    assert.deepEqual(JSON.parse(result.result.content[0].text), readable
+      ? { schemaVersion: "1.0", deviceId: input.deviceId, operation: name }
+      : { code: "artifact_contract_unavailable", message: ARTIFACT_FEATURE_GATES[name], status: 501 });
   }
   for (const [name, input] of [
     ["mobile_device_media_add", { deviceId: "target", paths: ["/owned/photo.png", null] }],
@@ -120,7 +127,7 @@ test("all nine installed file, media and diagnostics identities retain schemas b
     assert.equal(result.result.isError, true);
     assert.equal(JSON.parse(result.result.content[0].text).code, "invalid_request");
   }
-  assert.equal(backendCalls, 0);
+  assert.equal(backendCalls, 1);
 });
 
 test("bound empty-context inventory retains the installed MCP list output envelope", async (t) => {

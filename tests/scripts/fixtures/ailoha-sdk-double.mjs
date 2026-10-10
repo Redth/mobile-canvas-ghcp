@@ -44,8 +44,15 @@ function mergedCapabilities(values) {
   return [...groups.values()];
 }
 function providerRecords() {
+  const readCapabilities = scenario.artifactReads ? [
+    { id: "target.files", version: 1, features: ["queryTargetFiles"] },
+    { id: "target.diagnostics", version: 1,
+      features: ["queryTargetLogs", "queryTargetCrashes", "getTargetCrashDetail"] },
+    { id: "target.apps", version: 1, features: ["listTargetApps"] },
+  ] : [];
   return [{
-    providerId: "synthetic-provider", name: "Synthetic provider", version: "synthetic", state: "ready", capabilities: captures,
+    providerId: "synthetic-provider", name: "Synthetic provider", version: "synthetic", state: "ready",
+    capabilities: [...captures, ...readCapabilities],
   }, ...(scenario.catalog?.providers ?? []).map((provider) => ({
     ...provider, capabilities: mergedCapabilities([...provider.capabilities, ...captures]),
   }))];
@@ -172,6 +179,37 @@ export async function openTargetHostTransport(leaseId) {
         if (targetRoute[2] === "capabilities") return reply(providerRecords().find((provider) => provider.providerId === selected.providerId).capabilities);
         if (targetRoute[2] === "surfaces") return reply(selected.surfaces);
         return reply(selected);
+      }
+      if (scenario.artifactReads) {
+        const prefix = `/api/v1/targets/${encodeURIComponent(targetId)}`;
+        const owner = { "x-ailoha-target-host": { targetId, providerId: "synthetic-provider" } };
+        if (path === `${prefix}/apps?includeSystem=true`) {
+          return reply([{ appId: "native-app", packageId: "com.example.app", ...owner }]);
+        }
+        if (path.startsWith(`${prefix}/files/listing?`)) {
+          const nativePath = new URL(path, "http://localhost").searchParams.get("path");
+          return reply({
+            path: nativePath, nativePath: "/Documents", total: 1,
+            files: [{ name: "empty.db", path: `${nativePath}/empty.db`, nativePath: "/Documents/empty.db",
+              type: "file", size: 0, ...owner }],
+          });
+        }
+        if (path.startsWith(`${prefix}/logs/query?`)) return reply({
+          total: 2, entries: [
+            { nativeTimestamp: "first", nativeLevel: "verbose", nativeSource: "process",
+              source: "native", message: "first", ...owner },
+            { nativeTimestamp: "second", nativeLevel: "fatal", nativeSource: "process",
+              source: "native", message: "second", ...owner },
+          ],
+        });
+        if (path.startsWith(`${prefix}/crashes/query?`)) return reply({
+          total: 2, crashes: [{ crashId: "report", nativeName: "App",
+            nativeTimestamp: "native clock", nativeKind: "crash", ...owner }],
+        });
+        if (path === `${prefix}/crashes/report/detail`) return reply({
+          crashId: "report", nativeName: "App", nativeTimestamp: "native clock",
+          nativeKind: "crash", content: "full stack", ...owner,
+        });
       }
       if (/\/actions\/(start|stop|reboot)$/.test(path)) {
         const action = path.split("/").at(-1);

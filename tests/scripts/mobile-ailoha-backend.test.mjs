@@ -221,7 +221,7 @@ test("real compatibility action paths project inventory/selection/native identit
   assert.equal((await unsupported.json()).code, "capability_not_supported");
 });
 
-test("artifact routes and direct actions do not approximate native output or dispatch device IO", async (t) => {
+test("unadvertised artifact reads and five mutation gates never dispatch device IO", async (t) => {
   const state = fixture();
   t.after(() => state.backend.dispose());
   const cases = [
@@ -236,18 +236,25 @@ test("artifact routes and direct actions do not approximate native output or dis
     ["mobile_device_crash_report", "GET", "/crashes/report-id"],
   ];
   for (const [identity, method, suffix] of cases) {
-    await assert.rejects(state.backend.invokeAction(identity, { deviceId: "one" }), {
-      code: "artifact_contract_unavailable", message: ARTIFACT_FEATURE_GATES[identity], status: 501,
+    const readable = ["mobile_device_file_list", "mobile_device_log",
+      "mobile_device_crashes", "mobile_device_crash_report"].includes(identity);
+    const failure = readable
+      ? { code: "capability_not_supported", status: 501 }
+      : { code: "artifact_contract_unavailable", message: ARTIFACT_FEATURE_GATES[identity], status: 501 };
+    await assert.rejects(state.backend.invokeAction(identity, {
+      deviceId: "one", ...(identity === "mobile_device_crash_report" ? { crashId: "report-id" } : {}),
+    }), {
+      ...failure,
     });
     const response = await state.backend.request(`/api/v1/devices/one${suffix}`, {
       method, ...(method === "POST" ? { body: JSON.stringify({ devicePath: "/fixture", hostPath: "/owned" }) } : {}),
     });
     assert.equal(response.status, 501, identity);
-    assert.deepEqual(await response.json(), {
-      code: "artifact_contract_unavailable", message: ARTIFACT_FEATURE_GATES[identity], status: 501,
-    });
+    assert.deepEqual(await response.json(), readable
+      ? { ...failure, message: `${identity} is not supported by this Ailoha opt-in or the selected target's advertised capabilities.` }
+      : failure);
   }
-  assert.deepEqual(state.calls, []);
+  assert.equal(state.calls.some(([kind]) => !["get"].includes(kind)), false);
   const wrongMethod = await state.backend.request("/api/v1/devices/one/files/delete", { method: "GET" });
   assert.equal(wrongMethod.status, 501);
   assert.equal((await wrongMethod.json()).code, "capability_not_supported");
@@ -263,7 +270,149 @@ test("artifact routes and direct actions do not approximate native output or dis
   const malformedCrash = await state.backend.request("/api/v1/devices/one/crashes/%ZZ");
   assert.equal(malformedCrash.status, 400);
   assert.equal((await malformedCrash.json()).code, "invalid_request");
+  assert.equal(state.calls.some(([kind]) => kind !== "get"), false);
+});
+
+test("captured native read features preserve exact file, log and crash envelopes", async (t) => {
+  const calls = [];
+  const context = { "x-ailoha-target-host": { targetId: "one", providerId: "provider" } };
+  const state = canonicalFixture({
+    client: {
+      async getTargetCapabilities() {
+        return [
+          { id: "target.files", version: 1, features: ["queryTargetFiles"] },
+          { id: "target.diagnostics", version: 1,
+            features: ["queryTargetLogs", "queryTargetCrashes", "getTargetCrashDetail"] },
+          { id: "target.apps", version: 1, features: ["listTargetApps"] },
+        ];
+      },
+      async listTargetApps(id) {
+        calls.push(["apps", id]);
+        return [{ appId: "native-app", packageId: "com.example.app", ...context }];
+      },
+      async queryTargetFiles(id, path) {
+        calls.push(["files", id, path]);
+        return {
+          path, nativePath: "/Documents", total: 1,
+          files: [{ name: "zero", path: `${path}/zero`, nativePath: "/Documents/zero",
+            type: "file", size: 0, ...context }],
+        };
+      },
+      async queryTargetLogs(id, query) {
+        calls.push(["logs", id, query]);
+        return { total: 2, entries: [
+          { nativeTimestamp: "first", nativeLevel: "verbose", nativeSource: "app",
+            source: "native", message: "one", ...context },
+          { nativeTimestamp: "second", nativeLevel: "fatal", nativeSource: "app",
+            source: "native", message: "two", ...context },
+        ] };
+      },
+      async queryTargetCrashes(id, query) {
+        calls.push(["crashes", id, query]);
+        return { total: 3, crashes: [{
+          crashId: "report", nativeName: "App", nativeTimestamp: "raw time", nativeKind: "ANR", ...context,
+        }] };
+      },
+      async getTargetCrashDetail(id, crashId) {
+        calls.push(["detail", id, crashId]);
+        return { crashId, nativeName: "App", nativeTimestamp: "raw time", content: "full stack", ...context };
+      },
+    },
+  });
+  t.after(() => state.backend.dispose());
+  const files = await state.backend.readArtifact("mobile_device_file_list", {
+    deviceId: "one", bundleId: "native-app", path: "Documents",
+  });
+  assert.equal(files.files[0].size, 0);
+  assert.equal(files.files[0].path, "/Documents/zero");
+  assert.deepEqual(calls.slice(0, 2), [["apps", "one"], ["files", "one", "app://com.example.app/Documents"]]);
+  const logs = await state.backend.readArtifact("mobile_device_log", {
+    deviceId: "one", bundleId: "native-app", level: "fatal", seconds: 300, limit: 2,
+  });
+  assert.deepEqual(logs.entries.map((entry) => entry.level), ["verbose", "fatal"]);
+  assert.equal(logs.total, 2);
+  assert.equal(calls.find(([kind]) => kind === "logs")[2].appId, "com.example.app");
+  assert.equal(calls.find(([kind]) => kind === "logs")[2].level, "critical");
+  assert.equal((await state.backend.readArtifact("mobile_device_crashes", {
+    deviceId: "one", text: "App", limit: 1,
+  })).total, 3);
+  assert.equal((await state.backend.readArtifact("mobile_device_crash_report", {
+    deviceId: "one", crashId: "report",
+  })).content, "full stack");
+  assert.equal(JSON.stringify(files).includes("connectionRef"), false);
+  assert.equal(calls.some(([kind]) => ["push", "delete", "media"].includes(kind)), false);
+});
+
+test("stale view revision cannot borrow a newer app lookup for a file read", async (t) => {
+  let state;
+  state = canonicalFixture({
+    client: {
+      async getTargetCapabilities() {
+        return [
+          { id: "target.files", version: 1, features: ["queryTargetFiles"] },
+          { id: "target.apps", version: 1, features: ["listTargetApps"] },
+        ];
+      },
+      async listTargetApps() {
+        await state.advanceSelection();
+        return [{ appId: "app", packageId: "app",
+          "x-ailoha-target-host": { targetId: "one", providerId: "provider" } }];
+      },
+      async queryTargetFiles() { throw new Error("stale intent crossed native read boundary"); },
+    },
+  });
+  t.after(() => state.backend.dispose());
+  await assert.rejects(state.backend.readArtifact("mobile_device_file_list", {
+    deviceId: "one", bundleId: "app",
+  }), { code: "context_snapshot_superseded" });
+});
+
+test("read adapters reject invalid limits before inventory and refuse ambiguous/foreign/incomplete results", async (t) => {
+  let apps = [{ appId: "app", packageId: "pkg",
+    "x-ailoha-target-host": { targetId: "one", providerId: "provider" } }];
+  let listing = {
+    path: "app://pkg/", nativePath: "/", total: 1,
+    files: [{ name: "empty", path: "app://pkg/empty", nativePath: "/empty",
+      type: "file", size: 0, "x-ailoha-target-host": { targetId: "one", providerId: "provider" } }],
+  };
+  const state = fixture({
+    client: {
+      async getTargetCapabilities() {
+        return [
+          { id: "target.files", version: 1, features: ["queryTargetFiles"] },
+          { id: "target.apps", version: 1, features: ["listTargetApps"] },
+          { id: "target.diagnostics", version: 1, features: ["queryTargetCrashes"] },
+        ];
+      },
+      async listTargetApps() { return apps; },
+      async queryTargetFiles() { return listing; },
+      async queryTargetCrashes() { return { total: 0, crashes: [] }; },
+    },
+  });
+  t.after(() => state.backend.dispose());
+  for (const input of [
+    { deviceId: "one", limit: 0 }, { deviceId: "one", limit: 501 },
+    { deviceId: "one", text: "  " },
+  ]) {
+    await assert.rejects(state.backend.readArtifact("mobile_device_crashes", input),
+      { code: "artifact_contract_unavailable", status: 501 });
+  }
   assert.deepEqual(state.calls, []);
+  apps = [...apps, { ...apps[0], appId: "another" }];
+  await assert.rejects(state.backend.readArtifact("mobile_device_file_list", {
+    deviceId: "one", bundleId: "pkg",
+  }), { code: "capability_not_supported", status: 501 });
+  apps = apps.slice(0, 1);
+  listing = { ...listing, total: 2 };
+  await assert.rejects(state.backend.readArtifact("mobile_device_file_list", {
+    deviceId: "one", bundleId: "pkg",
+  }), { code: "invalid_artifact_listing", status: 502 });
+  listing = { ...listing, total: 1, files: [{
+    ...listing.files[0], "x-ailoha-target-host": { targetId: "one", providerId: "other" },
+  }] };
+  await assert.rejects(state.backend.readArtifact("mobile_device_file_list", {
+    deviceId: "one", bundleId: "pkg",
+  }), { code: "artifact_owner_mismatch", status: 502 });
 });
 
 test("an open empty canonical view projects its verified binding without inferring a target", async (t) => {
