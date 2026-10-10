@@ -5,7 +5,7 @@ import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { assertDarwinHelperEntries } from "../lib/runtime-assets.mjs";
 import { verifyPreparedAilohaGraph } from "./prepare-ailoha-graph.mjs";
-import { listFiles, verifyPublishableImages, withVsix } from "./vsix.mjs";
+import { listFiles, verifyDevelopmentFiles, verifyPublishableImages, withVsix } from "./vsix.mjs";
 
 const root = join(dirname(fileURLToPath(import.meta.url)), "..");
 const vsix = resolve(process.argv[2] ?? join(root, ".build", "mobile-canvas-vscode.vsix"));
@@ -27,7 +27,7 @@ function verifyExtracted(directory) {
     context: "VSIX runtime manifest",
     requireAll: Object.keys(runtimeManifest.runtimes ?? {}).length > 1,
   });
-  verifyPreparedAilohaGraph(join(directory, "extension", "dist"));
+  const verifiedAilohaGraph = verifyPreparedAilohaGraph(join(directory, "extension", "dist"));
 
   for (const path of [
     "extension/readme.md",
@@ -89,16 +89,7 @@ function verifyExtracted(directory) {
     }
   }
 
-  for (const path of entries) {
-    if (
-      path.startsWith("extension/src/")
-      || path.startsWith("extension/test/")
-      || path.startsWith("extension/.vscode-test/")
-      || path.endsWith(".map")
-    ) {
-      throw new Error(`VSIX contains development-only file ${path}`);
-    }
-  }
+  verifyDevelopmentFiles(entries, { verifiedAilohaGraph });
 
   if (extensionPackage.version !== runtimeManifest.version) {
     throw new Error(

@@ -74,6 +74,9 @@ function fixture(t) {
       ? 'import value from "synthetic-transitive"; export default `tar:${value}`;\n'
       : `export default "${name}";\n`);
   }
+  json(join(launcher, "node_modules", "synthetic-transitive", "index.js.map"), {
+    version: 3, sources: ["synthetic.js"], names: [], mappings: "",
+  });
   write(join(launcher, "node_modules", "@ailoha", "cli-synthetic-native", "payload"), "Excluded native fixture.\n");
   const output = (host) => {
     const path = join(directory, host);
@@ -94,6 +97,8 @@ test("both prepared hosts resolve the complete synthetic bundled launcher graph 
     const packageRoot = join(product, "node_modules", "@ailoha", "cli");
     assert.equal(existsSync(join(packageRoot, "node_modules", "@ailoha", "cli-synthetic-native")), false);
     assert.equal(readFileSync(join(packageRoot, "node_modules", "synthetic-transitive", "LICENSE"), "utf8"), "Synthetic synthetic-transitive license.\n");
+    assert.equal(readFileSync(join(packageRoot, "node_modules", "synthetic-transitive", "index.js.map"), "utf8"),
+      readFileSync(join(state.launcher, "node_modules", "synthetic-transitive", "index.js.map"), "utf8"));
     const provenance = JSON.parse(readFileSync(join(product, "lib", "ailoha", "prepared-runtime-graph.json"), "utf8"));
     assert.equal(provenance.sourceSha, state.pin.sourceSha);
     assert.equal(provenance.tarball, state.pin.tarball);
