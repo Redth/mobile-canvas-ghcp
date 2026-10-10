@@ -4,7 +4,7 @@ import { existsSync, mkdirSync, mkdtempSync, readFileSync, renameSync, rmSync, s
 import { dirname, join } from "node:path";
 import test from "node:test";
 import { fileURLToPath } from "node:url";
-import { prepareAilohaGraph } from "../../scripts/prepare-ailoha-graph.mjs";
+import { prepareAilohaGraph, verifyPreparedAilohaGraph } from "../../scripts/prepare-ailoha-graph.mjs";
 
 const root = join(dirname(fileURLToPath(import.meta.url)), "../..");
 
@@ -54,7 +54,7 @@ function fixture(t) {
   json(join(launcher, "package.json"), manifest);
   write(join(launcher, "LICENSE"), "Synthetic test license only.\n");
   write(join(launcher, "THIRD-PARTY-NOTICES.md"), "Synthetic test notices only.\n");
-  json(join(launcher, "runtime-pins.json"), { synthetic: true, version: pin.version });
+  json(join(launcher, "runtime-pins.json"), { synthetic: true, version: pin.version, sourceSha: pin.sourceSha });
   write(join(launcher, "runtime", "index.d.ts"), "export declare const syntheticGraph: string[];\n");
   write(join(launcher, "runtime", "index.mjs"), [
     'import ws from "ws";',
@@ -79,6 +79,7 @@ function fixture(t) {
     const path = join(directory, host);
     json(join(path, "package.json"), { type: "module" });
     mkdirSync(join(path, "lib", "ailoha"), { recursive: true });
+    json(join(path, "lib", "ailoha", "runtime-package.json"), pin);
     return path;
   };
   return { sourceRoot, launcher, pin, manifest, json, write, output };
@@ -89,6 +90,7 @@ test("both prepared hosts resolve the complete synthetic bundled launcher graph 
   const products = ["github", "vscode"].map(state.output);
   for (const product of products) {
     assert.equal(prepareAilohaGraph(product, { sourceRoot: state.sourceRoot }), true);
+    assert.equal(verifyPreparedAilohaGraph(product), true);
     const packageRoot = join(product, "node_modules", "@ailoha", "cli");
     assert.equal(existsSync(join(packageRoot, "node_modules", "@ailoha", "cli-synthetic-native")), false);
     assert.equal(readFileSync(join(packageRoot, "node_modules", "synthetic-transitive", "LICENSE"), "utf8"), "Synthetic synthetic-transitive license.\n");
@@ -109,7 +111,7 @@ test("both prepared hosts resolve the complete synthetic bundled launcher graph 
     assert.deepEqual(JSON.parse(result), {
       syntheticGraph: ["ws", "undici", "tar:synthetic-transitive"],
       syntheticTransport: true,
-      pins: { synthetic: true, version: state.pin.version },
+      pins: { synthetic: true, version: state.pin.version, sourceSha: state.pin.sourceSha },
     });
   }
 });
@@ -119,7 +121,9 @@ test("an absent public pin leaves the preparer dormant rather than resolving any
   rmSync(join(state.sourceRoot, "lib", "ailoha", "runtime-package.json"));
   rmSync(join(state.sourceRoot, "node_modules"), { recursive: true });
   const output = state.output("github");
+  rmSync(join(output, "lib", "ailoha", "runtime-package.json"));
   assert.equal(prepareAilohaGraph(output, { sourceRoot: state.sourceRoot }), false);
+  assert.equal(verifyPreparedAilohaGraph(output), false);
   assert.equal(existsSync(join(output, "node_modules")), false);
 });
 
@@ -147,3 +151,28 @@ for (const [name, change, error] of [
     assert.equal(existsSync(join(output, "node_modules", "@ailoha", "cli")), false);
   });
 }
+
+test("both host verifiers reject changed transitive bytes and incomplete pinned launcher receipts", (t) => {
+  const state = fixture(t);
+  for (const host of ["github", "vscode"]) {
+    const output = state.output(host);
+    prepareAilohaGraph(output, { sourceRoot: state.sourceRoot });
+    const dependency = join(output, "node_modules", "@ailoha", "cli", "node_modules", "synthetic-transitive", "index.js");
+    state.write(dependency, 'export default "changed bytes";\n');
+    assert.throws(() => verifyPreparedAilohaGraph(output), /bytes or provenance/);
+    rmSync(join(output, "lib", "ailoha", "prepared-runtime-graph.json"));
+    assert.throws(() => verifyPreparedAilohaGraph(output), /missing its prepared launcher graph or receipt/);
+    rmSync(join(output, "lib", "ailoha", "runtime-package.json"));
+    assert.throws(() => verifyPreparedAilohaGraph(output), /without its approved package pin/);
+  }
+});
+
+test("packaged SDK pins cannot disagree with the approved source provenance", (t) => {
+  const state = fixture(t);
+  const output = state.output("vscode");
+  state.json(join(state.launcher, "runtime-pins.json"), {
+    version: state.pin.version, sourceSha: "b".repeat(40),
+  });
+  prepareAilohaGraph(output, { sourceRoot: state.sourceRoot });
+  assert.throws(() => verifyPreparedAilohaGraph(output), /bytes or provenance/);
+});

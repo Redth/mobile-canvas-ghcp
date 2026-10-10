@@ -4,6 +4,7 @@ import { existsSync, readFileSync, statSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { assertDarwinHelperEntries } from "../lib/runtime-assets.mjs";
+import { verifyPreparedAilohaGraph } from "./prepare-ailoha-graph.mjs";
 import { listFiles, verifyPublishableImages, withVsix } from "./vsix.mjs";
 
 const root = join(dirname(fileURLToPath(import.meta.url)), "..");
@@ -26,6 +27,7 @@ function verifyExtracted(directory) {
     context: "VSIX runtime manifest",
     requireAll: Object.keys(runtimeManifest.runtimes ?? {}).length > 1,
   });
+  verifyPreparedAilohaGraph(join(directory, "extension", "dist"));
 
   for (const path of [
     "extension/readme.md",
