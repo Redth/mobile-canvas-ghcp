@@ -184,6 +184,28 @@ test("cancelling is nonterminal and mismatched host/target/surface/output never 
   }
 });
 
+test("a failed or cancelled recording never reports a completed stop even with an artifact", async () => {
+  for (const state of ["failed", "cancelled", "canceled"]) {
+    let active = false;
+    let stops = 0;
+    const { coordinator } = fixture({
+      run(action) {
+        if (action === "status") return JSON.stringify(active ? record() : null);
+        if (action === "start") { active = true; return JSON.stringify(record()); }
+        if (action === "stop") {
+          stops += 1;
+          return JSON.stringify({ ...record(state), artifactId: "artifact-needs-verification" });
+        }
+      },
+    });
+    await coordinator.start(invocation);
+    await assert.rejects(coordinator.stop("target-one"), { code: "recording_not_finalized" });
+    await assert.rejects(coordinator.finalize(), { code: "recording_stop_unresolved" });
+    assert.equal(coordinator.tracked, true);
+    assert.equal(stops, 1);
+  }
+});
+
 test("same-key concurrent starts submit exactly one native start and release a bounded slot", async () => {
   let accept;
   const blocked = new Promise((resolve) => { accept = resolve; });
