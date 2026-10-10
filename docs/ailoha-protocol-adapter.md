@@ -125,9 +125,8 @@ an explicitly empty body. `resetTarget` has the same shape plus mandatory
 Reset and deletion require an own data property with value exactly `true`;
 missing, inherited, accessor, false, or non-boolean confirmation is rejected
 **before any network IO**. `confirmed` is a consumer-side gate and is never sent
-to the server. It does not claim user consent has been obtained: the eventual
-product adapter must obtain and scope the real confirmation before setting it.
-No UI/MCP adapter or public compatibility tool is changed by this slice.
+to the server. It is not evidence of human consent: the product adapters obtain
+the separately captured approval described below before setting it.
 
 Mutation bodies are strict JSON snapshots, capped at 64 KiB of serialized UTF-8
 and 64 nesting levels. Unknown request fields, non-JSON values, accessors,
@@ -307,6 +306,61 @@ or reject that old transport, while reused external credentials leave a
 request-time race. Mobile Canvas neither refreshes/replays mutations across
 changed evidence nor claims that comparing a precheck eliminates that race.
 
+### Captured human approval
+
+`confirm: true` remains the compatibility intent flag, not proof that a person
+approved. The GitHub canvas uses the joined SDK session's advertised
+`capabilities.ui.elicitation`, `session.ui.elicitation`, and the matching
+`elicitation.requested` event. Cancellation uses that event's request ID through
+`session.rpc.ui.handlePendingElicitation`; no permission hook auto-approves.
+VS Code uses a native `createQuickPick` with an explicit "Approve once" choice
+and a non-destructive default. Accept/hide callbacks and abort dispose that
+picker. Renderer JSON never supplies an approval. Legacy confirmation UX is
+unchanged; Ailoha skips the renderer-only confirmation and requests its trusted
+host prompt instead.
+
+The private shared authority captures the original action, invocation object,
+canonical ref/epoch/revision, provider/native target, and frozen full
+`connectionRef`. One monotonic 60-second budget covers prompt and revalidation,
+not a fresh timeout after approval. Selection change, observed authority
+retirement/replacement, owner disposal, caller cancellation, or expiry retires
+the approval; a late result cannot revive it. The pending prompt pool is bounded
+to 128 independently of the unchanged 64 accepted-operation receipts.
+Immediately before a new reset/delete submission, the backend rereads the
+canonical context and target/provenance/capabilities, compares the captured
+snapshot and native identity, checks admission again, and spends approval in
+the same synchronous turn as receipt insertion and submission. It does not
+serialize unrelated operations. Accepted or uncertain work retains its original
+receipt and is not replayed or rebound to a replacement incarnation.
+
+MCP requires the client's supported form-elicitation capability and sends a
+nested `elicitation/create` request. The stdio parser correlates those responses
+outside the serialized tool queue, preventing an approval deadlock.
+`notifications/cancelled`, EOF, and owned shutdown retire pending prompts.
+Unsolicited/late replies are ignored with diagnostics; clients without form
+elicitation receive explicit `consent_not_supported`, not automatic approval.
+
+Trusted app adapters reuse `backend.supportsDestructiveApproval` and
+`backend.beginDestructiveApproval(action, originalInvocation, options)`.
+The returned private handle has `approved`, `signal`, `run(work)`,
+`requireCurrent()`, `consume(originalInvocation, currentStagedArtifact?)`, and
+`dispose()`. `run` bounds pre-submit revalidation; after `consume` has spent the
+approval, the original accepted submission may finish inside that run without
+resetting the approval budget or replaying it.
+
+For the separately owned install workflow, `options.stagedArtifact` is the exact
+canonical staged record: artifact ID, literal source path, receipt, size,
+SHA-256, and its whole native receipt proof. A private immutable copy is bound
+to the approval, including source-path/receipt hashes and literal native
+`proof.hostInstanceId`; this existing native field is not derived into a
+consumer incarnation alias. Only package name/digest/size and captured
+target/view details are presented to the human. Source path, receipt, full
+proof, and process evidence never cross renderer/MCP boundaries. Install
+adapters must retain the original invocation before public cloning, revalidate
+their native stage/target/context, and pass the unchanged complete staged record
+to `consume` immediately before submission. This host seam does not implement
+or claim public/native installation readiness.
+
 `get_selected_device`/`mobile_device_get_selected` include a non-secret
 `contextBinding` projection when backed by the canonical authority:
 `contextRef`, `scopeEpoch`, string `revision` and the actual product
@@ -341,9 +395,8 @@ success. Lost accepted bodies and timed-out waits retain a bounded receipt acros
 view resource replacement; a subsequent action resumes the original operation
 with GET/wait, never a repeated POST. An outcome without a recovery receipt is
 explicitly uncertain and is not replayed. Reset/delete require both the own
-literal confirmation gate and real scoped consent; the opt-in has no such human
-consent adapter and reports them
-unsupported. Create/start omission semantics in the underlying client remain
+literal confirmation gate and real scoped consent. Hosts without the required
+approval facility report these actions as unsupported. Create/start omission semantics in the underlying client remain
 unchanged, but the existing creation/catalog compatibility workflow is not
 enabled in this slice.
 
@@ -365,7 +418,8 @@ tooling is not a ready-shaped empty inventory.
 ### Scope and verification
 
 Implemented: inventory/select, advertised start/stop/reboot, PNG screenshot,
-basic geometry-bound pointer gestures and shared ALHV WebCodecs display.
+basic geometry-bound pointer gestures, shared ALHV WebCodecs display, and
+advertised reset/delete when the host can obtain genuine captured approval.
 Unsupported: compatibility creation/catalog, reveal/rotation/keyboard/buttons,
 reset/delete without scoped consent, app/system semantic trees, app deployment,
 recording and broader settings/diagnostics/file/hardware operations. No claim of

@@ -4,6 +4,7 @@ import { fileURLToPath } from "node:url";
 
 export const scenario = {
   calls: [], leases: new Map(), videos: new Map(), operations: new Map(), status: "running", geometryRevision: 13,
+  targets: new Map(), providerId: "synthetic-provider", nativeId: "native-deployment-not-opaque-target",
   connectionRef: {
     schema: "ailoha.target-host.connection/v1", serviceId: "synthetic-service", pid: 12345,
     startedAt: "2026-10-09T23:00:00Z", processStartedAt: "2026-10-09T22:59:59Z",
@@ -15,7 +16,7 @@ const surfaceId = "opaque/surface";
 const packetRoot = new URL("../../web/fixtures/ailoha-baseline/", import.meta.url);
 const fixture = JSON.parse(readFileSync(new URL("manifest.json", packetRoot), "utf8"));
 const captures = [
-  { id: "target.lifecycle", version: 1, features: ["listTargets", "getTarget", "getTargetCapabilities", "startTarget", "stopTarget", "rebootTarget"] },
+  { id: "target.lifecycle", version: 1, features: ["listTargets", "getTarget", "getTargetCapabilities", "startTarget", "stopTarget", "rebootTarget", "resetTarget", "deleteTarget"] },
   { id: "target.surfaces", version: 1, features: ["listTargetSurfaces", "getTargetSurface"] },
   { id: "surface.capture", version: 1, features: ["captureTargetScreenshot", "createLiveVideoSession", "getLiveVideoSession", "stopLiveVideoSession"] },
   { id: "surface.input", version: 1, features: ["tapTargetElement", "performTargetGesture"] },
@@ -27,9 +28,9 @@ const surface = {
 };
 function target() {
   return {
-    targetId, providerId: "synthetic-provider", targetTypeId: "opaque/type", name: "Synthetic device",
+    targetId, providerId: scenario.providerId, targetTypeId: "opaque/type", name: "Synthetic device",
     status: scenario.status, surfaces: scenario.status === "running" ? [{ ...surface, geometryRevision: scenario.geometryRevision }] : [],
-    nativeIdentity: { platform: "ios", nativeId: "native-deployment-not-opaque-target", isVirtual: true },
+    nativeIdentity: { platform: "ios", nativeId: scenario.nativeId, isVirtual: true },
   };
 }
 const reply = (body, status = 200, location = null) => ({
@@ -89,26 +90,50 @@ export async function openTargetHostTransport(leaseId) {
         state: "ready", capabilities: captures,
       });
       if (path === "/api/v1/providers") return reply([{
-        providerId: "synthetic-provider", name: "Synthetic provider", version: "synthetic", state: "ready", capabilities: captures,
+        providerId: scenario.providerId, name: "Synthetic provider", version: "synthetic", state: "ready", capabilities: captures,
       }]);
-      if (path === "/api/v1/targets") return reply([target()]);
-      if (path === "/api/v1/targets/opaque%2Ftarget") return reply(target());
+      if (path === "/api/v1/targets") return reply(scenario.targets.size ? [...scenario.targets.values()] : scenario.deleted ? [] : [target()]);
+      const targetPath = /^\/api\/v1\/targets\/([^/]+)$/.exec(path);
+      if (targetPath) {
+        const id = decodeURIComponent(targetPath[1]);
+        const record = scenario.targets.get(id) ?? (id === targetId ? target() : undefined);
+        if (!record || (id === targetId && scenario.deleted)) return reply({ status: 404, title: "Synthetic target not found" }, 404);
+        if (options.method === "DELETE") {
+          const operationId = randomUUID();
+          const operation = {
+            operationId, kind: "deleteTarget", targetId: id, providerId: record.providerId,
+            status: "queued", destructive: true, createdAt: "2026-10-09T23:00:00Z",
+          };
+          scenario.targets.delete(id);
+          if (id === targetId) scenario.deleted = true;
+          scenario.operations.set(operationId, { ...operation, status: "succeeded", startedAt: "2026-10-09T23:00:01Z", completedAt: "2026-10-09T23:00:02Z" });
+          return reply(operation, 202, `/api/v1/operations/${operationId}`);
+        }
+        if (scenario.beforeTargetRead) await scenario.beforeTargetRead(id);
+        return reply(record);
+      }
       if (path.endsWith("/capabilities")) return reply(captures);
       if (path.endsWith("/surfaces")) return reply([{ ...surface, geometryRevision: scenario.geometryRevision }]);
-      if (/\/actions\/(start|stop|reboot)$/.test(path)) {
+      if (/\/actions\/(start|stop|reboot|reset)$/.test(path)) {
         const action = path.split("/").at(-1);
+        const id = decodeURIComponent(path.split("/").at(-3));
+        const record = scenario.targets.get(id);
         const operationId = randomUUID();
-        scenario.status = action === "stop" ? "stopped" : "running";
+        const status = action === "stop" || action === "reset" ? "stopped" : "running";
+        if (record) record.status = status;
+        else scenario.status = status;
         const operation = {
-          operationId, kind: `${action}Target`, targetId, providerId: "synthetic-provider",
-          status: "queued", destructive: false, createdAt: "2026-10-09T23:00:00Z",
+          operationId, kind: `${action}Target`, targetId: id, providerId: scenario.providerId,
+          status: "queued", destructive: action === "reset", createdAt: "2026-10-09T23:00:00Z",
         };
         scenario.operations.set(operationId, {
           ...operation, status: "succeeded", startedAt: "2026-10-09T23:00:01Z", completedAt: "2026-10-09T23:00:02Z",
         });
         return reply(operation, 202, `/api/v1/operations/${operationId}`);
       }
-      if (path.startsWith("/api/v1/operations/")) return reply(scenario.operations.get(decodeURIComponent(path.split("/").at(-1))));
+      if (path.startsWith("/api/v1/operations/")) return scenario.operationUnavailable
+        ? reply({ status: 503, title: "Synthetic operation observation unavailable" }, 503)
+        : reply(scenario.operations.get(decodeURIComponent(path.split("/").at(-1))));
       if (path.endsWith("/screenshots")) {
         const image = readFileSync(new URL("reference-1.png", packetRoot));
         return reply({

@@ -435,16 +435,41 @@ test("missing real scoped destructive consent is unsupported even when confirm i
 test("real consent is captured to the original target and is separate from the literal gate", async (t) => {
   const consent = deferred();
   let captured;
-  const state = fixture({ confirmDestructive: (context) => { captured = context; return consent.promise; } });
+  const state = canonicalFixture({ confirmDestructive: (context) => { captured = context; return consent.promise; } });
   t.after(() => state.backend.dispose());
-  await state.backend.select("one");
   const resetting = state.backend.lifecycle("erase", "one", { confirm: true });
+  const rejected = assert.rejects(resetting, { code: "context_snapshot_superseded" });
   await new Promise((resolve) => setImmediate(resolve));
   await state.backend.select("two");
   assert.equal(captured.invocation.targetId, "one");
+  assert.equal(captured.invocation.executionContext.revision, "1");
+  assert.equal(captured.invocation.connectionRef, state.backend.connectionRef);
+  assert.equal(Object.isFrozen(captured.invocation), true);
+  assert.equal(JSON.stringify(captured).includes("processStartedAt"), false);
   consent.resolve(false);
-  await assert.rejects(resetting, { code: "consent_denied" });
+  await rejected;
   assert.equal(state.calls.some(([kind]) => kind === "reset"), false);
+});
+
+test("known revision replacement during post-approval target revalidation cancels before any DELETE", async (t) => {
+  const state = canonicalFixture({ confirmDestructive: async () => true });
+  t.after(() => state.backend.dispose());
+  const entered = deferred();
+  const release = deferred();
+  const getTarget = state.client.getTarget;
+  let reads = 0;
+  state.client.getTarget = async (id) => {
+    if (++reads === 2) { entered.resolve(); await release.promise; }
+    return getTarget(id);
+  };
+  const pending = state.backend.lifecycle("delete", "one", { confirm: true });
+  const rejected = assert.rejects(pending, { code: "context_snapshot_superseded" });
+  await entered.promise;
+  await state.advanceSelection();
+  await rejected;
+  release.resolve();
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(state.calls.some(([kind]) => kind === "delete"), false);
 });
 
 test("geometry-observed input uses logical bounds and rejects later revisions before dispatch", async (t) => {
@@ -886,7 +911,7 @@ test("receipt admission remains exactly64 after concurrent asynchronous destruct
   const approval = deferred();
   const operationState = new Map();
   let approvals = 0;
-  const state = fixture({
+  const state = canonicalFixture({
     operationState,
     async confirmDestructive() { approvals += 1; await approval.promise; return true; },
     client: {
@@ -896,7 +921,9 @@ test("receipt admission remains exactly64 after concurrent asynchronous destruct
   t.after(() => state.backend.dispose());
   for (let index = 0; index < 65; index += 1) {
     const id = `target-${index}`;
-    state.targets.set(id, { ...structuredClone(state.targets.get("one")), targetId: id });
+    const target = { ...structuredClone(state.targets.get("one")), targetId: id };
+    target.nativeIdentity.nativeId = `native-target-${index}`;
+    state.targets.set(id, target);
   }
   const work = Array.from({ length: 65 }, (_, index) =>
     state.backend.lifecycle("erase", `target-${index}`, { confirm: true }));
