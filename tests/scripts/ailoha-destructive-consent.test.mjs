@@ -191,7 +191,7 @@ test("remaining submission ceilings use the original monotonic budget and never 
   clock = 60_000;
   assert.throws(() => approval.remainingTimeoutMs(30_000), { code: "consent_timeout" });
   assert.equal(approval.signal.aborted, true);
-  approval.submitted();
+  assert.throws(() => approval.submitted(), { code: "submission_outcome_unknown" });
 });
 
 test("cooperative accepted metadata after caller abort is captured within the original budget", async (t) => {
@@ -214,8 +214,10 @@ test("cooperative accepted metadata after caller abort is captured within the or
   });
   await entered.promise;
   caller.abort();
-  assert.equal((await work).operationId, "original-accepted-operation");
+  await assert.rejects(work, { code: "consent_cancelled" });
   assert.equal(receipt.invocation, captured);
+  assert.equal(approval.submissionResult.value.operationId, "original-accepted-operation");
+  assert.equal(JSON.stringify(approval).includes("original-accepted-operation"), false);
   assert.throws(() => approval.consume(captured), { code: "consent_already_consumed" });
 });
 
@@ -323,4 +325,39 @@ test("pending approvals are independently bounded without changing the64 operati
   assert.throws(() => authority.begin("erase", invocation()), { code: "consent_prompt_limit", status: 429 });
   authority.dispose();
   assert.equal((await results).every((result) => result.status === "rejected" && result.reason.code === "consent_cancelled"), true);
+});
+
+test("consumed output after the original monotonic deadline cannot beat a delayed timer", async (t) => {
+  let clock = 0;
+  t.mock.method(performance, "now", () => clock);
+  const authority = new ScopedDestructiveConsent(async () => true, new AbortController().signal);
+  t.after(() => authority.dispose());
+  const captured = invocation();
+  const approval = authority.begin("delete", captured);
+  const attempt = approval.run(async () => {
+    approval.consume(captured);
+    clock = 60_001;
+    return { operationId: "late-original-operation" };
+  });
+  await assert.rejects(attempt, { code: "submission_outcome_unknown" });
+  assert.equal(approval.signal.aborted, true);
+  assert.equal(approval.submissionResult.value.operationId, "late-original-operation");
+  assert.equal(JSON.stringify(approval).includes("late-original-operation"), false);
+});
+
+test("direct submitted finalization cannot turn late or cancelled metadata into a valid approval", async (t) => {
+  let clock = 0;
+  t.mock.method(performance, "now", () => clock);
+  const authority = new ScopedDestructiveConsent(async () => true, new AbortController().signal);
+  t.after(() => authority.dispose());
+  const captured = invocation();
+  const approval = authority.begin("delete", captured);
+  await approval.approved;
+  approval.consume(captured);
+  clock = 60_001;
+  const metadata = { operationId: "late-direct-receipt" };
+  assert.throws(() => approval.submitted(metadata), { code: "submission_outcome_unknown" });
+  assert.equal(approval.signal.aborted, true);
+  assert.equal(approval.submissionResult, metadata);
+  assert.throws(() => approval.consume(captured), { code: "consent_already_consumed" });
 });

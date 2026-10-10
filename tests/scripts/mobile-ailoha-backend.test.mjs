@@ -174,6 +174,67 @@ function canonicalFixture(options = {}) {
   };
 }
 
+for (const status of [408, 499]) {
+  test(`destructive HTTP ${status} uncertainty retains the original receipt without another mutation or approval`, async (t) => {
+    let submissions = 0;
+    let prompts = 0;
+    const operationState = new Map();
+    const state = canonicalFixture({
+      operationState,
+      confirmDestructive: async () => { prompts += 1; return true; },
+      client: {
+        async resetTarget() { submissions += 1; throw new AilohaProtocolError("http_error", { status }); },
+      },
+    });
+    t.after(() => state.backend.dispose());
+    await assert.rejects(state.backend.lifecycle("erase", "one", { confirm: true }));
+    const original = [...operationState.values()][0];
+    await assert.rejects(state.backend.lifecycle("erase", "one", { confirm: true }), { code: "lifecycle_outcome_uncertain" });
+    assert.equal([...operationState.values()][0], original);
+    assert.equal(original.invocation.targetId, "one");
+    assert.equal(submissions, 1);
+    assert.equal(prompts, 1);
+  });
+}
+
+test("a disposed client with an unknown destructive outcome cannot erase the original receipt", async (t) => {
+  let submissions = 0;
+  const state = canonicalFixture({
+    confirmDestructive: async () => true,
+    client: {
+      async resetTarget() { submissions += 1; throw new AilohaProtocolError("client_disposed"); },
+    },
+  });
+  t.after(() => state.backend.dispose());
+  await assert.rejects(state.backend.lifecycle("erase", "one", { confirm: true }));
+  await assert.rejects(state.backend.lifecycle("erase", "one", { confirm: true }), { code: "lifecycle_outcome_uncertain" });
+  assert.equal(submissions, 1);
+});
+
+test("late authoritative acceptance remains recoverable by GET despite outward approval expiry", async (t) => {
+  let clock = 0;
+  t.mock.method(performance, "now", () => clock);
+  const operationState = new Map();
+  let submissions = 0;
+  let prompts = 0;
+  const state = canonicalFixture({
+    operationState,
+    confirmDestructive: async () => { prompts += 1; return true; },
+    client: {
+      async resetTarget() { submissions += 1; clock = 60_001; return { operationId: "reset-one" }; },
+    },
+  });
+  t.after(() => state.backend.dispose());
+  await assert.rejects(state.backend.lifecycle("erase", "one", { confirm: true }), { code: "submission_outcome_unknown" });
+  const original = [...operationState.values()][0];
+  assert.equal(original.operationId, "reset-one");
+  assert.equal(original.invocation.executionContext.revision, "1");
+  const recovered = await state.backend.lifecycle("erase", "one", { confirm: true });
+  assert.equal(recovered.id, "one");
+  assert.equal(recovered.invocation.executionContext.revision, "1");
+  assert.equal(submissions, 1);
+  assert.equal(prompts, 1);
+});
 test("legacy remains the default and invalid opt-in never becomes a fallback", () => {
   assert.equal(mobileCanvasBackend(), "legacy");
   assert.equal(mobileCanvasBackend("legacy"), "legacy");
@@ -496,7 +557,9 @@ for (const cancellation of ["caller", "owner", "deadline"]) {
     });
     t.after(() => state.backend.dispose());
     const work = state.backend.lifecycle("erase", "one", { confirm: true }, { signal: caller.signal });
-    const rejected = assert.rejects(work, { code: "cancelled" });
+    const rejected = assert.rejects(work, { code: {
+      caller: "consent_cancelled", owner: "view_closed", deadline: "submission_outcome_unknown",
+    }[cancellation] });
     const options = await entered.promise;
     assert.ok(options.timeoutMs > 0 && options.timeoutMs <= 15_000);
     if (cancellation === "caller") caller.abort();
@@ -650,6 +713,21 @@ test("lost create result remains explicit and cannot trigger a second create or 
   const response = await state.backend.request("/api/v1/devices/one/input/rotate", { method: "POST" });
   assert.equal(response.status, 501);
 });
+
+for (const status of [408, 499]) {
+  test(`video creation HTTP ${status} uncertainty cannot submit another create`, async (t) => {
+    let creates = 0;
+    const state = fixture({
+      media: {
+        async createVideo() { creates += 1; throw new AilohaProtocolError("http_error", { status }); },
+      },
+    });
+    t.after(() => state.backend.dispose());
+    await assert.rejects(state.backend.openVideo("one", () => {}, () => {}));
+    await assert.rejects(state.backend.openVideo("one", () => {}, () => {}), { code: "video_create_uncertain" });
+    assert.equal(creates, 1);
+  });
+}
 
 test("unknown SDK failures are explicitly reported without serializing private diagnostic data", async (t) => {
   const state = fixture({ client: { async listTargets() { throw new Error("Bearer private-secret http://private-origin"); } } });
