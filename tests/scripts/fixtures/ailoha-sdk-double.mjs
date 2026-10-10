@@ -133,6 +133,11 @@ export async function openTargetHostTransport(leaseId) {
       }
       if (path === "/api/v1/targets" && options.method === "POST") {
         if (!scenario.catalog) throw new Error("Synthetic creation is disabled");
+        if (scenario.creationSubmissionStatus !== undefined) {
+          return reply({
+            type: "about:blank", title: "Owned creation submission failure", status: scenario.creationSubmissionStatus,
+          }, scenario.creationSubmissionStatus);
+        }
         const input = JSON.parse(body);
         const provider = scenario.catalog.providerCatalogs.find((entry) => entry.providerId === input.providerId);
         const type = provider?.targetTypes.find((entry) => entry.targetTypeId === input.targetTypeId);
