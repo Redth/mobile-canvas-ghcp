@@ -84,9 +84,17 @@ screenshots, observed-geometry tap/held-press/swipe/scroll, and complete ALHV
 H.264 access units. Device control and System inspection require no app
 instrumentation; App inspection does. Creation uses exact
 host/provider catalog choices and one canonical operation; accepted retries do
-not submit another create or boot. Destructive reset/delete on hosts without
-genuine scoped human approval remain unsupported. The read-only System lens uses the selected Target Host target;
-the App lens requires an explicitly selected verified native runtime instance
+not submit another create or boot. Destructive reset/delete without scoped human
+consent remains unsupported where genuine scoped approval is unavailable. The read-only System lens uses the selected Target Host target;
+canonical app inventory, launch, terminate, cold relaunch and Android app-op
+reads use native target identities. Source-conditional staged installation
+remains unsupported in installed hosts until a compatible approved public
+runtime and host artifact capability are available; uninstall and app-op
+mutation use source-conditional fenced CLI actions with captured native app
+evidence, scoped human approval and effective readback. They remain unsupported
+in installed hosts until the compatible reviewed public CLI and native host
+capabilities are packaged; ordinary uninstall/app-op routes cannot substitute.
+The App lens requires an explicitly selected verified native runtime instance
 in the canonical named context. Workspace application evidence cannot bind an
 agent. Recording, keyboard/buttons and broader controls remain unsupported.
 See [the Ailoha adapter contract](docs/ailoha-protocol-adapter.md)

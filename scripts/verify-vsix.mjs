@@ -66,6 +66,8 @@ function verifyExtracted(directory) {
     "extension/dist/lib/ailoha/system-ui-adapter.mjs",
     "extension/dist/lib/ailoha/runtime-sdk.mjs",
     "extension/dist/lib/ailoha/runtime-backend.mjs",
+    "extension/dist/lib/ailoha/staged-apps.mjs",
+    "extension/dist/lib/ailoha/fenced-apps.mjs",
     "extension/dist/lib/ailoha/context-adapter.mjs",
     "extension/dist/lib/ailoha/canvas-host.mjs",
     "extension/dist/lib/ailoha/github-adapter.mjs",

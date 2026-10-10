@@ -25,6 +25,16 @@ for (const [host, product] of [
         "deny", "cancel", "erase_device", "delete_device", "selection", "retirement", "epoch",
         "native", "provider", "replacement", "deadline", "revalidation-deadline", "external-during-probe",
         "queued-deadline", "queued-owner", "queued-caller", "unsupported-host", "admission-and-resume",
+        "fenced-uninstall-denial", "fenced-uninstall-deadline", "fenced-uninstall-owner",
+        "fenced-uninstall-queued-deadline", "fenced-uninstall-queued-owner",
+        "fenced-uninstall-approved", "fenced-uninstall-accepted-nonzero",
+        "fenced-ios-app-op-unsupported",
+        "fenced-missing-installation-evidence",
+        "fenced-native-errors",
+        "fenced-android-app-op", "fenced-android-app-op-selection-recovery",
+        "fenced-android-app-op-effective-mismatch",
+        "fenced-android-app-op-denial",
+        "fenced-app-op-known-id-unicode", "fenced-app-op-known-id-long-ascii",
       ]);
       assert.equal(evidence.synthetic, true);
       assert.equal(evidence.realDeviceMutation, false);
@@ -38,6 +48,8 @@ for (const [host, product] of [
       assert.equal(mcp.cancelledPromptRetired, true);
       assert.equal(mcp.lateApprovalIgnored, true);
       assert.equal(mcp.targetSurvivedCancelledDelete, true);
+      assert.equal(mcp.fencedAppActionsThroughInstalledMcp, true);
+      assert.equal(mcp.fencedAcceptedMismatchGetOnly, true);
     } finally { rmSync(scratch, { recursive: true }); }
   });
 }

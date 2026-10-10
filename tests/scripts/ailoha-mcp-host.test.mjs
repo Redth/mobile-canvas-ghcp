@@ -16,7 +16,6 @@ test("MCP preserves all61 installed identities and advertises broader opt-in lim
   const baseline = JSON.parse(readFileSync(new URL("./ailoha-compatibility-baseline.json", import.meta.url), "utf8"));
   assert.deepEqual(catalog.map((tool) => tool.name).sort(), baseline.mcpTools);
   assert.equal(catalog.length, 61);
-  assert.equal(catalog.find((tool) => tool.name === "mobile_device_app_launch").description.includes("positively unsupported"), true);
   for (const name of ["hardware_get", "clipboard_get", "settings_get", "settings_set",
     "location_clear", "sms_send", "biometric", "notification_push"]) {
     assert.equal(catalog.find((tool) => tool.name === `mobile_device_${name}`)
@@ -31,6 +30,8 @@ test("MCP preserves all61 installed identities and advertises broader opt-in lim
   for (const name of ["mobile_device_ui_dump", "mobile_device_ui_find", "mobile_device_ui_tap"]) {
     assert.match(catalog.find((tool) => tool.name === name).description, /compatible published runtime/);
   }
+  assert.equal(catalog.find((tool) => tool.name === "mobile_device_app_launch").description.includes("bound view/Target Host"), true);
+  assert.equal(catalog.find((tool) => tool.name === "mobile_device_app_install").description.includes("explicitly unsupported"), true);
   assert.equal(catalog.every((tool) => tool.execution.taskSupport === "forbidden"), true);
   assert.equal(catalog.find((tool) => tool.name === "mobile_device_tap").inputSchema.properties.geometryRevision.maximum, 0xffffffff);
   const selected = catalog.find((tool) => tool.name === "mobile_device_get_selected");
@@ -55,8 +56,8 @@ test("actual dispatch uses the bound context with original tool meanings and cap
           calls.push({ name: "reveal", deviceId, options });
           return { id: deviceId, platform: "ios", nativeId: "owned-native-id" };
         },
-        async invokeAction(name, input) {
-          calls.push({ name, input });
+        async invokeAction(name, input, options) {
+          calls.push({ name, input, options });
           return { success: true, operation: name, deviceId: input.deviceId };
         },
         async screenshot(deviceId) {
@@ -88,7 +89,8 @@ test("actual dispatch uses the bound context with original tool meanings and cap
   ]) {
     const response = await dispatcher.handle(call(tool, input));
     assert.equal(response.result.structuredContent.operation, action);
-    assert.deepEqual(calls.at(-1), { name: action, input });
+    assert.deepEqual(calls.at(-1).name, action);
+    assert.deepEqual(calls.at(-1).input, input);
   }
   const screenshot = await dispatcher.handle(call("mobile_device_screenshot", { deviceId: "opaque-target" }));
   assert.equal(screenshot.result.content[1].type, "image");
@@ -97,6 +99,32 @@ test("actual dispatch uses the bound context with original tool meanings and cap
   assert.equal(revealed.result.structuredContent.id, "opaque-target");
   assert.equal(calls.at(-1).name, "reveal");
   assert.deepEqual(calls.at(-1).options, { selectRevealed: false });
+  const launched = await dispatcher.handle(call("mobile_device_app_launch", {
+    deviceId: "opaque-target", bundleId: "com.example.fixture", relaunch: true,
+  }));
+  assert.equal(launched.result.structuredContent.operation, "launch_app");
+  assert.deepEqual(calls.at(-1).input, {
+    deviceId: "opaque-target", bundleId: "com.example.fixture", relaunch: true,
+  });
+  const caller = new AbortController();
+  const uninstall = await dispatcher.handle(call("mobile_device_app_uninstall", {
+    deviceId: "opaque-target", bundleId: "com.example.fixture", confirm: true,
+  }), { signal: caller.signal });
+  assert.equal(uninstall.result.structuredContent.operation, "uninstall_app");
+  assert.deepEqual(calls.at(-1).input, {
+    deviceId: "opaque-target", bundleId: "com.example.fixture", confirm: true,
+  });
+  assert.equal(calls.at(-1).options.signal, caller.signal);
+  const setter = await dispatcher.handle(call("mobile_device_app_op_set", {
+    deviceId: "opaque-target", bundleId: "com.example.fixture",
+    operation: "SYSTEM_ALERT_WINDOW", mode: "ignore",
+  }), { signal: caller.signal });
+  assert.equal(setter.result.structuredContent.operation, "set_app_op");
+  assert.deepEqual(calls.at(-1).input, {
+    deviceId: "opaque-target", bundleId: "com.example.fixture",
+    operation: "SYSTEM_ALERT_WINDOW", mode: "ignore",
+  });
+  assert.equal(calls.at(-1).options.signal, caller.signal);
 });
 
 test("unsupported/invalid/cross-scope calls are positive failures before any runtime resolution", async (t) => {
@@ -106,7 +134,7 @@ test("unsupported/invalid/cross-scope calls are positive failures before any run
   });
   t.after(() => dispatcher.dispose());
   for (const request of [
-    call("mobile_device_app_launch", { deviceId: "target", bundleId: "app" }),
+    call("mobile_device_app_launch", { deviceId: "target" }),
     call("mobile_device_tap", { deviceId: "target", x: "bad", y: 1 }),
     call("mobile_device_select", { deviceId: "target", sessionId: "other" }),
     call("mobile_device_battery_set", { deviceId: "target", level: 80 }),

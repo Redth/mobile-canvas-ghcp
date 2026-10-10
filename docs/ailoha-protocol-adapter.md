@@ -54,8 +54,140 @@ Clients expose `getHostStatus`, `listProviders`, `listTargets`,
 `getTarget`, `getTargetCapabilities`, `listTargetSurfaces`, `createTarget`,
 `startTarget`, `stopTarget`, `rebootTarget`, `resetTarget`, `deleteTarget`,
 `listOperations`, `getOperation`, `cancelOperation`, `waitForOperation`, and `dispose`.
+The source-only target-app client also exposes `listTargetApps`, `getTargetApp`,
+`launchTargetApp`, `terminateTargetApp`, `uninstallTargetApp`, `listTargetAppOps`,
+and `updateTargetAppOp`. These use the published `/api/v1/targets/{targetId}`
+app and app-op routes, not workspace application or agent identities.
+Mutations return accepted operations; launch/terminate/uninstall do not treat
+HTTP 202 as completion. Uninstall's `confirmed: true` is only a client-side gate,
+not evidence of human consent. App-op PUT returns a descriptor rather than an
+operation. Native package IDs are resolved through canonical app inventory,
+not assumed to equal `appId`.
+The reviewed 599 owner SDK **source** transport allows GET, POST, PATCH and
+DELETE, not PUT; this source is not yet a pinned public package. The ordinary
+app-op endpoint is PUT and ordinary uninstall DELETE cannot fence the captured
+named context through final native dispatch. Neither route is used for the
+source-conditional destructive app actions described below.
 `listTargets` accepts only optional `providerId`, `status`, and `signal`;
 other reads accept only `signal`. No arbitrary API paths or caller headers exist.
+
+The Mobile Canvas opt-in routes seven existing app tool identities to the shared
+backend used by the GitHub canvas and VS Code HostBridge/MCP proxy. For now,
+canonical launch and terminate require positive per-target capability evidence,
+native package lookup, target/provider/native identity rechecks before submission,
+exact operation ownership and terminal success.
+Cold relaunch retains confirmed termination independently of its non-running
+app read: failed readback retries only that read, never the successful stop,
+and launch remains fenced to the original context. Legacy API launch arguments are forwarded to the canonical
+request; distinct argument lists cannot borrow one another's accepted receipts.
+The original target and accepted receipt survive UI selection
+changes; an unknown acceptance is never retried or routed to legacy.
+The Target Host ID is stable discovery identity across process restarts, not an
+incarnation fence. The reviewed source lease's full connection reference fences
+same-key app receipts and cold-relaunch recovery across process replacement,
+including confirmed stops. The original named revision separately fences every
+relaunch continuation even after reselecting its target. This is private host
+evidence, not renderer or MCP output. The reviewed source owner transport does
+not atomically verify process identity with each HTTP mutation;
+safe same-credential external restart mutation still needs a request-time
+native fence.
+
+This source-only slice **does not yet claim full app parity**. The reviewed
+native source contract adds optional `InstalledApp.kind`, process ID, path and
+data container; the shared adapter returns nonempty inventory only when each
+app reports user/system kind and a stable running state. Nullable fields with
+no native evidence remain null, never invented, and `includeSystem` is passed
+to the backend and sorted as in the legacy service. Empty supported inventory
+is returned as empty, not inferred from a failed read. Optional `AppOp.uidScoped`
+allows Android app-op results only when every operation reports effective UID
+scope and a legacy-compatible mode; otherwise the result is explicitly
+unsupported. Source-conditional uninstall and Android app-op mutation use
+distinct positively advertised fenced capabilities plus the verified CLI.
+Before a host approval prompt, `target app action-capture` must return one
+v2 private receipt matching the original named ref/epoch/revision,
+literal process owner, host incarnation, provider/native target, installed
+app ID/package/version/build, authoritative installation evidence, and a
+unique lower-hex 32-character attempt ID. The exact receipt is limited to
+64 KiB of UTF-8 bytes. Its native private single-use claim prevents a second
+mutation from the same capture, including across consumer processes. Setter
+capture also binds operation, current/requested mode and UID scope; unavailable
+native installation or UID evidence is unsupported, not guessed. The prompt
+shows the captured package, and for the setter the current-to-requested mode
+and whole-UID effects. Approval expires within the original 60-second budget;
+submission uses only `uninstall-fenced` or `set-app-op-fenced` with the captured
+receipt. The accepted and completed uninstall Operation is destructive;
+the accepted and completed setter Operation is not. It never uses ordinary
+DELETE/PUT, trusts `confirm=true` as human
+approval, or sends private evidence to a renderer. The original accepted
+Operation ID remains available for GET-only recovery on uncertain delivery,
+including late acceptance; neither mutation is replayed. Known accepted IDs
+remain opaque and are never rewritten or truncated; unknown delivery without
+an ID never acquires invented acceptance evidence. Android setter
+success additionally requires terminal effective mode and UID-scope readback.
+The local CLI contract emits exit-1 JSON on stderr without an HTTP status:
+`AppActionRejected` and stale-context/binding types are definitive
+non-admissions when no accepted ID is reported, whereas
+`AppActionDeliveryUnknown`, `AppActionAttemptAlreadySubmitted` and
+`AppActionAcceptedRecordUnavailable` without an ID retain an uncertain
+same-key receipt without another submission. `AppActionAcceptedMismatch`
+reports the typed failure with its opaque original operation ID on that call.
+A later explicit same-key request can GET a known ID without another capture,
+approval or submission; the terminal operation must still match the original
+action, target and provider. Malformed IDs cannot create acceptance or permit replay.
+Its `retryable:false` field is not
+evidence of failed delivery. Missing native installation evidence reports
+`unsupported-capability` rather than manufacturing a native identity.
+These command names and receipt fields are a **locally parent-proven source
+integration target**, not evidence of a published compatible native SDK or
+real-device mutation. The native MCP fenced tools report typed failures with
+`isError: true` and `structuredContent.ok: false`; the nested error has
+`code`, `retryable: false`, and an optional `operationId`. Their success
+result shape is unchanged.
+Mobile Canvas uses the verified CLI transport and retains its existing
+public tool response shape.
+The reviewed native adapter optionally preserves launch result process ID and
+detail in the completed operation, which are returned when present and valid;
+unknown optional values remain null rather than invented.
+The source-conditional install adapter uses the reviewed **source** contract at
+`microsoft/ailoha` `c8caabd589d8c008adac33107846bc322632977a`:
+verified host CLI `target app stage` streams a readable local `.apk`, `.ipa`
+or `.zip` file or archives a `.app` directory, then `install-staged` submits
+an accepted operation against its exact captured ref/epoch/revision and
+`stage-cleanup` requests deletion of the original owned artifact. The native
+artifact stream is capped at 512 MiB and its upload deadline is ten minutes;
+the verified CLI stage process has an eleven-minute ceiling for local bundle
+archiving plus that bounded upload; the verified install and cleanup controls
+retain a 30-second ceiling. The stage deadline is bounded per command; the
+original scoped approval signal and remaining monotonic budget also bound the
+install submission attempt after consumption, including verified CLI launch
+acquisition, without restarting that budget. Owned cleanup has its own
+original-resource lifetime. Approval must actually resolve before revalidation
+and consumption, never merely be requested. A definitive pre-dispatch expiry
+cleans the known staged artifact; an uncertain install submission retains its
+original receipt without retry or speculative cleanup. The native host checks
+the expected process incarnation and stamped provider/target identity before
+accepting the staged install. Mobile Canvas retains the
+full private stage proof and original lease `connectionRef`, waits for terminal
+install and artifact-delete operations, and never uploads package bytes or
+the receipt through a renderer. Unknown submission outcomes are not retried.
+The legacy install result can only report a native bundle/package ID when
+canonical evidence identifies it; the conditional adapter returns null rather
+than inventing one and does not expose the host source path as `detail`.
+**This source approval is not a public runtime pin or production activation.**
+Both installed hosts still report install unsupported without a compatible
+verified public CLI, coordinator-approved package/command provenance, advertised
+target/host capability and genuine scoped host approval. The reviewed c8
+feature-source hash is not an eventual merged public SDK pin and does not
+auto-enable the staged adapter. Both hosts now have inherited scoped human
+approval for reset/delete; the source-only install flow reuses that authority,
+but no boolean `confirm` argument alone enables staging or installation. The
+existing combined install CLI/MCP commands lack this original-view fence;
+neither renderer buffering nor a direct native process fallback is used.
+The local fenced app-action source and synthetic two-host checks do not
+activate those capabilities in the absence of the reviewed compatible public
+CLI/Host graph, authoritative native evidence, and refreshed complete native
+assets. All these limitations fail explicitly without fallback; this is not
+real-device mutation proof or a release-ready package.
 
 All reads use `/api/v1` and bearer authentication, including status and inventory.
 Collections are bare arrays. Status includes `profile`, `hostId`, `version`,
@@ -444,8 +576,9 @@ Spreading, structured-cloning or publicly projecting an invocation deliberately
 drops that internal property. Trusted adapters that extend an invocation must
 retain its `connectionRef` separately with their private receipt/progress, not
 recover it from renderer/MCP output. A changed tuple rejects same-key lifecycle
-recovery or unknown video-create replay as `runtime_incarnation_changed`; it
-does not discard the old receipt or attach cleanup to the replacement transport.
+and app-receipt recovery, cold relaunch continuation, or unknown video-create
+replay as `runtime_incarnation_changed`; it does not discard the old receipt or
+attach cleanup to the replacement transport.
 New unrelated explicit actions remain independent.
 
 This evidence is not an atomic request-time process fence. The official SDK
@@ -498,7 +631,9 @@ The returned private handle has `approved`, `signal`, `run(work)`,
 `dispose()`. `run` waits for genuine approval before starting revalidation.
 One original monotonic 60-second deadline spans question, revalidation and the
 submission attempt; consuming the approval does not clear or reset that budget.
-The submission signal retains caller/backend lifetime cancellation.
+The submission signal retains caller/backend lifetime cancellation; for app
+installation the original API/MCP caller signal also bounds staging and approval,
+while artifact cleanup uses a separate owned backend-lifetime budget.
 `remainingTimeoutMs` gives the smaller of the original remaining whole
 milliseconds and the existing CLI/client ceiling (30/15 seconds respectively).
 The submission adapter signals `submitted()` only after capturing its actual
@@ -512,9 +647,10 @@ Finalization rechecks the monotonic deadline itself, not only its timer.
 Late results remain in the private `submissionResult`/original operation
 receipt, while the originating caller receives an explicit unknown outcome.
 HTTP 408/499 and disposed-client uncertainty are not definitive submission
-rejections: they cannot evict an uncertain lifecycle or video receipt and cause
-another mutation. A retained authoritative operation ID can still be recovered
-by GET without a new approval or POST.
+rejections: they cannot evict an uncertain lifecycle, app, creation, or video
+receipt and cause another mutation. Definitive local pre-admission denials and
+HTTP 403 still release their exact receipts. A retained authoritative operation
+ID can still be recovered by GET without a new approval or POST.
 The canonical adapter also captures a frozen, non-enumerable `contextOwner`
 (`processId`, exact `processStartedAt`) in the same snapshot and invocation.
 Install proof PID and owner birth must match this original value exactly;
@@ -720,7 +856,11 @@ both-platform and template projections, ambiguous/partial/unavailable catalogs,
 lost 202 bodies, unknown acceptance, timeout, failure/cancellation, stale views,
 pool races and receipt reuse under replacement owners. The installed entrypoint
 fixture also creates both platforms through the actual GitHub registration and
-compiled VS Code bridge, and exercises the compatibility MCP dispatcher.
+compiled VS Code bridge, and exercises the compatibility MCP dispatcher. Its
+controlled app fixture checks native package-ID routing, reported inventory
+metadata, accepted launch completion, terminate, Android app-op reads and
+positive install/uninstall/app-op mutation and iOS app-op gates through both
+installed hosts. It does not install or change a real app.
 All provider mutations are original synthetic fixtures, not native-device acceptance.
 
 `ailoha-creation-browser-server.mjs <prepared-root> <github|vscode> <context-file>`
