@@ -35,6 +35,7 @@ export interface AilohaConnectionRef {
 
 export interface AilohaCanvasHost {
   readonly connectionRef?: AilohaConnectionRef;
+  cancelPendingApprovals?(): void;
   openCanvas(input?: { deviceId?: string }): Promise<CanvasOpenResult>;
   closeCanvas(): Promise<void>;
   invokeAction(name: string, input: Record<string, unknown>): Promise<unknown>;
@@ -217,6 +218,7 @@ export class HostBridge implements vscode.Disposable {
       this.visibilityNeedsCleanup = false;
     }
     if (!visible) {
+      this.ailohaHost?.cancelPendingApprovals?.();
       this.closeSockets();
       if (this.ailohaHost) {
         this.visibilityNeedsCleanup = true;
@@ -232,6 +234,7 @@ export class HostBridge implements vscode.Disposable {
   async restart(): Promise<void> {
     this.ailohaHost?.workspaceInspection?.invalidate();
     this.ailohaHost?.semanticInspection?.invalidate();
+    this.ailohaHost?.cancelPendingApprovals?.();
     this.selectionToRestore = await this.readSelectedDeviceId();
     await this.closeCanvas();
     this.invalidateConnection();

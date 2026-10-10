@@ -417,6 +417,61 @@ for (const acceptance of ["unknown", "cross-origin"]) {
   });
 }
 
+for (const kind of ["action", "api", "mcp"]) {
+  for (const [name, code, status] of [
+    ["HTTP 408", "http_error", 408],
+    ["HTTP 499", "http_error", 499],
+    ["disposed client", "client_disposed", undefined],
+  ]) {
+    test(`${kind} creation retains the original ${name} receipt without replacement IO or replay`, async (t) => {
+      const state = await fixture(t);
+      const create = await entrypoint(state, kind);
+      const input = inputFor(await state.backend.catalog());
+      const submit = state.client.createTarget.bind(state.client);
+      let submissions = 0;
+      state.state.submissionStatus = status;
+      state.client.createTarget = async (...args) => {
+        submissions += 1;
+        if (code === "client_disposed") throw new AilohaProtocolError(code);
+        return submit(...args);
+      };
+      await assert.rejects(create(input), { code });
+      const receipt = [...state.operationState.values()][0];
+      assert.ok(receipt);
+      assert.equal(receipt.uncertain, true);
+      state.state.submissionStatus = undefined;
+      state.client.createTarget = async (...args) => { submissions += 1; return submit(...args); };
+      const reads = state.state.calls.length;
+      const contextReads = state.contextCommands.length;
+      await assert.rejects(create(input), { code: "creation_outcome_uncertain" });
+      assert.equal([...state.operationState.values()][0], receipt);
+      assert.equal(submissions, 1);
+      assert.equal(posts(state.state).length, status === undefined ? 0 : 1);
+      assert.equal(state.state.calls.length, reads);
+      assert.equal(state.contextCommands.length, contextReads);
+      assert.equal(state.document.selection, null);
+    });
+  }
+}
+
+test("a definitive HTTP403 creation rejection is safely retryable through all compatibility entrypoints", async (t) => {
+  for (const kind of ["action", "api", "mcp"]) {
+    const state = await fixture(t);
+    const create = await entrypoint(state, kind);
+    const input = inputFor(await state.backend.catalog());
+    state.state.submissionStatus = 403;
+    await assert.rejects(create(input), { code: "http_error", status: 403 });
+    assert.equal(state.operationState.size, 0);
+    state.state.submissionStatus = undefined;
+    const created = await create(input);
+    assert.equal(created.nativeIdentity.nativeId, "owned-udid-1");
+    assert.equal(created.state, "booted");
+    assert.equal(posts(state.state).length, 2);
+    assert.equal(posts(state.state).every((call) => call.path === "/api/v1/targets" && call.body.start === true), true);
+    assert.equal(state.operationState.size, 0);
+  }
+});
+
 test("accepted timeout resumes GET/poll; known terminal failure/cancellation cannot replay creation or boot", async (t) => {
   for (const status of ["running", "failed", "cancelled"]) {
     const state = await fixture(t);
@@ -762,6 +817,39 @@ test("pool admission is rechecked after asynchronous catalog validation and cann
   rejected.resolve();
   await assert.rejects(receipt.submitted, { code: "http_error" });
   assert.equal(map.get(key), newer);
+});
+
+test("64 staggered creation submissions remain admissible while waiting for acceptance", async (t) => {
+  const state = await fixture(t);
+  const input = inputFor(await state.backend.catalog());
+  const submit = state.client.createTarget.bind(state.client);
+  const gates = [];
+  const pending = [];
+  let entered;
+  state.client.createTarget = async (...args) => {
+    const gate = deferred();
+    gates.push(gate);
+    entered.resolve();
+    await gate.promise;
+    return submit(...args);
+  };
+  for (let index = 0; index < 64; index += 1) {
+    entered = deferred();
+    const creation = state.backend.create({ ...input, name: `Bounded creation ${index}` });
+    pending.push(creation);
+    await Promise.race([entered.promise, creation]);
+    assert.equal(state.operationState.size, index + 1);
+  }
+  const reads = state.state.calls.length;
+  await assert.rejects(state.backend.create({ ...input, name: "Outside the bound" }), { code: "operation_receipt_limit" });
+  assert.equal(gates.length, 64);
+  assert.equal(state.state.calls.length, reads);
+  for (let index = 0; index < gates.length; index += 1) {
+    gates[index].resolve();
+    assert.equal((await pending[index]).state, "booted");
+  }
+  assert.equal(posts(state.state).length, 64);
+  assert.equal(state.operationState.size, 0);
 });
 
 for (const kind of ["action", "api", "mcp", "vscode-mcp"]) {

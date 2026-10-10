@@ -27,6 +27,7 @@ test("prepared extension assets contain the shared runtime and UI", () => {
     "dist/lib/ailoha/mobile-backend.mjs",
     "dist/lib/ailoha/mobile-catalog.mjs",
     "dist/lib/ailoha/operation-receipts.mjs",
+    "dist/lib/ailoha/destructive-consent.mjs",
     "dist/lib/ailoha/mobile-projection.mjs",
     "dist/lib/ailoha/media-adapter.mjs",
     "dist/lib/ailoha/runtime-sdk.mjs",

@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { cpSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { cpSync, existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import test from "node:test";
 import { fileURLToPath, pathToFileURL } from "node:url";
@@ -7,6 +7,7 @@ import { productModule } from "../ailoha-test-module.mjs";
 
 const root = join(dirname(fileURLToPath(import.meta.url)), "../..");
 const product = fileURLToPath(new URL("../../", productModule("lib/ailoha/runtime-sdk.mjs")));
+const { createVerifiedAilohaCli } = await import(productModule("lib/ailoha/runtime-sdk.mjs"));
 
 function fixture(t, content, directory = false) {
   const parent = join(root, ".build");
@@ -57,4 +58,66 @@ test("an unreadable pin reports a sanitized read failure rather than missing run
     assert.equal(Object.hasOwn(error, "cause"), false);
     return true;
   });
+
+  function cliFixture(t) {
+    mkdirSync(join(root, ".build"), { recursive: true });
+    const scratch = mkdtempSync(join(root, ".build/ailoha-cli-budget-"));
+    t.after(() => rmSync(scratch, { recursive: true }));
+    const wire = join(scratch, "owned-wire");
+    const pin = { version: "synthetic-only", sourceSha: "a".repeat(40) };
+    const launch = { file: process.execPath, args: [join(root, "tests/scripts/fixtures/ailoha-cli-budget-target.mjs")], ...pin };
+    return { wire, pin, launch };
+  }
+
+  test("verified CLI cannot start a child after caller cancellation during SDK launch resolution", async (t) => {
+    const { wire, pin, launch } = cliFixture(t);
+    const caller = new AbortController();
+    let resolve;
+    const cli = createVerifiedAilohaCli({ pin, sdk: {
+      getVerifiedCliLaunch() { return new Promise((complete) => { resolve = complete; }); },
+    } });
+    const work = cli([wire], { signal: caller.signal, timeoutMs: 100 });
+    const rejected = assert.rejects(work, { code: "ailoha_cli_cancelled" });
+    await Promise.resolve();
+    caller.abort();
+    await rejected;
+    resolve(launch);
+    await new Promise((complete) => setImmediate(complete));
+    assert.equal(existsSync(wire), false);
+  });
+
+  test("verified CLI total budget includes delayed SDK launch and rejects before child dispatch", async (t) => {
+    const { wire, pin, launch } = cliFixture(t);
+    let resolve;
+    const cli = createVerifiedAilohaCli({ pin, sdk: {
+      getVerifiedCliLaunch() { return new Promise((complete) => { resolve = complete; }); },
+    } });
+    await assert.rejects(cli([wire], { timeoutMs: 20 }), { code: "ailoha_cli_timeout" });
+    resolve(launch);
+    await new Promise((complete) => setImmediate(complete));
+    assert.equal(existsSync(wire), false);
+  });
+
+  test("an actual owned child startup is cancelled by the validated remaining budget before its synthetic wire", async (t) => {
+    const { wire, pin, launch } = cliFixture(t);
+    const cli = createVerifiedAilohaCli({ pin, sdk: { async getVerifiedCliLaunch() { return launch; } } });
+    await assert.rejects(cli([wire], { timeoutMs: 30 }), (error) => {
+      assert.ok(["ailoha_cli_timeout", "ailoha_cli_failed"].includes(error.code));
+      return true;
+    });
+    assert.equal(existsSync(wire), false);
+  });
+});
+
+test("verified CLI reserves the longer total budget only for canonical recording commands", async () => {
+  const pin = { version: "synthetic-only", sourceSha: "a".repeat(40) };
+  const cli = createVerifiedAilohaCli({ pin, sdk: {
+    async getVerifiedCliLaunch() {
+      return { ...pin, file: process.execPath, args: ["-e", "process.stdout.write('ok')"] };
+    },
+  } });
+  assert.equal(await cli(["recording", "recover"], { timeoutMs: 120_000 }), "ok");
+  await assert.rejects(cli(["recording", "recover"], { timeoutMs: 120_001 }), { code: "ailoha_cli_budget_invalid" });
+  await assert.rejects(cli(["workspace", "inspect"], { timeoutMs: 30_001 }), { code: "ailoha_cli_budget_invalid" });
+  await assert.rejects(cli(["recording", "unknown"], { timeoutMs: 30_001 }), { code: "ailoha_cli_budget_invalid" });
 });
