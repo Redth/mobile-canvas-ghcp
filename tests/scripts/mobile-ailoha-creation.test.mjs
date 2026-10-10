@@ -571,6 +571,29 @@ test("accepted creation resumes under a replacement owner after hide without rep
   assert.equal(state.document.selection.targetId, created.id);
 });
 
+test("replacement owners do not mistake a local generation reset for a changed canonical view selection", async (t) => {
+  const state = await fixture(t);
+  state.state.targets.set("existing/ios", {
+    targetId: "existing/ios", providerId: catalogIds.iosProvider, targetTypeId: catalogIds.type,
+    runtimeId: catalogIds.runtime, name: "Owned initial selection", status: "running", surfaces: [],
+    nativeIdentity: { platform: "ios", nativeId: "owned-initial-udid", isVirtual: true },
+  });
+  await state.backend.select("existing/ios");
+  state.state.terminal = "running";
+  state.state.waitMs = 10;
+  const input = inputFor(await state.backend.catalog());
+  await assert.rejects(state.backend.invokeAction("create_device", input), { code: "timeout" });
+  await state.backend.dispose();
+  const replacement = await state.makeBackend();
+  state.state.operations.values().next().value.status = "succeeded";
+  const created = await replacement.backend.invokeAction("create_device", input);
+  assert.equal(created.selectionApplied, true);
+  assert.equal(created.invocation.selectionGeneration, 1);
+  assert.equal(created.invocation.executionContext.revision, "2");
+  assert.equal(state.document.selection.targetId, created.id);
+  assert.equal(posts(state.state).length, 1);
+});
+
 test("a reopened epoch can finish its old accepted creation but cannot inherit the old selection write", async (t) => {
   const state = await fixture(t);
   state.state.terminal = "running";
@@ -632,3 +655,31 @@ test("pool admission is rechecked after asynchronous catalog validation and cann
   await assert.rejects(receipt.submitted, { code: "http_error" });
   assert.equal(map.get(key), newer);
 });
+
+for (const kind of ["action", "api", "mcp", "vscode-mcp"]) {
+  test(`${kind} error envelopes retain unknown/timeout/boot failure receipts with exact single-POST semantics`, async (t) => {
+    for (const outcome of ["unknown", "timeout", "boot-failed", "cancelled"]) {
+      const state = await fixture(t);
+      const create = await entrypoint(state, kind, kind === "vscode-mcp");
+      const input = inputFor(await state.backend.catalog());
+      if (outcome === "unknown") state.state.acceptance = "unknown";
+      if (outcome === "timeout") { state.state.terminal = "running"; state.state.waitMs = 10; }
+      if (outcome === "boot-failed") { state.state.terminal = "failed"; state.state.targetStatus = "stopped"; }
+      if (outcome === "cancelled") state.state.terminal = "cancelled";
+      await assert.rejects(create(input), (error) => {
+        if (outcome !== "unknown") {
+          assert.equal(error.operationId, "creation/operation-1%2F");
+          assert.equal(error.createdTargetId, "created/opaque-1%2F");
+          assert.ok(error.operation);
+        }
+        return true;
+      });
+      if (outcome === "timeout") {
+        state.state.operations.values().next().value.status = "succeeded";
+        assert.equal((await create(input)).state, "booted");
+      } else await assert.rejects(create(input));
+      assert.equal(posts(state.state).length, 1);
+      assert.equal(state.state.calls.some((call) => call.method === "DELETE" || /\/actions\/start$/.test(call.path)), false);
+    }
+  });
+}

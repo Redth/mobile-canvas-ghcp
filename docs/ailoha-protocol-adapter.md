@@ -283,6 +283,8 @@ creation does not select, matching the unscoped legacy tool; canvas/panel and
 the VS Code MCP adapter follow the captured view only if its original selection,
 epoch and revision remain current. A late result returns the created native
 record with `selectionApplied: false`, never retargeting the changed view.
+Reopening the same live authority under a replacement resource compares the
+original canonical identity, not a restarted owner's local generation counter.
 
 Creation and lifecycle share `operation-receipts.mjs`. Same-key catalog validation
 and confirmation are single-flight, with bounded preparation and shared 64-receipt
