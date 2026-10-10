@@ -258,6 +258,13 @@ actual window/view binding and refreshes MCP definitions after a genuine context
 open. The first slice is target-only; app/agent/runtime-instance selectors are
 not adopted as native package identity.
 
+`get_selected_device`/`mobile_device_get_selected` include a non-secret
+`contextBinding` projection when backed by the canonical authority:
+`contextRef`, `scopeEpoch`, string `revision` and the actual product
+`ownerProcessId`. This is the explicit binding used for a separately configured
+MCP process, not a ref hash or inferred first panel. Invocation results retain
+the same captured `executionContext` separately from local selection generation.
+
 Input captures one view/host/target/surface tuple and observed logical bounds,
 coordinate space and geometry revision. Additive `surfaceId`, `coordinate` and
 `geometryRevision` inputs preserve that observation. Encoded frame size is never

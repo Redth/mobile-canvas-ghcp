@@ -102,3 +102,19 @@ test("operation support requires explicit operation evidence at a supported capa
   assert.equal(hasOperation([{ id: "startTarget", version: 1 }], "startTarget"), false);
   assert.equal(hasOperation([{ id: "lifecycle", version: 2, features: ["startTarget"] }], "startTarget"), false);
 });
+
+test("canonical execution context revision is captured separately from mutable local selection generation", () => {
+  const context = {
+    contextRef: "ctx-canonical", scopeEpoch: "captured-epoch", revision: "12345678901234567890", ownerProcessId: 1234,
+  };
+  const invocation = captureInvocation({
+    scope: { sessionId: "session", viewId: "view" }, device: project(),
+    selectionGeneration: 2, surface, context,
+  });
+  context.scopeEpoch = "another-epoch";
+  context.revision = "999";
+  assert.equal(invocation.executionContext.scopeEpoch, "captured-epoch");
+  assert.equal(invocation.executionContext.revision, "12345678901234567890");
+  assert.equal(invocation.executionContext.ownerProcessId, 1234);
+  assert.equal(Object.isFrozen(invocation.executionContext), true);
+});

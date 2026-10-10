@@ -51,7 +51,12 @@ try {
     assert.equal(devices[0].nativeId, "native-deployment-not-opaque-target");
     assert.notEqual(devices[0].nativeId, devices[0].id);
     await action("select_device", { deviceId: "opaque/target" });
-    assert.equal((await action("get_selected_device")).device.id, "opaque/target");
+    const selected = await action("get_selected_device");
+    assert.equal(selected.device.id, "opaque/target");
+    assert.equal(selected.contextBinding.ownerProcessId, process.pid);
+    assert.equal(typeof selected.contextBinding.contextRef, "string");
+    assert.equal(typeof selected.contextBinding.scopeEpoch, "string");
+    assert.equal(typeof selected.contextBinding.revision, "string");
     assert.equal((await action("shutdown_device", { deviceId: "opaque/target" })).state, "shutdown");
     assert.equal((await action("boot_device", { deviceId: "opaque/target" })).state, "booted");
     const geometry = await action("get_display_geometry", { deviceId: "opaque/target" });
@@ -143,7 +148,9 @@ try {
     const catalog = await (await api("/api/v1/catalog")).json();
     assert.equal(catalog.devices[0].nativeId, "native-deployment-not-opaque-target");
     await api("/api/v1/selection", "POST", { deviceId: "opaque/target" });
-    assert.equal((await bridge.getSelectedDeviceContext()).deviceId, "opaque/target");
+    const selected = await bridge.getSelectedDeviceContext();
+    assert.equal(selected.deviceId, "opaque/target");
+    assert.equal(selected.selection.contextBinding.ownerProcessId, process.pid);
     const screenshot = await bridge.getSelectedScreenshot();
     assert.equal(screenshot.bytes[0], 137);
     assert.equal((await api("/api/v1/devices/opaque%2Ftarget/shutdown", "POST")).status, 200);
@@ -175,6 +182,23 @@ try {
   assert.equal(contextCommands.length, 1);
   assert.deepEqual(contextCommands[0].scope, scope);
   assert.equal(contextCommands[0].state, "open");
+  const { createAilohaMcpDispatcher } = await import(pathToFileURL(join(root, "lib", "ailoha", "mcp-host.mjs")).href);
+  const dispatcher = await createAilohaMcpDispatcher({
+    version: "0.1.18",
+    binding: {
+      contextRef: contextCommands[0].contextRef, scopeEpoch: contextCommands[0].scopeEpoch,
+      ownerProcessId: process.pid, scope,
+    },
+  });
+  const mcpResult = await dispatcher.handle({
+    jsonrpc: "2.0", id: 1, method: "tools/call",
+    params: { name: "mobile_device_get_selected", arguments: {} },
+  });
+  assert.notEqual(mcpResult.result.isError, true);
+  assert.equal(mcpResult.result.structuredContent.contextBinding.contextRef, contextCommands[0].contextRef);
+  assert.equal(mcpResult.result.structuredContent.device.id, "opaque/target");
+  await dispatcher.dispose();
+  assert.equal(scenario.leases.size, 0);
   console.log(JSON.stringify({
     host, synthetic: true, selectedScope: scope, units, leaseCountAfterClose: scenario.leases.size,
     videoResourcesAfterClose: scenario.videos.size, operationPolls: scenario.calls.filter((call) => call.path?.startsWith("/api/v1/operations/")).length,

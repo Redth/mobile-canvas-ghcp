@@ -68,6 +68,9 @@ test("real serialized open/get shape is cached as one named trusted view authori
   assert.equal(binding.contextRef, document.contextRef);
   assert.equal(binding.scopeEpoch, document.scopeEpoch);
   assert.equal(binding.ownerProcessId, 81027);
+  assert.deepEqual(store.contextProjection, {
+    contextRef: document.contextRef, scopeEpoch: document.scopeEpoch, revision: "0", ownerProcessId: 81027,
+  });
   assert.equal(await store.read(), null);
   assert.equal(calls.filter((args) => args[1] === "open").length, 1);
   assert.equal(calls[1][1], "get");
