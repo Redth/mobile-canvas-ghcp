@@ -7,6 +7,7 @@ const { createAilohaMediaAdapter } = await import(productModule("lib/ailoha/medi
 const { AilohaProtocolError } = await import(productModule("lib/ailoha/errors.mjs"));
 const { publicSnapshot, MobileAilohaError } = await import(productModule("lib/ailoha/mobile-projection.mjs"));
 const { createAilohaContextStore } = await import(productModule("lib/ailoha/context-adapter.mjs"));
+const { AilohaRecordingCoordinator } = await import(productModule("lib/ailoha/recording-coordinator.mjs"));
 
 function deferred() {
   let resolve;
@@ -282,6 +283,50 @@ test("retired contexts reject new recording work but finalize the captured owner
   assert.equal(finalized[0].surfaceId, "surface/opaque");
   assert.equal(state.calls.filter((call) => call[0] === "release-end").length, 1);
   assert.equal(state.calls.some((call) => call[0] === "stop"), false);
+});
+
+test("view close waits for a concurrent accepted recording start before releasing its lease", async () => {
+  const entered = deferred();
+  const accepted = deferred();
+  const calls = [];
+  let active = false;
+  const record = (state = "recording") => ({
+    recordingId: "owned-recording", targetHostId: "host", targetId: "one",
+    surfaceId: "surface/opaque", outputFile: "/host/record.mp4", state,
+    ...(state === "completed" ? { artifactId: "owned-artifact" } : {}),
+  });
+  const recording = new AilohaRecordingCoordinator({
+    output: async () => "/host/record.mp4",
+    async run(args) {
+      const action = args[1];
+      calls.push(action);
+      if (action === "status") return JSON.stringify(active ? record() : null);
+      if (action === "start") {
+        entered.resolve();
+        await accepted.promise;
+        active = true;
+        return JSON.stringify(record());
+      }
+      if (action === "stop") {
+        active = false;
+        return JSON.stringify(record("completed"));
+      }
+      throw new Error("Unexpected recording command");
+    },
+  });
+  const state = canonicalFixture({ recording, finalizeRecordings: true });
+  state.capabilities.push({ id: "surface.capture", version: 1,
+    features: ["startTargetRecording", "getTargetRecording", "stopTargetRecording"] });
+  const starting = state.backend.recordingStart("one");
+  await entered.promise;
+  const closing = state.backend.dispose();
+  assert.equal(state.calls.some((call) => call[0] === "release-begin"), false);
+  accepted.resolve();
+  await starting;
+  await closing;
+  assert.deepEqual(calls, ["status", "start", "status", "stop"]);
+  assert.equal(state.calls.filter((call) => call[0] === "release-end").length, 1);
+  assert.equal(recording.tracked, false);
 });
 
 test("remote and non-virtual targets advertise no recording even when capture methods exist", async (t) => {

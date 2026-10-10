@@ -107,8 +107,10 @@ test("close uses native pending-start recovery when status cannot name the accep
       if (action === "stop") return JSON.stringify(record("completed"));
     },
   });
-  await assert.rejects(coordinator.start(invocation), /lost native start/);
-  await coordinator.finalize();
+  const starting = coordinator.start(invocation);
+  const closing = coordinator.finalize();
+  await assert.rejects(starting, /lost native start/);
+  await closing;
   assert.deepEqual(calls, ["status", "start", "stop"]);
 });
 
@@ -208,6 +210,35 @@ test("same-key concurrent starts submit exactly one native start and release a b
   assert.equal(starts, 1);
   await coordinator.finalize();
   assert.equal(coordinator.tracked, false);
+});
+
+test("close queued during an unacknowledged start finalizes that accepted owner before releasing", async () => {
+  let accept;
+  const pendingStart = new Promise((resolve) => { accept = resolve; });
+  const commands = [];
+  let tracked = false;
+  const { coordinator } = fixture({
+    async run(action) {
+      commands.push(action);
+      if (action === "status") return JSON.stringify(tracked ? record() : null);
+      if (action === "start") {
+        await pendingStart;
+        tracked = true;
+        return JSON.stringify(record());
+      }
+      tracked = false;
+      return JSON.stringify(record("completed"));
+    },
+  });
+  const starting = coordinator.start(invocation);
+  const closing = coordinator.finalize();
+  await Promise.resolve();
+  assert.equal(commands.includes("stop"), false);
+  accept();
+  await starting;
+  await closing;
+  assert.equal(coordinator.tracked, false);
+  assert.deepEqual(commands, ["status", "start", "status", "stop"]);
 });
 
 test("the shared owner refuses a 65th queued recording intent without dispatching it", async () => {
