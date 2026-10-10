@@ -575,7 +575,9 @@ receipts at native draft `e003ea7`; incomplete artifact readback confirms
 by original-host GET only, uncertain device acceptance never triggers another
 device POST, and original-host cleanup is receipt-conditional. A completed
 zero-byte push is distinguished from a failed copy; media output requires the
-native accepted artifact IDs in stage order. Media batches beyond 16 paths
+native accepted artifact IDs in stage order. Relative host source paths resolve
+to absolute paths in push/media output, matching the legacy service. Media
+batches beyond 16 paths
 fail explicitly instead of silently truncating. These are **source-only**
 compatibility paths, not a public SDK/runtime pin. The normal Ailoha opt-in
 remains unavailable until an approved public runtime graph is prepared; no

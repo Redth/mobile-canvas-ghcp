@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { createHash } from "node:crypto";
 import { mkdtemp, rm, writeFile } from "node:fs/promises";
-import { basename, join, resolve } from "node:path";
+import { basename, join, relative, resolve } from "node:path";
 import { productModule } from "../ailoha-test-module.mjs";
 const { AilohaMobileBackend } = await import(productModule("lib/ailoha/mobile-backend.mjs"));
 const { mobileCanvasBackend } = await import(productModule("lib/backend.mjs"));
@@ -310,6 +310,7 @@ test("installed app selector uses its package and preserves a nonempty legacy pu
   t.after(() => rm(dir, { recursive: true, force: true }));
   const source = join(dir, "seed.db");
   await writeFile(source, "abc");
+  const requestedSource = relative(process.cwd(), source);
   const destination = "app://com.example.package/Documents/seed.db";
   let receipt;
   const actions = [];
@@ -353,7 +354,7 @@ test("installed app selector uses its package and preserves a nonempty legacy pu
   t.after(() => state.backend.dispose());
   const response = await state.backend.request("/api/v1/devices/one/files/push", {
     method: "POST",
-    body: JSON.stringify({ hostPath: source, devicePath: "Documents/seed.db", bundleId: "com.example.package" }),
+    body: JSON.stringify({ hostPath: requestedSource, devicePath: "Documents/seed.db", bundleId: "com.example.package" }),
   });
   assert.equal(response.status, 200);
   assert.deepEqual(await response.json(), {
@@ -367,6 +368,7 @@ test("owned media paths use one native staged batch and project every accepted h
   const dir = await mkdtemp(join(process.cwd(), "tests/scripts/fixtures/media-owned-"));
   t.after(() => rm(dir, { recursive: true, force: true }));
   const paths = [join(dir, "contact.vcf"), join(dir, "image.png")];
+  const requestedPaths = [relative(process.cwd(), paths[0]), paths[1]];
   await Promise.all(paths.map((path) => writeFile(path, "")));
   const actions = [];
   let receipt;
@@ -405,7 +407,7 @@ test("owned media paths use one native staged batch and project every accepted h
   });
   t.after(() => state.backend.dispose());
   const response = await state.backend.request("/api/v1/devices/one/media", {
-    method: "POST", body: JSON.stringify({ hostPaths: paths }),
+    method: "POST", body: JSON.stringify({ hostPaths: requestedPaths }),
   });
   assert.equal(response.status, 200);
   assert.deepEqual(await response.json(), {
