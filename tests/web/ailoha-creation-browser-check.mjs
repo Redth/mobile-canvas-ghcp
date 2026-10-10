@@ -50,6 +50,22 @@ async (page) => {
       .some((value, index) => index % 4 !== 3 && value > 0);
   });
   verify(painted, "The complete shared renderer did not decode and paint actual WebCodecs frames");
+  await page.locator("#device-screen").click();
+  const screen = await page.locator("#device-screen").boundingBox();
+  verify(screen?.width > 0 && screen?.height > 0, "The painted device screen is not usable");
+  await page.mouse.move(screen.x + screen.width / 4, screen.y + screen.height / 2);
+  await page.mouse.down();
+  await page.mouse.move(screen.x + 3 * screen.width / 4, screen.y + screen.height / 2, { steps: 5 });
+  await page.mouse.up();
+  value = await waitFor((value) => value.calls.filter((call) => call.path?.includes("/input/actions/")).length === 2);
+  const inputCalls = value.calls.filter((call) => call.path?.includes("/input/actions/"));
+  const tap = JSON.parse(inputCalls.find((call) => call.path.endsWith("/tap")).body);
+  const gesture = JSON.parse(inputCalls.find((call) => call.path.endsWith("/gesture")).body);
+  verify(tap.x === 24 && tap.y === 16 && tap.geometryRevision === 14,
+    "The renderer scaled logical tap coordinates using encoded pixels");
+  verify(gesture.geometryRevision === 14 && gesture.actions[0].x === 12 && gesture.actions.at(-1).x === 36
+    && gesture.actions.every((action) => action.y === undefined || action.y === 16),
+  "The renderer lost captured logical swipe geometry");
   const catalog = await api("/api/v1/catalog");
   verify(catalog.creationSupport.supported === true, "Installed catalog mapping did not advertise wired creation");
   const createdEvidence = [];
@@ -127,6 +143,7 @@ async (page) => {
   return {
     host: options.host, synthetic: true, realWebCodecs: painted, initialResizeVideoPosts: 1,
     createPosts: createPosts(value).length, separateBootPosts: 0, createdEvidence,
+    tap, gesture,
     staleSelectionPreserved: true, leasesAfterHide: value.leases, videosAfterHide: value.videoResources, errors: value.errors,
   };
 }
