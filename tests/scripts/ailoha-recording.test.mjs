@@ -7,7 +7,7 @@ import { productModule } from "../ailoha-test-module.mjs";
 import * as sdkDouble from "./fixtures/ailoha-sdk-double.mjs";
 
 const { AilohaRecordingCoordinator } = await import(productModule("lib/ailoha/recording-coordinator.mjs"));
-const { recordingOutputPath } = await import(productModule("lib/ailoha/recording-artifact.mjs"));
+const { captureRecordingStartInput, recordingOutputPath } = await import(productModule("lib/ailoha/recording-artifact.mjs"));
 const { createRuntimeMobileBackend } = await import(productModule("lib/ailoha/runtime-backend.mjs"));
 const { createVerifiedAilohaCli, hasVerifiedRecordingRecovery } = await import(productModule("lib/ailoha/runtime-sdk.mjs"));
 
@@ -67,6 +67,34 @@ function fixture({ run } = {}) {
   });
   return { coordinator, calls };
 }
+
+test("recording inputs retain only validated scalars before asynchronous coordination", () => {
+  const input = { timeoutSeconds: 180, outputPath: path, ignored: "not a recording option" };
+  const captured = captureRecordingStartInput(input);
+  input.timeoutSeconds = 1;
+  input.outputPath = "/safe/replacement.mp4";
+  assert.deepEqual(captured, { timeoutSeconds: 180, outputPath: path });
+  assert.equal(Object.isFrozen(captured), true);
+  assert.deepEqual(captureRecordingStartInput(), { timeoutSeconds: 180 });
+  for (const invalid of [null, [], 0, "record", { timeoutSeconds: null }, { timeoutSeconds: 3601 }]) {
+    assert.throws(() => captureRecordingStartInput(invalid), { code: "invalid_request" });
+  }
+  for (const invalid of ["relative.mp4", "/safe/file.mov", "", 42]) {
+    assert.throws(() => captureRecordingStartInput({ outputPath: invalid }), { code: "invalid_output" });
+  }
+});
+
+test("recording status advertises possible recovery writes only in the Ailoha MCP catalog", async () => {
+  const { ailohaMcpCatalog } = await import(productModule("lib/ailoha/mcp-host.mjs"));
+  const catalog = await ailohaMcpCatalog();
+  const status = catalog.find((tool) => tool.name === "mobile_device_recording_status");
+  assert.equal(status.annotations.readOnlyHint, false);
+  assert.equal(status.annotations.destructiveHint, false);
+  assert.match(status.description, /download the original recording/);
+  const { readFile } = await import("node:fs/promises");
+  const baseline = JSON.parse(await readFile(new URL(productModule("lib/ailoha/mcp-catalog.json")), "utf8"));
+  assert.equal(baseline.tools.find((tool) => tool.name === "mobile_device_recording_status").annotations.readOnlyHint, true);
+});
 
 test("canonical CLI owns recording lifecycle and the captured view/target/destination", async () => {
   const { coordinator, calls } = fixture();

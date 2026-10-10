@@ -547,8 +547,10 @@ even if a replacement backend cannot advertise new recording. The verified Ailoh
 CLI's scoped recording coordinator owns cross-process acceptance markers,
 operation reconciliation, stop and bounded artifact download; Mobile Canvas
 does not implement provider recording or forward a credential to the renderer.
-Start captures the context ref/epoch/revision and host/target/surface; a lost
-start response is not submitted twice. Caller cancellation or view retirement
+Start synchronously snapshots and validates the caller's timeout and host MP4
+destination before target preparation can yield; it also captures the context
+ref/epoch/revision and host/target/surface. A lost start response is not
+submitted twice. Caller cancellation or view retirement
 before CLI dispatch blocks a new start; cancellation after dispatch does not
 abort or retarget an accepted recording. The view retains that captured owner
 across runtime lease replacement and selection changes. Stop uses the original
@@ -562,6 +564,9 @@ response retries only captured recovery, never a second stop. Pending, failed an
 recovery outcomes retain the owner and block lease release or another start;
 a file at the output path alone never proves completion. A pending start may
 have no recording ID; only the first authoritatively known ID is pinned.
+The Ailoha MCP status tool advertises `readOnlyHint: false` because status
+after a stop may recover and write that original output; it never deletes a
+target or overwrites an existing recording. The legacy catalog is unchanged.
 This source behavior requires the separately reviewed native recovery contract
 and a compatible public SDK pin; the current opt-in remains unavailable without
 those prepared public inputs.

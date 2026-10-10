@@ -333,6 +333,10 @@ try {
   await recordThroughHost(recorded);
   const recordingMcp = await createAilohaMcpDispatcher({ version: "synthetic-only", binding: returnedBinding(selectedContext) });
   try {
+    const tools = await recordingMcp.handle({ jsonrpc: "2.0", id: randomUUID(), method: "tools/list" });
+    const recordingStatus = tools.result.tools.find((tool) => tool.name === "mobile_device_recording_status");
+    assert.equal(recordingStatus.annotations.readOnlyHint, false);
+    assert.equal(recordingStatus.annotations.destructiveHint, false);
     const status = await recordingMcp.handle(mcpCall("mobile_device_recording_status", { deviceId: "opaque/target" }));
     assert.equal(status.result.structuredContent.isRecording, true);
   } finally { await recordingMcp.dispose(); }

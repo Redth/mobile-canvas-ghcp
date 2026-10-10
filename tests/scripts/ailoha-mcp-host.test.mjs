@@ -109,6 +109,9 @@ test("bound empty-context inventory retains the installed MCP list output envelo
   const catalog = await dispatcher.handle(message("tools/list"));
   const schema = catalog.result.tools.find((tool) => tool.name === "mobile_device_list").outputSchema;
   assert.deepEqual(schema.required, ["result"]);
+  const recordingStatus = catalog.result.tools.find((tool) => tool.name === "mobile_device_recording_status");
+  assert.equal(recordingStatus.annotations.readOnlyHint, false);
+  assert.equal(recordingStatus.annotations.destructiveHint, false);
   const result = await dispatcher.handle(call("mobile_device_list", {}));
   assert.notEqual(result.result.isError, true);
   assert.deepEqual(result.result.structuredContent, { result: devices });

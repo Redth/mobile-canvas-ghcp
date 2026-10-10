@@ -249,6 +249,47 @@ test("legacy remains the default and invalid opt-in never becomes a fallback", (
   for (const value of ["", "Ailoha", "unknown"]) assert.throws(() => mobileCanvasBackend(value), /never falls back/);
 });
 
+for (const viaAction of [false, true]) {
+  test(`recording start captures options before target preparation via ${viaAction ? "action" : "direct API"}`, async (t) => {
+    const input = { timeoutSeconds: 180, outputPath: "/owned/original.mp4" };
+    const submittedInput = viaAction ? { deviceId: "one", ...input } : input;
+    let submitted;
+    const state = fixture({
+      recording: {
+        async start(invocation, options, requireCurrent) {
+          requireCurrent();
+          submitted = { ...options };
+          return { deviceId: invocation.targetId, isRecording: true,
+            outputPath: options.outputPath, timeoutSeconds: options.timeoutSeconds };
+        },
+      },
+      client: {
+        async getTargetCapabilities() {
+          submittedInput.timeoutSeconds = 1;
+          submittedInput.outputPath = "/owned/replacement.mp4";
+          return [{ id: "surface.capture", version: 1,
+            features: ["startTargetRecording", "getTargetRecording", "stopTargetRecording"] }];
+        },
+      },
+    });
+    t.after(() => state.backend.dispose());
+    if (viaAction) {
+      await state.backend.invokeAction("start_recording", submittedInput);
+    } else {
+      await state.backend.recordingStart("one", submittedInput);
+    }
+    assert.deepEqual(submitted, { timeoutSeconds: 180, outputPath: "/owned/original.mp4" });
+  });
+}
+
+test("invalid recording start input is rejected before target IO", async (t) => {
+  const state = fixture({ recording: { async start() { throw new Error("must not submit"); } } });
+  t.after(() => state.backend.dispose());
+  await assert.rejects(state.backend.recordingStart("one", { timeoutSeconds: 0 }), { code: "invalid_request" });
+  await assert.rejects(state.backend.recordingStart("one", { outputPath: "relative.mp4" }), { code: "invalid_output" });
+  assert.deepEqual(state.calls, []);
+});
+
 test("shared recording API and action identifiers preserve legacy outputs and captured owner across selection", async () => {
   const recordings = [];
   let tracked = false;
