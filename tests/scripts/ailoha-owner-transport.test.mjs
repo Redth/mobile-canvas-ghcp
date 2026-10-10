@@ -118,11 +118,66 @@ test("slash, dot-containing and percent-literal opaque IDs are encoded/decoded e
   assert.equal(calls[1].path, `/api/v1/targets/${encodeURIComponent(targetId)}/actions/start`);
 });
 
-for (const reason of ["timeout", "cancelled"]) {
-  test(`owner accepted Location survives ${reason} without retrying the mutation`, async (t) => {
-    const { client, calls } = await fixture(t, (_path, options) => new Promise((_resolve, reject) => {
-      options.signal.addEventListener("abort", () => {
-        const error = new Error("typed sanitized owner failure");
+test("available owner accepted Location survives caller abort without retrying the mutation", async (t) => {
+  const { client, calls } = await fixture(t, (_path, options) => new Promise((_resolve, reject) => {
+    options.signal.addEventListener("abort", () => {
+      const error = new Error("typed sanitized owner failure");
+      Object.assign(error, {
+        name: "TargetHostTransportError", code: "RequestAborted", status: 202, problem: null,
+        response: {
+          status: 202, location: "/api/v1/operations/accepted%2Fopaque",
+          retryAfterMs: 1000, contentType: "application/json",
+        },
+      });
+      reject(error);
+    }, { once: true });
+  }), { timeoutMs: 1000 });
+  const controller = new AbortController();
+  const pending = client.startTarget("target/one", { signal: controller.signal });
+  controller.abort();
+  await assert.rejects(pending, (error) => {
+    assert.equal(error.code, "cancelled");
+    assert.equal(error.operationId, "accepted/opaque");
+    assert.equal(error.status, 202);
+    assert.equal(error.transportCode, "RequestAborted");
+    return true;
+  });
+  assert.equal(calls.filter((call) => call.request.method === "POST").length, 1);
+});
+
+test("owner metadata delivered only in reaction to an expired deadline is explicitly unavailable", async (t) => {
+  let ownerAborted = false;
+  const { client, calls } = await fixture(t, (_path, options) => new Promise((_resolve, reject) => {
+    options.signal.addEventListener("abort", () => {
+      ownerAborted = true;
+      const error = new Error("typed owner metadata was not delivered before budget expiry");
+      Object.assign(error, {
+        name: "TargetHostTransportError", code: "RequestAborted", status: 202, problem: null,
+        response: {
+          status: 202, location: "/api/v1/operations/accepted%2Fopaque",
+          retryAfterMs: 1000, contentType: "application/json",
+        },
+      });
+      reject(error);
+    }, { once: true });
+  }), { timeoutMs: 10 });
+  await assert.rejects(client.startTarget("target/one"), (error) => {
+    assert.equal(error.code, "timeout");
+    assert.equal(error.status, undefined);
+    assert.equal(error.operationId, undefined);
+    return true;
+  });
+  assert.equal(ownerAborted, true);
+  assert.equal(calls.filter((call) => call.request.method === "POST").length, 1);
+});
+
+test("cooperative asynchronous abort settlement retains validated metadata within the original deadline", async (t) => {
+  let ownerAborted = false;
+  const { client, calls } = await fixture(t, (_path, options) => new Promise((_resolve, reject) => {
+    options.signal.addEventListener("abort", () => {
+      ownerAborted = true;
+      setImmediate(() => setImmediate(() => {
+        const error = new Error("synthetic event-loop ordering, not SDK production timing evidence");
         Object.assign(error, {
           name: "TargetHostTransportError", code: "RequestAborted", status: 202, problem: null,
           response: {
@@ -131,18 +186,106 @@ for (const reason of ["timeout", "cancelled"]) {
           },
         });
         reject(error);
-      }, { once: true });
-    }), { timeoutMs: reason === "timeout" ? 10 : 1000 });
-    const controller = new AbortController();
-    const pending = client.startTarget("target/one", { signal: controller.signal });
-    if (reason === "cancelled") controller.abort();
-    await assert.rejects(pending, (error) => {
-      assert.equal(error.code, reason);
-      assert.equal(error.operationId, "accepted/opaque");
-      assert.equal(error.status, 202);
-      assert.equal(error.transportCode, "RequestAborted");
-      return true;
-    });
-    assert.equal(calls.filter((call) => call.request.method === "POST").length, 1);
+      }));
+    }, { once: true });
+  }), { timeoutMs: 1000 });
+  const controller = new AbortController();
+  const pending = client.startTarget("target/one", { signal: controller.signal });
+  controller.abort();
+  assert.equal(ownerAborted, true);
+  await assert.rejects(pending, (error) => {
+    assert.equal(error.code, "cancelled");
+    assert.equal(error.status, 202);
+    assert.equal(error.operationId, "accepted/opaque");
+    assert.equal(error.transportCode, "RequestAborted");
+    assert.equal(JSON.stringify(error).includes("production timing"), false);
+    return true;
   });
-}
+  const posts = calls.filter((call) => call.request.method === "POST");
+  assert.equal(posts.length, 1);
+  assert.ok(posts[0].request.timeoutMs <= 1000);
+  assert.equal((await client.getHostStatus()).hostId, status.hostId);
+});
+
+test("nonresponsive owner cancellation remains bounded by the unchanged original request budget", { timeout: 500 }, async (t) => {
+  let now = 0;
+  t.mock.method(performance, "now", () => now);
+  t.mock.timers.enable({ apis: ["setTimeout"] });
+  let ownerAborted = false;
+  const { client, calls } = await fixture(t, (_path, options) => {
+    options.signal.addEventListener("abort", () => { ownerAborted = true; }, { once: true });
+    return new Promise(() => {});
+  }, { timeoutMs: 40 });
+  const controller = new AbortController();
+  const started = performance.now();
+  const pending = client.startTarget("target/one", { signal: controller.signal });
+  now = 20;
+  t.mock.timers.tick(20);
+  controller.abort();
+  assert.equal(ownerAborted, true);
+  now = 40;
+  t.mock.timers.tick(20);
+  await assert.rejects(pending, (error) => {
+    assert.equal(error.code, "cancelled");
+    assert.equal(error.status, undefined);
+    assert.equal(error.operationId, undefined);
+    return true;
+  });
+  assert.equal(performance.now() - started, 40);
+  const posts = calls.filter((call) => call.request.method === "POST");
+  assert.equal(posts.length, 1);
+  assert.equal(posts[0].request.timeoutMs, 40);
+  assert.equal((await client.getHostStatus()).hostId, status.hostId);
+});
+
+test("an already available owner response cannot become successful after the absolute deadline", async (t) => {
+  let now = 0;
+  t.mock.method(performance, "now", () => now);
+  const { client, calls } = await fixture(t, () => {
+    now = 21;
+    return response(operation, 202, "/api/v1/operations/accepted%2Fopaque");
+  }, { timeoutMs: 20 });
+  await assert.rejects(client.startTarget("target/one"), (error) => {
+    assert.equal(error.code, "timeout");
+    assert.equal(error.status, 202);
+    assert.equal(error.operationId, "accepted/opaque");
+    return true;
+  });
+  assert.equal(calls.filter((call) => call.request.method === "POST").length, 1);
+});
+
+test("metadata withheld past the deadline stays explicitly unavailable rather than mutating a delivered error", async (t) => {
+  let settleLate;
+  const late = new Promise((resolve) => { settleLate = resolve; });
+  const { client, calls } = await fixture(t, (_path, options) => new Promise((_resolve, reject) => {
+    options.signal.addEventListener("abort", () => {
+      setTimeout(() => {
+        const error = new Error("synthetic owner violated its settlement budget");
+        Object.assign(error, {
+          name: "TargetHostTransportError", code: "RequestAborted", status: 202, problem: null,
+          response: {
+            status: 202, location: "/api/v1/operations/accepted%2Fopaque",
+            retryAfterMs: 1000, contentType: "application/json",
+          },
+        });
+        reject(error);
+        settleLate();
+      }, 60);
+    }, { once: true });
+  }), { timeoutMs: 10 });
+  const controller = new AbortController();
+  const pending = client.startTarget("target/one", { signal: controller.signal });
+  controller.abort();
+  let delivered;
+  await assert.rejects(pending, (error) => {
+    delivered = error;
+    assert.equal(error.code, "cancelled");
+    assert.equal(error.status, undefined);
+    assert.equal(error.operationId, undefined);
+    return true;
+  });
+  await late;
+  assert.equal(delivered.operationId, undefined);
+  assert.equal(delivered.status, undefined);
+  assert.equal(calls.filter((call) => call.request.method === "POST").length, 1);
+});
