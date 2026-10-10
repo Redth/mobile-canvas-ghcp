@@ -63,6 +63,10 @@ HTTP 202 as completion. Uninstall's `confirmed: true` is only a client-side gate
 not evidence of human consent. App-op PUT returns a descriptor rather than an
 operation. Native package IDs are resolved through canonical app inventory,
 not assumed to equal `appId`.
+The currently published owner SDK transport allows GET, POST, PATCH and DELETE,
+not PUT. Although the canonical app-op endpoint is PUT, the installed owner
+transport cannot forward it; app-op mutation remains gated pending a compatible
+reviewed SDK transport contract.
 `listTargets` accepts only optional `providerId`, `status`, and `signal`;
 other reads accept only `signal`. No arbitrary API paths or caller headers exist.
 
@@ -71,8 +75,9 @@ backend used by the GitHub canvas and VS Code HostBridge/MCP proxy. For now,
 canonical launch and terminate require positive per-target capability evidence,
 native package lookup, target/provider/native identity rechecks before submission,
 exact operation ownership and terminal success.
-Cold relaunch waits for a successful terminate and a non-running app read before
-submitting launch. Legacy API launch arguments are forwarded to the canonical
+Cold relaunch retains confirmed termination independently of its non-running
+app read: failed readback retries only that read, never the successful stop,
+and launch remains fenced to the original context. Legacy API launch arguments are forwarded to the canonical
 request; distinct argument lists cannot borrow one another's accepted receipts.
 The original target and accepted receipt survive UI selection
 changes; an unknown acceptance is never retried or routed to legacy.

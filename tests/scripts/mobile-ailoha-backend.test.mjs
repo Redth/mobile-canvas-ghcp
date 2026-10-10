@@ -301,6 +301,69 @@ test("unknown app acceptance cannot submit twice and cold relaunch never repeats
   assert.equal(starts, 1);
 });
 
+test("completed terminate is not resubmitted when cold relaunch readback fails", async (t) => {
+  for (const outcome of ["transport", "running"]) {
+    const state = fixture({ app: true });
+    t.after(() => state.backend.dispose());
+    let stops = 0;
+    let reads = 0;
+    state.client.terminateTargetApp = async () => {
+      stops += 1;
+      return { operationId: "app-terminate" };
+    };
+    state.client.waitForOperation = async (id) => ({
+      operationId: id, kind: id === "app-terminate" ? "terminateTargetApp" : "launchTargetApp",
+      targetId: "one", providerId: "provider", status: "succeeded", destructive: false,
+    });
+    state.client.getTargetApp = async () => {
+      reads += 1;
+      if (reads === 1 && outcome === "transport") throw new AilohaProtocolError("transport_error");
+      return { appId: "opaque-app", packageId: "com.example.native",
+        state: reads === 1 && outcome === "running" ? "running" : "stopped" };
+    };
+    await assert.rejects(state.backend.launchApp("one", "com.example.native", true),
+      { code: outcome === "transport" ? "transport_error" : "app_stop_unconfirmed" });
+    assert.equal(stops, 1);
+    assert.equal(state.calls.filter(([name]) => name === "app-launch").length, 0);
+    assert.equal((await state.backend.launchApp("one", "com.example.native", true)).success, true);
+    assert.equal(stops, 1);
+    assert.equal(reads, 2);
+    assert.equal(state.calls.filter(([name]) => name === "app-launch").length, 1);
+  }
+});
+
+test("completed terminate readback cannot launch on a replaced target or replay an unknown stop", async (t) => {
+  const replaced = fixture({ app: true });
+  t.after(() => replaced.backend.dispose());
+  let stops = 0;
+  replaced.client.terminateTargetApp = async () => {
+    stops += 1;
+    return { operationId: "app-terminate" };
+  };
+  replaced.client.waitForOperation = async (id) => ({
+    operationId: id, kind: "terminateTargetApp",
+    targetId: "one", providerId: "provider", status: "succeeded", destructive: false,
+  });
+  replaced.client.getTargetApp = async () => { throw new AilohaProtocolError("transport_error"); };
+  await assert.rejects(replaced.backend.launchApp("one", "com.example.native", true), { code: "transport_error" });
+  replaced.targets.get("one").nativeIdentity.nativeId = "replacement-after-stop";
+  await assert.rejects(replaced.backend.launchApp("one", "com.example.native", true), { code: "operation_owner_mismatch" });
+  assert.equal(stops, 1);
+  assert.equal(replaced.calls.filter(([name]) => name === "app-launch").length, 0);
+
+  const unknown = fixture({ app: true });
+  t.after(() => unknown.backend.dispose());
+  let unknownStops = 0;
+  unknown.client.terminateTargetApp = async () => {
+    unknownStops += 1;
+    throw new AilohaProtocolError("transport_error");
+  };
+  await assert.rejects(unknown.backend.launchApp("one", "com.example.native", true), { code: "transport_error" });
+  await assert.rejects(unknown.backend.launchApp("one", "com.example.native", true), { code: "app_outcome_uncertain" });
+  assert.equal(unknownStops, 1);
+  assert.equal(unknown.calls.filter(([name]) => name === "app-launch").length, 0);
+});
+
 test("concurrent cold relaunch calls share the original stop and launch", async (t) => {
   const state = fixture({ app: true });
   t.after(() => state.backend.dispose());

@@ -327,7 +327,7 @@ export interface OwnerTransportResponse<T = unknown> {
 
 export interface OwnerTargetHostTransport {
   response<T = unknown>(path: string, options?: {
-    method?: "GET" | "POST" | "PUT" | "DELETE";
+    method?: "GET" | "POST" | "PATCH" | "DELETE";
     body?: string | Uint8Array;
     signal?: AbortSignal;
     timeoutMs?: number;
