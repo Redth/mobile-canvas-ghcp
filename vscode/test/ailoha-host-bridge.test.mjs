@@ -49,6 +49,7 @@ function fixture(options = {}) {
   const adapter = {
     openCanvas: (input) => host.openCanvas(input),
     invokeAction: (name, input) => host.invokeAction(name, input),
+    request: (path, options) => host.request(path, options),
     async closeCanvas() {
       calls.push(["close-canvas"]);
       if (++closes <= (options.closeFailures ?? 0)) throw new Error("synthetic cleanup failure");

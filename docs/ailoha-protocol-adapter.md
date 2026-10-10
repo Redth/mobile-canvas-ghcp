@@ -303,6 +303,29 @@ the exact created type/runtime/template/name, running state and authoritative
 virtual-device native identity. Errors retain operation metadata and any
 attributable `createdTargetId`; no client-side destructive cleanup is attempted.
 
+Creation accepts a host-only `signal` option through the direct backend, canvas
+action, compatibility API and named MCP dispatcher. Cancellation received during
+snapshot/catalog preparation prevents admission and removes only that caller.
+Same-key callers share preparation and confirmation; one cancelled caller cannot
+abort another active caller's intent. When the last caller retires, its owned
+submission signal is cancelled, but an accepted or uncertain receipt stays bound
+to the original compatibility tuple. Late accepted Location metadata remains
+recoverable through GET/wait, never a new create/start. Cancelled callers do not
+apply late selection; an active recovery caller still uses the original selection
+snapshot and owner checks.
+
+The loopback host installs each request's disconnect listeners before body or
+backend awaits, checks already-aborted/destroyed state, and removes listeners on
+completion. Normal completion of the request body is not cancellation. Scoped
+host request/action options keep caller cancellation separate from shared backend
+initialization and lease lifetime. VS Code API requests use a bounded per-request
+controller and `api-cancel` IPC message; its Ailoha adapter invokes the same
+trusted, scoped backend API directly rather than waiting for a later loopback
+disconnect. Legacy HTTP behavior is unchanged. HTTP cancellation tests observe
+the captured signal before releasing a held native read: a client-side abort and
+immediate fixture release cannot prove when a remote TCP disconnect was received.
+No event-loop delay, grace period or atomic remote-cancellation claim is added.
+
 ### Selection, input and cleanup
 
 Opaque host/target/surface IDs are separate from `nativeIdentity.nativeId` and
