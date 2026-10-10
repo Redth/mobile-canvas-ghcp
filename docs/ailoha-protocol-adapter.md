@@ -339,9 +339,12 @@ These source-level gates do not indicate that the current public Ailoha package
 can run the opt-in: no compatible public runtime pin has been approved. Enabling
 PUT-dependent features needs exact official runtime support, not a fixture-only
 verb; reviewed runtime PR 67 source at `5abe074c7a91bb64aaf2691300e4bd39e9807079`
-includes the fixed PUT method/type/private guard, and reviewed native PR 76 source
+includes the fixed PUT method/type/private guard and is merged at
+`1c82c6b65b9ef099f49f42386bd0e875c91b3339`. Reviewed native PR 76 source
 at `00c8eda7e9e01145e0493d2ed45d2a455042d71d` includes the fidelity
-fields. Both remain unmerged and neither is an approved public SDK pin. Internal
+fields; its current draft head is `c67933ce8d0b976d29a96a7a4063e477cc06ec09`
+after a normal merge of main. Native PR 76 is not merged, and neither source
+head is an approved public SDK pin. Internal
 source-only fixtures explicitly enable these contracts and exercise 21 API plus
 21 MCP feature cases in **each** thin-installed GitHub and VS Code host (84
 positive invocations total), along with missing-generic-evidence negatives.
