@@ -895,6 +895,35 @@ test("caller cancellation retires an app approval without dispatch and cannot be
   assert.equal(state.events.some(([event]) => event === "uninstall"), false);
 });
 
+for (const interruption of ["expiry", "caller abort"]) {
+  test(`queued fenced app revalidation ${interruption} performs zero native submissions`, async (t) => {
+    let clock = 0;
+    if (interruption === "expiry") t.mock.method(performance, "now", () => clock);
+    const answer = deferred();
+    const state = fencedFixture(t, { answer: () => answer.promise });
+    const caller = new AbortController();
+    const work = state.backend.uninstallApp("one", "com.example.native", true, { signal: caller.signal });
+    const rejection = assert.rejects(work, {
+      code: interruption === "expiry" ? "consent_timeout" : "consent_cancelled",
+    });
+    await waitForFencedEvent(state.events, "prompt");
+    const queued = deferred();
+    const release = deferred();
+    state.client.getTarget = async () => {
+      queued.resolve();
+      await release.promise;
+      return state.targets.get("one");
+    };
+    answer.resolve(true);
+    await queued.promise;
+    if (interruption === "expiry") clock = 60_001;
+    else caller.abort();
+    release.resolve();
+    await rejection;
+    assert.equal(state.events.some(([event]) => event === "uninstall"), false);
+  });
+}
+
 test("a late accepted fenced operation retains its original ID for GET-only recovery after approval expiry", async (t) => {
   t.mock.timers.enable({ apis: ["setTimeout"] });
   const delivery = deferred();
