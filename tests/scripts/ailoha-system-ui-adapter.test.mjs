@@ -85,7 +85,7 @@ test("native find retains full total, child paths, null-frame zero centers and e
   assert.equal(url.searchParams.get("exact"), "true");
   assert.equal(url.searchParams.get("interactableOnly"), "false");
   assert.equal(url.searchParams.get("geometryRevision"), "7");
-  assert.equal((await adapter.validateQuery({ text: "Save", limit: 0 })).limit, 1);
+  assert.equal(adapter.validateQuery({ text: "Save", limit: 0 }).limit, 0);
   assert.equal(calls.length, 1);
 });
 
@@ -102,12 +102,26 @@ test("native query admits large signed-int32 legacy limits without silent 256 tr
   assert.equal(found.matches.length, 300);
   assert.equal(found.matches.at(-1).path, "1/299");
   assert.equal(new URL(calls[0].path, "http://example.invalid").searchParams.get("limit"), "300");
-  assert.equal(adapter.validateQuery({ text: "Save", limit: -2147483648 }).limit, 1);
+  assert.equal(adapter.validateQuery({ text: "Save", limit: -2147483648 }).limit, -2147483648);
   assert.equal(adapter.validateQuery({ text: "Save", limit: 2147483647 }).limit, 2147483647);
   for (const limit of [-2147483649, 2147483648, 1.5]) {
     await assert.rejects(adapter.find(invocation, { text: "Save", limit }), { code: "invalid_request" });
   }
   assert.equal(calls.length, 1);
+});
+
+test("nonpositive find limit reaches native unchanged and accepts the legacy one-match result", async () => {
+  const { adapter, calls } = fixture(() => asResponse({
+    targetId: invocation.targetId, targetHost, total: 300, uiRevision: "revision-a",
+    matches: [{ path: "0", element: node("Save"), centerX: 30, centerY: 50 }],
+  }));
+  for (const limit of [0, -12, -2147483648]) {
+    const found = await adapter.find(invocation, { text: "Save", limit });
+    assert.equal(found.total, 300);
+    assert.equal(found.matches.length, 1);
+  }
+  assert.deepEqual(calls.map(({ path }) =>
+    new URL(path, "http://example.invalid").searchParams.get("limit")), ["0", "-12", "-2147483648"]);
 });
 
 test("native tap sends revision-fenced fresh selector, never a client coordinate tap", async () => {
