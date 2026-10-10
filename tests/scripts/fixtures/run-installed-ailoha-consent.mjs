@@ -536,6 +536,23 @@ try {
     evidence.cases.push("fenced-ios-app-op-unsupported");
     await close();
   }
+  current = await open("fenced-missing-installation-evidence");
+  {
+    await current.action("select_device", { deviceId: "opaque/target" });
+    process.env.AILOHA_TEST_FENCED_MISSING_EVIDENCE = "1";
+    try {
+      await assert.rejects(current.action("uninstall_app", {
+        deviceId: "opaque/target", bundleId: "com.example.native", confirm: true,
+      }), { code: "capability_not_supported" });
+      assert.equal(kind === "github" ? copilotUi.pending.size
+        : vscode.testUi.pickers.filter((picker) => picker.visible).length, 0);
+      assert.equal(JSON.parse(readFileSync(`${process.env.AILOHA_TEST_CONTEXT_STATE}.fenced`, "utf8")).length, 2);
+      evidence.cases.push("fenced-missing-installation-evidence");
+    } finally {
+      delete process.env.AILOHA_TEST_FENCED_MISSING_EVIDENCE;
+      await close();
+    }
+  }
   current = await open("fenced-native-errors");
   {
     await current.action("select_device", { deviceId: "opaque/target" });

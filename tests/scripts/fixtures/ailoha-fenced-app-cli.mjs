@@ -34,6 +34,13 @@ export function runFencedAppCli(args) {
     receipt: hash("synthetic-host-incarnation:target:provider:native-installation"),
   };
   if (args[2] === "action-capture") {
+    if (process.env.AILOHA_TEST_FENCED_MISSING_EVIDENCE === "1") {
+      process.stderr.write(JSON.stringify({
+        error: "The native app installation identity is unavailable on this target.",
+        type: "unsupported-capability", retryable: false,
+      }));
+      return 1;
+    }
     if (args[3] !== targetId || required(args, "--app-id") !== appId
       || required(args, "--package-id") !== packageId
       || context.selection?.targetHostId !== "synthetic-host" || context.selection.targetId !== targetId) {

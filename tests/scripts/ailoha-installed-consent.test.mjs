@@ -29,6 +29,7 @@ for (const [host, product] of [
         "fenced-uninstall-queued-deadline", "fenced-uninstall-queued-owner",
         "fenced-uninstall-approved", "fenced-uninstall-accepted-nonzero",
         "fenced-ios-app-op-unsupported",
+        "fenced-missing-installation-evidence",
         "fenced-native-errors",
         "fenced-android-app-op", "fenced-android-app-op-effective-mismatch",
         "fenced-android-app-op-denial",
