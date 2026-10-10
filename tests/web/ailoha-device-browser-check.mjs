@@ -77,14 +77,14 @@ async (page) => {
     document.querySelector("#device-screen").dispatchEvent(event);
   });
   observed = await waitFor((result) => result.calls.filter((call) =>
-    call.path?.endsWith("/input/actions/key")).length >= 2
-    && result.calls.filter((call) => call.path?.endsWith("/input/actions/fill")).length >= 2);
+    call.path?.endsWith("/input/actions/key")).length >= 2);
   const keys = observed.calls.filter((call) => call.path?.endsWith("/input/actions/key"))
     .map((call) => JSON.parse(call.body).key);
+  const unsupportedText = await page.locator("#toast").textContent();
   verify(keys.includes("home") && keys.includes("40")
-    && ["A", "literal text"].every((value) => observed.calls.some((call) =>
-      call.path?.endsWith("/input/actions/fill") && JSON.parse(call.body).text === value)),
-  "The real toolbar/keyboard did not use structured canonical button, key and focused-text actions.");
+    && unsupportedText?.includes("cursor-preserving text input")
+    && !observed.calls.some((call) => call.path?.endsWith("/input/actions/fill")),
+  "The real toolbar/keyboard must preserve key/button transport and reject unsafe plain text.");
   await page.locator('[data-action="rotate"]').click();
   observed = await waitFor((result) => result.calls.some((call) =>
     call.path?.endsWith("/presentation") && call.method === "PATCH"));

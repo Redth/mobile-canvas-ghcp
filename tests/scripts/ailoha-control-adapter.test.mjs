@@ -52,7 +52,7 @@ test("advertises only target and surface operations actually available", () => {
     { id: "surface.input", version: 1, features: ["key", "button", "text", "rotate"] },
   ] };
   assert.deepEqual(adapter.supported(capabilities, actual),
-    { key: true, button: true, text: true, rotate: true, presentation: true });
+    { key: true, button: true, text: false, rotate: true, presentation: true });
   assert.deepEqual(adapter.supported(capabilities, { capabilities: [] }),
     { key: false, button: false, text: false, rotate: false, presentation: true });
   assert.equal(adapter.supported([], actual).presentation, false);
@@ -71,10 +71,10 @@ test("key and button use structured canonical key requests, not host commands", 
   assert.equal(calls.length, 2);
 });
 
-test("text resolves exactly one owned focused element, validates intervening scope, and bounds literal JSON", async () => {
+test("fill is restricted to an explicitly named owned editable element and bounded literal JSON", async () => {
   const { adapter, calls } = fixture();
   let checked = 0;
-  await adapter.text(invocation, `a'b";\n\u2603`, () => { checked++; });
+  await adapter.fillElement(invocation, "focused/field", `a'b";\n\u2603`, () => { checked++; });
   assert.equal(checked, 1);
   assert.deepEqual(calls.map(({ path }) => path), [
     `${surface}/ui/tree?depth=64`, `${surface}/input/actions/fill`,
@@ -83,23 +83,25 @@ test("text resolves exactly one owned focused element, validates intervening sco
   const stale = fixture({ [`${surface}/ui/tree?depth=64`]: reply([{
     id: "field", state: { focused: true }, "x-ailoha-target-host": { ...owner, geometryRevision: 13 },
   }]) });
-  await assert.rejects(stale.adapter.text(invocation, "text", () => {}), { code: "control_owner_mismatch" });
+  await assert.rejects(stale.adapter.fillElement(invocation, "field", "text", () => {}), { code: "control_owner_mismatch" });
   assert.equal(stale.calls.length, 1);
   const missing = fixture({ [`${surface}/ui/tree?depth=64`]: reply([]) });
-  await assert.rejects(missing.adapter.text(invocation, "text", () => {}), { code: "focused_element_unavailable" });
+  await assert.rejects(missing.adapter.fillElement(invocation, "focused/field", "text", () => {}), { code: "element_unavailable" });
   assert.equal(missing.calls.length, 1);
   const wrongRole = fixture({ [`${surface}/ui/tree?depth=64`]: reply([{
-    id: "focused-button", role: "button", state: { focused: true, displayed: true, enabled: true },
+    id: "focused/field", role: "button", state: { focused: true, displayed: true, enabled: true },
     "x-ailoha-target-host": owner,
   }]) });
-  await assert.rejects(wrongRole.adapter.text(invocation, "text", () => {}), { code: "focused_element_unavailable" });
+  await assert.rejects(wrongRole.adapter.fillElement(invocation, "focused/field", "text", () => {}), { code: "element_unavailable" });
   assert.equal(wrongRole.calls.length, 1);
   const changed = fixture();
-  await assert.rejects(changed.adapter.text(invocation, "text", () => {
+  await assert.rejects(changed.adapter.fillElement(invocation, "focused/field", "text", () => {
     throw new Error("view superseded");
   }), /view superseded/);
   assert.equal(changed.calls.length, 1);
-  await assert.rejects(adapter.text(invocation, "x".repeat(33 * 1024), () => {}), { code: "invalid_request" });
+  await assert.rejects(adapter.fillElement(invocation, "focused/field", "x".repeat(33 * 1024), () => {}), { code: "invalid_request" });
+  await assert.rejects(adapter.fillElement(invocation, "", "text", () => {}), { code: "invalid_request" });
+  assert.equal(calls.length, 2);
 });
 
 test("rotation confirms presentation and status-bar settings retain legacy response shape", async () => {

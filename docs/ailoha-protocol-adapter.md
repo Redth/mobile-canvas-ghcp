@@ -424,8 +424,7 @@ All provider mutations are original synthetic fixtures, not native-device accept
 
 Agentless controls in the opt-in use the captured Target Host selection and
 per-target/per-surface capability evidence, without an app agent: `pressTargetKey`
-for numeric USB HID keys and physical button names, `getTargetUiTree` plus
-`fillTargetElement` for exactly one observed focused field, and
+for numeric USB HID keys and physical button names, and
 `updateTargetPresentation` for portrait/landscape rotation. The legacy
 `/presentation` API and MCP identity mean **status-bar overrides**, not
 Target Host display presentation: they map to `getTargetSettings` and
@@ -444,9 +443,11 @@ commands or credentials in the webview.
 The pinned Target Host `fill` implementation taps the field center before
 typing, even when it was already focused. Unlike legacy `TypeTextAsync`,
 successive character events or a paste can therefore move an existing caret.
-This source-only draft does not establish cursor-preserving text-entry parity;
-the canonical contract/provider needs a focused-text operation without that
-tap before this behavior can be considered equivalent or released.
+The opt-in explicitly advertises `text: false` and rejects plain typing and
+paste without sending `fill`; the shared adapter retains `fillElement` only
+for an explicitly named, observed editable element. The canonical
+contract/provider needs a cursor-preserving focused-text operation, with
+distinct capability evidence, before plain text entry can be enabled.
 
 `ailoha-creation-browser-server.mjs <prepared-root> <github|vscode> <context-file>`
 serves the complete shared renderer with synthetic catalogs/creation. Its VS Code

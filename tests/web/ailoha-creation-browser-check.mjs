@@ -71,15 +71,14 @@ async (page) => {
   await page.locator("#device-screen").focus();
   await page.keyboard.press("Enter");
   await page.keyboard.type("A");
-  value = await waitFor((entry) => entry.calls.filter((item) => item.path?.endsWith("/input/actions/key")).length >= 2
-    && entry.calls.some((item) => item.path?.endsWith("/input/actions/fill")));
+  value = await waitFor((entry) => entry.calls.filter((item) => item.path?.endsWith("/input/actions/key")).length >= 2);
   verify(value.calls.some((item) => item.path?.endsWith("/input/actions/key")
     && JSON.parse(item.body).key === "home")
     && value.calls.some((item) => item.path?.endsWith("/input/actions/key")
       && JSON.parse(item.body).key === "40")
-    && value.calls.some((item) => item.path?.endsWith("/input/actions/fill")
-      && JSON.parse(item.body).text === "A"),
-  "The prepared renderer did not preserve button/key/focused-text event transport.");
+    && (await page.locator("#toast").textContent())?.includes("cursor-preserving text input")
+    && !value.calls.some((item) => item.path?.endsWith("/input/actions/fill")),
+  "The prepared renderer did not preserve button/key transport or reject unsafe plain text.");
   await page.locator('[data-action="rotate"]').click();
   value = await waitFor((entry) => entry.calls.some((item) =>
     item.path?.endsWith("/presentation") && item.method === "PATCH"));

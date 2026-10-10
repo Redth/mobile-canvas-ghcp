@@ -2197,8 +2197,9 @@ elements.canvas.addEventListener("keydown", (event) => {
     sendInput("key", { keyCode: keyCodes[event.key] }, event.key).catch(showError);
   } else if (event.key.length === 1) {
     event.preventDefault();
-    if (state.selected?.capabilities?.text === false) {
-      showError(new Error("This target does not advertise focused text input."));
+    if (state.selected?.capabilities?.text === false
+      || (state.selected?.backend === "ailoha" && state.selected?.capabilities?.text !== true)) {
+      showError(new Error("This target does not advertise cursor-preserving text input."));
       return;
     }
     sendInput("text", { text: event.key }, "Type").catch(showError);
@@ -2209,8 +2210,9 @@ elements.canvas.addEventListener("paste", (event) => {
   const text = event.clipboardData?.getData("text");
   if (!text) return;
   event.preventDefault();
-  if (state.selected?.capabilities?.text === false) {
-    showError(new Error("This target does not advertise focused text input."));
+  if (state.selected?.capabilities?.text === false
+    || (state.selected?.backend === "ailoha" && state.selected?.capabilities?.text !== true)) {
+    showError(new Error("This target does not advertise cursor-preserving text input."));
     return;
   }
   sendInput("text", { text }, "Paste").catch(showError);

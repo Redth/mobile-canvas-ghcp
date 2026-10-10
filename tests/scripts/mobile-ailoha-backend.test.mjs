@@ -543,13 +543,9 @@ test("agentless controls use captured canonical view and explicit capability evi
       return [{ id: "target.settings", version: 1, features: ["getTargetSettings", "updateTargetSettings"] }];
     },
   }, controls: {
-    supported() { return { key: true, button: true, text: true, rotate: true, presentation: true }; },
+    supported() { return { key: true, button: true, text: false, rotate: true, presentation: true }; },
     async key(invocation, value) { state.calls.push(["key", invocation, value]); },
     async button(invocation, value) { state.calls.push(["button", invocation, value]); },
-    async text(invocation, value, assertCurrent) {
-      assertCurrent();
-      state.calls.push(["text", invocation, value]);
-    },
     async rotate(invocation, value) { state.calls.push(["rotate", invocation, value]); },
     async presentation(invocation, value) {
       state.calls.push(["presentation", invocation, value]);
@@ -559,7 +555,7 @@ test("agentless controls use captured canonical view and explicit capability evi
   } });
   t.after(() => state.backend.dispose());
   const device = await state.backend.getDevice("one");
-  assert.equal(device.capabilities.text, true);
+  assert.equal(device.capabilities.text, false);
   assert.equal(device.capabilities.presentation, true);
   const key = await state.backend.invokeAction("press_key", { deviceId: "one", keyCode: 40 });
   assert.equal(key.operation, "press-key");
@@ -569,7 +565,8 @@ test("agentless controls use captured canonical view and explicit capability evi
   assert.equal(button.status, 200);
   const text = await state.backend.request("/api/v1/devices/one/input/text",
     { method: "POST", body: '{"text":"literal \\\\u2603"}' });
-  assert.equal(text.status, 200);
+  assert.equal(text.status, 501);
+  assert.equal(state.calls.some(([kind]) => kind === "text"), false);
   const rotation = await state.backend.request("/api/v1/devices/one/input/rotate",
     { method: "POST", body: '{"orientation":"landscape-left"}' });
   assert.equal(rotation.status, 200);
@@ -588,23 +585,14 @@ test("agentless controls use captured canonical view and explicit capability evi
   assert.equal(state.calls.at(-1)[1].selectionGeneration, 0);
 });
 
-test("delayed focused-text reads reject changed context without sending a mutation", async (t) => {
-  const pending = deferred();
+test("plain text remains unsupported even when fill is available", async (t) => {
   const state = canonicalFixture({ controls: {
-    supported() { return { text: true }; },
-    async text(invocation, value, assertCurrent) {
-      await pending.promise;
-      assertCurrent();
-      state.calls.push(["text", invocation, value]);
-    },
+    supported() { return { text: false }; },
+    async fillElement() { state.calls.push(["fill"]); },
   } });
   t.after(() => state.backend.dispose());
-  const typing = state.backend.input("text", "one", { text: "hello" });
-  await new Promise((resolve) => setImmediate(resolve));
-  await state.advanceSelection();
-  pending.resolve();
-  await assert.rejects(typing, { code: "context_snapshot_superseded" });
-  assert.equal(state.calls.some(([kind]) => kind === "text"), false);
+  await assert.rejects(state.backend.input("text", "one", { text: "hello" }), { code: "capability_not_supported" });
+  assert.equal(state.calls.some(([kind]) => kind === "fill"), false);
 });
 
 test("input values remain immutable while the captured target is read", async (t) => {
