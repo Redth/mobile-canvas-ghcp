@@ -13,8 +13,15 @@ export const scenario = {
 export const sourceSha = "0000000000000000000000000000000000000000";
 const targetId = "opaque/target";
 const surfaceId = "opaque/surface";
-const packetRoot = new URL("../../web/fixtures/ailoha-baseline/", import.meta.url);
+const fixtureName = process.env.AILOHA_TEST_VIDEO_FIXTURE ?? "baseline";
+if (!["baseline", "bframes"].includes(fixtureName)) throw new Error("The owned video fixture must be baseline or bframes.");
+const packetRoot = new URL(`../../web/fixtures/ailoha-${fixtureName}/`, import.meta.url);
+const imageRoot = new URL("../../web/fixtures/ailoha-baseline/", import.meta.url);
 const fixture = JSON.parse(readFileSync(new URL("manifest.json", packetRoot), "utf8"));
+const pacingMs = Number(process.env.AILOHA_TEST_VIDEO_PACING_MS ?? 0);
+if (!Number.isSafeInteger(pacingMs) || pacingMs < 0 || pacingMs > 1000) throw new Error("Invalid owned video fixture pacing.");
+const initialGeometryRevision = fixture.geometry[0].geometryRevision;
+scenario.geometryRevision = initialGeometryRevision;
 const captures = [
   { id: "target.lifecycle", version: 1, features: ["listTargets", "getTarget", "getTargetCapabilities", "startTarget", "stopTarget", "rebootTarget", "resetTarget", "deleteTarget"] },
   { id: "target.surfaces", version: 1, features: ["listTargetSurfaces", "getTargetSurface"] },
@@ -23,7 +30,7 @@ const captures = [
 ];
 const surface = {
   surfaceId, kind: "display", bounds: { x: 0, y: 0, width: 48, height: 32 },
-  geometryRevision: 13, pixelDensity: 2, orientation: "landscape",
+  geometryRevision: initialGeometryRevision, pixelDensity: 2, orientation: "landscape",
   capabilities: [{ id: "surface.input", version: 1, features: ["tap.point", "long-press.point", "gesture", "swipe.point"] }],
 };
 function target() {
@@ -141,7 +148,7 @@ export async function openTargetHostTransport(leaseId) {
         ? reply({ status: 503, title: "Synthetic operation observation unavailable" }, 503)
         : reply(scenario.operations.get(decodeURIComponent(path.split("/").at(-1))));
       if (path.endsWith("/screenshots")) {
-        const image = readFileSync(new URL("reference-1.png", packetRoot));
+        const image = readFileSync(new URL("reference-1.png", imageRoot));
         return reply({
           artifactId: "synthetic/screenshot", kind: "screenshot", status: "ready", contentType: "image/png",
           targetId, surfaceId, createdAt: "2026-10-09T23:00:00Z", size: image.length,
@@ -152,11 +159,11 @@ export async function openTargetHostTransport(leaseId) {
       });
       const collection = "/api/v1/targets/opaque%2Ftarget/surfaces/opaque%2Fsurface/video/sessions";
       if (path === collection && options.method === "POST") {
-        scenario.geometryRevision = 13;
+        scenario.geometryRevision = initialGeometryRevision;
         const videoSessionId = randomUUID();
         const session = {
           videoSessionId, targetId, surfaceId, codec: "h264", state: "ready",
-          createdAt: "2026-10-09T23:00:00Z", geometryRevision: 13, source: "synthetic-fixture",
+          createdAt: "2026-10-09T23:00:00Z", geometryRevision: initialGeometryRevision, source: "synthetic-fixture",
           websocketUrl: `/ws/v1/targets/opaque%2Ftarget/surfaces/opaque%2Fsurface/video/${videoSessionId}`,
         };
         scenario.videos.set(videoSessionId, session);
@@ -183,19 +190,20 @@ export async function openTargetHostTransport(leaseId) {
       scenario.calls.push({ bytes: path });
       return {
         status: 200, location: null, contentType: "image/png", retryAfterMs: null,
-        bytes: new Uint8Array(readFileSync(new URL("reference-1.png", packetRoot))),
+        bytes: new Uint8Array(readFileSync(new URL("reference-1.png", imageRoot))),
       };
     },
     async websocket(path, callbacks) {
       scenario.calls.push({ websocket: path });
       let next = 0;
       let active = true;
+      let nextTimer;
       const videoSessionId = path.split("/").at(-1);
       function text(control) { callbacks.onMessage(new TextEncoder().encode(JSON.stringify(control)), false); }
       function sendNext() {
         if (!active || next >= fixture.units.length) return;
         const unit = fixture.units[next++];
-        if (unit.sequence === 0 || unit.sequence === 3) {
+        if (unit.sequence === 0 || unit.geometryRevision !== scenario.geometryRevision) {
           scenario.geometryRevision = unit.geometryRevision;
           text({ type: "geometryChanged", ...fixture.geometry.find((geometry) => geometry.geometryRevision === unit.geometryRevision) });
         }
@@ -208,11 +216,19 @@ export async function openTargetHostTransport(leaseId) {
           const control = JSON.parse(data);
           scenario.calls.push({ control });
           if (control.type === "hello") {
-            text({ type: "ready", videoSessionId, codec: "h264", geometryRevision: 13, resumeFromSequence: 0, maxInFlightFrames: 1 });
+            text({ type: "ready", videoSessionId, codec: "h264", geometryRevision: initialGeometryRevision, resumeFromSequence: 0, maxInFlightFrames: 1 });
             sendNext();
-          } else if (control.type === "ack") sendNext();
+          } else if (control.type === "ack") {
+            if (pacingMs && next < fixture.units.length) nextTimer = setTimeout(sendNext, pacingMs);
+            else sendNext();
+          }
         },
-        async close() { active = false; scenario.calls.push({ socketClosed: path }); callbacks.onClose?.(1000, ""); },
+        async close() {
+          active = false;
+          clearTimeout(nextTimer);
+          scenario.calls.push({ socketClosed: path });
+          callbacks.onClose?.(1000, "");
+        },
       });
     },
     async close() { closed = true; },
