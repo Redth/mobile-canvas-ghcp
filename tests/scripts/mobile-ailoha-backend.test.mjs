@@ -497,6 +497,35 @@ test("completed native UI tap survives a failed authority read without another P
   assert.equal(state.calls.filter(([kind, path]) => kind === "system-ui" && path.includes("/actions/tap")).length, 1);
 });
 
+test("accepted native UI tap canceled during authority read retains its completed receipt", async (t) => {
+  const controller = new AbortController();
+  const entered = deferred();
+  const release = deferred();
+  let accepted = false;
+  const state = systemUiFixture((path) => {
+    if (path.includes("/actions/tap")) accepted = true;
+    return systemUiResponse(path.includes("system-snapshot") ? "snapshot" : "tap");
+  });
+  t.after(() => { release.resolve(); return state.backend.dispose(); });
+  const read = state.selectionStore.readSnapshot.bind(state.selectionStore);
+  state.selectionStore.readSnapshot = async (...args) => {
+    if (accepted) {
+      accepted = false;
+      entered.resolve();
+      await release.promise;
+    }
+    return read(...args);
+  };
+  const pending = state.backend.uiTap("one", { text: "Save" }, { signal: controller.signal });
+  await entered.promise;
+  controller.abort();
+  release.resolve();
+  await assert.rejects(pending, { code: "cancelled" });
+  assert.equal((await state.backend.uiTap("one", { text: "Save" })).success, true);
+  assert.equal(state.calls.filter(([kind, path]) =>
+    kind === "system-ui" && path.includes("/actions/tap")).length, 1);
+});
+
 test("unknown native UI tap cannot move to a new process incarnation with the same host ID", async (t) => {
   const stateByIntent = new Map();
   const first = systemUiFixture((path) => path.includes("/actions/tap")
@@ -623,6 +652,39 @@ test("cancelled reveal caller cannot select an accepted completion; explicit rec
   assert.equal((await state.backend.getSelected()).hasSelection, false);
   const result = await state.backend.reveal("one", { selectRevealed: true });
   assert.equal(result.id, "one");
+  assert.equal((await state.backend.getSelected()).device.id, "one");
+  assert.equal(state.calls.filter(([kind]) => kind === "reveal").length, 1);
+});
+
+test("reveal canceled during authority read retains completion without selecting or resubmitting", async (t) => {
+  const controller = new AbortController();
+  const entered = deferred();
+  const release = deferred();
+  let accepted = false;
+  const state = fixture({ reveal: {
+    async reveal(invocation) {
+      state.calls.push(["reveal", invocation]);
+      accepted = true;
+      return state.targets.get(invocation.targetId);
+    },
+  } });
+  t.after(() => { release.resolve(); return state.backend.dispose(); });
+  const read = state.selectionStore.readSnapshot.bind(state.selectionStore);
+  state.selectionStore.readSnapshot = async (...args) => {
+    if (accepted) {
+      accepted = false;
+      entered.resolve();
+      await release.promise;
+    }
+    return read(...args);
+  };
+  const pending = state.backend.reveal("one", { selectRevealed: true, signal: controller.signal });
+  await entered.promise;
+  controller.abort();
+  release.resolve();
+  await assert.rejects(pending, { code: "cancelled" });
+  assert.equal((await state.backend.getSelected()).hasSelection, false);
+  assert.equal((await state.backend.reveal("one", { selectRevealed: true })).id, "one");
   assert.equal((await state.backend.getSelected()).device.id, "one");
   assert.equal(state.calls.filter(([kind]) => kind === "reveal").length, 1);
 });
