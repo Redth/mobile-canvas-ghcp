@@ -8,6 +8,8 @@ import { WebSocket } from "ws";
 import { enableCatalogCreation, scenario, sourceSha } from "./ailoha-sdk-double.mjs";
 import { catalogIds } from "./ailoha-catalog-creation.mjs";
 
+const focusedText = process.argv.includes("--focused-text");
+scenario.focusedText = focusedText;
 const root = resolve(process.argv[2]);
 const host = process.argv[3];
 const source = join(dirname(fileURLToPath(import.meta.url)), "../../..");
@@ -31,6 +33,7 @@ let selectedContext;
 let readCatalog;
 let createFromHost;
 let selectedFromHost;
+let presentationApi;
 const logs = [];
 const units = [];
 
@@ -181,6 +184,13 @@ try {
     assert.equal((await action("boot_device", { deviceId: "opaque/target" })).state, "booted");
     const geometry = await action("get_display_geometry", { deviceId: "opaque/target" });
     await action("tap_device", { deviceId: "opaque/target", x: 12, y: 10, geometryRevision: geometry.geometryRevision });
+    assert.equal((await action("press_key", { deviceId: "opaque/target", keyCode: 40 })).operation, "press-key");
+    assert.equal((await action("press_button", { deviceId: "opaque/target", button: "SIDE" })).operation, "press-button");
+    if (focusedText) {
+      assert.equal((await action("type_text", { deviceId: "opaque/target", text: "literal \u2603" })).operation, "type-text");
+      await assert.rejects(action("type_text", { deviceId: "opaque/target", text: "\0" }), { status: 400 });
+    } else await assert.rejects(action("type_text", { deviceId: "opaque/target", text: "literal \u2603" }), { status: 501 });
+    assert.equal((await action("rotate_device", { deviceId: "opaque/target", orientation: "portrait" })).operation, "rotate");
     const screenshot = await action("take_screenshot", { deviceId: "opaque/target", output: join(scratch, "screen.png") });
     assert.equal(screenshot.mimeType, "image/png");
     assert.equal(readFileSync(screenshot.path).length, screenshot.bytes);
@@ -193,6 +203,20 @@ try {
     });
     assert.equal(bootstrap.status, 204);
     const cookie = bootstrap.headers.get("set-cookie").split(";", 1)[0];
+    presentationApi = (deviceId, method = "GET", input) => fetch(
+      new URL(`/api/v1/devices/${encodeURIComponent(deviceId)}/presentation`, url), {
+        method, headers: { Cookie: cookie, "Content-Type": "application/json" },
+        ...(input === undefined ? {} : { body: JSON.stringify(input) }),
+      });
+    const presentationRoute = new URL("/api/v1/devices/opaque%2Ftarget/presentation", url);
+    const updateStatus = await fetch(presentationRoute, {
+      method: "POST", headers: { Cookie: cookie, "Content-Type": "application/json" },
+      body: JSON.stringify({ enabled: true, time: "09:41" }),
+    });
+    assert.equal(updateStatus.status, 200);
+    assert.equal((await updateStatus.json()).enabled, true);
+    const readStatus = await fetch(presentationRoute, { headers: { Cookie: cookie } });
+    assert.equal((await readStatus.json()).overrides[0].value, "09:41");
     const socketUrl = new URL("/ws/video?deviceId=opaque%2Ftarget", url);
     socketUrl.protocol = "ws:";
     const socket = new WebSocket(socketUrl, "ailoha.video.v1", { headers: { Cookie: cookie } });
@@ -220,7 +244,7 @@ try {
     await receiver.dispose();
   } else if (host === "vscode") {
     const require = createRequire(import.meta.url);
-    const extensionRoot = resolve(process.argv[4] ?? join(source, "vscode"));
+    const extensionRoot = resolve(process.argv[4]?.startsWith("--") ? join(source, "vscode") : process.argv[4] ?? join(source, "vscode"));
     const { HostBridge } = require(join(extensionRoot, "out", "hostBridge.js"));
     const { createRuntimeCanvasHost } = await import(pathToFileURL(join(root, "lib", "ailoha", "runtime-backend.mjs")).href);
     const hostAdapter = createRuntimeCanvasHost({ scope, onError: (error) => logs.push(error.code) });
@@ -268,6 +292,8 @@ try {
       assert.equal(result.type, "api-result");
       return new Response(result.body, { status: result.status, headers: result.headers });
     }
+    presentationApi = (deviceId, method = "GET", input) =>
+      api(`/api/v1/devices/${encodeURIComponent(deviceId)}/presentation`, method, input);
     readCatalog = async () => (await api("/api/v1/catalog")).json();
     createFromHost = async (input) => {
       const response = await api("/api/v1/devices", "POST", input);
@@ -289,6 +315,21 @@ try {
     assert.equal((await api("/api/v1/devices/opaque%2Ftarget/boot", "POST")).status, 200);
     const display = await (await api("/api/v1/devices/opaque%2Ftarget/display")).json();
     await api("/api/v1/devices/opaque%2Ftarget/input/tap", "POST", { x: 12, y: 10, geometryRevision: display.geometryRevision });
+    for (const [kind, input] of [
+      ["key", { keyCode: 40 }], ["button", { button: "SIDE" }],
+      ["rotate", { orientation: "portrait" }],
+    ]) {
+      assert.equal((await api(`/api/v1/devices/opaque%2Ftarget/input/${kind}`, "POST", input)).status, 200);
+    }
+    assert.equal((await api("/api/v1/devices/opaque%2Ftarget/input/text", "POST",
+      { text: "literal \u2603" })).status, focusedText ? 200 : 501);
+    if (focusedText) assert.equal((await api("/api/v1/devices/opaque%2Ftarget/input/text", "POST",
+      { text: "\0" })).status, 400);
+    const changedStatus = await api("/api/v1/devices/opaque%2Ftarget/presentation", "POST",
+      { enabled: true, time: "09:41" });
+    assert.equal((await changedStatus.json()).enabled, true);
+    const readStatus = await api("/api/v1/devices/opaque%2Ftarget/presentation");
+    assert.equal((await readStatus.json()).overrides[0].value, "09:41");
     assert.equal((await api("/api/v1/devices/opaque%2Ftarget/recording")).status, 501);
     await bridge.handleMessage({ type: "socket-open", id: "video", channel: "video", query: "deviceId=opaque%2Ftarget" });
     await waitFor(() => receiver?.lastAcknowledgedSequence === 5);
@@ -330,6 +371,46 @@ try {
   }
   const rawMcp = await createAilohaMcpDispatcher({ version: "synthetic-only", binding: returnedBinding(selectedContext) });
   try {
+    const androidDeviceId = selectedContext.device.id;
+    const androidUnfixed = {
+      schemaVersion: "1.0", deviceId: androidDeviceId, platform: "android",
+      enabled: false, readable: false, overrides: [],
+    };
+    const androidFixed = { ...androidUnfixed, enabled: true };
+    const androidRead = await presentationApi(androidDeviceId);
+    assert.equal(androidRead.status, 200);
+    assert.deepEqual(await androidRead.json(), androidUnfixed);
+    const androidWrite = await presentationApi(androidDeviceId, "POST", {
+      enabled: true, time: "09:41", batteryLevel: 75,
+    });
+    assert.equal(androidWrite.status, 200);
+    assert.deepEqual(await androidWrite.json(), androidFixed);
+    const androidReadback = await presentationApi(androidDeviceId);
+    assert.equal(androidReadback.status, 200);
+    assert.deepEqual(await androidReadback.json(), androidFixed);
+    const button = await rawMcp.handle(mcpCall("mobile_device_press_button",
+      { deviceId: selectedContext.device.id, button: "VolumeUp" }));
+    assert.equal(button.result.structuredContent.operation, "press-button");
+    const typed = await rawMcp.handle(mcpCall("mobile_device_type_text",
+      { deviceId: selectedContext.device.id, text: "literal ascii" }));
+    assert.equal(typed.result.isError === true, !focusedText);
+    if (focusedText) assert.equal(typed.result.structuredContent.operation, "type-text");
+    const presentation = await rawMcp.handle(mcpCall("mobile_device_presentation_get",
+      { deviceId: selectedContext.device.id }));
+    assert.deepEqual(presentation.result.structuredContent, androidFixed);
+    const restored = await rawMcp.handle(mcpCall("mobile_device_presentation_set",
+      { deviceId: androidDeviceId, enabled: false }));
+    assert.deepEqual(restored.result.structuredContent, androidUnfixed);
+    const restoredRead = await presentationApi(androidDeviceId);
+    assert.equal(restoredRead.status, 200);
+    assert.deepEqual(await restoredRead.json(), androidUnfixed);
+    const androidSettingsPath = `/api/v1/targets/${encodeURIComponent(androidDeviceId)}/settings/status-bar`;
+    const androidSettingsCalls = scenario.calls.filter((call) => call.path === androidSettingsPath);
+    assert.deepEqual(androidSettingsCalls.map((call) => call.method), ["GET", "PATCH", "GET", "GET", "PATCH", "GET"]);
+    assert.deepEqual(JSON.parse(androidSettingsCalls[1].body), {
+      values: { enabled: true, time: "09:41", batteryLevel: 75 },
+    });
+    assert.deepEqual(JSON.parse(androidSettingsCalls[4].body), { values: { enabled: false } });
     const created = await rawMcp.handle({
       ...mcpCall("mobile_device_create"),
       params: { name: "mobile_device_create", arguments: inputFor("ios", "Owned installed raw MCP") },
@@ -355,7 +436,8 @@ try {
       creationRecords.push(created.result.structuredContent);
     } finally { await followedMcp.dispose(); }
   }
-  const creationCalls = scenario.calls.slice(callsBeforeCreate).filter((call) => call.method === "POST");
+  const creationCalls = scenario.calls.slice(callsBeforeCreate).filter((call) =>
+    call.method === "POST" && call.path === "/api/v1/targets");
   assert.equal(creationCalls.length, creationRecords.length);
   assert.equal(creationCalls.every((call) => call.path === "/api/v1/targets" && JSON.parse(call.body).start === true), true);
   assert.equal(creationCalls.every((call) => {
@@ -371,6 +453,22 @@ try {
   assert.equal(scenario.calls.some((call) => call.path === "/api/v1/host/stop"), false);
   const body = scenario.calls.find((call) => call.path?.endsWith("/input/actions/tap")).body;
   assert.equal(JSON.parse(body).geometryRevision, 13);
+  assert.equal(scenario.calls.filter((call) => call.path?.endsWith("/input/actions/key")).length >= 3, true);
+  assert.equal(scenario.calls.some((call) => call.path?.endsWith("/input/actions/key")
+    && JSON.parse(call.body).key === "side"), true);
+  assert.equal(scenario.calls.some((call) => call.path?.endsWith("/input/actions/key")
+    && JSON.parse(call.body).key === "volumeup"), true);
+  assert.equal(scenario.calls.some((call) => call.path?.endsWith("/input/actions/fill")), false);
+  const focusedCalls = scenario.calls.filter((call) => call.path?.endsWith("/input/actions/type-focused-text"));
+  assert.equal(focusedCalls.length, focusedText ? 2 : 0);
+  if (focusedText) {
+    assert.equal(focusedCalls.every((call) => call.method === "POST"), true);
+    assert.deepEqual(focusedCalls.map((call) => JSON.parse(call.body)), [
+      { text: "literal \u2603" }, { text: "literal ascii" },
+    ]);
+  }
+  assert.equal(scenario.calls.some((call) => call.method === "PATCH" && call.path?.endsWith("/presentation")), true);
+  assert.equal(scenario.calls.some((call) => call.method === "PATCH" && call.path?.endsWith("/settings/status-bar")), true);
   assert.equal(scenario.calls.filter((call) => call.path?.startsWith("/api/v1/operations/")).length >= 3, true);
   const contextCommands = JSON.parse(readFileSync(process.env.AILOHA_TEST_CONTEXT_STATE, "utf8"));
   assert.equal(contextCommands.length, 1);
@@ -410,7 +508,8 @@ try {
   dispatcher = null;
   assert.equal(scenario.leases.size, 0);
   console.log(JSON.stringify({
-    host, synthetic: true, selectedScope: scope, units, leaseCountAfterClose: scenario.leases.size,
+    host, synthetic: true, focusedText, focusedPosts: focusedCalls.length,
+    selectedScope: scope, units, leaseCountAfterClose: scenario.leases.size,
     videoResourcesAfterClose: scenario.videos.size, operationPolls: scenario.calls.filter((call) => call.path?.startsWith("/api/v1/operations/")).length,
     nativeIdentityPreserved: true, returnedBindingConsumed: true, emptyContextInventory: true,
     externalRetirementRejected: true, readOnlyDiscovery: true, missingPublicPinRejected: true,

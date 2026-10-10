@@ -10,13 +10,15 @@ for (const [host, product] of [
   ["github", join(root, ".build/copilot-plugin-thin/mobile-canvas")],
   ["vscode", join(root, "vscode/dist")],
 ]) {
-  test(`${host} actual installed entrypoint consumes the official-shaped runtime/context/media boundary`, () => {
+  for (const focusedText of [false, true]) test(`${host} installed entrypoint with focused text ${focusedText}`, () => {
     const output = execFileSync(process.execPath, [
       "--import", join(fixtures, "ailoha-installed-hooks.mjs"),
-      join(fixtures, "run-installed-ailoha-host.mjs"), product, host,
+      join(fixtures, "run-installed-ailoha-host.mjs"), product, host, ...(focusedText ? ["--focused-text"] : []),
     ], { encoding: "utf8", cwd: root, timeout: 30_000 });
     const evidence = JSON.parse(output);
     assert.equal(evidence.synthetic, true);
+    assert.equal(evidence.focusedText, focusedText);
+    assert.equal(evidence.focusedPosts, focusedText ? 2 : 0);
     assert.deepEqual(evidence.units, [0, 1, 2, 3, 4, 5]);
     assert.equal(evidence.nativeIdentityPreserved, true);
     assert.equal(evidence.returnedBindingConsumed, true);
@@ -37,6 +39,8 @@ for (const [host, product] of [
     assert.equal(evidence.creationRecords[1].platform, "android");
     assert.equal(evidence.creationRecords.every((record) => record.state === "booted" && record.nativeId !== record.id), true);
     assert.equal(evidence.creationRecords[2].selectionApplied, false);
-    assert.deepEqual(evidence.logs, host === "vscode" ? ["capability_not_supported"] : []);
+    assert.deepEqual(evidence.logs, host === "vscode"
+      ? focusedText ? ["invalid_request", "capability_not_supported"]
+        : ["capability_not_supported", "capability_not_supported"] : []);
   });
 }

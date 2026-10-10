@@ -114,7 +114,7 @@ function fixture(options = {}) {
   };
   const backend = new AilohaMobileBackend({
     scope: { sessionId: "unique-session", viewId: "unique-view" },
-    client, media, owner, selectionStore,
+    client, media, controls: options.controls, owner, selectionStore,
     confirmDestructive: options.confirmDestructive,
     saveScreenshot: options.saveScreenshot,
     operationState: options.operationState,
@@ -715,6 +715,127 @@ test("lost create result remains explicit and cannot trigger a second create or 
   assert.equal(state.calls.filter(([kind]) => kind === "video-create").length, 1);
   const response = await state.backend.request("/api/v1/devices/one/input/rotate", { method: "POST" });
   assert.equal(response.status, 501);
+});
+
+test("agentless controls use captured canonical view and explicit capability evidence across API/actions", async (t) => {
+  const state = canonicalFixture({ client: {
+    async getTargetCapabilities() {
+      return [
+        { id: "target.settings", version: 1, features: ["getTargetSettings", "updateTargetSettings"] },
+        { id: "surface.input", version: 1, features: ["typeFocusedText"] },
+      ];
+    },
+  }, controls: {
+    supported() { return { key: true, button: true, text: true, rotate: true, presentation: true }; },
+    async key(invocation, value) { state.calls.push(["key", invocation, value]); },
+    async button(invocation, value) { state.calls.push(["button", invocation, value]); },
+    async text(invocation, value, assertCurrent) {
+      assertCurrent();
+      state.calls.push(["text", invocation, value]);
+    },
+    async rotate(invocation, value) { state.calls.push(["rotate", invocation, value]); },
+    async presentation(invocation, value) {
+      state.calls.push(["presentation", invocation, value]);
+      return { schemaVersion: "1.0", deviceId: invocation.targetId, platform: "ios",
+        enabled: true, readable: true, overrides: [] };
+    },
+  } });
+  t.after(() => state.backend.dispose());
+  const device = await state.backend.getDevice("one");
+  assert.equal(device.capabilities.text, true);
+  assert.equal(device.capabilities.presentation, true);
+  const key = await state.backend.invokeAction("press_key", { deviceId: "one", keyCode: 40 });
+  assert.equal(key.operation, "press-key");
+  assert.equal(state.calls.at(-1)[1].executionContext.revision, "1");
+  const button = await state.backend.request("/api/v1/devices/one/input/button",
+    { method: "POST", body: '{"button":"home"}' });
+  assert.equal(button.status, 200);
+  const text = await state.backend.request("/api/v1/devices/one/input/text",
+    { method: "POST", body: '{"text":"literal \\\\u2603"}' });
+  assert.equal(text.status, 200);
+  assert.equal(state.calls.some(([kind]) => kind === "text"), true);
+  const rotation = await state.backend.request("/api/v1/devices/one/input/rotate",
+    { method: "POST", body: '{"orientation":"landscape-left"}' });
+  assert.equal(rotation.status, 200);
+  assert.deepEqual(state.calls.filter(([kind]) => kind === "rotate").map(([, , value]) => value), ["landscape-left"]);
+  const presentation = await state.backend.request("/api/v1/devices/one/presentation",
+    { method: "POST", body: '{"enabled":true,"time":"09:41"}' });
+  assert.equal(presentation.status, 200);
+  assert.deepEqual(state.calls.at(-1)[2], { enabled: true, time: "09:41" });
+  const read = await state.backend.request("/api/v1/devices/one/presentation");
+  assert.deepEqual(await read.json(), { schemaVersion: "1.0", deviceId: "one", platform: "ios",
+    enabled: true, readable: true, overrides: [] });
+  await state.advanceSelection();
+  const later = await state.backend.invokeAction("press_button", { deviceId: "one", button: "home" });
+  assert.equal(later.context.targetId, "one");
+  assert.equal(state.calls.at(-1)[1].executionContext.revision, "2");
+  assert.equal(state.calls.at(-1)[1].selectionGeneration, 0);
+});
+
+test("plain text cannot reach explicit fill when only the old capability is available", async (t) => {
+  const state = canonicalFixture({ controls: {
+    supported() { return { text: false }; },
+    async fillElement() { state.calls.push(["fill"]); },
+  } });
+  t.after(() => state.backend.dispose());
+  await assert.rejects(state.backend.input("text", "one", { text: "hello" }), { code: "capability_not_supported" });
+  assert.equal(state.calls.some(([kind]) => kind === "fill"), false);
+});
+
+test("focused text pins input and rejects a superseded view before dispatch", async (t) => {
+  for (const change of ["selection", "retirement"]) {
+    const pending = deferred();
+    const state = canonicalFixture({ controls: {
+      supported() { return { text: true }; },
+      async text(invocation, value, assertCurrent) {
+        await pending.promise;
+        assertCurrent();
+        state.calls.push(["text", invocation, value]);
+      },
+    } });
+    t.after(() => state.backend.dispose());
+    const input = { text: "first" };
+    const typing = state.backend.input("text", "one", input);
+    input.text = "later";
+    await new Promise((resolve) => setImmediate(resolve));
+    if (change === "selection") await state.advanceSelection();
+    else await state.retireAuthority();
+    pending.resolve();
+    await assert.rejects(typing, { code: change === "selection" ? "context_snapshot_superseded" : "view_closed" });
+    assert.equal(state.calls.some(([kind]) => kind === "text"), false);
+  }
+});
+
+test("input values remain immutable while the captured target is read", async (t) => {
+  const gate = deferred();
+  const input = { keyCode: 40 };
+  const state = fixture({ client: {
+    async getTarget(id) {
+      await gate.promise;
+      return state.targets.get(id);
+    },
+  }, controls: {
+    supported() { return { key: true }; },
+    async key(invocation, code) { state.calls.push(["key", invocation.targetId, code]); },
+  } });
+  t.after(() => state.backend.dispose());
+  const sending = state.backend.input("key", "one", input);
+  input.keyCode = 41;
+  gate.resolve();
+  await sending;
+  assert.deepEqual(state.calls.filter(([kind]) => kind === "key"), [["key", "one", 40]]);
+});
+
+test("rotation invalidates prior geometry observations even when delivery is uncertain", async (t) => {
+  const state = fixture({ controls: {
+    supported() { return { rotate: true, tap: true }; },
+    async rotate() { throw new Error("uncertain rotation"); },
+  } });
+  t.after(() => state.backend.dispose());
+  await state.backend.display("one");
+  await assert.rejects(state.backend.input("rotate", "one", { orientation: "landscape-left" }), /uncertain rotation/);
+  await assert.rejects(state.backend.input("tap", "one", { x: 5, y: 50 }), { code: "stale_geometry" });
+  assert.equal(state.calls.some(([kind]) => kind === "tap"), false);
 });
 
 for (const status of [408, 499]) {

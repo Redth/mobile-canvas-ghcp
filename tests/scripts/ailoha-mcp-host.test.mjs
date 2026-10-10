@@ -57,6 +57,18 @@ test("actual dispatch uses the bound context with original tool meanings and cap
   }));
   assert.equal(tapped.result.structuredContent.operation, "tap_device");
   assert.equal(calls[0].input.geometryRevision, 13);
+  for (const [tool, input, expected] of [
+    ["mobile_device_press_key", { deviceId: "opaque-target", keyCode: 40 }, "press_key"],
+    ["mobile_device_press_button", { deviceId: "opaque-target", button: "home" }, "press_button"],
+    ["mobile_device_type_text", { deviceId: "opaque-target", text: "literal \u2603" }, "type_text"],
+    ["mobile_device_rotate", { deviceId: "opaque-target", orientation: "portrait" }, "rotate_device"],
+    ["mobile_device_presentation_get", { deviceId: "opaque-target" }, "presentation_get"],
+    ["mobile_device_presentation_set", { deviceId: "opaque-target", enabled: true }, "presentation_set"],
+  ]) {
+    const result = await dispatcher.handle(call(tool, input));
+    assert.equal(result.result.structuredContent.operation, expected);
+    assert.deepEqual(calls.at(-1), { name: expected, input });
+  }
   const screenshot = await dispatcher.handle(call("mobile_device_screenshot", { deviceId: "opaque-target" }));
   assert.equal(screenshot.result.content[1].type, "image");
   assert.equal(screenshot.result.content[1].mimeType, "image/png");
