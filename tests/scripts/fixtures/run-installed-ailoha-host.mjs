@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { randomUUID } from "node:crypto";
@@ -16,12 +16,12 @@ mkdirSync(scratch, { recursive: true });
 let previousPin;
 try { previousPin = readFileSync(pinPath); }
 catch (error) { if (error.code !== "ENOENT") throw error; }
-writeFileSync(pinPath, JSON.stringify({ schema: "mobile-canvas.ailoha-runtime/v1", version: "synthetic-only", sourceSha }));
 process.env.AILOHA_TEST_CONTEXT_STATE = join(scratch, "context.json");
 process.env.MOBILE_CANVAS_BACKEND = "ailoha";
 const scope = { sessionId: `live-test-session-${process.pid}`, viewId: `${host}-view` };
 const { createAilohaVideoReceiver } = await import(pathToFileURL(join(root, "web", "ailoha-video-receiver.js")).href);
 const { createAilohaMcpDispatcher } = await import(pathToFileURL(join(root, "lib", "ailoha", "mcp-host.mjs")).href);
+const { createRuntimeCanvasHost, getRuntimeContextBinding } = await import(pathToFileURL(join(root, "lib", "ailoha", "runtime-backend.mjs")).href);
 let release;
 let receiver;
 let dispatcher;
@@ -52,6 +52,11 @@ async function checkEmptyContext(selection) {
   assert.equal(selection.hasSelection, false);
   assert.equal(Object.hasOwn(selection, "device"), false);
   const binding = returnedBinding(selection);
+  const callsBeforeDiscovery = scenario.calls.length;
+  assert.deepEqual(await getRuntimeContextBinding(scope), {
+    contextRef: binding.contextRef, scopeEpoch: binding.scopeEpoch, scope: binding.scope, ownerProcessId: binding.ownerProcessId,
+  });
+  assert.equal(scenario.calls.length, callsBeforeDiscovery);
   const emptyDispatcher = await createAilohaMcpDispatcher({ version: "0.1.18", binding });
   try {
     const selected = await emptyDispatcher.handle(mcpCall("mobile_device_get_selected"));
@@ -72,6 +77,17 @@ async function checkEmptyContext(selection) {
 }
 
 try {
+  rmSync(pinPath, { force: true });
+  await assert.rejects(getRuntimeContextBinding(scope), { code: "ailoha_runtime_unavailable", status: 503 });
+  const unavailable = createRuntimeCanvasHost({ scope });
+  await assert.rejects(unavailable.openCanvas(), { code: "ailoha_runtime_unavailable", status: 503 });
+  await unavailable.closeCanvas();
+  assert.equal(existsSync(process.env.AILOHA_TEST_CONTEXT_STATE), false);
+  assert.equal(scenario.calls.length, 0);
+  writeFileSync(pinPath, JSON.stringify({ schema: "mobile-canvas.ailoha-runtime/v1", version: "synthetic-only", sourceSha }));
+  await assert.rejects(getRuntimeContextBinding(scope), { code: "context_not_bound" });
+  assert.equal(existsSync(process.env.AILOHA_TEST_CONTEXT_STATE), false);
+  assert.equal(scenario.calls.length, 0);
   if (host === "github") {
     process.env.EXTENSION_PATH = join(scratch, "installed-plugins", "mobile-canvas", "extension.mjs");
     await import(pathToFileURL(join(root, "extensions", "mobile-canvas", "extension.mjs")).href);
@@ -245,6 +261,7 @@ try {
   assert.equal(retired.result.isError, true);
   assert.equal(JSON.parse(retired.result.content[0].text).code, "view_closed");
   assert.equal(JSON.stringify(retired).includes("contextBinding"), false);
+  await assert.rejects(getRuntimeContextBinding(scope), { code: "context_retired" });
   assert.equal(scenario.calls.length, callsBeforeRetirement);
   assert.equal(JSON.parse(readFileSync(process.env.AILOHA_TEST_CONTEXT_STATE, "utf8"))[0].state, "detached");
   await dispatcher.dispose();
@@ -254,7 +271,7 @@ try {
     host, synthetic: true, selectedScope: scope, units, leaseCountAfterClose: scenario.leases.size,
     videoResourcesAfterClose: scenario.videos.size, operationPolls: scenario.calls.filter((call) => call.path?.startsWith("/api/v1/operations/")).length,
     nativeIdentityPreserved: true, returnedBindingConsumed: true, emptyContextInventory: true,
-    externalRetirementRejected: true, noHostStop: true, logs,
+    externalRetirementRejected: true, readOnlyDiscovery: true, missingPublicPinRejected: true, noHostStop: true, logs,
   }));
 } finally {
   await dispatcher?.dispose();

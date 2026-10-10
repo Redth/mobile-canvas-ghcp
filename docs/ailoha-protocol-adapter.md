@@ -259,8 +259,10 @@ The static GitHub plugin MCP path fails closed without explicit `--context`,
 `--context-epoch`, `--session`, `--instance` and `--owner-process`. It cannot
 infer the first panel or derive private context filenames. VS Code supplies its
 actual window/view binding and refreshes MCP definitions after a genuine context
-open. The first slice is target-only; app/agent/runtime-instance selectors are
-not adopted as native package identity.
+open. Binding discovery itself cannot create or reopen an authority: before a
+trusted view opens it reports `context_not_bound`, and a retired view reports
+`context_retired`. The first slice is target-only; app/agent/runtime-instance
+selectors are not adopted as native package identity.
 
 `get_selected_device`/`mobile_device_get_selected` include a non-secret
 `contextBinding` projection when backed by the canonical authority:

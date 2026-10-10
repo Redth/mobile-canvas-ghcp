@@ -128,6 +128,20 @@ test("unbound reads and repeated detach never open or resurrect authority", asyn
   assert.equal(state.calls.filter((args) => args[1] === "detach").length, 1);
 });
 
+test("read-only binding discovery cannot create authority before a trusted view opens", async () => {
+  const state = fixture();
+  await assert.rejects(state.store.binding({ allowCreate: false, allowReopen: false }), { code: "context_not_bound" });
+  assert.equal(state.calls.length, 0);
+  const opened = await state.store.binding();
+  assert.deepEqual(await state.store.binding({ allowCreate: false, allowReopen: false }), opened);
+  assert.equal(state.calls.filter((args) => args[1] === "open").length, 1);
+  assert.equal(state.calls.at(-1)[1], "get");
+  await state.store.clear();
+  await assert.rejects(state.store.binding({ allowCreate: false, allowReopen: false }), { code: "context_retired" });
+  assert.equal(state.calls.filter((args) => args[1] === "open").length, 1);
+  assert.equal(state.calls.filter((args) => args[1] === "detach").length, 1);
+});
+
 test("an externally retired empty authority no longer projects an open context binding", async () => {
   const state = fixture();
   await state.store.binding();
