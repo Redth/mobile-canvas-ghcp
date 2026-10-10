@@ -7,7 +7,7 @@ import {
   assertDarwinHelperEntries,
   remoteRuntimeManifest,
 } from "../lib/runtime-assets.mjs";
-import { prepareAilohaGraph } from "./prepare-ailoha-graph.mjs";
+import { prepareAilohaGraph, prepareSemanticGraph } from "./prepare-ailoha-graph.mjs";
 
 const root = join(dirname(fileURLToPath(import.meta.url)), "..");
 const extensionRoot = join(root, "vscode");
@@ -19,6 +19,10 @@ if (runtimeDirectoryIndex >= 0 && !process.argv[runtimeDirectoryIndex + 1]) {
   throw new Error("--runtime-dir requires a directory.");
 }
 const extensionPackage = JSON.parse(readFileSync(join(extensionRoot, "package.json"), "utf8"));
+const productPackage = JSON.parse(readFileSync(join(root, "package.json"), "utf8"));
+if (extensionPackage.dependencies["@modelcontextprotocol/sdk"] !== productPackage.dependencies["@modelcontextprotocol/sdk"]) {
+  throw new Error("Both installed hosts must use the same exact-pinned semantic MCP client.");
+}
 const runtimeManifest = JSON.parse(readFileSync(join(runtimeDirectory, "manifest.json"), "utf8"));
 const targetIndex = process.argv.indexOf("--target");
 const target = targetIndex >= 0 ? process.argv[targetIndex + 1] : null;
@@ -96,6 +100,7 @@ for (const relative of [
   cpSync(join(root, relative), destination, { recursive: true });
 }
 prepareAilohaGraph(output);
+prepareSemanticGraph(output);
 
 mkdirSync(join(root, ".build"), { recursive: true });
 const flavor = thin ? " (thin)" : target ? ` for ${target}` : "";
