@@ -69,7 +69,8 @@ other reads accept only `signal`. No arbitrary API paths or caller headers exist
 The Mobile Canvas opt-in routes seven existing app tool identities to the shared
 backend used by the GitHub canvas and VS Code HostBridge/MCP proxy. For now,
 canonical launch and terminate require positive per-target capability evidence,
-native package lookup, exact operation ownership and terminal success.
+native package lookup, target/provider/native identity rechecks before submission,
+exact operation ownership and terminal success.
 Cold relaunch waits for a successful terminate and a non-running app read before
 submitting launch. Legacy API launch arguments are forwarded to the canonical
 request; distinct argument lists cannot borrow one another's accepted receipts.

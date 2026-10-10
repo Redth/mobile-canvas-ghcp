@@ -218,6 +218,34 @@ test("stale named app authority before dispatch and failed terminate prevent the
   assert.equal(failed.calls.some(([name]) => name === "app-launch"), false);
 });
 
+test("target replacement before dispatch and after acceptance cannot inherit app ownership", async (t) => {
+  const replaced = fixture({ app: true });
+  t.after(() => replaced.backend.dispose());
+  const listApps = replaced.client.listTargetApps;
+  replaced.client.listTargetApps = async (...args) => {
+    const apps = await listApps(...args);
+    replaced.targets.get("one").nativeIdentity.nativeId = "another-native-target";
+    return apps;
+  };
+  await assert.rejects(replaced.backend.launchApp("one", "com.example.native"), { code: "app_target_replaced" });
+  assert.equal(replaced.calls.some(([name]) => name === "app-launch"), false);
+
+  const accepted = fixture({ app: true });
+  t.after(() => accepted.backend.dispose());
+  let submissions = 0;
+  accepted.client.launchTargetApp = async () => {
+    submissions += 1;
+    return { operationId: "accepted-native-app" };
+  };
+  accepted.client.waitForOperation = async () => {
+    throw new AilohaProtocolError("timeout", { operationId: "accepted-native-app" });
+  };
+  await assert.rejects(accepted.backend.launchApp("one", "com.example.native"), { code: "timeout" });
+  accepted.targets.get("one").nativeIdentity.nativeId = "replacement-after-acceptance";
+  await assert.rejects(accepted.backend.launchApp("one", "com.example.native"), { code: "operation_owner_mismatch" });
+  assert.equal(submissions, 1);
+});
+
 test("lost app acceptance retains original operation and native app across a selected-target change", async (t) => {
   const state = fixture({ app: true });
   t.after(() => state.backend.dispose());
