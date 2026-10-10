@@ -34,10 +34,30 @@ test("reveal rejects a different provider, target, native deployment or malforme
     const adapter = createAilohaRevealAdapter({
       transport: { async response() { return { status: 200, contentType: "application/json", body: { ...target, ...changed } }; } },
     });
+
     await assert.rejects(adapter.reveal(invocation), { code: "reveal_owner_mismatch" });
   }
   const adapter = createAilohaRevealAdapter({
     transport: { async response() { return { status: 204, contentType: "application/json", body: target }; } },
   });
   await assert.rejects(adapter.reveal(invocation), { code: "invalid_reveal_response" });
+});
+
+test("typed HTTP refusal is definitive, but timeout with response metadata remains uncertain", async () => {
+  const rejected = createAilohaRevealAdapter({ transport: {
+    async response() {
+      const error = new Error("private rejection detail");
+      Object.assign(error, { name: "TargetHostTransportError", status: 403, code: "HttpError" });
+      throw error;
+    },
+  } });
+  await assert.rejects(rejected.reveal(invocation), { code: "http_error", status: 403 });
+  const timedOut = createAilohaRevealAdapter({ transport: {
+    async response() {
+      const error = new Error("unknown outcome");
+      Object.assign(error, { name: "TargetHostTransportError", status: 403, code: "RequestTimeout" });
+      throw error;
+    },
+  } });
+  await assert.rejects(timedOut.reveal(invocation), { name: "TargetHostTransportError" });
 });

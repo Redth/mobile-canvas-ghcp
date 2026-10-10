@@ -300,6 +300,127 @@ test("reveal rejects stale context before POST and retains uncertain mutation un
   assert.equal(state.calls.find(([kind]) => kind === "reveal")[1].connectionRef, state.backend.connectionRef);
 });
 
+test("completed reveal survives a failed authority read without another POST", async (t) => {
+  const revealState = new Map();
+  const state = fixture({ revealState, reveal: {
+    async reveal(invocation) {
+      state.calls.push(["reveal", invocation]);
+      rejectNextRead = true;
+      return state.targets.get(invocation.targetId);
+    },
+  } });
+  t.after(() => state.backend.dispose());
+  Object.defineProperty(state.selectionStore, "contextProjection", {
+    value: { contextRef: "ctx-reveal", scopeEpoch: "original-epoch", revision: "7", ownerProcessId: 1234 },
+  });
+  const read = state.selectionStore.readSnapshot.bind(state.selectionStore);
+  let rejectNextRead = false;
+  state.selectionStore.readSnapshot = async () => {
+    if (rejectNextRead) {
+      rejectNextRead = false;
+      throw new Error("authority read temporarily unavailable");
+    }
+    return read();
+  };
+  await assert.rejects(state.backend.reveal("one", { selectRevealed: true }), /authority read temporarily unavailable/);
+  const receipt = [...revealState.values()][0];
+  assert.equal(receipt.completed.targetId, "one");
+  assert.equal(receipt.invocation.executionContext.scopeEpoch, "original-epoch");
+  assert.equal(receipt.invocation.connectionRef, state.backend.connectionRef);
+  const result = await state.backend.reveal("one", { selectRevealed: true });
+  assert.equal(result.id, "one");
+  assert.equal((await state.backend.getSelected()).device.id, "one");
+  assert.equal(state.calls.filter(([kind]) => kind === "reveal").length, 1);
+});
+
+test("a definitive reveal rejection does not become permanent unknown acceptance", async (t) => {
+  const revealState = new Map();
+  let posts = 0;
+  const state = fixture({ revealState, reveal: {
+    async reveal(invocation) {
+      posts += 1;
+      if (posts === 1) throw new AilohaProtocolError("http_error", { status: 403 });
+      return state.targets.get(invocation.targetId);
+    },
+  } });
+  t.after(() => state.backend.dispose());
+  await assert.rejects(state.backend.reveal("one"), { code: "http_error", status: 403 });
+  assert.equal(revealState.size, 0);
+  assert.equal((await state.backend.reveal("one")).id, "one");
+  assert.equal(posts, 2);
+});
+
+test("timeout with HTTP metadata never clears an uncertain reveal receipt", async (t) => {
+  const revealState = new Map();
+  let posts = 0;
+  const state = fixture({ revealState, reveal: {
+    async reveal() {
+      posts += 1;
+      throw new AilohaProtocolError("timeout", { status: 403 });
+    },
+  } });
+  t.after(() => state.backend.dispose());
+  await assert.rejects(state.backend.reveal("one"), { code: "timeout" });
+  await assert.rejects(state.backend.reveal("one"), { code: "reveal_outcome_uncertain" });
+  assert.equal(posts, 1);
+  assert.equal(revealState.size, 1);
+});
+
+test("a completed reveal cannot be confirmed from a replacement process incarnation", async (t) => {
+  const revealState = new Map();
+  const first = fixture({ revealState, reveal: {
+    async reveal(invocation) {
+      failRead = true;
+      return first.targets.get(invocation.targetId);
+    },
+  } });
+  t.after(() => first.backend.dispose());
+  let failRead = false;
+  const read = first.selectionStore.readSnapshot.bind(first.selectionStore);
+  first.selectionStore.readSnapshot = async () => {
+    if (failRead) { failRead = false; throw new Error("read unavailable"); }
+    return read();
+  };
+  await assert.rejects(first.backend.reveal("one"), /read unavailable/);
+  assert.equal(revealState.size, 1);
+  const second = fixture({ revealState, connectionRef: { ...first.backend.connectionRef, pid: 99 },
+    reveal: { async reveal() { throw new Error("unexpected POST"); } } });
+  t.after(() => second.backend.dispose());
+  await assert.rejects(second.backend.reveal("one"), { code: "runtime_incarnation_changed" });
+  assert.equal(revealState.size, 1);
+});
+
+test("a late completed reveal cannot evict a newer same-key receipt", async (t) => {
+  const revealState = new Map();
+  const enteredRead = deferred();
+  const releaseRead = deferred();
+  const state = fixture({ revealState, reveal: {
+    async reveal(invocation) {
+      blockConfirmation = true;
+      return state.targets.get(invocation.targetId);
+    },
+  } });
+  t.after(() => state.backend.dispose());
+  const read = state.selectionStore.readSnapshot.bind(state.selectionStore);
+  let blockConfirmation = false;
+  state.selectionStore.readSnapshot = async () => {
+    if (blockConfirmation) {
+      enteredRead.resolve();
+      await releaseRead.promise;
+      blockConfirmation = false;
+    }
+    return read();
+  };
+  const original = state.backend.reveal("one");
+  await enteredRead.promise;
+  const [key, receipt] = [...revealState][0];
+  const replacement = { invocation: receipt.invocation, completed: null };
+  revealState.set(key, replacement);
+  releaseRead.resolve();
+  await original;
+  assert.equal(revealState.get(key), replacement);
+});
+
 for (const [field, replacement] of [
   ["serviceId", "another-service"], ["pid", 9876],
   ["startedAt", "2026-10-09T23:01:00Z"], ["processStartedAt", "2026-10-09T23:01:00Z"],
@@ -337,7 +458,7 @@ test("concurrent reveal requests dispatch once and never borrow a later selectio
   await assert.rejects(first, { code: "context_snapshot_superseded" });
   assert.equal((await state.backend.getSelected()).device.id, "two");
   assert.equal(state.calls.filter(([kind]) => kind === "reveal").length, 1);
-  await assert.rejects(state.backend.reveal("one"), { code: "reveal_outcome_uncertain" });
+  await assert.rejects(state.backend.reveal("one"), { code: "context_snapshot_superseded" });
 });
 
 test("reveal refuses authority changes during inventory before native dispatch", async (t) => {
