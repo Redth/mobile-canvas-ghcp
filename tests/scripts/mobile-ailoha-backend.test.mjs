@@ -354,6 +354,28 @@ test("App UI or absent System UI capability never enables native System compatib
   assert.equal(state.calls.some(([kind]) => kind === "system-ui"), false);
 });
 
+test("large legacy find limit is forwarded without truncation while caller-int32 overflow fails before native reads", async (t) => {
+  const state = systemUiFixture((path) => path.includes("system-elements")
+    ? systemUiResponse("find", {
+      matches: Array.from({ length: 300 }, (_, index) => ({
+        element: systemUiResponse("find").body.matches[0].element,
+        path: `1/${index}`, centerX: 30, centerY: 30,
+      })),
+      total: 321,
+    })
+    : systemUiResponse("snapshot"));
+  t.after(() => state.backend.dispose());
+  const found = await state.backend.uiFind("one", { text: "Save", limit: 300 });
+  assert.equal(found.total, 321);
+  assert.equal(found.matches.length, 300);
+  assert.equal(found.matches.at(-1).path, "1/299");
+  assert.equal(state.calls.filter(([kind, path]) => kind === "system-ui"
+    && path.includes("system-elements") && path.includes("limit=300")).length, 1);
+  await assert.rejects(state.backend.uiFind("one", { text: "Save", limit: 2147483648 }),
+    { code: "invalid_request" });
+  assert.equal(state.calls.filter(([kind]) => kind === "system-ui").length, 1);
+});
+
 test("unknown native tap retains a single original receipt, definitive 403 releases, HTTP 408 never replays", async (t) => {
   for (const status of [403, 408, 502]) {
     const state = systemUiFixture((path) => {

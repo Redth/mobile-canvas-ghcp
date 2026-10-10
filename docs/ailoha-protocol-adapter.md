@@ -452,7 +452,7 @@ workspace-application-to-native-agent mapping or binding control. The three
 legacy `mobile_device_ui_dump/find/tap` identities remain installed, but the
 opt-in returns `ui_contract_unavailable` (HTTP 501) without the exact reviewed
 native System UI source in its verified runtime pin. The source-only
-`microsoft/ailoha@afaccc8238bb9f15bf9e9dc707310bb55edc5026` contract
+`microsoft/ailoha@d89f675bd75fd00c33a95a40f595178e8f1ee0fa` contract
 supplies `surface.ui` operations `getSystemUiSnapshot`, `querySystemUi`, and
 `tapSystemUiMatch`; no compatible public runtime/pin is available yet. The
 shared projection uses only `/ui/system-snapshot`, `/ui/system-elements`, and
@@ -466,8 +466,9 @@ defaulting `interactableOnly` to false so the first legacy match is not
 substituted. The native owner performs the query and input under one lease;
 Mobile Canvas never follows find with a coordinate POST. Changed view/native
 identity/surface/process and uncertain tap outcomes do not authorize replay.
-Native queries cap `limit` at 256; larger legacy requests fail explicitly
-(`ui_query_limit_unavailable`) rather than silently returning partial matches.
+Native queries accept the legacy signed-int32 `limit` and return at most
+`Math.Max(1, limit)` matches while reporting the honest full total; the native
+source hierarchy is bounded to 8 MiB before search, and raw payloads to 1 MiB.
 This source-only consumer mapping is **not** proof of released SDK/native
 compatibility, other-platform CI, or device validation.
 

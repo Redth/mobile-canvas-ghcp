@@ -86,7 +86,27 @@ test("native find retains full total, child paths, null-frame zero centers and e
   assert.equal(url.searchParams.get("interactableOnly"), "false");
   assert.equal(url.searchParams.get("geometryRevision"), "7");
   assert.equal((await adapter.validateQuery({ text: "Save", limit: 0 })).limit, 1);
-  await assert.rejects(adapter.find(invocation, { text: "Save", limit: 257 }), { code: "ui_query_limit_unavailable" });
+  assert.equal(calls.length, 1);
+});
+
+test("native query admits large signed-int32 legacy limits without silent 256 truncation", async () => {
+  const nativeMatches = Array.from({ length: 300 }, (_, index) => ({
+    path: `1/${index}`, element: node("Save"), centerX: 30, centerY: 50,
+  }));
+  const { adapter, calls } = fixture(() => asResponse({
+    targetId: invocation.targetId, targetHost, total: 321, uiRevision: "revision-a",
+    matches: nativeMatches,
+  }));
+  const found = await adapter.find(invocation, { text: "Save", limit: 300 });
+  assert.equal(found.total, 321);
+  assert.equal(found.matches.length, 300);
+  assert.equal(found.matches.at(-1).path, "1/299");
+  assert.equal(new URL(calls[0].path, "http://example.invalid").searchParams.get("limit"), "300");
+  assert.equal(adapter.validateQuery({ text: "Save", limit: -2147483648 }).limit, 1);
+  assert.equal(adapter.validateQuery({ text: "Save", limit: 2147483647 }).limit, 2147483647);
+  for (const limit of [-2147483649, 2147483648, 1.5]) {
+    await assert.rejects(adapter.find(invocation, { text: "Save", limit }), { code: "invalid_request" });
+  }
   assert.equal(calls.length, 1);
 });
 
