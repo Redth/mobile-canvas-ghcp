@@ -78,6 +78,19 @@ test("canonical capture binds exact owner, native installation and UID-scope evi
   assert.equal(JSON.stringify(calls[0][0]).includes("processStartedAt"), false);
 });
 
+test("native version strings are preserved within the bounded receipt without invented field limits", async () => {
+  const invocation = original();
+  const version = "v".repeat(350);
+  const buildNumber = "b".repeat(350);
+  const value = captured(invocation, "uninstall");
+  value.version = version;
+  value.buildNumber = buildNumber;
+  const cli = createFencedAppCli({ async runCli() { return JSON.stringify(value); } });
+  assert.equal((await cli.capture(invocation, {
+    appId: value.appId, packageId: value.packageId, version, buildNumber,
+  }, { timeoutMs: 30_000 })).receipt.version, version);
+});
+
 test("uninstall and setter submit only the original native receipt through the verified CLI", async () => {
   const invocation = original();
   const calls = [];
