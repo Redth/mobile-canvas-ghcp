@@ -104,9 +104,12 @@ scope and a legacy-compatible mode; otherwise the result is explicitly
 unsupported. Source-conditional uninstall and Android app-op mutation use
 distinct positively advertised fenced capabilities plus the verified CLI.
 Before a host approval prompt, `target app action-capture` must return one
-versioned private receipt matching the original named ref/epoch/revision,
+v2 private receipt matching the original named ref/epoch/revision,
 literal process owner, host incarnation, provider/native target, installed
-app ID/package/version/build and authoritative installation evidence. Setter
+app ID/package/version/build, authoritative installation evidence, and a
+unique lower-hex 32-character attempt ID. The exact receipt is limited to
+64 KiB of UTF-8 bytes. Its native private single-use claim prevents a second
+mutation from the same capture, including across consumer processes. Setter
 capture also binds operation, current/requested mode and UID scope; unavailable
 native installation or UID evidence is unsupported, not guessed. The prompt
 shows the captured package, and for the setter the current-to-requested mode
@@ -115,16 +118,31 @@ submission uses only `uninstall-fenced` or `set-app-op-fenced` with the captured
 receipt. It never uses ordinary DELETE/PUT, trusts `confirm=true` as human
 approval, or sends private evidence to a renderer. The original accepted
 Operation ID remains available for GET-only recovery on uncertain delivery,
-including late acceptance; neither mutation is replayed. Android setter
+including late acceptance; neither mutation is replayed. Known accepted IDs
+remain opaque and are never rewritten or truncated; unknown delivery without
+an ID never acquires invented acceptance evidence. Android setter
 success additionally requires terminal effective mode and UID-scope readback.
 The local CLI contract emits exit-1 JSON on stderr without an HTTP status:
 `AppActionRejected` and stale-context/binding types are definitive
-non-admissions, whereas `AppActionDeliveryUnknown` retains an uncertain
-same-key receipt without another submission. Its `retryable:false` field is
-not evidence of failed delivery. Missing native installation evidence reports
+non-admissions when no accepted ID is reported, whereas
+`AppActionDeliveryUnknown`, `AppActionAttemptAlreadySubmitted` and
+`AppActionAcceptedRecordUnavailable` without an ID retain an uncertain
+same-key receipt without another submission. `AppActionAcceptedMismatch`
+reports the typed failure with its opaque original operation ID on that call.
+A later explicit same-key request can GET a known ID without another capture,
+approval or submission; the terminal operation must still match the original
+action, target and provider. Malformed IDs cannot create acceptance or permit replay.
+Its `retryable:false` field is not
+evidence of failed delivery. Missing native installation evidence reports
 `unsupported-capability` rather than manufacturing a native identity.
-These command names and receipt fields are a **local source integration
-target**, not evidence of a reviewed or published native implementation.
+These command names and receipt fields are a **locally parent-proven source
+integration target**, not evidence of a published compatible native SDK or
+real-device mutation. The native MCP fenced tools report typed failures with
+`isError: true` and `structuredContent.ok: false`; the nested error has
+`code`, `retryable: false`, and an optional `operationId`. Their success
+result shape is unchanged.
+Mobile Canvas uses the verified CLI transport and retains its existing
+public tool response shape.
 The reviewed native adapter optionally preserves launch result process ID and
 detail in the completed operation, which are returned when present and valid;
 unknown optional values remain null rather than invented.

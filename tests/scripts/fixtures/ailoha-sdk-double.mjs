@@ -1,4 +1,4 @@
-import { readFileSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import { randomUUID } from "node:crypto";
 import { fileURLToPath } from "node:url";
 import { createCatalogModel } from "./ailoha-catalog-creation.mjs";
@@ -293,6 +293,13 @@ export async function openTargetHostTransport(leaseId) {
         if (scenario.beforeOperationRead) await scenario.beforeOperationRead(path, options);
         if (scenario.operationUnavailable) return reply({ status: 503, title: "Synthetic operation observation unavailable" }, 503);
         const id = decodeURIComponent(path.split("/").at(-1));
+        const fencedPath = `${process.env.AILOHA_TEST_CONTEXT_STATE}.fenced`;
+        const fenced = scenario.fencedAppResponses && existsSync(fencedPath)
+          ? JSON.parse(readFileSync(fencedPath, "utf8")).find((entry) => entry.operationId === id) : undefined;
+        if (scenario.fencedPollFailureOnce && fenced) {
+          scenario.fencedPollFailureOnce = false;
+          throw new Error("The owned synthetic app operation read failed.");
+        }
         if (id.startsWith("creation/") && scenario.creationPollFailure) {
           throw new Error("Owned synthetic operation read failed before completion.");
         }
@@ -300,10 +307,7 @@ export async function openTargetHostTransport(leaseId) {
         if (scenario.operationUnavailable) {
           return reply({ status: 503, title: "Synthetic operation observation unavailable" }, 503);
         }
-        if (id.startsWith("synthetic-fenced-")) {
-          const recorded = JSON.parse(readFileSync(`${process.env.AILOHA_TEST_CONTEXT_STATE}.fenced`, "utf8"));
-          return reply(recorded.find((entry) => entry.operationId === id));
-        }
+        if (fenced) return reply(fenced);
         return reply(scenario.operations.get(id));
       }
       const surfaceRoute = /^\/api\/v1\/targets\/([^/]+)\/surfaces\/([^/]+)\/(.+)$/.exec(path);

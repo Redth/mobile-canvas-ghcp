@@ -495,6 +495,7 @@ try {
     assert.equal(result.operation, "uninstall");
     assert.equal(result.bundleId, "com.example.native");
     assert.equal(JSON.stringify(result).includes("installationEvidence"), false);
+    assert.equal(JSON.stringify(result).includes("attemptId"), false);
     const native = JSON.parse(readFileSync(`${process.env.AILOHA_TEST_CONTEXT_STATE}.fenced`, "utf8"));
     assert.equal(native.length, 1);
     assert.equal(native[0].kind, "uninstallFencedTargetApp");
@@ -603,6 +604,39 @@ try {
     evidence.cases.push("fenced-android-app-op");
     await close();
   }
+  current = await open("fenced-android-app-op-selection-recovery");
+  {
+    await current.action("select_device", { deviceId: "opaque/target" });
+    scenario.fencedPollFailureOnce = true;
+    const input = {
+      deviceId: "opaque/target", bundleId: "com.example.native",
+      operation: "CAMERA", mode: "allow",
+    };
+    const work = current.action("set_app_op", input);
+    const failedRead = assert.rejects(work, { code: "transport_error" });
+    (await promptFor()).answer("approve");
+    await failedRead;
+    const recordPath = `${process.env.AILOHA_TEST_CONTEXT_STATE}.fenced`;
+    assert.equal(JSON.parse(readFileSync(recordPath, "utf8")).length, 4);
+    scenario.targets.set("other-target", {
+      targetId: "other-target", providerId: "synthetic-provider", targetTypeId: "type",
+      status: "running", surfaces: [],
+      nativeIdentity: { platform: "android", nativeId: "other-native-target" },
+    });
+    await current.action("select_device", { deviceId: "other-target" });
+    const captured = readFileSync(`${process.env.AILOHA_TEST_CONTEXT_STATE}.captures`, "utf8");
+    assert.match(JSON.parse(captured.trim().split("\n").at(-1)).attemptId, /^[a-f0-9]{32}$/);
+    const appReads = scenario.calls.filter((call) => call.method === "GET"
+      && /\/apps(?:\/|\?|$)/.test(call.path ?? "")).length;
+    const resumed = await current.action("set_app_op", input);
+    assert.equal(resumed.mode, "allow");
+    assert.equal(readFileSync(`${process.env.AILOHA_TEST_CONTEXT_STATE}.captures`, "utf8"), captured);
+    assert.equal(scenario.calls.filter((call) => call.method === "GET"
+      && /\/apps(?:\/|\?|$)/.test(call.path ?? "")).length, appReads);
+    assert.equal(JSON.parse(readFileSync(recordPath, "utf8")).length, 4);
+    evidence.cases.push("fenced-android-app-op-selection-recovery");
+    await close();
+  }
   current = await open("fenced-android-app-op-effective-mismatch");
   {
     await current.action("select_device", { deviceId: "opaque/target" });
@@ -618,9 +652,9 @@ try {
       prompt.answer("approve");
       await rejected;
       const recordPath = `${process.env.AILOHA_TEST_CONTEXT_STATE}.fenced`;
-      assert.equal(JSON.parse(readFileSync(recordPath, "utf8")).length, 4);
+      assert.equal(JSON.parse(readFileSync(recordPath, "utf8")).length, 5);
       await assert.rejects(current.action("set_app_op", input), { code: "app_action_readback_mismatch" });
-      assert.equal(JSON.parse(readFileSync(recordPath, "utf8")).length, 4);
+      assert.equal(JSON.parse(readFileSync(recordPath, "utf8")).length, 5);
       evidence.cases.push("fenced-android-app-op-effective-mismatch");
     } finally {
       delete process.env.AILOHA_TEST_FENCED_EFFECTIVE_MODE;
@@ -638,9 +672,53 @@ try {
     const prompt = await promptFor();
     prompt.answer("deny");
     await rejected;
-    assert.equal(JSON.parse(readFileSync(`${process.env.AILOHA_TEST_CONTEXT_STATE}.fenced`, "utf8")).length, 4);
+    assert.equal(JSON.parse(readFileSync(`${process.env.AILOHA_TEST_CONTEXT_STATE}.fenced`, "utf8")).length, 5);
     evidence.cases.push("fenced-android-app-op-denial");
     await close();
+  }
+  for (const [name, operationId] of [["unicode", "café"], ["long-ascii", "a".repeat(700)]]) {
+    current = await open(`fenced-app-op-known-id-${name}`);
+    try {
+      await current.action("select_device", { deviceId: "opaque/target" });
+      process.env.AILOHA_TEST_FENCED_KNOWN_ERROR_TYPE = "AppActionAcceptedMismatch";
+      process.env.AILOHA_TEST_FENCED_KNOWN_OPERATION_ID = operationId;
+      const input = {
+        deviceId: "opaque/target", bundleId: "com.example.native", operation: "CAMERA", mode: "allow",
+      };
+      const work = current.action("set_app_op", input);
+      const rejected = assert.rejects(work, (error) => {
+        assert.equal(error.code, "app_action_accepted_mismatch");
+        assert.equal(error.operationId, operationId);
+        assert.equal(JSON.stringify(error).includes("installationEvidence"), false);
+        return true;
+      });
+      (await promptFor()).answer("approve");
+      await rejected;
+      delete process.env.AILOHA_TEST_FENCED_KNOWN_ERROR_TYPE;
+      delete process.env.AILOHA_TEST_FENCED_KNOWN_OPERATION_ID;
+      const recordPath = `${process.env.AILOHA_TEST_CONTEXT_STATE}.fenced`;
+      const nativeCount = JSON.parse(readFileSync(recordPath, "utf8")).length;
+      const captured = readFileSync(`${process.env.AILOHA_TEST_CONTEXT_STATE}.captures`, "utf8");
+      const appReads = scenario.calls.filter((call) => call.method === "GET"
+        && /\/apps(?:\/|\?|$)/.test(call.path ?? "")).length;
+      scenario.targets.set("other-target", {
+        targetId: "other-target", providerId: "synthetic-provider", targetTypeId: "type",
+        status: "running", surfaces: [],
+        nativeIdentity: { platform: "android", nativeId: "other-native-target" },
+      });
+      await current.action("select_device", { deviceId: "other-target" });
+      const resumed = await current.action("set_app_op", input);
+      assert.equal(resumed.mode, "allow");
+      assert.equal(readFileSync(`${process.env.AILOHA_TEST_CONTEXT_STATE}.captures`, "utf8"), captured);
+      assert.equal(scenario.calls.filter((call) => call.method === "GET"
+        && /\/apps(?:\/|\?|$)/.test(call.path ?? "")).length, appReads);
+      assert.equal(JSON.parse(readFileSync(recordPath, "utf8")).length, nativeCount);
+      evidence.cases.push(`fenced-app-op-known-id-${name}`);
+    } finally {
+      delete process.env.AILOHA_TEST_FENCED_KNOWN_ERROR_TYPE;
+      delete process.env.AILOHA_TEST_FENCED_KNOWN_OPERATION_ID;
+      await close();
+    }
   }
   evidence.leaseCountAfterClose = scenario.leases.size;
   evidence.pendingHumanPrompts = kind === "github" ? copilotUi.pending.size

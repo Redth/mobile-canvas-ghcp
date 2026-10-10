@@ -1,5 +1,5 @@
 import { createHash, randomUUID } from "node:crypto";
-import { readFileSync, writeFileSync } from "node:fs";
+import { appendFileSync, readFileSync, writeFileSync } from "node:fs";
 
 const hash = (value) => createHash("sha256").update(value).digest("hex");
 const required = (args, flag) => {
@@ -51,7 +51,8 @@ export function runFencedAppCli(args) {
     }
     const appOpId = args.includes("--app-op") ? required(args, "--app-op") : undefined;
     const receipt = {
-      schema: "ailoha.target-app-action/v1", action: appOpId ? "app-op" : "uninstall",
+      schema: "ailoha.target-app-action/v2", action: appOpId ? "app-op" : "uninstall",
+      attemptId: randomUUID().replaceAll("-", ""),
       contextRef: context.contextRef, scopeEpoch: context.scopeEpoch, revision: context.revision,
       ownerProcessId: context.owner.processId, ownerStartedAt: context.owner.processStartedAt,
       targetHostId: "synthetic-host", stamp, appId, packageId, version: "1", buildNumber: "2",
@@ -60,6 +61,7 @@ export function runFencedAppCli(args) {
         appOpId, currentMode: "default", requestedMode: required(args, "--mode"), uidScoped: true,
       } : {}),
     };
+    appendFileSync(`${path}.captures`, `${JSON.stringify({ appId, appOpId, attemptId: receipt.attemptId })}\n`);
     process.stdout.write(JSON.stringify(receipt));
     return 0;
   }
@@ -67,7 +69,9 @@ export function runFencedAppCli(args) {
     throw new Error("Unsupported synthetic fenced app action.");
   }
   const receipt = JSON.parse(required(args, "--receipt"));
-  if (receipt.contextRef !== context.contextRef || receipt.scopeEpoch !== context.scopeEpoch
+  if (receipt.schema !== "ailoha.target-app-action/v2" || !/^[a-f0-9]{32}$/.test(receipt.attemptId)
+    || Buffer.byteLength(JSON.stringify(receipt), "utf8") > 64 * 1024
+    || receipt.contextRef !== context.contextRef || receipt.scopeEpoch !== context.scopeEpoch
     || receipt.revision !== context.revision || receipt.ownerProcessId !== context.owner.processId
     || receipt.ownerStartedAt !== context.owner.processStartedAt
     || receipt.targetHostId !== "synthetic-host" || receipt.appId !== appId || receipt.packageId !== packageId
@@ -85,7 +89,8 @@ export function runFencedAppCli(args) {
     }));
     return 1;
   }
-  const operationId = `synthetic-fenced-${randomUUID()}`;
+  const operationId = process.env.AILOHA_TEST_FENCED_KNOWN_OPERATION_ID
+    ?? `synthetic-fenced-${randomUUID()}`;
   const operation = {
     operationId, kind: args[2] === "uninstall-fenced" ? "uninstallFencedTargetApp" : "updateFencedTargetAppOp",
     targetId, providerId: "synthetic-provider", status: "queued", destructive: true,
@@ -109,6 +114,13 @@ export function runFencedAppCli(args) {
   }
   operations.push(completed);
   writeFileSync(recordPath, JSON.stringify(operations));
+  if (process.env.AILOHA_TEST_FENCED_KNOWN_ERROR_TYPE) {
+    process.stderr.write(JSON.stringify({
+      error: "The captured native action was accepted with different observed state.",
+      type: process.env.AILOHA_TEST_FENCED_KNOWN_ERROR_TYPE, retryable: false, operationId,
+    }));
+    return 1;
+  }
   process.stdout.write(JSON.stringify(operation));
   return process.env.AILOHA_TEST_FENCED_ACCEPTED_NONZERO === "1" ? 1 : 0;
 }

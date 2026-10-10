@@ -840,6 +840,93 @@ test("fenced Android setter returns the effective legacy ignore mode only after 
   assert.equal(state.events.filter(([event]) => event === "set-app-op").length, 1);
 });
 
+test("accepted fenced app-op recovers after view retirement without recapture", async (t) => {
+  let waits = 0;
+  const state = fencedFixture(t, {
+    wait(operationId) {
+      waits += 1;
+      if (waits === 1) throw new AilohaProtocolError("transport_error", { operationId });
+      return {
+        operationId, kind: "updateFencedTargetAppOp", targetId: "one", providerId: "provider",
+        status: "succeeded", destructive: false,
+        createdAt: "2026-10-09T23:00:00Z", completedAt: "2026-10-09T23:00:02Z",
+      };
+    },
+  });
+  state.targets.get("one").nativeIdentity.platform = "android";
+  await assert.rejects(state.backend.setAppOp("one", "com.example.native", "camera", "allow"),
+    { code: "transport_error" });
+  await state.retireAuthority({ observe: false });
+  const reads = state.calls.length;
+  const resumed = await state.backend.setAppOp("one", "com.example.native", "camera", "allow");
+  assert.equal(resumed.success, true);
+  assert.equal(waits, 2);
+  assert.equal(state.calls.length, reads);
+  assert.equal(state.events.filter(([event]) => event === "capture").length, 1);
+  assert.equal(state.events.filter(([event]) => event === "prompt").length, 1);
+  assert.equal(state.events.filter(([event]) => event === "set-app-op").length, 1);
+});
+
+test("native accepted mismatch stays typed until explicit same-key GET recovery", async (t) => {
+  const operationId = "café";
+  const state = fencedFixture(t, {
+    submit() {
+      const error = new MobileAilohaError("app_action_accepted_mismatch",
+        "The accepted action did not match its captured attempt.", 409);
+      error.operationId = operationId;
+      throw error;
+    },
+    wait(id) {
+      return {
+        operationId: id, kind: "updateFencedTargetAppOp", targetId: "one", providerId: "provider",
+        status: "succeeded", destructive: true,
+        createdAt: "2026-10-09T23:00:00Z", completedAt: "2026-10-09T23:00:02Z",
+      };
+    },
+  });
+  state.targets.get("one").nativeIdentity.platform = "android";
+  await assert.rejects(state.backend.setAppOp("one", "com.example.native", "camera", "allow"), (error) => {
+    assert.equal(error.code, "app_action_accepted_mismatch");
+    assert.equal(error.operationId, operationId);
+    return true;
+  });
+  assert.equal(state.events.some(([event]) => event === "wait"), false);
+  await state.retireAuthority({ observe: false });
+  const reads = state.calls.length;
+  const result = await state.backend.setAppOp("one", "com.example.native", "camera", "allow");
+  assert.equal(result.success, true);
+  assert.equal(state.calls.length, reads);
+  assert.deepEqual(state.events.filter(([event]) => event === "wait").map(([, id]) => id), [operationId]);
+  for (const event of ["capture", "prompt", "set-app-op"]) {
+    assert.equal(state.events.filter(([kind]) => kind === event).length, 1);
+  }
+});
+
+test("accepted mismatch with a foreign terminal target retains the ID without success or replay", async (t) => {
+  const operationId = "a".repeat(700);
+  const state = fencedFixture(t, {
+    submit() {
+      const error = new MobileAilohaError("app_action_accepted_mismatch",
+        "The accepted action did not match its captured attempt.", 409);
+      error.operationId = operationId;
+      throw error;
+    },
+    wait(id) {
+      return {
+        operationId: id, kind: "uninstallFencedTargetApp", targetId: "foreign-target",
+        providerId: "provider", status: "succeeded", destructive: true,
+        createdAt: "2026-10-09T23:00:00Z", completedAt: "2026-10-09T23:00:02Z",
+      };
+    },
+  });
+  await assert.rejects(state.backend.uninstallApp("one", "com.example.native", true),
+    { code: "app_action_accepted_mismatch", operationId });
+  await assert.rejects(state.backend.uninstallApp("one", "com.example.native", true),
+    { code: "operation_owner_mismatch", operationId });
+  assert.equal(state.events.filter(([event]) => event === "uninstall").length, 1);
+  assert.equal(state.events.filter(([event]) => event === "prompt").length, 1);
+});
+
 test("fenced app-op mutation names UID effects and requires authoritative matching effective readback", async (t) => {
   const state = fencedFixture(t, {
     capture: (_invocation, request) => ({

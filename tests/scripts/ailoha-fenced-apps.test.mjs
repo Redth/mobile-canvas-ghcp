@@ -6,6 +6,8 @@ const { createFencedAppCli } = await import(productModule("lib/ailoha/fenced-app
 const { AilohaProtocolError } = await import(productModule("lib/ailoha/errors.mjs"));
 const { captureInvocation } = await import(productModule("lib/ailoha/mobile-projection.mjs"));
 const { createVerifiedAilohaCli } = await import(productModule("lib/ailoha/runtime-sdk.mjs"));
+const { submitOperationReceipt, waitForOperationReceipt } = await import(
+  productModule("lib/ailoha/operation-receipts.mjs"));
 
 function original(platform = "android") {
   return captureInvocation({
@@ -23,7 +25,7 @@ function original(platform = "android") {
 
 function captured(invocation, action = "app-op") {
   return {
-    schema: "ailoha.target-app-action/v1", action,
+    schema: "ailoha.target-app-action/v2", action, attemptId: "b".repeat(32),
     contextRef: "ctx", scopeEpoch: "epoch", revision: "7",
     ownerProcessId: 321, ownerStartedAt: invocation.contextOwner.processStartedAt,
     targetHostId: "host",
@@ -67,6 +69,7 @@ test("canonical capture binds exact owner, native installation and UID-scope evi
   }, { timeoutMs: 30_000 });
   assert.equal(proof.currentMode, "deny");
   assert.equal(proof.uidScoped, true);
+  assert.equal(proof.receipt.attemptId, "b".repeat(32));
   assert.equal(proof.receipt.stamp.hostInstanceId, "native-host-incarnation");
   assert.equal(Object.isFrozen(proof.receipt.stamp), true);
   assert.deepEqual(calls[0][0], [
@@ -91,6 +94,31 @@ test("native version strings are preserved within the bounded receipt without in
   }, { timeoutMs: 30_000 })).receipt.version, version);
 });
 
+test("v2 capture requires a unique-form attempt ID and bounds the exact UTF-8 receipt bytes", async () => {
+  const invocation = original();
+  const request = (value) => ({
+    appId: value.appId, packageId: value.packageId, version: value.version, buildNumber: value.buildNumber,
+  });
+  const cli = (value) => createFencedAppCli({ async runCli() { return JSON.stringify(value); } });
+  for (const attemptId of [undefined, "B".repeat(32), "a".repeat(31), "g".repeat(32)]) {
+    const value = captured(invocation, "uninstall");
+    if (attemptId === undefined) delete value.attemptId;
+    else value.attemptId = attemptId;
+    await assert.rejects(cli(value).capture(invocation, request(value)), { code: "app_action_capture_mismatch" });
+  }
+  const value = captured(invocation, "uninstall");
+  value.version = "";
+  const remaining = 64 * 1024 - Buffer.byteLength(JSON.stringify(value), "utf8");
+  value.version = "x".repeat(remaining);
+  assert.equal(Buffer.byteLength(JSON.stringify(value), "utf8"), 64 * 1024);
+  assert.equal((await cli(value).capture(invocation, request(value))).receipt.version, value.version);
+  value.version += "x";
+  await assert.rejects(cli(value).capture(invocation, request(value)), { code: "app_action_capture_mismatch" });
+  value.version = "é".repeat(Math.floor(remaining / 2) + 1);
+  assert.ok(JSON.stringify(value).length < 64 * 1024);
+  await assert.rejects(cli(value).capture(invocation, request(value)), { code: "app_action_capture_mismatch" });
+});
+
 test("uninstall and setter submit only the original native receipt through the verified CLI", async () => {
   const invocation = original();
   const calls = [];
@@ -113,6 +141,144 @@ test("uninstall and setter submit only the original native receipt through the v
     ]);
     assert.equal(forwarded, options);
   }
+});
+
+test("canonical accepted IDs remain opaque across Unicode and long ASCII values", async () => {
+  const invocation = original();
+  for (const operationId of ["café", "a".repeat(700)]) {
+    const cli = createFencedAppCli({
+      async runCli() {
+        return JSON.stringify({ ...accepted("uninstallFencedTargetApp"), operationId });
+      },
+    });
+    assert.equal((await cli.uninstall(invocation, captured(invocation, "uninstall"))).operationId, operationId);
+  }
+});
+
+test("typed known-ID native errors surface first, then recover by original-host GET only", async () => {
+  const invocation = original();
+  const pin = { version: "synthetic", sourceSha: "a".repeat(40) };
+  for (const [type, code, operationId] of [
+    ["AppActionAcceptedMismatch", "app_action_accepted_mismatch", "café"],
+    ["AppActionAttemptAlreadySubmitted", "app_action_attempt_already_submitted", "a".repeat(700)],
+    ["AppActionAcceptedRecordUnavailable", "app_action_accepted_record_unavailable", "record-id"],
+    ["AppActionDeliveryUnknown", "app_action_delivery_unknown", "location-id"],
+  ]) {
+    let launches = 0;
+    const script = `process.stderr.write(${JSON.stringify(JSON.stringify({
+      error: "private native diagnostic", type, retryable: false, operationId,
+    }))}); process.exitCode = 1;`;
+    const cli = createFencedAppCli({ runCli: createVerifiedAilohaCli({
+      pin, sdk: { async getVerifiedCliLaunch() {
+        launches++;
+        return { file: process.execPath, args: ["-e", script], ...pin };
+      } },
+    }) });
+    const state = new Map();
+    const key = `known-${type}`;
+    const submit = () => submitOperationReceipt({
+      state, key, kind: "uninstallFencedTargetApp", invocation, requireCurrent() {},
+      submit: () => cli.uninstall(invocation, captured(invocation, "uninstall"), { timeoutMs: 10_000 }),
+    });
+    const receipt = submit();
+    await assert.rejects(receipt.submitted, (error) => {
+      assert.equal(error.code, code);
+      assert.equal(error.operationId, operationId);
+      assert.equal(JSON.stringify(error).includes("private native"), false);
+      return true;
+    });
+    assert.equal(receipt.operationId, operationId);
+    assert.equal(submit(), receipt);
+    const reads = [];
+    const completed = await waitForOperationReceipt({
+      state, key, receipt, outcome: "app_action",
+      client: { async waitForOperation(id) {
+        reads.push(id);
+        return { ...accepted("uninstallFencedTargetApp"), operationId: id, status: "succeeded" };
+      } },
+    });
+    assert.equal(completed.operationId, operationId);
+    assert.deepEqual(reads, [operationId]);
+    assert.equal(launches, 1);
+  }
+});
+
+test("accepted operation owner mismatch keeps its ID without claiming success or replaying", async () => {
+  const invocation = original();
+  let calls = 0;
+  const cli = createFencedAppCli({ async runCli() {
+    calls++;
+    return JSON.stringify({ ...accepted("uninstallFencedTargetApp"), targetId: "foreign-target" });
+  } });
+  const state = new Map();
+  const submit = () => submitOperationReceipt({
+    state, key: "foreign-accepted", kind: "uninstallFencedTargetApp", invocation, requireCurrent() {},
+    submit: () => cli.uninstall(invocation, captured(invocation, "uninstall")),
+  });
+  const receipt = submit();
+  await assert.rejects(receipt.submitted, {
+    code: "app_action_owner_mismatch", operationId: "accepted-op",
+  });
+  assert.equal(receipt.operationId, "accepted-op");
+  assert.equal(submit(), receipt);
+  assert.equal(calls, 1);
+});
+
+test("native attempt and delivery errors without an ID retain uncertainty and cannot submit again", async () => {
+  const invocation = original();
+  const pin = { version: "synthetic", sourceSha: "a".repeat(40) };
+  for (const [type, code] of [
+    ["AppActionDeliveryUnknown", "app_action_delivery_unknown"],
+    ["AppActionAttemptAlreadySubmitted", "app_action_attempt_already_submitted"],
+    ["AppActionAcceptedRecordUnavailable", "app_action_accepted_record_unavailable"],
+    ["AppActionAcceptedMismatch", "app_action_accepted_mismatch"],
+  ]) {
+    let launches = 0;
+    const script = `process.stderr.write(${JSON.stringify(JSON.stringify({
+      error: "private native diagnostic", type, retryable: false,
+    }))}); process.exitCode = 1;`;
+    const cli = createFencedAppCli({ runCli: createVerifiedAilohaCli({
+      pin, sdk: { async getVerifiedCliLaunch() {
+        launches++;
+        return { file: process.execPath, args: ["-e", script], ...pin };
+      } },
+    }) });
+    const state = new Map();
+    const key = `unknown-${type}`;
+    const submit = () => submitOperationReceipt({
+      state, key, kind: "uninstallFencedTargetApp", invocation, requireCurrent() {},
+      submit: () => cli.uninstall(invocation, captured(invocation, "uninstall"), { timeoutMs: 10_000 }),
+    });
+    const receipt = submit();
+    await assert.rejects(receipt.submitted, { code });
+    assert.equal(receipt.operationId, null);
+    assert.equal(receipt.uncertain, true);
+    assert.equal(submit(), receipt);
+    await assert.rejects(waitForOperationReceipt({
+      state, key, receipt, outcome: "app_action",
+      client: { async waitForOperation() { throw Error("Unknown operation was polled."); } },
+    }), { code: "app_action_outcome_uncertain" });
+    assert.equal(launches, 1);
+  }
+});
+
+test("malformed claimed native operation IDs do not become definitive rejections or accepted receipts", async () => {
+  const pin = { version: "synthetic", sourceSha: "a".repeat(40) };
+  const script = `process.stderr.write(JSON.stringify({
+    error: "private native diagnostic", type: "AppActionRejected",
+    retryable: false, operationId: "invalid\\nidentifier",
+  })); process.exitCode = 1;`;
+  const runCli = createVerifiedAilohaCli({
+    pin, sdk: { async getVerifiedCliLaunch() {
+      return { file: process.execPath, args: ["-e", script], ...pin };
+    } },
+  });
+  await assert.rejects(runCli(["target", "app", "uninstall-fenced"]), (error) => {
+    assert.equal(error.code, "app_action_invalid_response");
+    assert.equal(Object.hasOwn(error, "operationId"), false);
+    assert.equal(JSON.stringify(error).includes("private native"), false);
+    return true;
+  });
 });
 
 test("capture rejects owner, incarnation, installation and UID-proof substitution before approval", async () => {
@@ -176,6 +342,9 @@ test("verified CLI retains accepted native operation metadata even when its chil
       ["ContextBindingMismatch", "context_snapshot_superseded", 409],
       ["unsupported-capability", "capability_not_supported", 501],
       ["AppActionDeliveryUnknown", "app_action_delivery_unknown", 502],
+      ["AppActionAcceptedMismatch", "app_action_accepted_mismatch", 409],
+      ["AppActionAttemptAlreadySubmitted", "app_action_attempt_already_submitted", 409],
+      ["AppActionAcceptedRecordUnavailable", "app_action_accepted_record_unavailable", 502],
     ]) {
       const script = `process.stderr.write(${JSON.stringify(JSON.stringify({
         error: "private native path and credential", type, retryable: false,
@@ -188,6 +357,7 @@ test("verified CLI retains accepted native operation metadata even when its chil
       await assert.rejects(runCli(["target", "app", "uninstall-fenced"], { timeoutMs: 10_000 }), (error) => {
         assert.equal(error.code, code);
         assert.equal(error.status, status);
+        assert.equal(Object.hasOwn(error, "operationId"), false);
         assert.equal(JSON.stringify(error).includes("private native path"), false);
         return true;
       });
@@ -223,8 +393,10 @@ test("verified CLI retains accepted native operation metadata even when its chil
           });
         },
       });
-      await assert.rejects(cli.uninstall(invocation, receipt, { timeoutMs: 10_000 }), {
-        code: "app_action_owner_mismatch",
+      await assert.rejects(cli.uninstall(invocation, receipt, { timeoutMs: 10_000 }), (error) => {
+        assert.equal(error.code, "app_action_owner_mismatch");
+        assert.equal(error.operationId, value.operationId);
+        return true;
       });
     }
   });

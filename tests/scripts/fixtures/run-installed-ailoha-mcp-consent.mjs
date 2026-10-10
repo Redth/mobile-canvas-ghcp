@@ -92,6 +92,7 @@ try {
   const uninstallDenied = await take((message) => message.method === "elicitation/create");
   assert.match(uninstallDenied.params.message, /Native package: com\.example\.native/);
   assert.equal(JSON.stringify(uninstallDenied).includes("installationEvidence"), false);
+  assert.equal(JSON.stringify(uninstallDenied).includes("attemptId"), false);
   send({ jsonrpc: "2.0", id: uninstallDenied.id, result: { action: "decline" } });
   assert.equal(JSON.parse((await take((message) => message.id === 5)).result.content[0].text).code, "consent_denied");
   assert.equal(existsSync(`${process.env.AILOHA_TEST_CONTEXT_STATE}.fenced`), false);
@@ -105,6 +106,7 @@ try {
   const uninstalled = await take((message) => message.id === 6);
   assert.equal(uninstalled.result.structuredContent.operation, "uninstall");
   assert.equal(JSON.stringify(uninstalled).includes("installationEvidence"), false);
+  assert.equal(JSON.stringify(uninstalled).includes("attemptId"), false);
   call(7, "mobile_device_app_op_set", {
     deviceId: "opaque/target", bundleId: "com.example.native",
     operation: "SYSTEM_ALERT_WINDOW", mode: "ignore",

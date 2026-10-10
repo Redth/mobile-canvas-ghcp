@@ -121,6 +121,22 @@ test("app approval rejects incomplete, untrusted, or cross-platform action proof
   assert.equal(prompts, 0);
 });
 
+test("app approval refuses receipts exceeding the native UTF-8 byte budget before prompting", (t) => {
+  const authority = new ScopedDestructiveConsent(() => {
+    throw Error("Oversized app proof reached the human prompt.");
+  }, new AbortController().signal);
+  t.after(() => authority.dispose());
+  const appAction = {
+    appId: "app-one", packageId: "com.example.one",
+    receipt: { schema: "ailoha.target-app-action/v2", version: "é".repeat(33_000) },
+  };
+  assert.ok(JSON.stringify(appAction.receipt).length < 64 * 1024);
+  assert.ok(Buffer.byteLength(JSON.stringify(appAction.receipt), "utf8") > 64 * 1024);
+  assert.throws(() => authority.begin("uninstall", invocation(), { appAction }), {
+    code: "consent_app_action_invalid",
+  });
+});
+
 for (const result of [false, "cancel"]) {
   test(`the actual prompt decision ${result} never becomes an approval`, async (t) => {
     const owner = new AbortController();
