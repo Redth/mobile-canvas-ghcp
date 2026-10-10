@@ -219,10 +219,9 @@ function featureFixture(options = {}) {
       if (request.method === "PUT" && options.putFailure === "unknown") {
         throw new Error("private PUT transport diagnostics");
       }
-      if (request.method === "PUT" && ["timeout", "client_closed"].includes(options.putFailure)) {
-        throw new AilohaProtocolError("timeout", {
-          status: options.putFailure === "timeout" ? 408 : 499,
-        });
+      if (request.method === "PUT" && ["timeout", "server_timeout", "client_closed"].includes(options.putFailure)) {
+        throw new AilohaProtocolError(options.putFailure === "server_timeout" ? "http_error" : "timeout",
+          { status: options.putFailure === "client_closed" ? 499 : 408 });
       }
       const reply = (body, status = 200, location) =>
         ({ status, contentType: status === 204 ? null : "application/json", location, body });
@@ -636,12 +635,12 @@ test("setter readback failures and wrong capability never resubmit an uncertain 
     deviceId: "one", latitude: 1, longitude: 2,
   }), { code: "feature_outcome_uncertain" });
   assert.equal(uncertain.wire.filter(({ method }) => method === "PUT").length, 1);
-  for (const putFailure of ["timeout", "client_closed"]) {
+  for (const putFailure of ["timeout", "server_timeout", "client_closed"]) {
     const timeout = featureFixture({ allowPut: true, putFailure });
     t.after(() => timeout.backend.dispose());
     const timedOutInput = { deviceId: "one", level: 80 };
     await assert.rejects(timeout.backend.invokeAction("set_battery", timedOutInput),
-      { code: "timeout" });
+      { code: putFailure === "server_timeout" ? "http_error" : "timeout" });
     await assert.rejects(timeout.backend.invokeAction("set_battery", timedOutInput),
       { code: "feature_outcome_uncertain" });
     assert.equal(timeout.wire.filter(({ method }) => method === "PUT").length, 1);
