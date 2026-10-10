@@ -32,6 +32,7 @@ import {
 } from "./ailoha-canvas-state.js";
 import { createAilohaVideoPlayer } from "./ailoha-video-player.js";
 import { createWorkspaceInspectionView } from "./ailoha-workspace-view.js";
+import { createSemanticInspectionView } from "./ailoha-semantic-view.js";
 
 const elements = {
   list: document.querySelector("#device-list"),
@@ -126,6 +127,21 @@ const workspaceInspection = createWorkspaceInspectionView({
 });
 transport?.onWorkspaceInspectionChanged?.((snapshot) => {
   try { workspaceInspection.acceptState(snapshot); }
+  catch (error) { showError(error); }
+});
+const semanticInspection = createSemanticInspectionView({
+  element: document.querySelector("#semantic-inspection"),
+  async request(path, options) {
+    const response = await sendApiRequest(path, options);
+    const value = await response.json();
+    if (value.schema !== "mobile-canvas.semantic-inspection/v1") {
+      throw new Error(formatUserFacingMessage(value.message || "Invalid semantic inspection response."));
+    }
+    return value;
+  },
+});
+transport?.onSemanticInspectionChanged?.((snapshot) => {
+  try { semanticInspection.acceptState(snapshot); }
   catch (error) { showError(error); }
 });
 let bootstrapExchange = null;
@@ -262,6 +278,7 @@ async function refresh() {
   elements.list.setAttribute("aria-busy", "true");
   try {
     await loadCatalog();
+    semanticInspection.setActive(state.catalog?.backend === "ailoha");
 
     if (state.selected) {
       const updated = state.catalog.devices.find((device) => device.id === state.selected.id);
@@ -297,6 +314,7 @@ async function refresh() {
     showEmptySelection();
   } finally {
     elements.list.removeAttribute("aria-busy");
+    if (state.catalog?.backend === "ailoha") void semanticInspection.load();
   }
 }
 
@@ -1713,8 +1731,16 @@ function connectAutomationEvents() {
       }
       return;
     }
+    if (activity.kind === "semantic-inspection") {
+      if (addressed) {
+        try { semanticInspection.acceptState(activity.state); }
+        catch (error) { showError(error); }
+      }
+      return;
+    }
     if (transport && !addressed) return;
     if (addressed) {
+      const changedTarget = activity.kind === "selection" && state.selected?.id !== activity.deviceId;
       if (activity.kind === "selection") {
         automation.selectionGeneration += 1;
       }
@@ -1722,6 +1748,7 @@ function connectAutomationEvents() {
       // keeps the panel from sitting on the device the person last picked while work happens
       // somewhere else.
       await followSelection(activity.deviceId).catch(showError);
+      if (changedTarget && state.catalog?.backend === "ailoha") void semanticInspection.load();
     }
     if (activity.kind === "selection") return;
     if (!state.selected || activity.deviceId !== state.selected.id) return;
@@ -2762,6 +2789,7 @@ function setPanelVisible(visible) {
   const visibilityVersion = ++panelVisibilityVersion;
   state.panelVisible = visible;
   workspaceInspection.setVisible(visible);
+  semanticInspection.setVisible(visible);
   if (!visible) {
     stopStream();
     clearTimeout(automation.retryTimer);

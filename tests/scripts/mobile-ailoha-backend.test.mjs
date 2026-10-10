@@ -506,7 +506,10 @@ test("real consent is captured to the original target and is separate from the l
   assert.equal(captured.invocation.executionContext.revision, "1");
   assert.equal(captured.invocation.connectionRef, state.backend.connectionRef);
   assert.equal(Object.isFrozen(captured.invocation), true);
-  assert.equal(JSON.stringify(captured).includes("processStartedAt"), false);
+  assert.equal(captured.invocation.executionContext.processStartedAt, "2026-10-10T00:00:00Z");
+  assert.equal(JSON.stringify(captured).includes("connectionRef"), false);
+  assert.equal(JSON.stringify(captured).includes(state.backend.connectionRef.serviceId), false);
+  assert.equal(JSON.stringify(captured).includes(state.backend.connectionRef.processStartedAt), false);
   consent.resolve(false);
   await rejected;
   assert.equal(state.calls.some(([kind]) => kind === "reset"), false);

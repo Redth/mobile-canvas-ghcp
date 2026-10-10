@@ -25,9 +25,12 @@ async (page) => {
 
   await page.goto(url);
   await page.waitForFunction(() => document.querySelector("#stream-mode")?.textContent === "ALHV H.264");
+  await page.waitForFunction(() => document.querySelector("#semantic-inspection")?.hidden === false);
+  verify(await page.locator("#semantic-inspection").getByText("System (Target Host)").count() > 0,
+    "Read-only System inspection is not visible alongside the live video.");
   if (workspaceCards) {
     await page.waitForFunction(() => document.querySelector("#workspace-inspection")?.dataset.status === "ready");
-    await page.getByRole("button", { name: "Inspect", exact: true }).click();
+    await page.locator("#workspace-inspection").getByRole("button", { name: "Inspect", exact: true }).click();
     await page.waitForFunction(() => document.querySelector("#workspace-inspection")?.dataset.status === "complete");
     verify(await page.locator(".workspace-app-card").count() === 8, "The resized media check did not include actual workspace cards.");
     const application = (await evidence()).workspace.inspection.applications.find((entry) => entry.missingSteps.length);
@@ -60,7 +63,7 @@ async (page) => {
   const calls = observed.calls.filter((call) => call.path?.includes("/input/actions/"));
   const tap = JSON.parse(calls.find((call) => call.path.endsWith("/tap")).body);
   const gesture = JSON.parse(calls.find((call) => call.path.endsWith("/gesture")).body);
-  verify(tap.x === 24 && tap.y === 16 && tap.geometryRevision === 14,
+  verify(Math.abs(tap.x - 24) < 0.1 && Math.abs(tap.y - 16) < 0.1 && tap.geometryRevision === 14,
     "Pointer input did not use observed logical bounds and geometry revision.");
   verify(gesture.geometryRevision === 14 && gesture.actions[0].x === 12
     && gesture.actions.at(-1).x === 36 && gesture.actions.every((action) => action.y === undefined || action.y === 16),

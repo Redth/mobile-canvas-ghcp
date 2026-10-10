@@ -10,6 +10,7 @@ import type {
   SocketChannel,
   WebviewMessage,
   WorkspaceInspectionState,
+  SemanticInspectionState,
 } from "./messages";
 import type { WorkspaceRootAdapter, WorkspaceRootError } from "./workspaceRoots";
 
@@ -48,6 +49,13 @@ export interface AilohaCanvasHost {
     cancel(): WorkspaceInspectionState;
     invalidate(): WorkspaceInspectionState;
     setVisible(visible: boolean): WorkspaceInspectionState;
+  };
+  semanticInspection?: {
+    snapshot(): SemanticInspectionState;
+    subscribe(listener: (state: SemanticInspectionState) => void): () => void;
+    request(method: string, body?: string): Promise<SemanticInspectionState>;
+    invalidate(): SemanticInspectionState;
+    setVisible(visible: boolean): SemanticInspectionState;
   };
 }
 
@@ -89,6 +97,7 @@ export class HostBridge implements vscode.Disposable {
   private visibilityNeedsCleanup = false;
   private visible = true;
   private readonly inspectionSubscription?: () => void;
+  private readonly semanticSubscription?: () => void;
   private readonly workspaceSubscription?: vscode.Disposable;
 
   constructor(
@@ -113,6 +122,13 @@ export class HostBridge implements vscode.Disposable {
       });
       this.workspaceSubscription = workspaceRoots?.onDidChange(() => inspection.clearRoot());
     }
+    if (ailohaHost?.semanticInspection) {
+      this.semanticSubscription = ailohaHost.semanticInspection.subscribe((state) => {
+        void Promise.resolve(this.post({ type: "semantic-inspection", state })).then((delivered) => {
+          if (!delivered && !this.disposed) this.output.appendLine("Mobile Canvas semantic inspection was declined by its view.");
+        }).catch(() => this.output.appendLine("Mobile Canvas semantic inspection could not be delivered to its view."));
+      });
+    }
     if (refreshSignal) {
       this.signalOffset = readFileSync(refreshSignal, "utf8").length;
       watchFile(refreshSignal, { interval: 250 }, this.onRefreshSignal);
@@ -133,6 +149,9 @@ export class HostBridge implements vscode.Disposable {
         case "ready":
           if (this.ailohaHost?.workspaceInspection) {
             await this.post({ type: "workspace-inspection", state: this.ailohaHost.workspaceInspection.snapshot() });
+          }
+          if (this.ailohaHost?.semanticInspection) {
+            await this.post({ type: "semantic-inspection", state: this.ailohaHost.semanticInspection.snapshot() });
           }
           await this.connect();
           if (this.ailohaHost) this.onContextReady?.();
@@ -181,6 +200,7 @@ export class HostBridge implements vscode.Disposable {
   async setVisible(visible: boolean): Promise<void> {
     this.visible = visible;
     this.ailohaHost?.workspaceInspection?.setVisible(visible);
+    this.ailohaHost?.semanticInspection?.setVisible(visible);
     const previous = this.visibilityTask;
     const task = previous.then(
       () => this.applyVisibility(visible),
@@ -213,6 +233,7 @@ export class HostBridge implements vscode.Disposable {
 
   async restart(): Promise<void> {
     this.ailohaHost?.workspaceInspection?.invalidate();
+    this.ailohaHost?.semanticInspection?.invalidate();
     this.ailohaHost?.cancelPendingApprovals?.();
     this.selectionToRestore = await this.readSelectedDeviceId();
     await this.closeCanvas();
@@ -274,6 +295,7 @@ export class HostBridge implements vscode.Disposable {
       return;
     }
     this.disposed = true;
+    this.semanticSubscription?.();
     this.ailohaHost?.workspaceInspection?.setVisible(false);
     this.inspectionSubscription?.();
     this.workspaceSubscription?.dispose();
@@ -392,6 +414,10 @@ export class HostBridge implements vscode.Disposable {
       await this.forwardWorkspace(message);
       return;
     }
+    if (this.ailohaHost?.semanticInspection && message.path.startsWith("/api/v1/semantic/")) {
+      await this.forwardSemantic(message);
+      return;
+    }
     const method = (message.method ?? "GET").toUpperCase();
     if (!ALLOWED_METHODS.has(method)) {
       throw new Error(`Unsupported Mobile Canvas HTTP method: ${method}`);
@@ -461,6 +487,7 @@ export class HostBridge implements vscode.Disposable {
           status: isRecord(error) && typeof error.status === "number" ? error.status : 500,
         };
       }
+
     } else if (message.body?.trim() && message.body.trim() !== "{}") {
       result = { code: "workspace_root_authority_required", message: "Renderer requests cannot supply or enlarge the trusted workspace root.", status: 403 };
     } else if (message.path === "/api/v1/workspace/root" && method === "POST") {
@@ -478,6 +505,31 @@ export class HostBridge implements vscode.Disposable {
     }
     const status = "schema" in result ? result.error?.status ?? 200 : result.status ?? 400;
     if (!("schema" in result)) this.output.appendLine(`Mobile Canvas workspace: ${result.code}: ${result.message}`);
+    const response = new Response(JSON.stringify(result), { status, headers: { "Content-Type": "application/json" } });
+    await this.post({
+      type: "api-result", id: message.id, status, statusText: response.statusText,
+      headers: Object.fromEntries(response.headers), body: await response.arrayBuffer(),
+    });
+  }
+
+  private async forwardSemantic(message: Extract<WebviewMessage, { type: "api" }>): Promise<void> {
+    const semantic = this.ailohaHost?.semanticInspection;
+    if (!semantic) throw new Error("Semantic inspection is unavailable.");
+    const method = (message.method ?? "GET").toUpperCase();
+    let result: SemanticInspectionState | { code: string; message: string; status: number };
+    if (message.path !== "/api/v1/semantic/inspection" || !["GET", "POST", "DELETE"].includes(method)) {
+      result = { code: "semantic_request_unsupported", message: "Use the named read-only semantic inspection route.", status: 400 };
+    } else {
+      try { result = await semantic.request(method, message.body); }
+      catch (error) {
+        result = {
+          code: isRecord(error) && typeof error.code === "string" ? error.code : "semantic_request_failed",
+          message: ailohaErrorMessage(error),
+          status: isRecord(error) && typeof error.status === "number" ? error.status : 500,
+        };
+      }
+    }
+    const status = "schema" in result ? result.error?.status ?? 200 : result.status;
     const response = new Response(JSON.stringify(result), { status, headers: { "Content-Type": "application/json" } });
     await this.post({
       type: "api-result", id: message.id, status, statusText: response.statusText,

@@ -80,10 +80,13 @@ this is not a normal-install-ready release.
 
 The opt-in covers inventory/selection, advertised start/stop/reboot, PNG
 screenshots, observed-geometry tap/held-press/swipe/scroll, and complete ALHV
-H.264 access units. It requires no app instrumentation. Creation/catalog
-mapping, destructive reset/delete on hosts without genuine scoped approval, app/system
-inspection, recording, keyboard/buttons and broader controls remain explicitly
-unsupported. See [the Ailoha adapter contract](docs/ailoha-protocol-adapter.md)
+H.264 access units. Device control and System inspection require no app
+instrumentation; App inspection requires an explicitly selected verified native
+runtime instance in the canonical named context. Workspace application evidence
+cannot bind an agent. Creation/catalog mapping and destructive reset/delete on
+hosts without genuine scoped approval remain unsupported. Recording,
+keyboard/buttons and broader controls remain unsupported. See
+[the Ailoha adapter contract](docs/ailoha-protocol-adapter.md)
 for ownership, setup, package evidence and remaining gates.
 
 ## Give Copilot hands and eyes

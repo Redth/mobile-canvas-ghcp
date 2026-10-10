@@ -22,6 +22,19 @@ export interface WorkspaceInspectionState {
   error: { code: string; message: string; status?: number } | null;
 }
 
+export interface SemanticInspectionState {
+  schema: string;
+  scope: { sessionId: string; viewId: string };
+  generation: number;
+  status: string;
+  selection: unknown;
+  appAvailable: boolean;
+  lens: string;
+  operation: string | null;
+  result: unknown;
+  error: { code: string; message: string; status?: number } | null;
+}
+
 export type WebviewMessage =
   | { type: "ready" }
   | {
@@ -46,6 +59,7 @@ export type WebviewMessage =
 export type ExtensionMessage =
   | { type: "context"; sessionId: string; instanceId: string }
   | { type: "workspace-inspection"; state: WorkspaceInspectionState }
+  | { type: "semantic-inspection"; state: SemanticInspectionState }
   | {
       type: "api-result";
       id: string;
