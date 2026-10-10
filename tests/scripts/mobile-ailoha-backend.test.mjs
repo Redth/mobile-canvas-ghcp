@@ -158,9 +158,9 @@ function canonicalFixture(options = {}) {
         selection: { targetHostId: "host", targetId: "two", surfaceId: "surface/opaque" } };
       return store.read();
     },
-    async retireAuthority() {
+    async retireAuthority({ observe = true } = {}) {
       canonical = { ...canonical, state: "detached", revision: String(BigInt(canonical.revision) + 1n), selection: null };
-      return store.readSnapshot();
+      if (observe) return store.readSnapshot();
     },
     async reopenAuthority() {
       await store.binding();
@@ -264,7 +264,7 @@ test("retirement during selected target confirmation cannot return a stale usabl
   await rejected;
 });
 
-for (const action of ["lifecycle", "getSelected", "display", "input", "select", "inventory"]) {
+for (const action of ["lifecycle", "getSelected", "getDevice", "display", "input", "select", "inventory"]) {
   test(`canonical revision advance during ${action} rejects the old snapshot without relabeling or dispatch`, async (t) => {
     const state = canonicalFixture();
     t.after(() => state.backend.dispose());
@@ -280,6 +280,7 @@ for (const action of ["lifecycle", "getSelected", "display", "input", "select", 
     };
     const work = action === "lifecycle" ? state.backend.lifecycle("restart", "one")
       : action === "getSelected" ? state.backend.getSelected()
+      : action === "getDevice" ? state.backend.getDevice("one")
       : action === "display" ? state.backend.display("one")
       : action === "select" ? state.backend.select("one")
       : action === "inventory" ? state.backend.listDevices()
@@ -294,6 +295,27 @@ for (const action of ["lifecycle", "getSelected", "display", "input", "select", 
     assert.equal(state.contextCalls.some((args) => args[1] === "select"), false);
   });
 }
+
+test("direct target reads observe canonical retirement before any target host request", async (t) => {
+  const state = canonicalFixture();
+  t.after(() => state.backend.dispose());
+  await state.store.binding({ allowCreate: false, allowReopen: false });
+  await state.retireAuthority({ observe: false });
+  assert.equal(state.store.state, "open");
+  await assert.rejects(state.backend.getDevice("one"), { code: "view_closed" });
+  assert.equal(state.calls.length, 0);
+  assert.equal(state.contextCalls.some((args) => ["open", "select", "detach"].includes(args[1])), false);
+});
+
+test("direct reads retain explicit target semantics without changing the selected target", async (t) => {
+  const state = canonicalFixture();
+  t.after(() => state.backend.dispose());
+  const device = await state.backend.getDevice("two");
+  assert.equal(device.id, "two");
+  assert.equal(device.nativeId, "real-native-two");
+  assert.equal((await state.store.readSnapshot()).selection.targetId, "one");
+  assert.equal(state.contextCalls.some((args) => args[1] === "select"), false);
+});
 
 for (const reopen of [false, true]) {
   test(`canonical ${reopen ? "epoch replacement" : "retirement"} during input cannot reuse the captured authority`, async (t) => {
