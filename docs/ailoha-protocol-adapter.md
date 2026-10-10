@@ -450,7 +450,7 @@ bootstrap asset, while its inspection API remains authenticated. This
 source-only slice has no
 workspace-application-to-native-agent mapping or binding control. The three
 legacy `mobile_device_ui_dump/find/tap` identities remain installed. The
-source-only `microsoft/ailoha@82477159c928d1a979353c1c34e910a2be53eb8c`
+source-only `microsoft/ailoha@5a99822fbbaa4780aa6cc196c9442496c89a06f6`
 contract qualifies the consumer mapping for review; it is not a shipping
 allowlist for that exact Git SHA. A coordinator-approved published SDK/native
 version and source pin must first pass the official runtime verification.
