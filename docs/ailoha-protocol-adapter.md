@@ -303,6 +303,29 @@ the exact created type/runtime/template/name, running state and authoritative
 virtual-device native identity. Errors retain operation metadata and any
 attributable `createdTargetId`; no client-side destructive cleanup is attempted.
 
+Creation accepts a host-only `signal` option through the direct backend, canvas
+action, compatibility API and named MCP dispatcher. Cancellation received during
+snapshot/catalog preparation prevents admission and removes only that caller.
+Same-key callers share preparation and confirmation; one cancelled caller cannot
+abort another active caller's intent. When the last caller retires, its owned
+submission signal is cancelled, but an accepted or uncertain receipt stays bound
+to the original compatibility tuple. Late accepted Location metadata remains
+recoverable through GET/wait, never a new create/start. Cancelled callers do not
+apply late selection; an active recovery caller still uses the original selection
+snapshot and owner checks.
+
+The loopback host installs each request's disconnect listeners before body or
+backend awaits, checks already-aborted/destroyed state, and removes listeners on
+completion. Normal completion of the request body is not cancellation. Scoped
+host request/action options keep caller cancellation separate from shared backend
+initialization and lease lifetime. VS Code API requests use a bounded per-request
+controller and `api-cancel` IPC message; its Ailoha adapter invokes the same
+trusted, scoped backend API directly rather than waiting for a later loopback
+disconnect. Legacy HTTP behavior is unchanged. HTTP cancellation tests observe
+the captured signal before releasing a held native read: a client-side abort and
+immediate fixture release cannot prove when a remote TCP disconnect was received.
+No event-loop delay, grace period or atomic remote-cancellation claim is added.
+
 ### Device feature compatibility (source-gated)
 
 The shared `device-features.mjs` adapter serves both installed hosts through the
@@ -600,16 +623,38 @@ The legacy .NET canvas serves the shared semantic module as a public embedded
 bootstrap asset, while its inspection API remains authenticated. This
 source-only slice has no
 workspace-application-to-native-agent mapping or binding control. The three
-legacy `mobile_device_ui_dump/find/tap` identities are explicitly unavailable
-in the opt-in (`ui_contract_unavailable`, HTTP 501); the App/System semantic
-panels do not produce their legacy result shapes. The native
-`MobileCanvasUiAdapter.SnapshotAsync` always requests `includeRaw: false`;
-`Project` collapses a null frame into zero bounds, while native bounded query
-results have no complete total or legacy child-index path contract. A
-lossless System snapshot, optional untouched raw payload, complete query
-count/path and retained owner/geometry for the selected element across tap
-are prerequisites to enabling these tools. Neither host guesses the missing
-fields or routes UI taps via a different App/agent lens.
+legacy `mobile_device_ui_dump/find/tap` identities remain installed. The
+source-only `microsoft/ailoha@5a99822fbbaa4780aa6cc196c9442496c89a06f6`
+contract qualifies the consumer mapping for review; it is not a shipping
+allowlist for that exact Git SHA. A coordinator-approved published SDK/native
+version and source pin must first pass the official runtime verification.
+Targets and surfaces must then positively advertise `surface.ui` operations
+`getSystemUiSnapshot`, `querySystemUi`, and `tapSystemUiMatch`, and responses
+must pass typed owner and bounded-shape validation. Without a public pin the
+opt-in returns `ailoha_runtime_unavailable`; an incompatible native UI
+capability returns `capability_not_supported`, not App inspection results. The
+shared projection uses only `/ui/system-snapshot`, `/ui/system-elements`, and
+`/ui/system-elements/actions/tap`, never the App semantic lens or generic
+`/ui/tree`. It preserves nullable frames with legacy computed `centerX` and
+`centerY` on non-null frames, raw role/hint, explicit bounded
+UTF-8 raw payload, full count before limit, and native `UiTree` paths (`0`,
+`1`, `1/0`). Null-frame find centers remain zero as in the legacy projection;
+tap sends a fresh UI revision with captured geometry and the original query,
+defaulting `interactableOnly` to false so the first legacy match is not
+substituted. The native owner performs the query and input under one lease;
+Mobile Canvas never follows find with a coordinate POST. Changed view/native
+identity/surface/process and uncertain tap outcomes do not authorize replay.
+Native queries accept the legacy signed-int32 `limit` and return at most
+`Math.Max(1, limit)` matches while reporting the honest full total; the native
+source hierarchy is bounded to 8 MiB before search, and raw payloads to 1 MiB.
+The consumer also rejects a System UI response body over 16 MiB rather than
+silently truncating it; a larger result requires a reviewed native transport
+contract, not client-side invented pagination.
+Native tap keeps its completed original-owner receipt if its caller cancels
+during authority read-back; a live peer may confirm the same result without
+another tap, while a canceled peer cannot release that receipt.
+This source-only consumer mapping is **not** proof of released SDK/native
+compatibility, other-platform CI, or device validation.
 
 Reveal requires advertised `target.lifecycle/revealTarget` and a running
 provider-owned target, then calls only the canonical Target Host
@@ -619,6 +664,9 @@ remain captured; a changed view cannot turn the result into a different
 selection. A validated successful reply is retained privately through
 read-back/selection errors and can be reconciled against the original authority
 without another POST. A proven pre-acceptance refusal releases its receipt;
+typed transport errors carrying accepted operation evidence are not rewritten
+as definitive HTTP refusals, even if their status is 403. A canceled reveal
+caller cannot select or discard a live peer's original completion;
 HTTP 408, timeout, abort and other uncertain POSTs remain retained and are never
 replayed, including
 across same-ID process replacement. Stale authority and different process

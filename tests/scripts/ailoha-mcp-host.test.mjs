@@ -29,7 +29,7 @@ test("MCP preserves all61 installed identities and advertises broader opt-in lim
   }
   assert.match(catalog.find((tool) => tool.name === "mobile_device_reveal").description, /capability evidence is required/);
   for (const name of ["mobile_device_ui_dump", "mobile_device_ui_find", "mobile_device_ui_tap"]) {
-    assert.match(catalog.find((tool) => tool.name === name).description, /unavailable until canonical System UI/);
+    assert.match(catalog.find((tool) => tool.name === name).description, /compatible published runtime/);
   }
   assert.equal(catalog.every((tool) => tool.execution.taskSupport === "forbidden"), true);
   assert.equal(catalog.find((tool) => tool.name === "mobile_device_tap").inputSchema.properties.geometryRevision.maximum, 0xffffffff);
@@ -114,14 +114,39 @@ test("unsupported/invalid/cross-scope calls are positive failures before any run
     call("mobile_device_location_set", { deviceId: "target", latitude: 1, longitude: 2 }),
     call("mobile_device_clipboard_set", { deviceId: "target", text: "hello" }),
     call("mobile_device_permission_list", { deviceId: "target", bundleId: "com.example.app" }),
-    call("mobile_device_ui_dump", { deviceId: "target", includeRaw: true }),
-    call("mobile_device_ui_find", { deviceId: "target", text: "Save", limit: 1 }),
-    call("mobile_device_ui_tap", { deviceId: "target", text: "Save" }),
   ]) {
     const result = await dispatcher.handle(request);
     assert.equal(result.result.isError, true);
   }
   assert.equal(backendCalls, 0);
+});
+
+test("actual bound MCP dispatch preserves all three native System UI identities and legacy outputs", async (t) => {
+  const calls = [];
+  const dispatcher = await createAilohaMcpDispatcher({
+    binding, version: "test",
+    async createBackend() {
+      return {
+        async invokeAction(name, input) {
+          calls.push([name, input]);
+          if (name === "ui_dump") return { schemaVersion: "1.0", deviceId: input.deviceId,
+            platform: "ios", root: null, elementCount: 0, raw: "native" };
+          if (name === "ui_find") return { schemaVersion: "1.0", deviceId: input.deviceId,
+            matches: [], total: 0 };
+          return { schemaVersion: "1.0", deviceId: input.deviceId, success: true, match: null, total: 1 };
+        },
+        async dispose() {},
+      };
+    },
+  });
+  t.after(() => dispatcher.dispose());
+  const dump = await dispatcher.handle(call("mobile_device_ui_dump", { deviceId: "target", includeRaw: true }));
+  const find = await dispatcher.handle(call("mobile_device_ui_find", { deviceId: "target", text: "Save", limit: 2 }));
+  const tap = await dispatcher.handle(call("mobile_device_ui_tap", { deviceId: "target", text: "Save" }));
+  assert.equal(dump.result.structuredContent.raw, "native");
+  assert.equal(find.result.structuredContent.total, 0);
+  assert.equal(tap.result.structuredContent.success, true);
+  assert.deepEqual(calls.map(([name]) => name), ["ui_dump", "ui_find", "ui_tap"]);
 });
 
 test("VS Code's bound MCP reveal follows the selected target while raw GitHub MCP does not", async (t) => {

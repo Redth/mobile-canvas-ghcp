@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { request as httpRequest } from "node:http";
 import test from "node:test";
 import { WebSocket } from "ws";
 import { productModule } from "../ailoha-test-module.mjs";
@@ -18,6 +19,7 @@ function fixture(options = {}) {
     createBackend: async ({ scope }) => {
       const id = ++generation;
       calls.push(["create", id, scope]);
+      if (options.startWait) await options.startWait.promise;
       return {
         connectionRef: Object.freeze({
           serviceId: `service-${id}`, pid: 12345,
@@ -25,7 +27,12 @@ function fixture(options = {}) {
         }),
         async ready() { return { backend: "ailoha" }; },
         async select(deviceId) { calls.push(["select", id, deviceId]); },
-        async request(path) {
+        async request(path, requestOptions) {
+          calls.push(["request", id, path, requestOptions]);
+          if (/\/ui(?:\/|$|\?)/.test(path) && options.uiResponse) {
+            return options.uiResponse(path, requestOptions);
+          }
+          if (options.request) return options.request(path, requestOptions);
           return new Response(JSON.stringify(
             path.endsWith("/ui") || path.endsWith("/ui/find") || path.endsWith("/ui/tap")
               ? { code: "ui_contract_unavailable" }
@@ -35,7 +42,7 @@ function fixture(options = {}) {
             headers: { "content-type": "application/json" },
           });
         },
-        async invokeAction(name) { return { name, generation: id }; },
+        async invokeAction(name) { calls.push(["action", id, name]); return { name, generation: id }; },
         async closeVideos() { calls.push(["video-retire", id]); },
         async openVideo(deviceId, onMessage) {
           calls.push(["video", id, deviceId]);
@@ -104,6 +111,42 @@ test("registered GitHub canvas forwards reveal and gates legacy System UI paths 
   }
 });
 
+test("registered GitHub canvas passes source-approved System UI result shapes through its authenticated API", async (t) => {
+  const calls = [];
+  const { host } = fixture({
+    uiResponse(path, request) {
+      calls.push([path, request]);
+      const body = path.endsWith("/ui?raw=true")
+        ? { schemaVersion: "1.0", deviceId: "one", platform: "ios", root: null, elementCount: 0, raw: "native" }
+        : path.endsWith("/ui/find")
+          ? { schemaVersion: "1.0", deviceId: "one", matches: [], total: 0 }
+          : { schemaVersion: "1.0", success: true, deviceId: "one", match: {
+            element: { label: "Save", frame: { x: 1, y: 2, width: 4, height: 6 } },
+            path: "1/0", centerX: 3, centerY: 5,
+          }, total: 2 };
+      return new Response(JSON.stringify(body), { headers: { "content-type": "application/json" } });
+    },
+  });
+  t.after(() => host.closeCanvas());
+  const { url, cookie } = await bootstrap(host);
+  for (const [path, method, expected] of [
+    ["/api/v1/devices/one/ui?raw=true", "GET", "native"],
+    ["/api/v1/devices/one/ui/find", "POST", 0],
+    ["/api/v1/devices/one/ui/tap", "POST", "1/0"],
+  ]) {
+    const response = await fetch(new URL(path, url), {
+      method, headers: { Cookie: cookie, ...(method === "POST" ? { "content-type": "application/json" } : {}) },
+      ...(method === "POST" ? { body: '{"text":"Save"}' } : {}),
+    });
+    assert.equal(response.status, 200);
+    const body = await response.json();
+    assert.equal(path.endsWith("/ui?raw=true") ? body.raw
+      : path.endsWith("/ui/find") ? body.total : body.match.path, expected);
+  }
+  assert.equal(calls.length, 3);
+  assert.equal(calls[2][1].method, "POST");
+});
+
 test("early official socket messages are delivered only after the non-secret owned descriptor", async (t) => {
   const { host, calls } = fixture();
   t.after(() => host.closeCanvas());
@@ -152,4 +195,81 @@ test("asynchronous close serializes a reopened owner and never tears down its re
   assert.equal(calls.filter(([name]) => name === "create").length, 2);
   await host.closeCanvas();
   assert.equal(host.connectionRef, undefined);
+});
+
+test("caller cancellation while a cold canvas owner is opening does not abandon initialization or dispatch its action", async (t) => {
+  const startWait = deferred();
+  const { host, calls } = fixture({ startWait });
+  t.after(() => host.closeCanvas());
+  const opening = host.openCanvas();
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(calls.filter(([kind]) => kind === "create").length, 1);
+  const controller = new AbortController();
+  const cancelled = host.invokeAction("create_device", {}, { signal: controller.signal }).then(
+    (value) => ({ status: "fulfilled", value }), (error) => ({ status: "rejected", error }));
+  controller.abort();
+  startWait.resolve();
+  await opening;
+  assert.equal((await cancelled).error.code, "cancelled");
+  assert.equal(calls.some(([kind]) => kind === "action"), false);
+  assert.equal(calls.some(([kind]) => kind === "dispose"), false);
+  assert.equal((await host.invokeAction("create_device", {})).generation, 1);
+});
+
+test("HTTP body completion is not cancellation and a disconnected held backend request cannot affect a normal peer request", async (t) => {
+  const entered = deferred();
+  const release = deferred();
+  let cancelledSignal;
+  const mutations = [];
+  const { host } = fixture({ request: async (path, options) => {
+    if (path.endsWith("/held")) {
+      cancelledSignal = options.signal;
+      entered.resolve();
+      await release.promise;
+    }
+    if (options.signal.aborted) return new Response('{"code":"cancelled"}', { status: 409 });
+    mutations.push(options.body);
+    return new Response('{"success":true}', { headers: { "content-type": "application/json" } });
+  } });
+  t.after(() => { release.resolve(); return host.closeCanvas(); });
+  const { url, cookie } = await bootstrap(host);
+  const controller = new AbortController();
+  const cancelled = fetch(new URL("/api/v1/held", url), {
+    method: "POST", headers: { Cookie: cookie }, body: '{"held":true}', signal: controller.signal,
+  }).then((value) => ({ value }), (error) => ({ error }));
+  await entered.promise;
+  const normal = await fetch(new URL("/api/v1/normal", url), {
+    method: "POST", headers: { Cookie: cookie }, body: '{"normal":true}',
+  });
+  assert.equal((await normal.json()).success, true);
+  controller.abort();
+  assert.ok((await cancelled).error);
+  const deadline = Date.now() + 5000;
+  while (!cancelledSignal.aborted && Date.now() < deadline) await new Promise((resolve) => setTimeout(resolve, 5));
+  assert.equal(cancelledSignal.aborted, true);
+  release.resolve();
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.deepEqual(mutations, ['{"normal":true}']);
+  const next = await fetch(new URL("/api/v1/next", url), { method: "POST", headers: { Cookie: cookie }, body: "{}" });
+  assert.equal((await next.json()).success, true);
+});
+
+test("a caller disconnect while the request body is incomplete never starts backend work or retires its lease", async (t) => {
+  const { host, calls } = fixture();
+  t.after(() => host.closeCanvas());
+  const { url, cookie } = await bootstrap(host);
+  const request = httpRequest(new URL("/api/v1/devices", url), {
+    method: "POST", headers: { Cookie: cookie, "Content-Type": "application/json" },
+  });
+  const closed = new Promise((resolve) => request.once("close", resolve));
+  const errors = [];
+  request.on("error", (error) => errors.push(error.code));
+  request.write('{"name":', () => request.destroy());
+  await closed;
+  assert.equal(errors.every((code) => ["ECONNRESET", "ERR_STREAM_DESTROYED"].includes(code)), true);
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(calls.some(([kind]) => kind === "request"), false);
+  assert.equal(calls.some(([kind]) => kind === "dispose"), false);
+  const next = await fetch(new URL("/api/v1/catalog", url), { headers: { Cookie: cookie } });
+  assert.equal(next.status, 200);
 });

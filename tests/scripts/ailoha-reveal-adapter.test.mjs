@@ -61,3 +61,12 @@ test("typed HTTP refusal is definitive, but timeout with response metadata remai
   } });
   await assert.rejects(timedOut.reveal(invocation), { name: "TargetHostTransportError" });
 });
+
+test("typed transport refusal carrying original operation evidence is not normalized into a definitive rejection", async () => {
+  const error = Object.assign(new Error("accepted operation has conflicting refusal metadata"), {
+    name: "TargetHostTransportError", status: 403, code: "HttpError", operationId: "accepted-operation",
+    response: { status: 403 },
+  });
+  const adapter = createAilohaRevealAdapter({ transport: { async response() { throw error; } } });
+  await assert.rejects(adapter.reveal(invocation), (actual) => actual === error);
+});
