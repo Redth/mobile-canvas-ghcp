@@ -125,6 +125,10 @@ function fixture(options = {}) {
   };
   const owner = {
     hostId: "host",
+    connectionRef: options.connectionRef ?? {
+      schema: "ailoha.target-host.connection/v1", serviceId: "fixture-service", pid: 12345,
+      startedAt: "2026-10-09T23:00:00Z", processStartedAt: "2026-10-09T22:59:59Z",
+    },
     registerCleanup(callback) { cleanups.add(callback); return () => cleanups.delete(callback); },
     async release() {
       calls.push(["release-begin"]);
@@ -138,9 +142,10 @@ function fixture(options = {}) {
     confirmDestructive: options.confirmDestructive,
     saveScreenshot: options.saveScreenshot,
     operationState: options.operationState,
+    videoState: options.videoState,
   });
   return {
-    backend, calls, targets, providers, client, media, cleanups, selectionStore,
+    backend, calls, targets, providers, client, media, cleanups, selectionStore, owner,
     retireContext() { contextState = "detached"; },
     geometryChanged() { revision += 1; },
     selectHost(hostId) { selection = { targetHostId: hostId, targetId: "one" }; },
@@ -344,6 +349,50 @@ test("lost app acceptance retains original operation and native app across a sel
   assert.equal(submissions, 1);
 });
 
+test("accepted app receipts retain private incarnation ownership across host recovery", async (t) => {
+  const operationState = new Map();
+  const connectionRef = {
+    schema: "ailoha.target-host.connection/v1", serviceId: "fixture-service", pid: 12345,
+    startedAt: "2026-10-09T23:00:00Z", processStartedAt: "2026-10-09T22:59:59Z",
+  };
+  let submissions = 0;
+  const client = {
+    async launchTargetApp() { submissions += 1; return { operationId: "accepted-app-launch" }; },
+    async waitForOperation() { throw new AilohaProtocolError("timeout", { operationId: "accepted-app-launch" }); },
+  };
+  const initial = fixture({ app: true, operationState, connectionRef, client });
+  t.after(() => initial.backend.dispose());
+  await assert.rejects(initial.backend.launchApp("one", "com.example.native"), { code: "timeout" });
+  const [receipt] = operationState.values();
+  assert.deepEqual(receipt.connectionRef, connectionRef);
+  assert.equal(Object.keys(receipt).includes("connectionRef"), false);
+  assert.equal(JSON.stringify(receipt).includes("processStartedAt"), false);
+
+  const replacements = {
+    serviceId: "replacement-service", pid: 99999,
+    startedAt: "2026-10-09T23:00:01Z", processStartedAt: "2026-10-09T22:59:58Z",
+  };
+  for (const field of ["serviceId", "pid", "startedAt", "processStartedAt"]) {
+    const replaced = fixture({
+      app: true, operationState, connectionRef: { ...connectionRef, [field]: replacements[field] },
+      client,
+    });
+    t.after(() => replaced.backend.dispose());
+    await assert.rejects(replaced.backend.launchApp("one", "com.example.native"),
+      { code: "runtime_incarnation_changed" });
+    assert.equal(replaced.calls.some(([name]) => name === "app-list"
+      || name === "app-launch" || name === "app-get"), false);
+  }
+  const resumed = fixture({ app: true, operationState, connectionRef: { ...connectionRef },
+    client: { ...client, async waitForOperation(id) {
+      return { operationId: id, kind: "launchTargetApp", targetId: "one",
+        providerId: "provider", status: "succeeded", destructive: false };
+    } } });
+  t.after(() => resumed.backend.dispose());
+  assert.equal((await resumed.backend.launchApp("one", "com.example.native")).success, true);
+  assert.equal(submissions, 1);
+});
+
 test("unknown app acceptance cannot submit twice and cold relaunch never repeats a successful stop", async (t) => {
   const uncertain = fixture({ app: true });
   t.after(() => uncertain.backend.dispose());
@@ -466,6 +515,78 @@ test("completed terminate is not resubmitted after failed readback and view reop
   assert.equal(stops, 1);
   assert.equal(reopened.calls.filter(([name]) => name === "app-get").length, 1);
   assert.equal(reopened.calls.filter(([name]) => name === "app-launch").length, 1);
+});
+
+test("cold relaunch cannot borrow a later named revision after confirmed termination", async (t) => {
+  const state = canonicalFixture({ app: true });
+  t.after(() => state.backend.dispose());
+  let stops = 0;
+  state.client.terminateTargetApp = async () => {
+    stops += 1;
+    return { operationId: "app-terminate" };
+  };
+  state.client.waitForOperation = async (id) => ({
+    operationId: id, kind: "terminateTargetApp", targetId: "one",
+    providerId: "provider", status: "succeeded", destructive: false,
+  });
+  state.client.getTargetApp = async () => {
+    await state.advanceSelection();
+    return { appId: "opaque-app", packageId: "com.example.native", state: "stopped" };
+  };
+  await assert.rejects(state.backend.launchApp("one", "com.example.native", true),
+    { code: "context_snapshot_superseded" });
+  await state.store.set({ targetHostId: "host", targetId: "one", surfaceId: "surface/opaque" });
+  await assert.rejects(state.backend.launchApp("one", "com.example.native", true),
+    { code: "context_snapshot_superseded" });
+  assert.equal(stops, 1);
+  assert.equal(state.calls.filter(([name]) => name === "app-launch").length, 0);
+});
+
+test("cold relaunch recovery rejects another incarnation without replaying the original stop", async (t) => {
+  const operationState = new Map();
+  const connectionRef = {
+    schema: "ailoha.target-host.connection/v1", serviceId: "fixture-service", pid: 12345,
+    startedAt: "2026-10-09T23:00:00Z", processStartedAt: "2026-10-09T22:59:59Z",
+  };
+  let stops = 0;
+  let reads = 0;
+  let starts = 0;
+  const client = {
+    async terminateTargetApp() { stops += 1; return { operationId: "app-terminate" }; },
+    async launchTargetApp() { starts += 1; return { operationId: "app-launch" }; },
+    async waitForOperation(id) {
+      return { operationId: id, kind: id === "app-terminate" ? "terminateTargetApp" : "launchTargetApp",
+        targetId: "one", providerId: "provider", status: "succeeded", destructive: false };
+    },
+    async getTargetApp(_id, appId) {
+      reads += 1;
+      if (reads === 1) throw new AilohaProtocolError("transport_error");
+      return { appId, packageId: "com.example.native", state: "stopped" };
+    },
+  };
+  const initial = fixture({ app: true, operationState, connectionRef, client });
+  t.after(() => initial.backend.dispose());
+  await assert.rejects(initial.backend.launchApp("one", "com.example.native", true),
+    { code: "transport_error" });
+  const [progress] = [...operationState.values()].filter((value) => value.terminationSucceeded);
+  assert.deepEqual(progress.connectionRef, connectionRef);
+  assert.equal(Object.keys(progress).includes("connectionRef"), false);
+  assert.equal(JSON.stringify(progress).includes("processStartedAt"), false);
+  const replaced = fixture({
+    app: true, operationState, connectionRef: { ...connectionRef, processStartedAt: "2026-10-09T22:59:58Z" }, client,
+  });
+  t.after(() => replaced.backend.dispose());
+  await assert.rejects(replaced.backend.launchApp("one", "com.example.native", true),
+    { code: "runtime_incarnation_changed" });
+  assert.equal(reads, 1);
+  assert.equal(stops, 1);
+  assert.equal(starts, 0);
+  const resumed = fixture({ app: true, operationState, connectionRef: { ...connectionRef }, client });
+  t.after(() => resumed.backend.dispose());
+  assert.equal((await resumed.backend.launchApp("one", "com.example.native", true)).success, true);
+  assert.equal(reads, 2);
+  assert.equal(stops, 1);
+  assert.equal(starts, 1);
 });
 
 test("concurrent cold relaunch calls share the original stop and launch", async (t) => {
@@ -648,6 +769,27 @@ test("legacy remains the default and invalid opt-in never becomes a fallback", (
   assert.equal(mobileCanvasBackend("legacy"), "legacy");
   assert.equal(mobileCanvasBackend("ailoha"), "ailoha");
   for (const value of ["", "Ailoha", "unknown"]) assert.throws(() => mobileCanvasBackend(value), /never falls back/);
+});
+
+test("trusted backend captures the original full lease evidence without serializing it", async (t) => {
+  const state = fixture();
+  t.after(() => state.backend.dispose());
+  const captured = state.backend.connectionRef;
+  assert.equal(Object.isFrozen(captured), true);
+  state.owner.connectionRef.pid = 1;
+  state.owner.hostId = "another-host";
+  await state.backend.ready();
+  const screenshot = await state.backend.screenshot("one");
+  assert.equal(screenshot.invocation.connectionRef, captured);
+  assert.equal(captured.pid, 12345);
+  assert.equal(screenshot.invocation.targetHostId, "host");
+  assert.equal(JSON.stringify(screenshot.invocation).includes("processStartedAt"), false);
+  await state.backend.display("one");
+  const input = await state.backend.input("tap", "one", { x: 10, y: 30 });
+  const dispatched = state.calls.find(([kind]) => kind === "tap")[1];
+  assert.equal(dispatched.connectionRef, captured);
+  assert.equal(Object.hasOwn(input.context, "connectionRef"), false);
+  assert.equal(Object.hasOwn((await state.backend.catalog()), "connectionRef"), false);
 });
 
 test("real compatibility action paths project inventory/selection/native identity and positive unsupported", async (t) => {
@@ -1153,6 +1295,100 @@ test("timed-out lifecycle wait and view reopening recover the captured receipt w
   assert.equal(submissions, 1);
   assert.equal(waits, 2);
   assert.equal(operationState.size, 0);
+});
+
+for (const changed of [
+  { serviceId: "replacement-service" },
+  { pid: 12346 },
+  { startedAt: "2026-10-09T23:00:01Z" },
+  { processStartedAt: "2026-10-09T23:00:00Z" },
+]) {
+  test(`a changed ${Object.keys(changed)[0]} cannot resume or replay another incarnation's lifecycle receipt`, async (t) => {
+    const operationState = new Map();
+    const first = fixture({ operationState, client: {
+      async waitForOperation(id) { throw new AilohaProtocolError("timeout", { operationId: id }); },
+    } });
+    await assert.rejects(first.backend.lifecycle("restart", "one"), { code: "timeout" });
+    const receipt = [...operationState.values()][0];
+    assert.equal(receipt.invocation.connectionRef, first.backend.connectionRef);
+    await first.backend.dispose();
+    const second = fixture({
+      operationState, connectionRef: { ...first.backend.connectionRef, ...changed },
+    });
+    t.after(() => second.backend.dispose());
+    await assert.rejects(second.backend.lifecycle("restart", "one"), { code: "runtime_incarnation_changed" });
+    assert.equal(second.calls.length, 0);
+    assert.equal([...operationState.values()][0], receipt);
+    assert.equal(first.calls.filter(([kind]) => kind === "reboot").length, 1);
+    await second.backend.lifecycle("shutdown", "two");
+    assert.equal(second.calls.filter(([kind]) => kind === "stop").length, 1);
+    assert.equal([...operationState.values()][0], receipt);
+  });
+}
+
+test("completed lifecycle confirmation cannot use a replacement incarnation with the same host ID", async (t) => {
+  const operationState = new Map();
+  let completed = false;
+  const first = fixture({ operationState });
+  const wait = first.client.waitForOperation;
+  first.client.waitForOperation = async (...args) => { completed = true; return wait(...args); };
+  const get = first.client.getTarget;
+  first.client.getTarget = async (...args) => {
+    if (completed) throw new AilohaProtocolError("timeout");
+    return get(...args);
+  };
+  await assert.rejects(first.backend.lifecycle("restart", "one"), { code: "timeout" });
+  const receipt = [...operationState.values()][0];
+  assert.equal(receipt.completed.status, "succeeded");
+  await first.backend.dispose();
+  const second = fixture({ operationState, connectionRef: {
+    ...first.backend.connectionRef, processStartedAt: "2026-10-09T23:00:00Z",
+  } });
+  t.after(() => second.backend.dispose());
+  await assert.rejects(second.backend.lifecycle("restart", "one"), { code: "runtime_incarnation_changed" });
+  assert.equal(second.calls.length, 0);
+  assert.equal([...operationState.values()][0], receipt);
+});
+
+test("accepted work and video cleanup stay on the original captured transport and incarnation", async (t) => {
+  const operationState = new Map();
+  const wait = deferred();
+  const first = fixture({ operationState, wait });
+  t.after(() => first.backend.dispose());
+  const lifecycle = first.backend.lifecycle("restart", "one");
+  await new Promise((resolve) => setImmediate(resolve));
+  const receipt = [...operationState.values()][0];
+  const original = first.backend.connectionRef;
+  first.owner.connectionRef = { ...original, pid: 12346 };
+  const second = fixture({ operationState, connectionRef: first.owner.connectionRef });
+  t.after(() => second.backend.dispose());
+  await assert.rejects(second.backend.lifecycle("restart", "one"), { code: "runtime_incarnation_changed" });
+  assert.equal(second.calls.length, 0);
+  wait.resolve();
+  assert.equal((await lifecycle).invocation.targetId, "one");
+  assert.equal(receipt.invocation.connectionRef, original);
+  let cleanupInvocation;
+  first.media.deleteVideo = async (invocation) => { cleanupInvocation = invocation; };
+  const video = await first.backend.openVideo("one", () => {}, () => {});
+  await video.close();
+  assert.equal(cleanupInvocation.connectionRef, original);
+  assert.equal(first.backend.connectionRef, original);
+});
+
+test("unknown video creation is not replayed after a changed incarnation", async (t) => {
+  const videoState = {};
+  const first = fixture({ videoState, media: {
+    async createVideo() { throw new Error("synthetic unknown acceptance"); },
+  } });
+  t.after(() => first.backend.dispose());
+  await assert.rejects(first.backend.openVideo("one", () => {}, () => {}));
+  assert.equal(videoState.invocation.connectionRef, first.backend.connectionRef);
+  const second = fixture({ videoState, connectionRef: {
+    ...first.backend.connectionRef, pid: 12346,
+  } });
+  t.after(() => second.backend.dispose());
+  await assert.rejects(second.backend.openVideo("one", () => {}, () => {}), { code: "runtime_incarnation_changed" });
+  assert.equal(second.calls.length, 0);
 });
 
 test("unknown lifecycle outcomes cannot be replayed and mismatched completion never retargets", async (t) => {

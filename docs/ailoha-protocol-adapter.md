@@ -63,10 +63,10 @@ HTTP 202 as completion. Uninstall's `confirmed: true` is only a client-side gate
 not evidence of human consent. App-op PUT returns a descriptor rather than an
 operation. Native package IDs are resolved through canonical app inventory,
 not assumed to equal `appId`.
-The currently published owner SDK transport allows GET, POST, PATCH and DELETE,
-not PUT. Although the canonical app-op endpoint is PUT, the installed owner
-transport cannot forward it; app-op mutation remains gated pending a compatible
-reviewed SDK transport contract.
+The reviewed 599 owner SDK **source** transport allows GET, POST, PATCH and
+DELETE, not PUT; this source is not yet a pinned public package. Although the
+canonical app-op endpoint is PUT, the owner transport cannot currently forward
+it. App-op mutation remains gated pending a compatible reviewed SDK contract.
 `listTargets` accepts only optional `providerId`, `status`, and `signal`;
 other reads accept only `signal`. No arbitrary API paths or caller headers exist.
 
@@ -82,10 +82,14 @@ request; distinct argument lists cannot borrow one another's accepted receipts.
 The original target and accepted receipt survive UI selection
 changes; an unknown acceptance is never retried or routed to legacy.
 The Target Host ID is stable discovery identity across process restarts, not an
-incarnation fence. The published owner transport does not atomically verify its
-process identity with each HTTP mutation; this source slice does not claim safe
-same-ServiceId restart continuation pending reviewed lease evidence and a
-request-time native fence.
+incarnation fence. The reviewed source lease's full connection reference fences
+same-key app receipts and cold-relaunch recovery across process replacement,
+including confirmed stops. The original named revision separately fences every
+relaunch continuation even after reselecting its target. This is private host
+evidence, not renderer or MCP output. The reviewed source owner transport does
+not atomically verify process identity with each HTTP mutation;
+safe same-credential external restart mutation still needs a request-time
+native fence.
 
 This source-only slice **does not yet claim full app parity**. The reviewed
 native source contract adds optional `InstalledApp.kind`, process ID, path and
@@ -220,8 +224,11 @@ idle delays: by default the client's request timeout, configurable from 1 to
 60,000 ms; each poll also honors the client's shorter request timeout. Poll
 intervals are bounded from 1 to 60,000 ms. Timeout, caller abort, and disposal
 stop local reads/timers only; they never cancel the external operation.
-The explicit/default polling interval remains the wait policy; server
-`Retry-After` hints cannot override or extend the caller's total deadline.
+The explicit/default polling interval remains the wait policy. A subsequent
+poll is scheduled only when its full interval leaves time before the absolute
+deadline; otherwise the existing deadline timer ends the wait. Intervals are not
+shortened into deadline-boundary reads, and server `Retry-After` hints cannot
+override or extend the caller's total deadline.
 
 Operation errors retain `operationId`, the latest validated `operation` when
 available, and sanitized primary Problem Details. HTTP errors remain `http_error`
@@ -376,6 +383,33 @@ open. Binding discovery itself cannot create or reopen an authority: before a
 trusted view opens it reports `context_not_bound`, and a retired view reports
 `context_retired`. The first slice is target-only; app/agent/runtime-instance
 selectors are not adopted as native package identity.
+
+### Internal host incarnation evidence
+
+`targetHostId` is a persistent discovery identity, not a process incarnation.
+The trusted backend captures the official lease's full `connectionRef`
+(`serviceId`, `pid`, `startedAt`, `processStartedAt`, and `schema` when supplied)
+as a frozen value before opening its transport. Trusted backend/canvas/VS Code
+bridge adapters expose `connectionRef`; `captureInvocation` retains the same
+frozen value in a non-enumerable host-only property after public capture.
+`captureConnectionRef` and `sameConnectionRef` are the shared capture/comparison
+helpers; no derived `hostInstanceId` or private metadata lookup is used.
+
+Spreading, structured-cloning or publicly projecting an invocation deliberately
+drops that internal property. Trusted adapters that extend an invocation must
+retain its `connectionRef` separately with their private receipt/progress, not
+recover it from renderer/MCP output. A changed tuple rejects same-key lifecycle
+and app-receipt recovery, cold relaunch continuation, or unknown video-create
+replay as `runtime_incarnation_changed`; it does not discard the old receipt or
+attach cleanup to the replacement transport.
+New unrelated explicit actions remain independent.
+
+This evidence is not an atomic request-time process fence. The official SDK
+validates owner/process/pin/metadata when a transport is opened; its HTTP socket
+and credential remain captured afterward. Managed credential rotation can close
+or reject that old transport, while reused external credentials leave a
+request-time race. Mobile Canvas neither refreshes/replays mutations across
+changed evidence nor claims that comparing a precheck eliminates that race.
 
 `get_selected_device`/`mobile_device_get_selected` include a non-secret
 `contextBinding` projection when backed by the canonical authority:
