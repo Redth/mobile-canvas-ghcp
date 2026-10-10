@@ -440,8 +440,10 @@ test("view close waits for a concurrent accepted recording start before releasin
   const state = canonicalFixture({ recording, finalizeRecordings: true });
   state.capabilities.push({ id: "surface.capture", version: 1,
     features: ["startTargetRecording", "getTargetRecording", "stopTargetRecording"] });
-  const starting = state.backend.recordingStart("one");
+  const caller = new AbortController();
+  const starting = state.backend.recordingStart("one", {}, { signal: caller.signal });
   await entered.promise;
+  caller.abort();
   const closing = state.backend.dispose();
   assert.equal(state.calls.some((call) => call[0] === "release-begin"), false);
   accepted.resolve();
