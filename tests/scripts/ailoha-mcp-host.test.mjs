@@ -3,6 +3,7 @@ import { readFileSync } from "node:fs";
 import test from "node:test";
 import { productModule } from "../ailoha-test-module.mjs";
 const { ailohaMcpCatalog, createAilohaMcpDispatcher } = await import(productModule("lib/ailoha/mcp-host.mjs"));
+const { ARTIFACT_FEATURE_GATES } = await import(productModule("lib/ailoha/artifact-features.mjs"));
 
 const binding = {
   contextRef: "ctx-opaque", scopeEpoch: "captured-epoch", ownerProcessId: 1234,
@@ -77,6 +78,73 @@ test("unsupported/invalid/cross-scope calls are positive failures before any run
     assert.equal(result.result.isError, true);
   }
   assert.equal(backendCalls, 0);
+});
+
+test("guarded pull, mkdir and delete retain installed MCP schemas and scoped consent", async (t) => {
+  let backendCalls = 0;
+  const dispatcher = await createAilohaMcpDispatcher({
+    binding, version: "test", createBackend() {
+      backendCalls += 1;
+      return {
+        async readArtifact(name, input) {
+          return { schemaVersion: "1.0", deviceId: input.deviceId, operation: name };
+        },
+        async stageArtifact(name, input) {
+          return { schemaVersion: "1.0", deviceId: input.deviceId, operation: name };
+        },
+        async guardedFile(name, input) {
+          return { schemaVersion: "1.0", deviceId: input.deviceId, operation: name };
+        },
+        async dispose() {},
+      };
+    },
+  });
+  t.after(() => dispatcher.dispose());
+  const tools = (await dispatcher.handle(message("tools/list"))).result.tools;
+  const original = JSON.parse(readFileSync(new URL("../../lib/ailoha/mcp-catalog.json", import.meta.url), "utf8")).tools;
+  const inputs = {
+    mobile_device_file_list: { deviceId: "target", bundleId: "com.example.app", path: "Documents" },
+    mobile_device_file_pull: { deviceId: "target", path: "empty.txt", output: "/owned/output" },
+    mobile_device_file_push: { deviceId: "target", input: "/owned/empty.txt", path: "empty.txt" },
+    mobile_device_file_delete: { deviceId: "target", path: "/directory", recursive: false },
+    mobile_device_file_mkdir: { deviceId: "target", path: "Documents", bundleId: "com.example.app" },
+    mobile_device_media_add: { deviceId: "target", paths: ["/owned/photo.png"] },
+    mobile_device_log: { deviceId: "target", text: "fault", seconds: 300, limit: 10 },
+    mobile_device_crashes: { deviceId: "target", text: "example", limit: 10 },
+    mobile_device_crash_report: { deviceId: "target", crashId: "report-id" },
+  };
+  for (const [name, input] of Object.entries(inputs)) {
+    const readable = ["mobile_device_file_list", "mobile_device_log", "mobile_device_crashes",
+      "mobile_device_crash_report", "mobile_device_media_add", "mobile_device_file_mkdir"].includes(name);
+    const gated = false;
+    const tool = tools.find((entry) => entry.name === name);
+    assert.ok(tool);
+    assert.equal(tool.description.includes(ARTIFACT_FEATURE_GATES[name]), gated);
+    assert.deepEqual(tool.inputSchema, original.find((entry) => entry.name === name).inputSchema);
+    assert.deepEqual(tool.outputSchema, original.find((entry) => entry.name === name).outputSchema);
+    if (name === "mobile_device_file_pull") assert.equal(tool.annotations.destructiveHint, true);
+    const result = await dispatcher.handle(call(name, input));
+    assert.equal(result.result.isError === true, !readable, name);
+    assert.deepEqual(JSON.parse(result.result.content[0].text), readable
+      ? { schemaVersion: "1.0", deviceId: input.deviceId, operation: name }
+      : ["mobile_device_file_push", "mobile_device_file_pull", "mobile_device_file_delete"].includes(name)
+        ? {
+          code: "consent_not_supported",
+          message: "This MCP client cannot request genuine captured form approval; confirm=true is not authorization.",
+          status: 501,
+        }
+        : { code: "artifact_contract_unavailable", message: ARTIFACT_FEATURE_GATES[name], status: 501 });
+  }
+  for (const [name, input] of [
+    ["mobile_device_media_add", { deviceId: "target", paths: ["/owned/photo.png", null] }],
+    ["mobile_device_file_pull", { deviceId: "target", path: "file" }],
+    ["mobile_device_log", { deviceId: "target", limit: "100" }],
+  ]) {
+    const result = await dispatcher.handle(call(name, input));
+    assert.equal(result.result.isError, true);
+    assert.equal(JSON.parse(result.result.content[0].text).code, "invalid_request");
+  }
+  assert.equal(backendCalls, 1);
 });
 
 test("bound empty-context inventory retains the installed MCP list output envelope", async (t) => {

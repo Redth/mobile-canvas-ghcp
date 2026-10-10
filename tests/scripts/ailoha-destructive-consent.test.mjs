@@ -52,6 +52,42 @@ test("one private approval retains the original frozen incarnation and cannot be
   assert.throws(() => approval.consume(original), { code: "consent_already_consumed" });
 });
 
+test("file replacement approval names the captured path and never treats confirm as consent", async (t) => {
+  const owner = new AbortController();
+  let request;
+  const authority = new ScopedDestructiveConsent(async (value) => {
+    request = value;
+    return false;
+  }, owner.signal);
+  t.after(() => authority.dispose());
+  const captured = invocation();
+  assert.throws(() => authority.begin("file_push", captured, { subject: "x\nApprove" }),
+    { code: "consent_subject_invalid" });
+  const approval = authority.begin("file_push", captured, { subject: "app://com.example.app/Documents/seed.db" });
+  await assert.rejects(approval.approved, { code: "consent_denied" });
+  assert.equal(request.action, "file_push");
+  assert.match(request.message, /app:\/\/com\.example\.app\/Documents\/seed\.db/);
+  assert.equal(JSON.stringify(request).includes("connectionRef"), false);
+});
+
+test("export approval names the captured host overwrite destination rather than a device path", async (t) => {
+  const owner = new AbortController();
+  let request;
+  const authority = new ScopedDestructiveConsent(async (value) => {
+    request = value;
+    return true;
+  }, owner.signal);
+  t.after(() => authority.dispose());
+  const captured = invocation();
+  const approval = authority.begin("file_pull", captured, { subject: "/owned/output.bin" });
+  await approval.approved;
+  assert.equal(request.action, "file_pull");
+  assert.match(request.message, /Host destination: \/owned\/output\.bin/);
+  assert.match(request.message, /replacing any existing file/);
+  approval.consume(captured);
+  assert.throws(() => approval.consume(captured), { code: "consent_already_consumed" });
+});
+
 for (const result of [false, "cancel"]) {
   test(`the actual prompt decision ${result} never becomes an approval`, async (t) => {
     const owner = new AbortController();

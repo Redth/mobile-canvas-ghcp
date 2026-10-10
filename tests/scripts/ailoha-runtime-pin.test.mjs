@@ -107,4 +107,18 @@ test("an unreadable pin reports a sanitized read failure rather than missing run
     });
     assert.equal(existsSync(wire), false);
   });
+
+  test("native stage preserves a typed nonzero receipt without broadening ordinary CLI budgets", async () => {
+    const pin = { version: "synthetic-only", sourceSha: "a".repeat(40) };
+    const outcome = { status: "readbackUnconfirmed", receipt: { kind: "file", artifacts: [] } };
+    const script = `process.stdout.write(${JSON.stringify(JSON.stringify(outcome))}); process.exit(2)`;
+    const cli = createVerifiedAilohaCli({ pin, sdk: {
+      async getVerifiedCliLaunch() {
+        return { file: process.execPath, args: ["-e", script], ...pin };
+      },
+    } });
+    assert.deepEqual(JSON.parse(await cli(["target", "native-stage", "stage"], { timeoutMs: 30_001 })), outcome);
+    assert.deepEqual(JSON.parse(await cli(["target", "native-file", "recover"], { timeoutMs: 30_001 })), outcome);
+    await assert.rejects(cli(["context", "get"], { timeoutMs: 30_001 }), { code: "ailoha_cli_budget_invalid" });
+  });
 });

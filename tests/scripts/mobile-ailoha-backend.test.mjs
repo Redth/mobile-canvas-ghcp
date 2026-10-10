@@ -1,5 +1,8 @@
 import assert from "node:assert/strict";
 import test from "node:test";
+import { createHash } from "node:crypto";
+import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { basename, join, relative, resolve } from "node:path";
 import { productModule } from "../ailoha-test-module.mjs";
 const { AilohaMobileBackend } = await import(productModule("lib/ailoha/mobile-backend.mjs"));
 const { mobileCanvasBackend } = await import(productModule("lib/backend.mjs"));
@@ -7,6 +10,7 @@ const { createAilohaMediaAdapter } = await import(productModule("lib/ailoha/medi
 const { AilohaProtocolError } = await import(productModule("lib/ailoha/errors.mjs"));
 const { publicSnapshot, MobileAilohaError } = await import(productModule("lib/ailoha/mobile-projection.mjs"));
 const { createAilohaContextStore } = await import(productModule("lib/ailoha/context-adapter.mjs"));
+const { ARTIFACT_FEATURE_GATES } = await import(productModule("lib/ailoha/artifact-features.mjs"));
 
 function deferred() {
   let resolve;
@@ -119,6 +123,8 @@ function fixture(options = {}) {
     saveScreenshot: options.saveScreenshot,
     operationState: options.operationState,
     videoState: options.videoState,
+    artifactState: options.artifactState,
+    runCli: options.runCli,
   });
   return {
     backend, calls, targets, providers, client, media, cleanups, selectionStore, owner,
@@ -173,6 +179,1314 @@ function canonicalFixture(options = {}) {
     },
   };
 }
+
+const stageHash = (text) => createHash("sha256").update(text).digest("hex");
+
+function stagedFixture(sourcePaths, kind, destination, owner, contents = []) {
+  const date = "2026-10-10T00:00:00Z";
+  const ticks = (value) => (BigInt(Date.parse(value)) + 62135596800000n) * 10000n;
+  const connection = owner.connectionRef;
+  const hostInstanceId = `host-${stageHash(`${connection.serviceId}\0${connection.pid}\0${ticks(connection.startedAt)}\0${ticks(connection.processStartedAt)}`)}`;
+  return {
+    kind, destination, expectedArtifactCount: sourcePaths.length,
+    artifacts: sourcePaths.map((source, slot) => {
+      const content = Buffer.from(contents[slot] ?? "");
+      const proof = {
+        targetHostId: "host", targetId: "one", providerId: "provider",
+        nativeTargetId: "real-native-one", nativeTargetPlatform: "ios",
+        hostInstanceId, sourcePathHash: stageHash(resolve(source)), destination,
+        contextRef: "ctx-canonical-snapshot", scopeEpoch: "original-epoch", revision: "1",
+        ownerProcessId: 1234, ownerStartedAt: date,
+        stageId: "0123456789abcdef0123456789abcdef",
+        expectedArtifactCount: sourcePaths.length, stageSlot: slot,
+      };
+      return {
+        artifact: {
+          artifactId: `stage-artifact-${slot}`, kind, status: "ready",
+          contentType: "application/octet-stream", createdAt: date,
+          fileName: basename(source), size: content.length, sha256: stageHash(content), targetId: "one",
+          metadata: { ...proof },
+        },
+        proof,
+      };
+    }),
+  };
+}
+
+function stagedOperation(kind, artifactIds, status = "queued") {
+  return {
+    operationId: kind === "deleteArtifact" ? "cleanup-operation" : "import-operation",
+    kind, status, destructive: true, targetId: "one", providerId: "provider",
+    createdAt: "2026-10-10T00:00:00Z", artifactIds,
+  };
+}
+
+function stagedCleanup(receipt) {
+  const cleanupArtifacts = receipt.artifacts.map((entry, index) => {
+    const operation = {
+      ...stagedOperation("deleteArtifact", [entry.artifact.artifactId], "succeeded"),
+      operationId: `cleanup-operation-${index}`,
+    };
+    return {
+      artifactId: entry.artifact.artifactId, status: "cleaned",
+      attemptId: `abcdef0123456789abcdef012345678${index}`,
+      operationId: operation.operationId, operation,
+    };
+  });
+  const last = cleanupArtifacts.at(-1);
+  return JSON.stringify({
+    status: "cleaned", receipt, attemptId: last.attemptId,
+    operation: last.operation, cleanupArtifacts,
+  });
+}
+
+function guardedFixture(kind, path, owner, options = {}) {
+  const date = "2026-10-10T00:00:00Z";
+  const ticks = (value) => (BigInt(Date.parse(value)) + 62135596800000n) * 10000n;
+  const connection = owner.connectionRef;
+  return {
+    kind, path, targetHostId: "host", attemptId: "0123456789abcdef0123456789abcdef",
+    owner: {
+      hostInstanceId: `host-${stageHash(`${connection.serviceId}\0${connection.pid}\0${ticks(connection.startedAt)}\0${ticks(connection.processStartedAt)}`)}`,
+      targetId: "one", providerId: "provider",
+      registrationEpoch: "01234567-89ab-cdef-0123-456789abcdef",
+      nativeIdentity: { platform: "ios", nativeId: "real-native-one", isVirtual: true },
+    },
+    contextRef: "ctx-canonical-snapshot", scopeEpoch: "original-epoch", revision: "1",
+    ownerProcessId: 1234, ownerStartedAt: date,
+    appId: null, recursive: kind === "delete" ? options.recursive ?? false : false,
+    destinationPath: kind === "export" ? options.destinationPath : null,
+    overwrite: kind === "export", maximumBytes: 512 * 1024 * 1024,
+  };
+}
+
+function guardedOperation(kind, receipt, status = "queued") {
+  return {
+    operationId: "guarded-operation", requestId: receipt.attemptId,
+    targetId: "one", providerId: "provider",
+    kind: { export: "exportTargetFile", delete: "deleteTargetFileWithOptions",
+      mkdir: "createTargetDirectory" }[kind],
+    status, destructive: kind === "delete", createdAt: "2026-10-10T00:00:00Z",
+  };
+}
+
+test("local guarded delete uses original scoped consent and backend-confirmed mutation path", async (t) => {
+  let prompts = 0;
+  let receipt;
+  const actions = [];
+  const state = canonicalFixture({
+    confirmDestructive: async (request) => {
+      prompts += 1;
+      assert.equal(request.action, "file_delete");
+      assert.match(request.message, /app:\/\/com.example.app\/Documents\/fixture/);
+      return true;
+    },
+    client: {
+      async getTargetCapabilities() {
+        return [{ id: "target.files", version: 1, features: ["deleteTargetFileWithOptions"] },
+          { id: "target.apps", version: 1, features: ["listTargetApps"] }];
+      },
+      async listTargetApps() {
+        return [{ appId: "com.example.app", packageId: "com.example.app",
+          "x-ailoha-target-host": { targetId: "one", providerId: "provider" } }];
+      },
+    },
+    async runCli(args) {
+      const action = args[args.indexOf("native-file") + 1];
+      actions.push(action);
+      if (action === "prepare") {
+        assert.equal(args[args.indexOf("--path") + 1], "app://com.example.app/Documents/fixture");
+        assert.ok(args.includes("--recursive"));
+        receipt = guardedFixture("delete", "app://com.example.app/Documents/fixture", state.owner,
+          { recursive: true });
+        return JSON.stringify({ status: "prepared", receipt });
+      }
+      assert.equal(args[args.indexOf("--guarded") + 1], JSON.stringify(receipt));
+      const operation = guardedOperation("delete", receipt, action === "continue" ? "queued" : "succeeded");
+      if (action === "recover") operation.result = { path: "Documents/fixture" };
+      return JSON.stringify({ status: action === "continue" ? "accepted" : "succeeded",
+        receipt, operationId: operation.operationId, operation,
+        ...(action === "recover" ? { mutation: { path: "Documents/fixture" } } : {}) });
+    },
+  });
+  t.after(() => state.backend.dispose());
+  const result = await state.backend.guardedFile("mobile_device_file_delete",
+    { deviceId: "one", path: "Documents/fixture", bundleId: "com.example.app", recursive: true });
+  assert.equal(result.path, "Documents/fixture");
+  assert.equal(result.operation, "delete");
+  assert.equal(prompts, 1);
+  assert.deepEqual(actions, ["prepare", "continue", "recover"]);
+});
+
+test("local guarded mkdir retains accepted original receipt after failed GET and recovers without a second submission", async (t) => {
+  let receipt;
+  let recovery = 0;
+  const actions = [];
+  const state = canonicalFixture({
+    client: {
+      async getTargetCapabilities() {
+        return [{ id: "target.files", version: 1, features: ["createTargetDirectory"] }];
+      },
+    },
+    async runCli(args) {
+      const action = args[args.indexOf("native-file") + 1];
+      actions.push(action);
+      if (action === "prepare") {
+        receipt = guardedFixture("mkdir", "/Documents/new", state.owner);
+        return JSON.stringify({ status: "prepared", receipt });
+      }
+      const operation = guardedOperation("mkdir", receipt, action === "continue" ? "queued" : "succeeded");
+      if (action === "recover" && ++recovery === 1) {
+        throw Object.assign(new Error("Original GET was unavailable"), { code: "owned_get_failed" });
+      }
+      if (action === "recover") operation.result = { path: "/Documents/new" };
+      return JSON.stringify({ status: action === "continue" ? "accepted" : "succeeded",
+        receipt, operationId: operation.operationId, operation,
+        ...(action === "recover" ? { mutation: { path: "/Documents/new" } } : {}) });
+    },
+  });
+  t.after(() => state.backend.dispose());
+  const input = { deviceId: "one", path: "/Documents/new" };
+  await assert.rejects(state.backend.guardedFile("mobile_device_file_mkdir", input), { code: "owned_get_failed" });
+  const result = await state.backend.guardedFile("mobile_device_file_mkdir", input);
+  assert.equal(result.path, "/Documents/new");
+  assert.equal(result.operation, "mkdir");
+  assert.deepEqual(actions, ["prepare", "continue", "recover", "recover"]);
+});
+
+test("guarded readback rejects another operation ID, retaining the original GET-only recovery", async (t) => {
+  let receipt;
+  let wrongReadback = true;
+  const actions = [];
+  const state = canonicalFixture({
+    client: {
+      async getTargetCapabilities() {
+        return [{ id: "target.files", version: 1, features: ["createTargetDirectory"] }];
+      },
+    },
+    async runCli(args) {
+      const action = args[args.indexOf("native-file") + 1];
+      actions.push(action);
+      if (action === "prepare") {
+        receipt = guardedFixture("mkdir", "/Documents/owned", state.owner);
+        return JSON.stringify({ status: "prepared", receipt });
+      }
+      const operation = guardedOperation("mkdir", receipt, action === "continue" ? "queued" : "succeeded");
+      if (action === "recover" && wrongReadback) operation.operationId = "another-operation";
+      if (action === "recover") operation.result = { path: "/Documents/owned" };
+      return JSON.stringify({ status: action === "continue" ? "accepted" : "succeeded",
+        receipt, operationId: operation.operationId, operation,
+        ...(action === "recover" ? { mutation: { path: "/Documents/owned" } } : {}) });
+    },
+  });
+  t.after(() => state.backend.dispose());
+  const input = { deviceId: "one", path: "/Documents/owned" };
+  await assert.rejects(state.backend.guardedFile("mobile_device_file_mkdir", input),
+    { code: "guarded_file_operation_mismatch" });
+  wrongReadback = false;
+  assert.equal((await state.backend.guardedFile("mobile_device_file_mkdir", input)).path, input.path);
+  assert.deepEqual(actions, ["prepare", "continue", "recover", "recover"]);
+});
+
+test("guarded input and original revision are captured before asynchronous capability lookup", async (t) => {
+  const input = { deviceId: "one", path: "/Documents/original" };
+  let prepared = false;
+  const state = canonicalFixture({
+    client: {
+      async getTargetCapabilities() {
+        input.path = "/Documents/replacement";
+        return [{ id: "target.files", version: 1, features: ["createTargetDirectory"] }];
+      },
+    },
+    async runCli(args) {
+      prepared = true;
+      assert.equal(args[args.indexOf("--path") + 1], "/Documents/original");
+      assert.equal(args[args.indexOf("--context-revision") + 1], "1");
+      throw Object.assign(new Error("Owned probe stops before admission."), { code: "probe_stopped" });
+    },
+  });
+  t.after(() => state.backend.dispose());
+  await assert.rejects(state.backend.guardedFile("mobile_device_file_mkdir", input), { code: "probe_stopped" });
+  assert.equal(prepared, true);
+  await assert.rejects(state.backend.guardedFile("mobile_device_file_mkdir",
+    { deviceId: "one", path: "/Documents/original" }), { code: "guarded_file_prepare_unknown" });
+});
+
+test("guarded prepare stops when its original view revision changes before device admission", async (t) => {
+  let prepared = false;
+  let state;
+  state = canonicalFixture({
+    client: {
+      async getTargetCapabilities() {
+        await state.advanceSelection();
+        return [{ id: "target.files", version: 1, features: ["createTargetDirectory"] }];
+      },
+    },
+    async runCli() { prepared = true; throw new Error("stale view admitted device IO"); },
+  });
+  t.after(() => state.backend.dispose());
+  await assert.rejects(state.backend.guardedFile("mobile_device_file_mkdir",
+    { deviceId: "one", path: "/Documents/original" }), { code: "context_snapshot_superseded" });
+  assert.equal(prepared, false);
+});
+
+test("guarded delete requires scoped approval and never admits a denied mutation", async (t) => {
+  let receipt;
+  const actions = [];
+  const state = canonicalFixture({
+    confirmDestructive: async (request) => {
+      assert.equal(request.action, "file_delete");
+      assert.match(request.message, /Documents\/owned/);
+      return false;
+    },
+    client: {
+      async getTargetCapabilities() {
+        return [{ id: "target.files", version: 1, features: ["deleteTargetFileWithOptions"] }];
+      },
+    },
+    async runCli(args) {
+      const action = args[args.indexOf("native-file") + 1];
+      actions.push(action);
+      assert.equal(action, "prepare");
+      receipt = guardedFixture("delete", "/Documents/owned", state.owner);
+      return JSON.stringify({ status: "prepared", receipt });
+    },
+  });
+  t.after(() => state.backend.dispose());
+  await assert.rejects(state.backend.guardedFile("mobile_device_file_delete",
+    { deviceId: "one", path: "/Documents/owned" }), { code: "consent_denied" });
+  assert.deepEqual(actions, ["prepare"]);
+});
+
+test("guarded failed native mutation is terminal, retaining its original receipt without replay", async (t) => {
+  let receipt;
+  const actions = [];
+  const state = canonicalFixture({
+    client: {
+      async getTargetCapabilities() {
+        return [{ id: "target.files", version: 1, features: ["createTargetDirectory"] }];
+      },
+    },
+    async runCli(args) {
+      const action = args[args.indexOf("native-file") + 1];
+      actions.push(action);
+      if (action === "prepare") {
+        receipt = guardedFixture("mkdir", "/Documents/failure", state.owner);
+        return JSON.stringify({ status: "prepared", receipt });
+      }
+      const operation = guardedOperation("mkdir", receipt, action === "continue" ? "queued" : "failed");
+      return JSON.stringify({ status: action === "continue" ? "accepted" : "failed",
+        receipt, operationId: operation.operationId, operation,
+        ...(action === "recover" ? { errorCode: "DeviceDirectoryAlreadyFile" } : {}) });
+    },
+  });
+  t.after(() => state.backend.dispose());
+  const input = { deviceId: "one", path: "/Documents/failure" };
+  for (let attempt = 0; attempt < 2; attempt += 1) {
+    await assert.rejects(state.backend.guardedFile("mobile_device_file_mkdir", input),
+      { code: "DeviceDirectoryAlreadyFile" });
+  }
+  assert.deepEqual(actions, ["prepare", "continue", "recover", "recover"]);
+});
+
+test("guarded unknown acceptance retries original recovery without another device submission", async (t) => {
+  let receipt;
+  let reads = 0;
+  const actions = [];
+  const state = canonicalFixture({
+    client: {
+      async getTargetCapabilities() {
+        return [{ id: "target.files", version: 1, features: ["createTargetDirectory"] }];
+      },
+    },
+    async runCli(args) {
+      const action = args[args.indexOf("native-file") + 1];
+      actions.push(action);
+      if (action === "prepare") {
+        receipt = guardedFixture("mkdir", "/Documents/uncertain", state.owner);
+        return JSON.stringify({ status: "prepared", receipt });
+      }
+      if (action === "continue") {
+        return JSON.stringify({ status: "acceptanceUnknown", receipt,
+          errorCode: "GuardedAcceptanceUnknown" });
+      }
+      if (++reads === 1) {
+        return JSON.stringify({ status: "readbackUnconfirmed", receipt,
+          errorCode: "GuardedReadbackUnconfirmed" });
+      }
+      const operation = guardedOperation("mkdir", receipt, "succeeded");
+      operation.result = { path: "/Documents/uncertain" };
+      return JSON.stringify({ status: "succeeded", receipt,
+        operationId: operation.operationId, operation, mutation: { path: "/Documents/uncertain" } });
+    },
+  });
+  t.after(() => state.backend.dispose());
+  const input = { deviceId: "one", path: "/Documents/uncertain" };
+  await assert.rejects(state.backend.guardedFile("mobile_device_file_mkdir", input),
+    { code: "GuardedReadbackUnconfirmed" });
+  assert.equal((await state.backend.guardedFile("mobile_device_file_mkdir", input)).path, input.path);
+  assert.deepEqual(actions, ["prepare", "continue", "recover", "recover"]);
+});
+
+test("accepted guarded files recover their original operation after view retirement", async (t) => {
+  let receipt;
+  let recoveries = 0;
+  const actions = [];
+  const state = canonicalFixture({
+    client: {
+      async getTargetCapabilities() {
+        return [{ id: "target.files", version: 1, features: ["createTargetDirectory"] }];
+      },
+    },
+    async runCli(args) {
+      const action = args[args.indexOf("native-file") + 1];
+      actions.push(action);
+      if (action === "prepare") {
+        receipt = guardedFixture("mkdir", "/Documents/original", state.owner);
+        return JSON.stringify({ status: "prepared", receipt });
+      }
+      const operation = guardedOperation("mkdir", receipt,
+        action === "continue" ? "queued" : "succeeded");
+      if (action === "recover" && ++recoveries === 1) {
+        throw Object.assign(new Error("Original GET reply was lost"), { code: "owned_get_failed" });
+      }
+      if (action === "recover") operation.result = { path: "/Documents/original" };
+      return JSON.stringify({
+        status: action === "continue" ? "accepted" : "succeeded",
+        receipt, operationId: operation.operationId, operation,
+        ...(action === "recover" ? { mutation: { path: "/Documents/original" } } : {}),
+      });
+    },
+  });
+  t.after(() => state.backend.dispose());
+  const input = { deviceId: "one", path: "/Documents/original" };
+  await assert.rejects(state.backend.guardedFile("mobile_device_file_mkdir", input),
+    { code: "owned_get_failed" });
+  await state.retireAuthority({ observe: false });
+  assert.equal((await state.backend.guardedFile("mobile_device_file_mkdir", input)).path, input.path);
+  assert.deepEqual(actions, ["prepare", "continue", "recover", "recover"]);
+});
+
+test("cancelled guarded readback retains the original receipt for GET-only recovery", async (t) => {
+  const entered = deferred();
+  const release = deferred();
+  const caller = new AbortController();
+  const actions = [];
+  let receipt;
+  let recoveries = 0;
+  const state = canonicalFixture({
+    client: {
+      async getTargetCapabilities() {
+        return [{ id: "target.files", version: 1, features: ["createTargetDirectory"] }];
+      },
+    },
+    async runCli(args) {
+      const action = args[args.indexOf("native-file") + 1];
+      actions.push(action);
+      if (action === "prepare") {
+        receipt = guardedFixture("mkdir", "/Documents/original", state.owner);
+        return JSON.stringify({ status: "prepared", receipt });
+      }
+      const operation = guardedOperation("mkdir", receipt,
+        action === "continue" ? "queued" : "succeeded");
+      if (action === "recover" && ++recoveries === 1) {
+        entered.resolve();
+        await release.promise;
+      }
+      if (action === "recover") operation.result = { path: "/Documents/original" };
+      return JSON.stringify({
+        status: action === "continue" ? "accepted" : "succeeded",
+        receipt, operationId: operation.operationId, operation,
+        ...(action === "recover" ? { mutation: { path: "/Documents/original" } } : {}),
+      });
+    },
+  });
+  t.after(() => state.backend.dispose());
+  const input = { deviceId: "one", path: "/Documents/original" };
+  const cancelled = state.backend.guardedFile("mobile_device_file_mkdir", input,
+    { signal: caller.signal });
+  const cancelledResult = assert.rejects(cancelled, { code: "cancelled" });
+  await entered.promise;
+  caller.abort();
+  release.resolve();
+  await cancelledResult;
+  assert.equal((await state.backend.guardedFile("mobile_device_file_mkdir", input)).path, input.path);
+  assert.deepEqual(actions, ["prepare", "continue", "recover", "recover"]);
+});
+
+test("disposed guarded owner cannot initiate a later original-receipt recovery", async (t) => {
+  let receipt;
+  const actions = [];
+  const state = canonicalFixture({
+    client: {
+      async getTargetCapabilities() {
+        return [{ id: "target.files", version: 1, features: ["createTargetDirectory"] }];
+      },
+    },
+    async runCli(args) {
+      const action = args[args.indexOf("native-file") + 1];
+      actions.push(action);
+      if (action === "prepare") {
+        receipt = guardedFixture("mkdir", "/Documents/original", state.owner);
+        return JSON.stringify({ status: "prepared", receipt });
+      }
+      if (action === "recover") {
+        throw Object.assign(new Error("Owned GET did not complete"), { code: "owned_get_failed" });
+      }
+      const operation = guardedOperation("mkdir", receipt);
+      return JSON.stringify({ status: "accepted", receipt,
+        operationId: operation.operationId, operation });
+    },
+  });
+  t.after(() => state.backend.dispose());
+  const input = { deviceId: "one", path: "/Documents/original" };
+  await assert.rejects(state.backend.guardedFile("mobile_device_file_mkdir", input),
+    { code: "owned_get_failed" });
+  await state.backend.dispose();
+  await assert.rejects(state.backend.guardedFile("mobile_device_file_mkdir", input),
+    { code: "cancelled" });
+  assert.deepEqual(actions, ["prepare", "continue", "recover"]);
+});
+
+test("a replacement host incarnation cannot inherit an accepted guarded mutation", async (t) => {
+  const artifactState = new Map();
+  let receipt;
+  const actions = [];
+  const first = canonicalFixture({
+    artifactState,
+    client: {
+      async getTargetCapabilities() {
+        return [{ id: "target.files", version: 1, features: ["createTargetDirectory"] }];
+      },
+    },
+    async runCli(args) {
+      const action = args[args.indexOf("native-file") + 1];
+      actions.push(action);
+      if (action === "prepare") {
+        receipt = guardedFixture("mkdir", "/Documents/owned", first.owner);
+        return JSON.stringify({ status: "prepared", receipt });
+      }
+      if (action === "recover") throw Object.assign(new Error("Original GET failed"), { code: "owned_get_failed" });
+      const operation = guardedOperation("mkdir", receipt);
+      return JSON.stringify({ status: "accepted", receipt, operationId: operation.operationId, operation });
+    },
+  });
+  t.after(() => first.backend.dispose());
+  const input = { deviceId: "one", path: "/Documents/owned" };
+  await assert.rejects(first.backend.guardedFile("mobile_device_file_mkdir", input),
+    { code: "owned_get_failed" });
+  let replacements = 0;
+  const replacement = canonicalFixture({
+    artifactState,
+    connectionRef: { ...first.owner.connectionRef, pid: 54321 },
+    async runCli() { replacements += 1; throw new Error("replacement read or mutation"); },
+  });
+  t.after(() => replacement.backend.dispose());
+  await assert.rejects(replacement.backend.guardedFile("mobile_device_file_mkdir", input),
+    { code: "runtime_incarnation_changed" });
+  assert.equal(replacements, 0);
+  assert.deepEqual(actions, ["prepare", "continue", "recover"]);
+});
+
+test("local guarded export uses backend-confirmed source path and verified zero/nonzero native readback", async (t) => {
+  for (const bytes of [0, 5]) {
+    const directory = await mkdtemp(join(process.cwd(), "tests/scripts/fixtures/export-owned-"));
+    t.after(() => rm(directory, { recursive: true, force: true }));
+    const destination = join(directory, "payload");
+    const content = Buffer.alloc(bytes, 65);
+    const input = { deviceId: "one", bundleId: "native-app", path: "Documents/payload", output: directory };
+    const actions = [];
+    let approvals = 0;
+    let receipt;
+    let recoveries = 0;
+    const state = canonicalFixture({
+      confirmDestructive: async (request) => {
+        approvals += 1;
+        assert.equal(request.action, "file_pull");
+        assert.match(request.message, /Host destination: /);
+        assert.match(request.message, /payload/);
+        return true;
+      },
+      client: {
+        async getTargetCapabilities() {
+          input.path = "Documents/replaced";
+          input.output = "/wrong/destination";
+          return [{ id: "target.files", version: 1, features: ["exportTargetFile"] },
+            { id: "target.apps", version: 1, features: ["listTargetApps"] }];
+        },
+        async listTargetApps() {
+          return [{ appId: "native-app", packageId: "com.example.app",
+            "x-ailoha-target-host": { targetId: "one", providerId: "provider" } }];
+        },
+      },
+      async runCli(args) {
+        const action = args[args.indexOf("native-file") + 1];
+        actions.push(action);
+        if (action === "prepare") {
+          assert.equal(args[args.indexOf("--path") + 1], "app://com.example.app/Documents/payload");
+          assert.equal(args[args.indexOf("--destination") + 1], resolve(directory));
+          assert.ok(args.includes("--overwrite"));
+          receipt = guardedFixture("export", "app://com.example.app/Documents/payload", state.owner,
+            { destinationPath: destination });
+          return JSON.stringify({ status: "prepared", receipt });
+        }
+        const operation = {
+          ...guardedOperation("export", receipt, action === "continue" ? "queued" : "succeeded"),
+          artifactIds: ["owned-artifact"],
+          ...(action === "recover" ? { result: { artifactId: "owned-artifact", devicePath: "Documents/payload" } } : {}),
+        };
+        if (action === "recover" && ++recoveries === 1) {
+          await writeFile(destination, content);
+          throw Object.assign(new Error("Original native GET reply was lost"), { code: "owned_get_failed" });
+        }
+        const artifact = {
+          artifactId: "owned-artifact", kind: "file", status: "ready",
+          contentType: "application/octet-stream", createdAt: "2026-10-10T00:00:00Z",
+          targetId: "one", operationId: operation.operationId, fileName: "payload",
+          size: bytes, sha256: stageHash(content),
+        };
+        if (action === "recover") assert.deepEqual(await readFile(destination), content);
+        return JSON.stringify({ status: action === "continue" ? "accepted" : "downloaded",
+          receipt, operationId: operation.operationId, operation,
+          ...(action === "recover" ? { artifact, downloadedBytes: bytes, devicePath: "Documents/payload" } : {}) });
+      },
+    });
+    t.after(() => state.backend.dispose());
+    await assert.rejects(state.backend.guardedFile("mobile_device_file_pull", input), { code: "owned_get_failed" });
+    const result = await state.backend.guardedFile("mobile_device_file_pull", {
+      deviceId: "one", bundleId: "native-app", path: "Documents/payload", output: directory,
+    });
+    assert.deepEqual(result, {
+      schemaVersion: "1.0", success: true, deviceId: "one",
+      devicePath: "Documents/payload", hostPath: destination, size: bytes, operation: "pull",
+    });
+    assert.deepEqual(actions, ["prepare", "continue", "recover", "recover"]);
+    assert.equal(approvals, 1);
+  }
+});
+
+test("cancelled guarded input and unadvertised export never launch a device command", async (t) => {
+  let launched = 0;
+  const state = canonicalFixture({
+    async runCli() { launched += 1; throw new Error("device command was admitted"); },
+  });
+  t.after(() => state.backend.dispose());
+  const abort = new AbortController();
+  abort.abort();
+  await assert.rejects(state.backend.guardedFile("mobile_device_file_mkdir",
+    { deviceId: "one", path: "/Documents/new" }, { signal: abort.signal }), { code: "cancelled" });
+  await assert.rejects(state.backend.invokeAction("mobile_device_file_pull",
+    { deviceId: "one", path: "/Documents/new", output: "/owned/file" }),
+  { code: "capability_not_supported" });
+  assert.equal(launched, 0);
+});
+
+test("file transfer and mutation selectors cannot silently reinterpret a blank app as a device path", async (t) => {
+  let launched = 0;
+  const state = canonicalFixture({
+    async runCli() { launched += 1; throw new Error("invalid app admitted native work"); },
+  });
+  t.after(() => state.backend.dispose());
+  for (const identity of ["mobile_device_file_pull", "mobile_device_file_delete", "mobile_device_file_mkdir"]) {
+    await assert.rejects(state.backend.guardedFile(identity, {
+      deviceId: "one", bundleId: " \t", path: "/Documents/file",
+      ...(identity === "mobile_device_file_pull" ? { output: "/owned/file" } : {}),
+    }), { code: "invalid_request" });
+  }
+  await assert.rejects(state.backend.stageArtifact("mobile_device_file_push", {
+    deviceId: "one", bundleId: " \t", path: "/Documents/file", input: "/owned/fixture",
+  }), { code: "invalid_request" });
+  assert.equal(launched, 0);
+});
+
+test("parent: file staging keeps the original destination across asynchronous capture", async (t) => {
+  const input = {
+    deviceId: "one", input: "/owned/original.bin", path: "/Documents/original.bin",
+  };
+  const commands = [];
+  const state = canonicalFixture({
+    client: {
+      async getTargetCapabilities() {
+        input.path = "/Documents/replacement.bin";
+        return [{ id: "target.files", version: 1, features: ["importStagedTargetFile"] }];
+      },
+    },
+    async runCli(args) {
+      commands.push(args);
+      throw Object.assign(new Error("Stop the owned probe before native upload"), { code: "probe_stopped" });
+    },
+  });
+  t.after(() => state.backend.dispose());
+  await assert.rejects(state.backend.stageArtifact("mobile_device_file_push", input), { code: "probe_stopped" });
+  assert.equal(commands.length, 1);
+  assert.equal(commands[0][commands[0].indexOf("--destination") + 1], "/Documents/original.bin");
+});
+
+test("parent: media staging retains original source identity after capture and unknown upload", async (t) => {
+  const input = { deviceId: "one", paths: ["/owned/original.png"] };
+  const commands = [];
+  const state = canonicalFixture({
+    client: {
+      async getTargetCapabilities() {
+        input.paths[0] = "/owned/replacement.png";
+        return [{ id: "target.media", version: 1, features: ["importStagedTargetMediaBatch"] }];
+      },
+    },
+    async runCli(args) {
+      commands.push(args);
+      throw Object.assign(new Error("The owned fixture lost the upload response"), { code: "probe_upload_unknown" });
+    },
+  });
+  t.after(() => state.backend.dispose());
+  await assert.rejects(state.backend.stageArtifact("mobile_device_media_add", input), { code: "probe_upload_unknown" });
+  await assert.rejects(state.backend.stageArtifact("mobile_device_media_add", {
+    deviceId: "one", paths: ["/owned/original.png"],
+  }), { code: "artifact_acceptance_unknown" });
+  assert.equal(commands.length, 1);
+  assert.deepEqual(JSON.parse(commands[0][commands[0].indexOf("--sources") + 1]), ["/owned/original.png"]);
+});
+
+test("parent: staged completion preserves its accepted destructive operation identity without replay", async (t) => {
+  const source = "/owned/original.bin";
+  const commands = [];
+  let receipt;
+  let polls = 0;
+  const state = canonicalFixture({
+    confirmDestructive: async () => true,
+    client: {
+      async getTargetCapabilities() {
+        return [{ id: "target.files", version: 1, features: ["importStagedTargetFile"] }];
+      },
+      async waitForOperation() {
+        return {
+          ...stagedOperation("importStagedTargetFile", ["stage-artifact-0"], "succeeded"),
+          destructive: ++polls !== 1,
+        };
+      },
+    },
+    async runCli(args) {
+      const action = args[args.indexOf("native-stage") + 1];
+      commands.push(action);
+      if (action === "stage") {
+        receipt = stagedFixture([source], "file", "/Documents/original.bin", state.owner);
+        return JSON.stringify({ status: "ready", receipt });
+      }
+      if (action === "continue") return JSON.stringify({
+        status: "accepted", receipt, attemptId: "0123456789abcdef0123456789abcdef",
+        operation: stagedOperation("importStagedTargetFile", ["stage-artifact-0"]),
+      });
+      return stagedCleanup(receipt);
+    },
+  });
+  t.after(() => state.backend.dispose());
+  const input = { deviceId: "one", input: source, path: "/Documents/original.bin" };
+  await assert.rejects(state.backend.stageArtifact("mobile_device_file_push", input), {
+    code: "artifact_operation_mismatch",
+  });
+  assert.equal(commands.filter((action) => action === "continue").length, 1);
+  const resumed = await state.backend.stageArtifact("mobile_device_file_push", input);
+  assert.equal(resumed.success, true);
+  assert.equal(commands.filter((action) => action === "continue").length, 1);
+});
+
+test("owned zero-byte file push uses exact native receipt, captured approval and GET-only completion", async (t) => {
+  const dir = await mkdtemp(join(process.cwd(), "tests/scripts/fixtures/staged-owned-"));
+  t.after(() => rm(dir, { recursive: true, force: true }));
+  const source = join(dir, "empty.txt");
+  await writeFile(source, "");
+  const artifactState = new Map();
+  const commands = [];
+  let prompts = 0;
+  let receipt;
+  const state = canonicalFixture({
+    artifactState,
+    confirmDestructive: async (request) => {
+      prompts += 1;
+      assert.equal(request.action, "file_push");
+      assert.match(request.message, /Documents\/empty\.txt/);
+      return true;
+    },
+    client: {
+      async getTargetCapabilities() {
+        return [{ id: "target.files", version: 1, features: ["importStagedTargetFile"] }];
+      },
+      async waitForOperation(id) {
+        assert.equal(id, "import-operation");
+        return { ...stagedOperation("importStagedTargetFile", ["stage-artifact-0"], "succeeded"),
+          result: { size: 0 } };
+      },
+    },
+    async runCli(args) {
+      commands.push(args);
+      assert.equal(args[0], "target");
+      assert.ok(args.includes("--context-revision") && args.includes("original-epoch"));
+      const action = args[args.indexOf("native-stage") + 1];
+      if (action === "stage") {
+        assert.deepEqual(JSON.parse(args[args.indexOf("--sources") + 1]), [source]);
+        receipt = stagedFixture([source], "file", "/Documents/empty.txt", state.owner);
+        return JSON.stringify({ status: "ready", receipt });
+      }
+      assert.equal(args[args.indexOf("--staged") + 1], JSON.stringify(receipt));
+      if (action === "continue") {
+        assert.ok(args.includes("--overwrite") && args.includes("--confirm"));
+        return JSON.stringify({
+          status: "accepted", receipt, attemptId: "0123456789abcdef0123456789abcdef",
+          operation: stagedOperation("importStagedTargetFile", ["stage-artifact-0"]),
+        });
+      }
+      assert.equal(action, "cleanup");
+      return stagedCleanup(receipt);
+    },
+  });
+  t.after(() => state.backend.dispose());
+  const response = await state.backend.request("/api/v1/devices/one/files/push", {
+    method: "POST", body: JSON.stringify({ hostPath: source, devicePath: "/Documents/empty.txt" }),
+  });
+  assert.equal(response.status, 200);
+  const result = await response.json();
+  assert.deepEqual(result, {
+    schemaVersion: "1.0", success: true, deviceId: "one",
+    devicePath: "/Documents/empty.txt", hostPath: source, size: 0, operation: "push",
+  });
+  assert.equal(prompts, 1);
+  assert.deepEqual(commands.map((args) => args[args.indexOf("native-stage") + 1]),
+    ["stage", "continue", "cleanup"]);
+  assert.equal(artifactState.size, 0);
+});
+
+test("installed app selector uses its package and preserves a nonempty legacy push envelope", async (t) => {
+  const dir = await mkdtemp(join(process.cwd(), "tests/scripts/fixtures/app-push-owned-"));
+  t.after(() => rm(dir, { recursive: true, force: true }));
+  const source = join(dir, "seed.db");
+  await writeFile(source, "abc");
+  const requestedSource = relative(process.cwd(), source);
+  const destination = "app://com.example.package/Documents/seed.db";
+  let receipt;
+  const actions = [];
+  const state = canonicalFixture({
+    confirmDestructive: async ({ message }) => {
+      assert.match(message, /app:\/\/com\.example\.package\/Documents\/seed\.db/);
+      return true;
+    },
+    client: {
+      async getTargetCapabilities() {
+        return [
+          { id: "target.files", version: 1, features: ["importStagedTargetFile"] },
+          { id: "target.apps", version: 1, features: ["listTargetApps"] },
+        ];
+      },
+      async listTargetApps() {
+        return [{
+          appId: "workspace-app", packageId: "com.example.package",
+          "x-ailoha-target-host": { targetId: "one", providerId: "provider" },
+        }];
+      },
+      async waitForOperation() {
+        return stagedOperation("importStagedTargetFile", ["stage-artifact-0"], "succeeded");
+      },
+    },
+    async runCli(args) {
+      const action = args[args.indexOf("native-stage") + 1];
+      actions.push(action);
+      if (action === "stage") {
+        assert.equal(args[args.indexOf("--destination") + 1], destination);
+        receipt = stagedFixture([source], "file", destination, state.owner, ["abc"]);
+        return JSON.stringify({ status: "ready", receipt });
+      }
+      if (action === "continue") return JSON.stringify({
+        status: "accepted", receipt, attemptId: "0123456789abcdef0123456789abcdef",
+        operation: stagedOperation("importStagedTargetFile", ["stage-artifact-0"]),
+      });
+      return stagedCleanup(receipt);
+    },
+  });
+  t.after(() => state.backend.dispose());
+  const response = await state.backend.request("/api/v1/devices/one/files/push", {
+    method: "POST",
+    body: JSON.stringify({ hostPath: requestedSource, devicePath: "Documents/seed.db", bundleId: "com.example.package" }),
+  });
+  assert.equal(response.status, 200);
+  assert.deepEqual(await response.json(), {
+    schemaVersion: "1.0", success: true, deviceId: "one",
+    devicePath: "Documents/seed.db", hostPath: source, size: 3, operation: "push",
+  });
+  assert.deepEqual(actions, ["stage", "continue", "cleanup"]);
+});
+
+test("owned media paths use one native staged batch and project every accepted host path", async (t) => {
+  const dir = await mkdtemp(join(process.cwd(), "tests/scripts/fixtures/media-owned-"));
+  t.after(() => rm(dir, { recursive: true, force: true }));
+  const paths = [join(dir, "contact.vcf"), join(dir, "image.png")];
+  const requestedPaths = [relative(process.cwd(), paths[0]), paths[1]];
+  await Promise.all(paths.map((path) => writeFile(path, "")));
+  const actions = [];
+  let receipt;
+  const state = canonicalFixture({
+    client: {
+      async getTargetCapabilities() {
+        return [{ id: "target.media", version: 1, features: ["importStagedTargetMediaBatch"] }];
+      },
+      async waitForOperation(id) {
+        assert.equal(id, "import-operation");
+        return { ...stagedOperation("importStagedTargetMediaBatch",
+          ["stage-artifact-0", "stage-artifact-1"], "succeeded"),
+        result: { addedArtifactIds: ["stage-artifact-0", "stage-artifact-1"] } };
+      },
+    },
+    async runCli(args) {
+      const action = args[args.indexOf("native-stage") + 1];
+      actions.push(action);
+      if (action === "stage") {
+        assert.deepEqual(JSON.parse(args[args.indexOf("--sources") + 1]), paths);
+        assert.equal(args[args.indexOf("--destination") + 1], "batch");
+        receipt = stagedFixture(paths, "media", "batch", state.owner);
+        return JSON.stringify({ status: "ready", receipt });
+      }
+      assert.equal(args[args.indexOf("--staged") + 1], JSON.stringify(receipt));
+      if (action === "continue") {
+        assert.ok(!args.includes("--overwrite"));
+        return JSON.stringify({
+          status: "accepted", receipt, attemptId: "0123456789abcdef0123456789abcdef",
+          operation: stagedOperation("importStagedTargetMediaBatch",
+            ["stage-artifact-0", "stage-artifact-1"]),
+        });
+      }
+      return stagedCleanup(receipt);
+    },
+  });
+  t.after(() => state.backend.dispose());
+  const response = await state.backend.request("/api/v1/devices/one/media", {
+    method: "POST", body: JSON.stringify({ hostPaths: requestedPaths }),
+  });
+  assert.equal(response.status, 200);
+  assert.deepEqual(await response.json(), {
+    schemaVersion: "1.0", deviceId: "one", platform: "ios", added: paths,
+  });
+  assert.deepEqual(actions, ["stage", "continue", "cleanup"]);
+});
+
+test("unrepresentable media batch never stages a truncated subset", async (t) => {
+  let cliCalls = 0;
+  const state = canonicalFixture({
+    async runCli() { cliCalls += 1; assert.fail("oversized batch cannot reach staging"); },
+  });
+  t.after(() => state.backend.dispose());
+  await assert.rejects(state.backend.stageArtifact("mobile_device_media_add", {
+    deviceId: "one", paths: Array.from({ length: 17 }, (_, index) => `/owned/image-${index}.png`),
+  }), { code: "artifact_media_batch_limit", status: 501 });
+  assert.equal(cliCalls, 0);
+});
+
+test("concurrent same-destination calls cannot race a second native stage or device POST", async (t) => {
+  const dir = await mkdtemp(join(process.cwd(), "tests/scripts/fixtures/concurrent-owned-"));
+  t.after(() => rm(dir, { recursive: true, force: true }));
+  const source = join(dir, "concurrent.png");
+  await writeFile(source, "");
+  const stalled = deferred();
+  const actions = [];
+  let receipt;
+  const state = canonicalFixture({
+    client: {
+      async getTargetCapabilities() {
+        return [{ id: "target.media", version: 1, features: ["importStagedTargetMediaBatch"] }];
+      },
+      async waitForOperation() {
+        return { ...stagedOperation("importStagedTargetMediaBatch", ["stage-artifact-0"], "succeeded"),
+          result: { addedArtifactIds: ["stage-artifact-0"] } };
+      },
+    },
+    async runCli(args) {
+      const action = args[args.indexOf("native-stage") + 1];
+      actions.push(action);
+      if (action === "stage") {
+        receipt = stagedFixture([source], "media", "batch", state.owner);
+        await stalled.promise;
+        return JSON.stringify({ status: "ready", receipt });
+      }
+      if (action === "continue") return JSON.stringify({
+        status: "accepted", receipt, attemptId: "0123456789abcdef0123456789abcdef",
+        operation: stagedOperation("importStagedTargetMediaBatch", ["stage-artifact-0"]),
+      });
+      return stagedCleanup(receipt);
+    },
+  });
+  t.after(() => state.backend.dispose());
+  const input = { deviceId: "one", paths: [source] };
+  const first = state.backend.stageArtifact("mobile_device_media_add", input);
+  await assert.rejects(state.backend.stageArtifact("mobile_device_media_add", input),
+    { code: "artifact_operation_in_progress" });
+  stalled.resolve();
+  assert.deepEqual((await first).added, [source]);
+  assert.deepEqual(actions, ["stage", "continue", "cleanup"]);
+});
+
+test("uncertain native device acceptance retains the original attempt without a second POST", async (t) => {
+  const dir = await mkdtemp(join(process.cwd(), "tests/scripts/fixtures/unknown-owned-"));
+  t.after(() => rm(dir, { recursive: true, force: true }));
+  const source = join(dir, "unknown.txt");
+  await writeFile(source, "");
+  let receipt;
+  const actions = [];
+  let prompts = 0;
+  const state = canonicalFixture({
+    confirmDestructive: async () => { prompts += 1; return true; },
+    client: {
+      async getTargetCapabilities() {
+        return [{ id: "target.files", version: 1, features: ["importStagedTargetFile"] }];
+      },
+    },
+    async runCli(args) {
+      const action = args[args.indexOf("native-stage") + 1];
+      actions.push(action);
+      if (action === "stage") {
+        receipt = stagedFixture([source], "file", "/Documents/unknown.txt", state.owner);
+        return JSON.stringify({ status: "ready", receipt });
+      }
+      assert.equal(action, "continue");
+      return JSON.stringify({
+        status: "acceptanceUnknown", receipt, attemptId: "0123456789abcdef0123456789abcdef",
+        errorCode: "DeviceAcceptanceUnknown",
+      });
+    },
+  });
+  t.after(() => state.backend.dispose());
+  const input = { deviceId: "one", input: source, path: "/Documents/unknown.txt" };
+  await assert.rejects(state.backend.stageArtifact("mobile_device_file_push", input));
+  await assert.rejects(state.backend.stageArtifact("mobile_device_file_push", input));
+  assert.deepEqual(actions, ["stage", "continue"]);
+  assert.equal(prompts, 1);
+});
+
+test("stalled native stage cannot continue after the original context is retired", async (t) => {
+  const dir = await mkdtemp(join(process.cwd(), "tests/scripts/fixtures/stale-owned-"));
+  t.after(() => rm(dir, { recursive: true, force: true }));
+  const source = join(dir, "stale.txt");
+  await writeFile(source, "");
+  let receipt;
+  const actions = [];
+  const state = canonicalFixture({
+    confirmDestructive: async () => { assert.fail("stale stage cannot request consent"); },
+    client: {
+      async getTargetCapabilities() {
+        return [{ id: "target.files", version: 1, features: ["importStagedTargetFile"] }];
+      },
+    },
+    async runCli(args) {
+      const action = args[args.indexOf("native-stage") + 1];
+      actions.push(action);
+      receipt = stagedFixture([source], "file", "/Documents/stale.txt", state.owner);
+      if (action === "cleanup") return stagedCleanup(receipt);
+      if (action !== "stage") assert.fail("retired original cannot continue device work");
+      await state.retireAuthority();
+      return JSON.stringify({ status: "ready", receipt });
+    },
+  });
+  t.after(() => state.backend.dispose());
+  await assert.rejects(state.backend.stageArtifact("mobile_device_file_push", {
+    deviceId: "one", input: source, path: "/Documents/stale.txt",
+  }));
+  assert.deepEqual(actions, ["stage", "cleanup"]);
+});
+
+test("a restarted same-key target host cannot inherit staged file authority", async (t) => {
+  const dir = await mkdtemp(join(process.cwd(), "tests/scripts/fixtures/restart-owned-"));
+  t.after(() => rm(dir, { recursive: true, force: true }));
+  const source = join(dir, "restart.txt");
+  await writeFile(source, "");
+  const actions = [];
+  const artifactState = new Map();
+  const state = canonicalFixture({
+    artifactState,
+    confirmDestructive: async () => { assert.fail("retired context cannot request consent"); },
+    client: {
+      async getTargetCapabilities() {
+        return [{ id: "target.files", version: 1, features: ["importStagedTargetFile"] }];
+      },
+    },
+    async runCli(args) {
+      const action = args[args.indexOf("native-stage") + 1];
+      actions.push(action);
+      const receipt = stagedFixture([source], "file", "/Documents/restart.txt", state.owner);
+      if (action === "cleanup") return stagedCleanup(receipt);
+      if (action !== "stage") assert.fail("replacement cannot continue original stage");
+      await state.retireAuthority();
+      return JSON.stringify({ status: "ready", receipt });
+    },
+  });
+  t.after(() => state.backend.dispose());
+  const input = { deviceId: "one", input: source, path: "/Documents/restart.txt" };
+  await assert.rejects(state.backend.stageArtifact("mobile_device_file_push", input),
+    { code: "view_closed" });
+  const replacement = canonicalFixture({
+    artifactState,
+    connectionRef: { ...state.owner.connectionRef, pid: 54321 },
+    async runCli() { assert.fail("replacement cannot restage original source"); },
+  });
+  t.after(() => replacement.backend.dispose());
+  await assert.rejects(replacement.backend.stageArtifact("mobile_device_file_push", input),
+    { code: "runtime_incarnation_changed" });
+  assert.deepEqual(actions, ["stage", "cleanup"]);
+});
+
+test("accepted file import recovers from failed completion GET without restaging or resubmitting", async (t) => {
+  const dir = await mkdtemp(join(process.cwd(), "tests/scripts/fixtures/recover-owned-"));
+  t.after(() => rm(dir, { recursive: true, force: true }));
+  const source = join(dir, "recover.txt");
+  await writeFile(source, "");
+  const actions = [];
+  let reads = 0;
+  let receipt;
+  const state = canonicalFixture({
+    confirmDestructive: async () => true,
+    client: {
+      async getTargetCapabilities() {
+        return [{ id: "target.files", version: 1, features: ["importStagedTargetFile"] }];
+      },
+      async waitForOperation(id) {
+        assert.equal(id, "import-operation");
+        if (++reads === 1) throw new Error("original operation GET temporarily failed");
+        return stagedOperation("importStagedTargetFile", ["stage-artifact-0"], "succeeded");
+      },
+    },
+    async runCli(args) {
+      const action = args[args.indexOf("native-stage") + 1];
+      actions.push(action);
+      if (action === "stage") {
+        receipt = stagedFixture([source], "file", "/Documents/recover.txt", state.owner);
+        return JSON.stringify({ status: "ready", receipt });
+      }
+      if (action === "continue") return JSON.stringify({
+        status: "accepted", receipt, attemptId: "0123456789abcdef0123456789abcdef",
+        operation: stagedOperation("importStagedTargetFile", ["stage-artifact-0"]),
+      });
+      assert.equal(action, "cleanup");
+      return stagedCleanup(receipt);
+    },
+  });
+  t.after(() => state.backend.dispose());
+  const input = { deviceId: "one", input: source, path: "/Documents/recover.txt" };
+  await assert.rejects(state.backend.stageArtifact("mobile_device_file_push", input),
+    /original operation GET temporarily failed/);
+  const result = await state.backend.stageArtifact("mobile_device_file_push", input);
+  assert.equal(result.size, 0);
+  assert.equal(reads, 2);
+  assert.deepEqual(actions, ["stage", "continue", "cleanup"]);
+});
+
+test("late accepted staged import retains its receipt and recovers without a second approval", async (t) => {
+  let clock = 0;
+  t.mock.method(performance, "now", () => clock);
+  const dir = await mkdtemp(join(process.cwd(), "tests/scripts/fixtures/late-owned-"));
+  t.after(() => rm(dir, { recursive: true, force: true }));
+  const source = join(dir, "late.txt");
+  await writeFile(source, "");
+  let prompts = 0;
+  let receipt;
+  const actions = [];
+  const state = canonicalFixture({
+    confirmDestructive: async () => { prompts += 1; return true; },
+    client: {
+      async getTargetCapabilities() {
+        return [{ id: "target.files", version: 1, features: ["importStagedTargetFile"] }];
+      },
+      async waitForOperation() {
+        return stagedOperation("importStagedTargetFile", ["stage-artifact-0"], "succeeded");
+      },
+    },
+    async runCli(args) {
+      const action = args[args.indexOf("native-stage") + 1];
+      actions.push(action);
+      if (action === "stage") {
+        receipt = stagedFixture([source], "file", "/Documents/late.txt", state.owner);
+        return JSON.stringify({ status: "ready", receipt });
+      }
+      if (action === "continue") {
+        clock = 60_001;
+        return JSON.stringify({
+          status: "accepted", receipt, attemptId: "0123456789abcdef0123456789abcdef",
+          operation: stagedOperation("importStagedTargetFile", ["stage-artifact-0"]),
+        });
+      }
+      return stagedCleanup(receipt);
+    },
+  });
+  t.after(() => state.backend.dispose());
+  const input = { deviceId: "one", input: source, path: "/Documents/late.txt" };
+  await assert.rejects(state.backend.stageArtifact("mobile_device_file_push", input),
+    { code: "submission_outcome_unknown" });
+  assert.equal((await state.backend.stageArtifact("mobile_device_file_push", input)).success, true);
+  assert.equal(prompts, 1);
+  assert.deepEqual(actions, ["stage", "continue", "cleanup"]);
+});
+
+test("staged readback uncertainty retries only original-host confirm GET before one continuation", async (t) => {
+  const dir = await mkdtemp(join(process.cwd(), "tests/scripts/fixtures/confirm-owned-"));
+  t.after(() => rm(dir, { recursive: true, force: true }));
+  const source = join(dir, "confirm.txt");
+  await writeFile(source, "");
+  let receipt;
+  const actions = [];
+  let confirms = 0;
+  const state = canonicalFixture({
+    confirmDestructive: async () => true,
+    client: {
+      async getTargetCapabilities() {
+        return [{ id: "target.files", version: 1, features: ["importStagedTargetFile"] }];
+      },
+      async waitForOperation(id) {
+        assert.equal(id, "import-operation");
+        return stagedOperation("importStagedTargetFile", ["stage-artifact-0"], "succeeded");
+      },
+    },
+    async runCli(args) {
+      const action = args[args.indexOf("native-stage") + 1];
+      actions.push(action);
+      if (action === "stage") {
+        receipt = stagedFixture([source], "file", "/Documents/confirm.txt", state.owner);
+        return JSON.stringify({ status: "readbackUnconfirmed", receipt,
+          errorCode: "ArtifactReadbackUnconfirmed" });
+      }
+      if (action === "confirm") {
+        assert.equal(args[args.indexOf("--staged") + 1], JSON.stringify(receipt));
+        if (++confirms === 1) throw new Error("original artifact GET interrupted");
+        return JSON.stringify({ status: "ready", receipt });
+      }
+      if (action === "continue") return JSON.stringify({
+        status: "accepted", receipt, attemptId: "0123456789abcdef0123456789abcdef",
+        operation: stagedOperation("importStagedTargetFile", ["stage-artifact-0"]),
+      });
+      return stagedCleanup(receipt);
+    },
+  });
+  t.after(() => state.backend.dispose());
+  const input = { deviceId: "one", input: source, path: "/Documents/confirm.txt" };
+  await assert.rejects(state.backend.stageArtifact("mobile_device_file_push", input),
+    /original artifact GET interrupted/);
+  assert.equal((await state.backend.stageArtifact("mobile_device_file_push", input)).size, 0);
+  assert.deepEqual(actions, ["stage", "confirm", "confirm", "continue", "cleanup"]);
+});
+
+test("uncertain original-host cleanup preserves accepted import and never repeats device continuation", async (t) => {
+  const dir = await mkdtemp(join(process.cwd(), "tests/scripts/fixtures/cleanup-owned-"));
+  t.after(() => rm(dir, { recursive: true, force: true }));
+  const source = join(dir, "cleanup.txt");
+  await writeFile(source, "");
+  const actions = [];
+  let receipt;
+  let cleanupCalls = 0;
+  const state = canonicalFixture({
+    confirmDestructive: async () => true,
+    client: {
+      async getTargetCapabilities() {
+        return [{ id: "target.files", version: 1, features: ["importStagedTargetFile"] }];
+      },
+      async waitForOperation() {
+        return stagedOperation("importStagedTargetFile", ["stage-artifact-0"], "succeeded");
+      },
+    },
+    async runCli(args) {
+      const action = args[args.indexOf("native-stage") + 1];
+      actions.push(action);
+      if (action === "stage") {
+        receipt = stagedFixture([source], "file", "/Documents/cleanup.txt", state.owner);
+        return JSON.stringify({ status: "ready", receipt });
+      }
+      if (action === "continue") return JSON.stringify({
+        status: "accepted", receipt, attemptId: "0123456789abcdef0123456789abcdef",
+        operation: stagedOperation("importStagedTargetFile", ["stage-artifact-0"]),
+      });
+      assert.equal(action, "cleanup");
+      if (++cleanupCalls === 1) return JSON.stringify({
+        status: "cleanupAcceptanceUnknown", receipt, attemptId: "abcdef0123456789abcdef0123456780",
+        cleanupArtifacts: [{
+          artifactId: "stage-artifact-0", status: "acceptanceUnknown",
+          attemptId: "abcdef0123456789abcdef0123456780",
+        }],
+      });
+      return stagedCleanup(receipt);
+    },
+  });
+  t.after(() => state.backend.dispose());
+  const input = { deviceId: "one", input: source, path: "/Documents/cleanup.txt" };
+  await assert.rejects(state.backend.stageArtifact("mobile_device_file_push", input),
+    { code: "artifact_cleanup_unconfirmed" });
+  assert.equal((await state.backend.stageArtifact("mobile_device_file_push", input)).success, true);
+  assert.deepEqual(actions, ["stage", "continue", "cleanup", "cleanup"]);
+});
+
+test("denied file replacement cleans only original staged artifact without device continuation", async (t) => {
+  const dir = await mkdtemp(join(process.cwd(), "tests/scripts/fixtures/denied-owned-"));
+  t.after(() => rm(dir, { recursive: true, force: true }));
+  const source = join(dir, "denied.txt");
+  await writeFile(source, "");
+  let receipt;
+  const actions = [];
+  const artifactState = new Map();
+  const state = canonicalFixture({
+    artifactState, confirmDestructive: async () => false,
+    client: {
+      async getTargetCapabilities() {
+        return [{ id: "target.files", version: 1, features: ["importStagedTargetFile"] }];
+      },
+    },
+    async runCli(args) {
+      const action = args[args.indexOf("native-stage") + 1];
+      actions.push(action);
+      if (action === "stage") {
+        receipt = stagedFixture([source], "file", "/Documents/denied.txt", state.owner);
+        return JSON.stringify({ status: "ready", receipt });
+      }
+      assert.equal(action, "cleanup");
+      return stagedCleanup(receipt);
+    },
+  });
+  t.after(() => state.backend.dispose());
+  await assert.rejects(state.backend.stageArtifact("mobile_device_file_push", {
+    deviceId: "one", input: source, path: "/Documents/denied.txt",
+  }), { code: "consent_denied" });
+  assert.deepEqual(actions, ["stage", "cleanup"]);
+  assert.equal(artifactState.size, 0);
+});
+
+test("native failed copy is never a successful zero-byte transfer and still cleans original staging", async (t) => {
+  const dir = await mkdtemp(join(process.cwd(), "tests/scripts/fixtures/failed-owned-"));
+  t.after(() => rm(dir, { recursive: true, force: true }));
+  const source = join(dir, "failed.txt");
+  await writeFile(source, "");
+  let receipt;
+  const actions = [];
+  const state = canonicalFixture({
+    confirmDestructive: async () => true,
+    client: {
+      async getTargetCapabilities() {
+        return [{ id: "target.files", version: 1, features: ["importStagedTargetFile"] }];
+      },
+      async waitForOperation() {
+        return stagedOperation("importStagedTargetFile", ["stage-artifact-0"], "failed");
+      },
+    },
+    async runCli(args) {
+      const action = args[args.indexOf("native-stage") + 1];
+      actions.push(action);
+      if (action === "stage") {
+        receipt = stagedFixture([source], "file", "/Documents/failed.txt", state.owner);
+        return JSON.stringify({ status: "ready", receipt });
+      }
+      if (action === "continue") return JSON.stringify({
+        status: "accepted", receipt, attemptId: "0123456789abcdef0123456789abcdef",
+        operation: stagedOperation("importStagedTargetFile", ["stage-artifact-0"]),
+      });
+      return stagedCleanup(receipt);
+    },
+  });
+  t.after(() => state.backend.dispose());
+  const input = { deviceId: "one", input: source, path: "/Documents/failed.txt" };
+  await assert.rejects(state.backend.stageArtifact("mobile_device_file_push", input),
+    { code: "artifact_operation_failed" });
+  await assert.rejects(state.backend.stageArtifact("mobile_device_file_push", input),
+    { code: "artifact_operation_failed" });
+  assert.deepEqual(actions, ["stage", "continue", "cleanup"]);
+});
 
 for (const status of [408, 499]) {
   test(`destructive HTTP ${status} uncertainty retains the original receipt without another mutation or approval`, async (t) => {
@@ -279,6 +1593,258 @@ test("real compatibility action paths project inventory/selection/native identit
   const unsupported = await state.backend.request("/api/v1/devices/one/ui");
   assert.equal(unsupported.status, 501);
   assert.equal((await unsupported.json()).code, "capability_not_supported");
+});
+
+test("unadvertised artifact reads and five mutation gates never dispatch device IO", async (t) => {
+  const state = fixture();
+  t.after(() => state.backend.dispose());
+  const cases = [
+    ["mobile_device_file_list", "GET", "/files?bundleId=com.example.app&path=Documents"],
+    ["mobile_device_file_pull", "POST", "/files/pull"],
+    ["mobile_device_file_push", "POST", "/files/push"],
+    ["mobile_device_file_delete", "POST", "/files/delete"],
+    ["mobile_device_file_mkdir", "POST", "/files/mkdir"],
+    ["mobile_device_media_add", "POST", "/media"],
+    ["mobile_device_log", "GET", "/log?text=fault&seconds=300"],
+    ["mobile_device_crashes", "GET", "/crashes?text=example"],
+    ["mobile_device_crash_report", "GET", "/crashes/report-id"],
+  ];
+  for (const [identity, method, suffix] of cases) {
+    const readable = ["mobile_device_file_list", "mobile_device_log",
+      "mobile_device_crashes", "mobile_device_crash_report"].includes(identity);
+    const failure = readable
+      ? { code: "capability_not_supported", status: 501 }
+      : { code: "artifact_contract_unavailable", message: ARTIFACT_FEATURE_GATES[identity], status: 501 };
+    await assert.rejects(state.backend.invokeAction(identity, {
+      deviceId: "one", ...(identity === "mobile_device_crash_report" ? { crashId: "report-id" } : {}),
+    }), {
+      ...failure,
+    });
+    const response = await state.backend.request(`/api/v1/devices/one${suffix}`, {
+      method, ...(method === "POST" ? { body: JSON.stringify({ devicePath: "/fixture", hostPath: "/owned" }) } : {}),
+    });
+    assert.equal(response.status, 501, identity);
+    assert.deepEqual(await response.json(), readable
+      ? { ...failure, message: `${identity} is not supported by this Ailoha opt-in or the selected target's advertised capabilities.` }
+      : failure);
+  }
+  assert.equal(state.calls.some(([kind]) => !["get"].includes(kind)), false);
+  const wrongMethod = await state.backend.request("/api/v1/devices/one/files/delete", { method: "GET" });
+  assert.equal(wrongMethod.status, 501);
+  assert.equal((await wrongMethod.json()).code, "capability_not_supported");
+  const wrongPath = await state.backend.request("/api/v1/devices/one/files/unknown", { method: "POST" });
+  assert.equal(wrongPath.status, 501);
+  assert.equal((await wrongPath.json()).code, "capability_not_supported");
+  const malformed = await state.backend.request("/api/v1/devices/one/files/push", { method: "POST", body: "not-json" });
+  assert.equal(malformed.status, 400);
+  assert.equal((await malformed.json()).code, "invalid_request");
+  const malformedPath = await state.backend.request("/api/v1/devices/%ZZ/files");
+  assert.equal(malformedPath.status, 400);
+  assert.equal((await malformedPath.json()).code, "invalid_request");
+  const malformedCrash = await state.backend.request("/api/v1/devices/one/crashes/%ZZ");
+  assert.equal(malformedCrash.status, 400);
+  assert.equal((await malformedCrash.json()).code, "invalid_request");
+  assert.equal(state.calls.some(([kind]) => kind !== "get"), false);
+});
+
+test("captured native read features preserve exact file, log and crash envelopes", async (t) => {
+  const calls = [];
+  const context = { "x-ailoha-target-host": { targetId: "one", providerId: "provider" } };
+  const state = canonicalFixture({
+    client: {
+      async getTargetCapabilities() {
+        return [
+          { id: "target.files", version: 1, features: ["queryTargetFiles"] },
+          { id: "target.diagnostics", version: 1,
+            features: ["queryTargetLogs", "queryTargetCrashes", "getTargetCrashDetail"] },
+          { id: "target.apps", version: 1, features: ["listTargetApps"] },
+        ];
+      },
+      async listTargetApps(id) {
+        calls.push(["apps", id]);
+        return [{ appId: "native-app", packageId: "com.example.app", ...context }];
+      },
+      async queryTargetFiles(id, path) {
+        calls.push(["files", id, path]);
+        return {
+          path, nativePath: "/Documents", total: 1,
+          files: [{ name: "zero", path: `${path}/zero`, nativePath: "/Documents/zero",
+            type: "file", size: 0, ...context }],
+        };
+      },
+      async queryTargetLogs(id, query) {
+        calls.push(["logs", id, query]);
+        return { total: 2, entries: [
+          { nativeTimestamp: "first", nativeLevel: "verbose", nativeSource: "app",
+            source: "native", message: "one", ...context },
+          { nativeTimestamp: "second", nativeLevel: "fatal", nativeSource: "app",
+            source: "native", message: "two", ...context },
+        ] };
+      },
+      async queryTargetCrashes(id, query) {
+        calls.push(["crashes", id, query]);
+        return { total: 3, crashes: [{
+          crashId: "report", nativeName: "App", nativeTimestamp: "raw time", nativeKind: "ANR", ...context,
+        }] };
+      },
+      async getTargetCrashDetail(id, crashId) {
+        calls.push(["detail", id, crashId]);
+        return { crashId, nativeName: "App", nativeTimestamp: "raw time", content: "full stack", ...context };
+      },
+    },
+  });
+  t.after(() => state.backend.dispose());
+  const files = await state.backend.readArtifact("mobile_device_file_list", {
+    deviceId: "one", bundleId: "native-app", path: "Documents",
+  });
+  assert.equal(files.files[0].size, 0);
+  assert.equal(files.files[0].path, "/Documents/zero");
+  assert.deepEqual(calls.slice(0, 2), [["apps", "one"], ["files", "one", "app://com.example.app/Documents"]]);
+  const logs = await state.backend.readArtifact("mobile_device_log", {
+    deviceId: "one", bundleId: "native-app", level: "fatal", seconds: 300, limit: 2,
+  });
+  assert.deepEqual(logs.entries.map((entry) => entry.level), ["verbose", "fatal"]);
+  assert.equal(logs.total, 2);
+  assert.equal(calls.find(([kind]) => kind === "logs")[2].appId, "com.example.app");
+  assert.equal(calls.find(([kind]) => kind === "logs")[2].level, "critical");
+  assert.equal((await state.backend.readArtifact("mobile_device_crashes", {
+    deviceId: "one", text: "App", limit: 1,
+  })).total, 3);
+  assert.equal((await state.backend.readArtifact("mobile_device_crash_report", {
+    deviceId: "one", crashId: "report",
+  })).content, "full stack");
+  assert.equal(JSON.stringify(files).includes("connectionRef"), false);
+  assert.equal(calls.some(([kind]) => ["push", "delete", "media"].includes(kind)), false);
+});
+
+test("stale view revision cannot borrow a newer app lookup for a file read", async (t) => {
+  let state;
+  state = canonicalFixture({
+    client: {
+      async getTargetCapabilities() {
+        return [
+          { id: "target.files", version: 1, features: ["queryTargetFiles"] },
+          { id: "target.apps", version: 1, features: ["listTargetApps"] },
+        ];
+      },
+      async listTargetApps() {
+        await state.advanceSelection();
+        return [{ appId: "app", packageId: "app",
+          "x-ailoha-target-host": { targetId: "one", providerId: "provider" } }];
+      },
+      async queryTargetFiles() { throw new Error("stale intent crossed native read boundary"); },
+    },
+  });
+  t.after(() => state.backend.dispose());
+  await assert.rejects(state.backend.readArtifact("mobile_device_file_list", {
+    deviceId: "one", bundleId: "app",
+  }), { code: "context_snapshot_superseded" });
+});
+
+for (const retirement of ["revision", "detach"]) {
+  test(`parent regression: native log read cannot return usable output after ${retirement} of its original view`, async (t) => {
+    let state;
+    state = canonicalFixture({
+      client: {
+        async getTargetCapabilities() {
+          return [{ id: "target.diagnostics", version: 1, features: ["queryTargetLogs"] }];
+        },
+        async queryTargetLogs() {
+          if (retirement === "revision") await state.advanceSelection();
+          else await state.retireAuthority();
+          return {
+            total: 1,
+            entries: [{
+              nativeTimestamp: "original time", nativeLevel: "info", nativeSource: "native-app",
+              source: "native", message: "original-owner-only",
+              "x-ailoha-target-host": { targetId: "one", providerId: "provider" },
+            }],
+          };
+        },
+      },
+    });
+    t.after(() => state.backend.dispose());
+    await assert.rejects(state.backend.readArtifact("mobile_device_log", { deviceId: "one" }));
+  });
+}
+
+test("read adapters reject invalid limits before inventory and refuse ambiguous/foreign/incomplete results", async (t) => {
+  let apps = [{ appId: "app", packageId: "pkg",
+    "x-ailoha-target-host": { targetId: "one", providerId: "provider" } }];
+  let listing = {
+    path: "app://pkg/", nativePath: "/", total: 1,
+    files: [{ name: "empty", path: "app://pkg/empty", nativePath: "/empty",
+      type: "file", size: 0, "x-ailoha-target-host": { targetId: "one", providerId: "provider" } }],
+  };
+  const state = fixture({
+    client: {
+      async getTargetCapabilities() {
+        return [
+          { id: "target.files", version: 1, features: ["queryTargetFiles"] },
+          { id: "target.apps", version: 1, features: ["listTargetApps"] },
+          { id: "target.diagnostics", version: 1, features: ["queryTargetCrashes"] },
+        ];
+      },
+      async listTargetApps() { return apps; },
+      async queryTargetFiles() { return listing; },
+      async queryTargetCrashes() { return { total: 0, crashes: [] }; },
+    },
+  });
+  t.after(() => state.backend.dispose());
+  for (const input of [
+    { deviceId: "one", limit: 0 }, { deviceId: "one", limit: 501 },
+  ]) {
+    await assert.rejects(state.backend.readArtifact("mobile_device_crashes", input),
+      { code: "artifact_contract_unavailable", status: 501 });
+  }
+  assert.deepEqual(state.calls, []);
+  apps = [...apps, { ...apps[0], appId: "another" }];
+  await assert.rejects(state.backend.readArtifact("mobile_device_file_list", {
+    deviceId: "one", bundleId: "pkg",
+  }), { code: "capability_not_supported", status: 501 });
+  apps = apps.slice(0, 1);
+  listing = { ...listing, total: 2 };
+  await assert.rejects(state.backend.readArtifact("mobile_device_file_list", {
+    deviceId: "one", bundleId: "pkg",
+  }), { code: "invalid_artifact_listing", status: 502 });
+  listing = { ...listing, total: 1, files: [{
+    ...listing.files[0], "x-ailoha-target-host": { targetId: "one", providerId: "other" },
+  }] };
+  await assert.rejects(state.backend.readArtifact("mobile_device_file_list", {
+    deviceId: "one", bundleId: "pkg",
+  }), { code: "artifact_owner_mismatch", status: 502 });
+});
+
+test("an in-flight native read cannot return data after revision, retirement or native identity changes", async (t) => {
+  for (const change of ["revision", "retirement", "native"]) {
+    const entered = deferred();
+    const finish = deferred();
+    const state = canonicalFixture({
+      client: {
+        async getTargetCapabilities() {
+          return [{ id: "target.diagnostics", version: 1, features: ["queryTargetCrashes"] }];
+        },
+        async queryTargetCrashes(id) {
+          assert.equal(id, "one");
+          entered.resolve();
+          await finish.promise;
+          return { total: 0, crashes: [] };
+        },
+      },
+    });
+    t.after(() => state.backend.dispose());
+    const pending = state.backend.readArtifact("mobile_device_crashes", { deviceId: "one" });
+    await entered.promise;
+    if (change === "revision") await state.advanceSelection();
+    if (change === "retirement") await state.retireAuthority();
+    if (change === "native") state.targets.get("one").nativeIdentity.nativeId = "replacement-native-id";
+    finish.resolve();
+    await assert.rejects(pending, {
+      code: change === "native" ? "artifact_owner_mismatch"
+        : change === "retirement" ? "view_closed" : "context_snapshot_superseded",
+    });
+    assert.equal(state.calls.filter(([name]) => name === "get").every(([, id]) => id === "one"), true);
+  }
 });
 
 test("an open empty canonical view projects its verified binding without inferring a target", async (t) => {

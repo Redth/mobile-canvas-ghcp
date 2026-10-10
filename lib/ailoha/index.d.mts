@@ -258,6 +258,50 @@ export class AilohaProtocolError extends Error {
   toJSON(): ProtocolErrorResult;
 }
 
+export interface TargetArtifactContext {
+  targetId: string;
+  providerId?: string;
+}
+
+export interface TargetFileListing {
+  path: string;
+  nativePath?: string;
+  total: number;
+  files: Array<{
+    name: string;
+    type: "file" | "directory";
+    path?: string;
+    nativePath?: string;
+    nativeModified?: string;
+    size?: number;
+    "x-ailoha-target-host"?: TargetArtifactContext;
+  }>;
+}
+
+export interface TargetLogListing {
+  total?: number;
+  entries: Array<{
+    nativeTimestamp?: string;
+    nativeLevel?: string;
+    nativeSource?: string;
+    source: string;
+    message: string;
+    processId?: number | null;
+    subsystem?: string | null;
+    "x-ailoha-target-host"?: TargetArtifactContext;
+  }>;
+}
+
+export interface TargetCrashReport {
+  crashId: string;
+  nativeName?: string;
+  nativeTimestamp?: string;
+  nativeKind?: string | null;
+  appId?: string | null;
+  content?: string;
+  "x-ailoha-target-host"?: TargetArtifactContext;
+}
+
 export interface TargetHostClient {
   readonly connection: PublicConnection;
   getHostStatus(options?: RequestOptions): Promise<HostStatus>;
@@ -270,6 +314,18 @@ export interface TargetHostClient {
   listTargets(options?: TargetListOptions): Promise<Target[]>;
   getTarget(targetId: string, options?: RequestOptions): Promise<Target>;
   getTargetCapabilities(targetId: string, options?: RequestOptions): Promise<Capability[]>;
+  listTargetApps(targetId: string, options?: RequestOptions): Promise<Array<{
+    appId: string; packageId?: string | null; "x-ailoha-target-host"?: TargetArtifactContext;
+  }>>;
+  queryTargetFiles(targetId: string, path: string, options?: RequestOptions): Promise<TargetFileListing>;
+  queryTargetLogs(targetId: string, query: {
+    appId?: string; text?: string; level?: string; limit?: string; since?: string; until?: string;
+  }, options?: RequestOptions): Promise<TargetLogListing>;
+  queryTargetCrashes(targetId: string, query: {
+    appId?: string; text?: string; limit?: string;
+  }, options?: RequestOptions):
+    Promise<{ total?: number; crashes: TargetCrashReport[] }>;
+  getTargetCrashDetail(targetId: string, crashId: string, options?: RequestOptions): Promise<TargetCrashReport>;
   listTargetSurfaces(targetId: string, options?: RequestOptions): Promise<Surface[]>;
   createTarget(request: TargetCreateRequest, options?: RequestOptions): Promise<Operation>;
   startTarget(targetId: string, options?: LifecycleOptions): Promise<Operation>;

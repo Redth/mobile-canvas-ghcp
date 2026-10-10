@@ -33,10 +33,14 @@ for (const [host, product] of [
     assert.equal(evidence.noHostStop, true);
     assert.equal(evidence.createPosts, host === "github" ? 3 : 4);
     assert.equal(evidence.noSeparateBootPost, true);
+    assert.deepEqual(evidence.stagedEvidence, { mediaBatches: 2, approvals: 2, uncertainPosts: 1 });
+    assert.deepEqual(evidence.guardedEvidence, { mutations: 7, submissions: 7, readbacks: 9, contentGets: 3 });
     assert.equal(evidence.creationRecords[0].platform, "ios");
     assert.equal(evidence.creationRecords[1].platform, "android");
     assert.equal(evidence.creationRecords.every((record) => record.state === "booted" && record.nativeId !== record.id), true);
     assert.equal(evidence.creationRecords[2].selectionApplied, false);
-    assert.deepEqual(evidence.logs, host === "vscode" ? ["capability_not_supported"] : []);
+    assert.deepEqual(evidence.logs, host === "vscode"
+      ? ["invalid_request", "consent_denied", "ailoha_cli_failed",
+        "GuardedDestinationChanged", "capability_not_supported"] : []);
   });
 }

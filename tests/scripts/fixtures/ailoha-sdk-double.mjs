@@ -2,6 +2,7 @@ import { readFileSync } from "node:fs";
 import { randomUUID } from "node:crypto";
 import { fileURLToPath } from "node:url";
 import { createCatalogModel } from "./ailoha-catalog-creation.mjs";
+import { stageEvents } from "./ailoha-native-stage-double.mjs";
 
 export const scenario = {
   calls: [], leases: new Map(), videos: new Map(), operations: new Map(), status: "running", geometryRevision: 13,
@@ -52,8 +53,24 @@ function mergedCapabilities(values) {
   return [...groups.values()];
 }
 function providerRecords() {
+  const readCapabilities = scenario.artifactReads ? [
+    { id: "target.files", version: 1, features: ["queryTargetFiles"] },
+    { id: "target.diagnostics", version: 1,
+      features: ["queryTargetLogs", "queryTargetCrashes", "getTargetCrashDetail"] },
+    { id: "target.apps", version: 1, features: ["listTargetApps"] },
+  ] : [];
+  if (scenario.artifactStaging) readCapabilities.push(
+    { id: "target.files", version: 1, features: ["importStagedTargetFile"] },
+    { id: "target.media", version: 1, features: ["importStagedTargetMediaBatch"] },
+  );
+  if (scenario.artifactGuarded) readCapabilities.push(
+    { id: "target.files", version: 1,
+      features: ["exportTargetFile", "deleteTargetFileWithOptions", "createTargetDirectory"] },
+    { id: "target.apps", version: 1, features: ["listTargetApps"] },
+  );
   return [{
-    providerId: scenario.providerId, name: "Synthetic provider", version: "synthetic", state: "ready", capabilities: captures,
+    providerId: scenario.providerId, name: "Synthetic provider", version: "synthetic", state: "ready",
+    capabilities: [...captures, ...readCapabilities],
   }, ...(scenario.catalog?.providers ?? []).map((provider) => ({
     ...provider, capabilities: mergedCapabilities([...provider.capabilities, ...captures]),
   }))];
@@ -214,6 +231,37 @@ export async function openTargetHostTransport(leaseId) {
         if (scenario.beforeTargetRead) await scenario.beforeTargetRead(selectedId);
         return reply(selected);
       }
+      if (scenario.artifactReads || scenario.artifactGuarded) {
+        const prefix = `/api/v1/targets/${encodeURIComponent(targetId)}`;
+        const owner = { "x-ailoha-target-host": { targetId, providerId: scenario.providerId } };
+        if (path === `${prefix}/apps?includeSystem=true`) {
+          return reply([{ appId: "native-app", packageId: "com.example.app", ...owner }]);
+        }
+        if (path.startsWith(`${prefix}/files/listing?`)) {
+          const nativePath = new URL(path, "http://localhost").searchParams.get("path");
+          return reply({
+            path: nativePath, nativePath: "/Documents", total: 1,
+            files: [{ name: "empty.db", path: `${nativePath}/empty.db`, nativePath: "/Documents/empty.db",
+              type: "file", size: 0, ...owner }],
+          });
+        }
+        if (path.startsWith(`${prefix}/logs/query?`)) return reply({
+          total: 2, entries: [
+            { nativeTimestamp: "first", nativeLevel: "verbose", nativeSource: "process",
+              source: "native", message: "first", ...owner },
+            { nativeTimestamp: "second", nativeLevel: "fatal", nativeSource: "process",
+              source: "native", message: "second", ...owner },
+          ],
+        });
+        if (path.startsWith(`${prefix}/crashes/query?`)) return reply({
+          total: 2, crashes: [{ crashId: "report", nativeName: "App",
+            nativeTimestamp: "native clock", nativeKind: "crash", ...owner }],
+        });
+        if (path === `${prefix}/crashes/report/detail`) return reply({
+          crashId: "report", nativeName: "App", nativeTimestamp: "native clock",
+          nativeKind: "crash", content: "full stack", ...owner,
+        });
+      }
       if (/\/actions\/(start|stop|reboot|reset)$/.test(path)) {
         const action = path.split("/").at(-1);
         const id = decodeURIComponent(path.split("/").at(-3));
@@ -232,6 +280,19 @@ export async function openTargetHostTransport(leaseId) {
         return reply(operation, 202, `/api/v1/operations/${operationId}`);
       }
       if (path.startsWith("/api/v1/operations/")) {
+        const stage = scenario.artifactStaging && stageEvents().find((event) =>
+          event.action === "continue" && `/api/v1/operations/${encodeURIComponent(event.operation.operationId)}` === path);
+        if (stage) {
+          if (scenario.failStageOperationReadOnce) {
+            scenario.failStageOperationReadOnce = false;
+            throw new Error("Owned operation GET interrupted");
+          }
+          return reply({
+            ...stage.operation, status: "succeeded", completedAt: "2026-10-10T00:00:02Z",
+            result: stage.receipt.kind === "file" ? { size: stage.receipt.artifacts[0].artifact.size }
+              : { addedArtifactIds: stage.operation.artifactIds },
+          });
+        }
         if (scenario.beforeOperationRead) await scenario.beforeOperationRead(path, options);
         if (scenario.operationUnavailable) return reply({ status: 503, title: "Synthetic operation observation unavailable" }, 503);
         const id = decodeURIComponent(path.split("/").at(-1));
