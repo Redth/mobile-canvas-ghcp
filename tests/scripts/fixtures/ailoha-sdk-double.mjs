@@ -6,6 +6,10 @@ import { createCatalogModel } from "./ailoha-catalog-creation.mjs";
 export const scenario = {
   calls: [], leases: new Map(), videos: new Map(), operations: new Map(), status: "running", geometryRevision: 13,
   catalog: null, createdTargets: new Map(), creationGate: null,
+  connectionRef: {
+    schema: "ailoha.target-host.connection/v1", serviceId: "synthetic-service", pid: 12345,
+    startedAt: "2026-10-09T23:00:00Z", processStartedAt: "2026-10-09T22:59:59Z",
+  },
 };
 export const sourceSha = "0000000000000000000000000000000000000000";
 const targetId = "opaque/target";
@@ -88,6 +92,7 @@ export async function ensureTargetHost(options) {
   return {
     leaseId,
     targetHost: { targetHostId: "synthetic-host", profile: "ailoha.target-host/v1", protocolVersion: "1" },
+    connectionRef: scenario.connectionRef,
   };
 }
 export function registerRuntimeCleanup(leaseId, callback) {
@@ -138,7 +143,7 @@ export async function openTargetHostTransport(leaseId) {
           targetId: createdId, providerId: input.providerId, targetTypeId: input.targetTypeId, name: input.name,
           ...(input.runtimeId ? { runtimeId: input.runtimeId } : {}),
           ...(input.templateId ? { templateId: input.templateId } : {}),
-          status: input.start === false ? "stopped" : "running", surfaces: [],
+          status: input.start === false ? "stopped" : scenario.creationTargetStatus ?? "running", surfaces: [],
           nativeIdentity: {
             platform: type.platform, nativeId: type.platform === "ios" ? `owned-udid-${number}` : `owned_avd_${number}`,
             ...(type.platform === "android" ? { serial: `emulator-${5600 + number}` } : {}),
@@ -155,6 +160,7 @@ export async function openTargetHostTransport(leaseId) {
           ...operation, status: "succeeded", targetId: createdId, result: { targetId: createdId },
           startedAt: "2026-10-10T03:00:01Z", completedAt: "2026-10-10T03:00:02Z",
         });
+        if (scenario.creationAcceptance === "unknown") return reply({}, 202);
         return reply(operation, 202, `/api/v1/operations/${encodeURIComponent(operationId)}`);
       }
       if (path === "/api/v1/targets") return reply([target(), ...[...scenario.createdTargets.keys()].map(createdTarget)]);
@@ -182,6 +188,9 @@ export async function openTargetHostTransport(leaseId) {
       }
       if (path.startsWith("/api/v1/operations/")) {
         const id = decodeURIComponent(path.split("/").at(-1));
+        if (id.startsWith("creation/") && scenario.creationPollFailure) {
+          throw new Error("Owned synthetic operation read failed before completion.");
+        }
         if (id.startsWith("creation/") && scenario.creationGate) await scenario.creationGate.promise;
         return reply(scenario.operations.get(id));
       }
