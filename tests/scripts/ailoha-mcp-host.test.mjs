@@ -19,6 +19,9 @@ test("MCP preserves all61 installed identities and advertises broader opt-in lim
   assert.equal(catalog.find((tool) => tool.name === "mobile_device_app_launch").description.includes("positively unsupported"), true);
   assert.equal(catalog.every((tool) => tool.execution.taskSupport === "forbidden"), true);
   assert.equal(catalog.find((tool) => tool.name === "mobile_device_tap").inputSchema.properties.geometryRevision.maximum, 0xffffffff);
+  const selected = catalog.find((tool) => tool.name === "mobile_device_get_selected");
+  assert.deepEqual(selected.outputSchema.properties.contextBinding.required, ["contextRef", "scopeEpoch", "revision", "ownerProcessId"]);
+  assert.deepEqual(selected.outputSchema.properties.scope.required, ["sessionId", "viewId"]);
 });
 
 test("static plugin opt-in cannot invent a named context or choose the first view", async () => {
@@ -74,6 +77,31 @@ test("unsupported/invalid/cross-scope calls are positive failures before any run
     assert.equal(result.result.isError, true);
   }
   assert.equal(backendCalls, 0);
+});
+
+test("bound empty-context inventory retains the installed MCP list output envelope", async (t) => {
+  const devices = [{ id: "opaque/target", nativeId: "real-native-id" }];
+  const dispatcher = await createAilohaMcpDispatcher({
+    binding, version: "test",
+    async createBackend(options) {
+      assert.deepEqual(options.scope, binding.scope);
+      return {
+        async invokeAction(action) {
+          assert.equal(action, "list_devices");
+          return devices;
+        },
+        async dispose() {},
+      };
+    },
+  });
+  t.after(() => dispatcher.dispose());
+  const catalog = await dispatcher.handle(message("tools/list"));
+  const schema = catalog.result.tools.find((tool) => tool.name === "mobile_device_list").outputSchema;
+  assert.deepEqual(schema.required, ["result"]);
+  const result = await dispatcher.handle(call("mobile_device_list", {}));
+  assert.notEqual(result.result.isError, true);
+  assert.deepEqual(result.result.structuredContent, { result: devices });
+  assert.deepEqual(JSON.parse(result.result.content[0].text), result.result.structuredContent);
 });
 
 test("operational failure is sanitized and never triggers a legacy or second-owner invocation", async (t) => {

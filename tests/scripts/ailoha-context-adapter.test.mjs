@@ -59,6 +59,9 @@ function fixture(options = {}) {
     store, calls,
     concurrentChange() { current.revision = "9"; },
     applicationSelection() { current.selection = { applicationId: "app:src/App.csproj" }; },
+    externalRetirement() {
+      current = { ...current, state: "detached", revision: String(BigInt(current.revision) + 1n), selection: null, observed: null };
+    },
   };
 }
 
@@ -123,6 +126,18 @@ test("unbound reads and repeated detach never open or resurrect authority", asyn
   await assert.rejects(state.store.binding({ allowReopen: false }), { code: "context_retired" });
   assert.equal(state.calls.filter((args) => args[1] === "open").length, 1);
   assert.equal(state.calls.filter((args) => args[1] === "detach").length, 1);
+});
+
+test("an externally retired empty authority no longer projects an open context binding", async () => {
+  const state = fixture();
+  await state.store.binding();
+  assert.equal(state.store.contextProjection.contextRef, document.contextRef);
+  state.externalRetirement();
+  assert.equal(await state.store.read(), null);
+  assert.equal(state.store.state, "detached");
+  assert.equal(state.store.contextProjection, undefined);
+  assert.equal(state.calls.filter((args) => args[1] === "open").length, 1);
+  assert.equal(state.calls.some((args) => ["select", "detach"].includes(args[1])), false);
 });
 
 test("a pending GET cannot restore an old open document after detach", async () => {

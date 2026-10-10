@@ -19,6 +19,9 @@ for (const [host, product] of [
     assert.equal(evidence.synthetic, true);
     assert.deepEqual(evidence.units, [0, 1, 2, 3, 4, 5]);
     assert.equal(evidence.nativeIdentityPreserved, true);
+    assert.equal(evidence.returnedBindingConsumed, true);
+    assert.equal(evidence.emptyContextInventory, true);
+    assert.equal(evidence.externalRetirementRejected, true);
     assert.equal(evidence.videoResourcesAfterClose, 0);
     assert.equal(evidence.leaseCountAfterClose, 0);
     assert.equal(evidence.noHostStop, true);

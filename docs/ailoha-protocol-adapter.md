@@ -222,8 +222,12 @@ SDK owns selected-RID lazy native acquisition, private metadata/process checks,
 direct bounded authenticated HTTP/WS and lease cleanup. Mobile Canvas adds no
 native downloader, private credential reader or bearer-bearing renderer URL.
 Only the approved small launcher/dependency graph is copied by the host
-preparers, with tarball/integrity and license notices retained. Required native
-RIDs and public pins remain upstream release evidence, not consumer assumptions.
+preparers, with tarball/integrity and license notices retained. Its dependencies
+must be bundled within the pinned launcher; hoisted checkout dependencies cannot
+substitute for an incomplete installed graph. The complete bundled tree,
+including transitive dependencies, is retained without native optional packages
+or symlinks. Required native RIDs and public pins remain upstream release
+evidence, not consumer assumptions.
 
 `connectTargetHostTransport` applies the same strict validators and bounded
 operation waits to the factory's `response()` metadata without requiring or
@@ -262,8 +266,12 @@ not adopted as native package identity.
 `contextBinding` projection when backed by the canonical authority:
 `contextRef`, `scopeEpoch`, string `revision` and the actual product
 `ownerProcessId`. This is the explicit binding used for a separately configured
-MCP process, not a ref hash or inferred first panel. Invocation results retain
-the same captured `executionContext` separately from local selection generation.
+MCP process, not a ref hash or inferred first panel. An open empty view returns
+`hasSelection: false` with its verified binding and scope, allowing read-only
+inventory without inferring a target. A retired authority returns an explicit
+error, not an empty usable binding; adapters without a canonical projection keep
+the original `{ hasSelection: false }` output. Invocation results retain the same
+captured `executionContext` separately from local selection generation.
 
 Input captures one view/host/target/surface tuple and observed logical bounds,
 coordinate space and geometry revision. Additive `surfaceId`, `coordinate` and

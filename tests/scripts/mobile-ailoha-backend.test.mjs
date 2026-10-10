@@ -99,7 +99,7 @@ function fixture(options = {}) {
     operationState: options.operationState,
   });
   return {
-    backend, calls, targets, providers, client, media, cleanups,
+    backend, calls, targets, providers, client, media, cleanups, selectionStore,
     retireContext() { contextState = "detached"; },
     geometryChanged() { revision += 1; },
     selectHost(hostId) { selection = { targetHostId: hostId, targetId: "one" }; },
@@ -129,6 +129,73 @@ test("real compatibility action paths project inventory/selection/native identit
   const unsupported = await state.backend.request("/api/v1/devices/one/ui");
   assert.equal(unsupported.status, 501);
   assert.equal((await unsupported.json()).code, "capability_not_supported");
+});
+
+test("an open empty canonical view projects its verified binding without inferring a target", async (t) => {
+  const state = fixture();
+  t.after(() => state.backend.dispose());
+  const binding = {
+    contextRef: "ctx-returned-empty", scopeEpoch: "returned-empty-epoch", revision: "0", ownerProcessId: 1234,
+  };
+  Object.defineProperty(state.selectionStore, "contextProjection", { get: () => binding });
+  const selected = await state.backend.invokeAction("get_selected_device");
+  assert.deepEqual(selected, {
+    hasSelection: false,
+    scope: { sessionId: "unique-session", viewId: "unique-view" },
+    contextBinding: binding,
+  });
+  assert.equal(Object.hasOwn(selected, "device"), false);
+  assert.equal(state.calls.length, 0);
+  binding.revision = "1";
+  assert.equal(selected.contextBinding.revision, "0");
+  await state.backend.select("one");
+  const populated = await state.backend.getSelected();
+  assert.equal(populated.contextBinding.revision, "1");
+  assert.equal(populated.device.nativeId, "real-native-one");
+});
+
+test("selection reads that observe retirement cannot project an empty or populated binding", async (t) => {
+  for (const selection of [null, { targetHostId: "host", targetId: "one" }]) {
+    const state = fixture();
+    t.after(() => state.backend.dispose());
+    const reading = deferred();
+    const result = deferred();
+    Object.defineProperty(state.selectionStore, "contextProjection", {
+      value: { contextRef: "ctx-old", scopeEpoch: "old-epoch", revision: "0", ownerProcessId: 1234 },
+    });
+    state.selectionStore.read = async () => {
+      reading.resolve();
+      await result.promise;
+      return selection;
+    };
+    const pending = state.backend.getSelected();
+    const rejected = assert.rejects(pending, { code: "view_closed" });
+    await reading.promise;
+    state.retireContext();
+    result.resolve();
+    await rejected;
+    assert.equal(state.calls.length, 0);
+  }
+});
+
+test("retirement during selected target confirmation cannot return a stale usable binding", async (t) => {
+  const state = fixture();
+  t.after(() => state.backend.dispose());
+  await state.backend.select("one");
+  const reading = deferred();
+  const result = deferred();
+  const get = state.client.getTarget;
+  state.client.getTarget = async (...args) => {
+    reading.resolve();
+    await result.promise;
+    return get(...args);
+  };
+  const pending = state.backend.getSelected();
+  const rejected = assert.rejects(pending, { code: "view_closed" });
+  await reading.promise;
+  state.retireContext();
+  result.resolve();
+  await rejected;
 });
 
 test("lifecycle awaits authoritative completion and selection cannot retarget accepted work", async (t) => {
