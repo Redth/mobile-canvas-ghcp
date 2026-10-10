@@ -84,6 +84,7 @@ async (page) => {
     const finalized = await evidence();
     verify(finalized.recordingCommands.filter((action) => action === "start").length === 1
       && finalized.recordingCommands.filter((action) => action === "stop").length === 1
+      && finalized.recordingCommands.filter((action) => action === "recover").length === 1
       && finalized.recordingFiles === 1,
     "The prepared renderer did not finalize exactly its first owned recording.");
     await recordButton.click();
@@ -99,6 +100,7 @@ async (page) => {
     && (!recordingLostStart || hidden.errors[0].code === "ailoha_cli_failed"),
     "Hiding the real shared renderer did not retire exactly its owned video/lease.");
   if (recording) verify(hidden.recordingCommands.filter((action) => action === "stop").length === 2
+    && hidden.recordingCommands.filter((action) => action === "recover").length === 2
     && hidden.recordingFiles === 2,
     "Hiding the view did not finalize its captured recording before lease release.");
   await page.evaluate(() => {

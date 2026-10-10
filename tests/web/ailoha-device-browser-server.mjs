@@ -62,6 +62,7 @@ async function close() {
     rmSync(contextPath, { force: true });
     if (recording) {
       rmSync(`${contextPath}.recording-calls`, { force: true });
+      rmSync(`${contextPath}.recording-completed`, { force: true });
       rmSync(`${contextPath}.lost-start`, { force: true });
       rmSync(recordingHome, { recursive: true, force: true });
     }

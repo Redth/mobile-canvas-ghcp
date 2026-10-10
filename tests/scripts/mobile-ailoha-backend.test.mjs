@@ -311,6 +311,12 @@ test("view close waits for a concurrent accepted recording start before releasin
         active = false;
         return JSON.stringify(record("completed"));
       }
+      if (action === "recover") return JSON.stringify({
+        ...record("completed"), outcome: "downloaded", hostInstanceId: "instance-one",
+        stopOperationId: "stop-operation-one", stopRequestId: "stop-request-one",
+        contextRef: "ctx-canonical-snapshot", scopeEpoch: "original-epoch", contextRevision: "1",
+        downloadedAt: "2026-10-10T01:02:00Z", downloadedLength: 21,
+      });
       throw new Error("Unexpected recording command");
     },
   });
@@ -324,7 +330,7 @@ test("view close waits for a concurrent accepted recording start before releasin
   accepted.resolve();
   await starting;
   await closing;
-  assert.deepEqual(calls, ["status", "start", "status", "stop"]);
+  assert.deepEqual(calls, ["status", "start", "status", "stop", "recover"]);
   assert.equal(state.calls.filter((call) => call[0] === "release-end").length, 1);
   assert.equal(recording.tracked, false);
 });

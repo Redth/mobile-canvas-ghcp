@@ -386,14 +386,17 @@ start response is not submitted twice. The view retains that captured owner
 across runtime lease replacement and selection changes. Stop uses the original
 bound owner even after selecting another target; failed finalization/download
 remains visible and prevents the canvas lease from releasing. The canonical
-CLI exposes generic errors for both indeterminate/failed stops and retryable
-downloads, and its
-retry can issue a new Target Host stop after a terminal failure. Mobile Canvas
-therefore never issues another CLI stop after an attempted stop, never treats an
-unrelated file at the output path as proof of finalization, and pins the first
-authoritatively identified recording ID across later status/stop responses.
-Safe poll/download-only recovery of a failed or timed-out stop requires a new
-native contract with a matching terminal receipt.
+CLI's recover-only operation is required after even a successful legacy stop:
+Mobile Canvas releases the owner only after a matching durable downloaded
+receipt proves the original context, host incarnation, recording and stop
+identities, artifact and output. A lost or failed stop/download response retries
+only captured recovery, never a second stop. Pending, failed and unknown
+recovery outcomes retain the owner and block lease release or another start;
+a file at the output path alone never proves completion. A pending start may
+have no recording ID; only the first authoritatively known ID is pinned.
+This source behavior requires the separately reviewed native recovery contract
+and a compatible public SDK pin; the current opt-in remains unavailable without
+those prepared public inputs.
 The default host output is a unique MP4 under
 `~/.mobile-canvas/artifacts/recordings`; explicit absolute MP4 host paths are
 accepted, but the canonical landing refuses an existing file rather than

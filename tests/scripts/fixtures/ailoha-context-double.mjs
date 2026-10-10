@@ -13,6 +13,7 @@ if (args[0] === "recording") {
   const contextRef = option("--context");
   const scopeEpoch = option("--context-epoch");
   const recordingPath = `${path}.recording`;
+  const completedPath = `${path}.recording-completed`;
   let tracked = null;
   try { tracked = JSON.parse(readFileSync(recordingPath, "utf8")); }
   catch (error) { if (error.code !== "ENOENT") throw error; }
@@ -35,9 +36,13 @@ if (args[0] === "recording") {
     const output = {
       recordingId: randomUUID(), targetHostId: context.selection.targetHostId,
       targetId: context.selection.targetId, surfaceId: context.selection.surfaceId,
+      hostInstanceId: "instance-synthetic", operationId: randomUUID(),
       state: "recording", outputFile, startedAt: new Date().toISOString(),
     };
-    writeFileSync(recordingPath, JSON.stringify({ contextRef, scopeEpoch, output }), { flag: "wx" });
+    rmSync(completedPath, { force: true });
+    writeFileSync(recordingPath, JSON.stringify({
+      contextRef, scopeEpoch, contextRevision: context.revision, output,
+    }), { flag: "wx" });
     const lostStart = `${path}.lost-start`;
     if (process.env.AILOHA_TEST_RECORDING_LOST_ACK && !existsSync(lostStart)) {
       writeFileSync(lostStart, "accepted");
@@ -47,8 +52,21 @@ if (args[0] === "recording") {
   } else if (args[1] === "stop") {
     if (!tracked) throw new Error("The synthetic recording has no accepted owner.");
     writeFileSync(tracked.output.outputFile, Buffer.from("synthetic-mp4-fixture"), { flag: "wx" });
+    const completed = {
+      ...tracked.output, state: "completed", artifactId: randomUUID(),
+      stopOperationId: randomUUID(), stopRequestId: randomUUID(),
+      outcome: "downloaded", contextRef, scopeEpoch, contextRevision: tracked.contextRevision,
+      downloadedAt: new Date().toISOString(), downloadedLength: Buffer.byteLength("synthetic-mp4-fixture"),
+    };
+    writeFileSync(completedPath, JSON.stringify(completed), { flag: "wx" });
     rmSync(recordingPath);
-    process.stdout.write(JSON.stringify({ ...tracked.output, state: "completed", artifactId: randomUUID() }));
+    process.stdout.write(JSON.stringify(completed));
+  } else if (args[1] === "recover") {
+    const completed = JSON.parse(readFileSync(completedPath, "utf8"));
+    if (completed.contextRef !== contextRef || completed.scopeEpoch !== scopeEpoch) {
+      throw new Error("The synthetic completed recording belongs to another scoped authority.");
+    }
+    process.stdout.write(JSON.stringify(completed));
   } else throw new Error("Unexpected synthetic recording command.");
   process.exit(0);
 }

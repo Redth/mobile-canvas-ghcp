@@ -9,6 +9,7 @@ import * as sdkDouble from "./fixtures/ailoha-sdk-double.mjs";
 const { AilohaRecordingCoordinator } = await import(productModule("lib/ailoha/recording-coordinator.mjs"));
 const { recordingOutputPath } = await import(productModule("lib/ailoha/recording-artifact.mjs"));
 const { createRuntimeMobileBackend } = await import(productModule("lib/ailoha/runtime-backend.mjs"));
+const { createVerifiedAilohaCli } = await import(productModule("lib/ailoha/runtime-sdk.mjs"));
 
 const invocation = Object.freeze({
   targetHostId: "host-one", targetId: "target-one", surfaceId: "surface-one", providerId: "provider-one",
@@ -21,6 +22,16 @@ const record = (state = "recording") => ({
   targetId: invocation.targetId, surfaceId: invocation.surfaceId, state,
   outputFile: path, startedAt: "2026-10-10T01:00:00Z",
   ...(state === "completed" ? { artifactId: "artifact-one" } : {}),
+});
+const recovery = (entry = record("completed"), overrides = {}) => ({
+  ...entry, outcome: "downloaded", hostInstanceId: entry.hostInstanceId ?? "instance-one",
+  stopOperationId: "stop-operation-one", stopRequestId: "stop-request-one",
+  contextRef: "ctx-captured", scopeEpoch: "epoch-captured", contextRevision: "7",
+  downloadedAt: "2026-10-10T01:02:00Z", downloadedLength: 21,
+  ...overrides,
+});
+const unresolved = (outcome = "pending", entry = record()) => ({
+  ...entry, outcome, code: "RecordingPending",
 });
 
 function fixture({ run } = {}) {
@@ -50,6 +61,7 @@ function fixture({ run } = {}) {
         active = null;
         return JSON.stringify(record("completed"));
       }
+      if (action === "recover") return JSON.stringify(recovery());
       throw new Error("unexpected command");
     },
   });
@@ -70,7 +82,7 @@ test("canonical CLI owns recording lifecycle and the captured view/target/destin
   await assert.rejects(coordinator.stop("target-two"), { code: "recording_not_tracked" });
   assert.equal((await coordinator.stop("target-one")).isRecording, false);
   await coordinator.finalize();
-  assert.deepEqual(calls.map((call) => call.action), ["status", "start", "status", "stop"]);
+  assert.deepEqual(calls.map((call) => call.action), ["status", "start", "status", "stop", "recover"]);
 });
 
 test("lost start acceptance is not replayed; only captured status/stop can recover it", async () => {
@@ -88,13 +100,107 @@ test("lost start acceptance is not replayed; only captured status/stop can recov
         active = null;
         return JSON.stringify(record("completed"));
       }
+      if (action === "recover") return JSON.stringify(recovery());
     },
   });
   await assert.rejects(coordinator.start(invocation), /lost accepted start/);
   await assert.rejects(coordinator.start(invocation), { code: "recording_already_tracked" });
   assert.equal((await coordinator.status(invocation)).isRecording, true);
   await coordinator.finalize();
-  assert.deepEqual(calls, ["status", "start", "status", "status", "status", "stop"]);
+  assert.deepEqual(calls, ["status", "start", "status", "status", "status", "stop", "recover"]);
+});
+
+test("pending canonical status retains the original owner without pinning an empty recording ID", async () => {
+  let state = "pending";
+  let starts = 0;
+  let stops = 0;
+  const owned = {
+    ...record(), hostInstanceId: "instance-one",
+    contextRef: "ctx-captured", scopeEpoch: "epoch-captured", contextRevision: "7",
+  };
+  const { coordinator } = fixture({
+    run(action) {
+      if (action === "status") {
+        if (!starts) return "null";
+        return JSON.stringify(state === "pending"
+          ? { ...owned, state, recordingId: "" } : { ...owned, state });
+      }
+      if (action === "start") {
+        starts += 1;
+        throw new Error("accepted start response lost");
+      }
+      if (action === "recover") return JSON.stringify(recovery({
+        ...owned, state: "completed", artifactId: "artifact-one",
+      }));
+      stops += 1;
+      return JSON.stringify({ ...owned, state: "completed", artifactId: "artifact-one" });
+    },
+  });
+  await assert.rejects(coordinator.start(invocation), /response lost/);
+  assert.equal((await coordinator.status(invocation)).isRecording, true);
+  await assert.rejects(coordinator.start(invocation), { code: "recording_already_tracked" });
+  state = "recording";
+  assert.equal((await coordinator.status(invocation)).isRecording, true);
+  assert.equal((await coordinator.stop("target-one")).isRecording, false);
+  assert.equal(starts, 1);
+  assert.equal(stops, 1);
+});
+
+test("unassigned pending recovery omits recording and operation IDs without permitting stop replay", async () => {
+  const { recordingId: _unassigned, ...pending } = record("pending");
+  let accepted = false;
+  let stops = 0;
+  const { coordinator } = fixture({
+    run(action) {
+      if (action === "status") return JSON.stringify(accepted
+        ? { ...pending, hostInstanceId: "instance-one", requestId: "start-request-one" } : null);
+      if (action === "start") {
+        accepted = true;
+        throw new Error("unacknowledged start");
+      }
+      if (action === "stop") {
+        stops += 1;
+        throw new Error("stop acceptance unknown");
+      }
+      if (action === "recover") return JSON.stringify({
+        ...pending, hostInstanceId: "instance-one", requestId: "start-request-one",
+        contextRef: "ctx-captured", scopeEpoch: "epoch-captured", contextRevision: "7",
+        outcome: "unknown", code: "RecordingAcceptanceUnknown",
+      });
+    },
+  });
+  await assert.rejects(coordinator.start(invocation), /unacknowledged start/);
+  assert.equal((await coordinator.status(invocation)).isRecording, true);
+  await assert.rejects(coordinator.stop("target-one"), /stop acceptance unknown/);
+  await assert.rejects(coordinator.finalize(), { code: "recording_recovery_unknown" });
+  await assert.rejects(coordinator.start(invocation), { code: "recording_recovery_unknown" });
+  assert.equal(stops, 1);
+  assert.equal(coordinator.tracked, true);
+});
+
+test("canonical context and host incarnation cannot change after an accepted pending start", async () => {
+  let status = null;
+  let stops = 0;
+  const { coordinator } = fixture({
+    run(action) {
+      if (action === "status") return JSON.stringify(status);
+      if (action === "start") throw new Error("accepted start response lost");
+      stops += 1;
+      return JSON.stringify(record("completed"));
+    },
+  });
+  await assert.rejects(coordinator.start(invocation), /response lost/);
+  status = { ...record("pending"), recordingId: "", hostInstanceId: "instance-one",
+    contextRef: "ctx-captured", scopeEpoch: "epoch-captured", contextRevision: "7" };
+  assert.equal((await coordinator.status(invocation)).isRecording, true);
+  status = { ...record(), hostInstanceId: "instance-two",
+    contextRef: "ctx-captured", scopeEpoch: "epoch-captured", contextRevision: "7" };
+  await assert.rejects(coordinator.status(invocation), { code: "recording_owner_mismatch" });
+  status = { ...status, hostInstanceId: "instance-one", scopeEpoch: "epoch-replaced" };
+  await assert.rejects(coordinator.status(invocation), { code: "recording_owner_mismatch" });
+  await assert.rejects(coordinator.start(invocation), { code: "recording_owner_mismatch" });
+  assert.equal(coordinator.tracked, true);
+  assert.equal(stops, 0);
 });
 
 test("close uses native pending-start recovery when status cannot name the accepted recording", async () => {
@@ -105,13 +211,14 @@ test("close uses native pending-start recovery when status cannot name the accep
       if (action === "status") return "null";
       if (action === "start") throw new Error("lost native start acknowledgement");
       if (action === "stop") return JSON.stringify(record("completed"));
+      if (action === "recover") return JSON.stringify(recovery());
     },
   });
   const starting = coordinator.start(invocation);
   const closing = coordinator.finalize();
   await assert.rejects(starting, /lost native start/);
   await closing;
-  assert.deepEqual(calls, ["status", "start", "stop"]);
+  assert.deepEqual(calls, ["status", "start", "stop", "recover"]);
 });
 
 test("lost stop response and failed download retain original owner without a second stop", async () => {
@@ -122,6 +229,9 @@ test("lost stop response and failed download retain original owner without a sec
       calls.push(action);
       if (action === "status") return JSON.stringify(stops ? record("completed") : null);
       if (action === "start") return JSON.stringify(record());
+      if (action === "recover") return JSON.stringify({
+        ...unresolved("downloadFailed", record("completed")), code: "ArtifactDownloadFailed",
+      });
       if (action === "stop") {
         if (++stops === 1) throw new Error("canonical accepted stop but download failed");
         return JSON.stringify(record("completed"));
@@ -130,10 +240,10 @@ test("lost stop response and failed download retain original owner without a sec
   });
   await coordinator.start(invocation, { outputPath: path });
   await assert.rejects(coordinator.stop("target-one"), /download failed/);
-  await assert.rejects(coordinator.start(invocation), { code: "recording_already_tracked" });
-  await assert.rejects(coordinator.finalize(), { code: "recording_stop_unresolved" });
+  await assert.rejects(coordinator.start(invocation), { code: "recording_recovery_download_failed" });
+  await assert.rejects(coordinator.finalize(), { code: "recording_recovery_download_failed" });
   assert.equal(coordinator.tracked, true);
-  assert.deepEqual(calls, ["status", "start", "stop", "status", "status", "status"]);
+  assert.deepEqual(calls, ["status", "start", "stop", "recover", "recover"]);
 });
 
 test("an ambiguous failed stop cannot submit a second CLI stop even after a terminal artifact", async () => {
@@ -142,6 +252,7 @@ test("an ambiguous failed stop cannot submit a second CLI stop even after a term
     run(action) {
       if (action === "status") return JSON.stringify(stops ? record("completed") : null);
       if (action === "start") return JSON.stringify(record());
+      if (action === "recover") return JSON.stringify(unresolved());
       if (action === "stop") {
         stops += 1;
         throw new Error("the native stop outcome is ambiguous");
@@ -150,10 +261,125 @@ test("an ambiguous failed stop cannot submit a second CLI stop even after a term
   });
   await coordinator.start(invocation);
   await assert.rejects(coordinator.stop("target-one"), /ambiguous/);
-  await assert.rejects(coordinator.stop("target-one"), { code: "recording_stop_unresolved" });
-  await assert.rejects(coordinator.finalize(), { code: "recording_stop_unresolved" });
+  await assert.rejects(coordinator.stop("target-one"), { code: "recording_recovery_pending" });
+  await assert.rejects(coordinator.finalize(), { code: "recording_recovery_pending" });
   assert.equal(stops, 1);
   assert.equal(coordinator.tracked, true);
+});
+
+test("failed artifact download retries only captured recovery after active pointer deletion", async () => {
+  let outcome = "downloadFailed";
+  let stops = 0;
+  const calls = [];
+  const { coordinator } = fixture({
+    run(action) {
+      calls.push(action);
+      if (action === "status") return "null";
+      if (action === "start") return JSON.stringify(record());
+      if (action === "stop") {
+        stops += 1;
+        return JSON.stringify(record("completed"));
+      }
+      if (action === "recover") return JSON.stringify(outcome === "downloaded"
+        ? recovery() : { ...unresolved(outcome, record("completed")), code: "ArtifactDownloadFailed" });
+    },
+  });
+  await coordinator.start(invocation);
+  await assert.rejects(coordinator.stop("target-one"), { code: "recording_recovery_download_failed" });
+  await assert.rejects(coordinator.finalize(), { code: "recording_recovery_download_failed" });
+  assert.equal(coordinator.tracked, true);
+  outcome = "downloaded";
+  assert.equal((await coordinator.status(invocation)).isRecording, false);
+  assert.equal(coordinator.tracked, false);
+  assert.equal(stops, 1);
+  assert.deepEqual(calls, ["status", "start", "stop", "recover", "recover", "recover"]);
+});
+
+test("lost successful recovery response replays only its durable receipt", async () => {
+  let recoveries = 0;
+  let stops = 0;
+  const { coordinator } = fixture({
+    run(action) {
+      if (action === "status") return "null";
+      if (action === "start") return JSON.stringify(record());
+      if (action === "stop") {
+        stops += 1;
+        return JSON.stringify(record("completed"));
+      }
+      if (action === "recover") {
+        recoveries += 1;
+        if (recoveries === 1) throw new Error("completed recovery response lost");
+        return JSON.stringify(recovery());
+      }
+    },
+  });
+  await coordinator.start(invocation);
+  await assert.rejects(coordinator.stop("target-one"), /response lost/);
+  assert.equal(coordinator.tracked, true);
+  await coordinator.finalize();
+  assert.equal(coordinator.tracked, false);
+  assert.equal(stops, 1);
+  assert.equal(recoveries, 2);
+});
+
+test("a downloaded receipt must match every pinned owner and stop identity", async () => {
+  const begun = {
+    ...record(), hostInstanceId: "instance-one",
+    operationId: "start-operation-one", requestId: "start-request-one",
+  };
+  const stopped = {
+    ...record("completed"), hostInstanceId: "instance-one",
+    operationId: "terminal-operation-one", stopOperationId: "stop-operation-one",
+    stopRequestId: "stop-request-one",
+  };
+  const valid = recovery({
+    ...stopped, operationId: begun.operationId, requestId: begun.requestId,
+  });
+  for (const field of [
+    "recordingId", "targetHostId", "hostInstanceId", "targetId", "surfaceId", "outputFile",
+    "contextRef", "scopeEpoch", "contextRevision", "operationId", "requestId",
+    "stopOperationId", "stopRequestId", "artifactId",
+  ]) {
+    let stops = 0;
+    const { coordinator } = fixture({
+      run(action) {
+        if (action === "status") return "null";
+        if (action === "start") return JSON.stringify(begun);
+        if (action === "stop") {
+          stops += 1;
+          return JSON.stringify(stopped);
+        }
+        if (action === "recover") return JSON.stringify({ ...valid, [field]: "/replacement.mp4" });
+      },
+    });
+    await coordinator.start(invocation);
+    await assert.rejects(coordinator.stop("target-one"), { code: "recording_owner_mismatch" }, field);
+    await assert.rejects(coordinator.finalize(), { code: "recording_owner_mismatch" }, field);
+    assert.equal(coordinator.tracked, true, field);
+    assert.equal(stops, 1, field);
+  }
+  for (const invalid of [
+    { state: "failed" }, { state: "cancelled" }, { artifactId: undefined },
+    { stopOperationId: undefined }, { stopRequestId: undefined },
+    { downloadedAt: undefined }, { downloadedLength: -1 },
+  ]) {
+    let stops = 0;
+    const { coordinator } = fixture({
+      run(action) {
+        if (action === "status") return "null";
+        if (action === "start") return JSON.stringify(begun);
+        if (action === "stop") {
+          stops += 1;
+          return JSON.stringify(stopped);
+        }
+        if (action === "recover") return JSON.stringify({ ...valid, ...invalid });
+      },
+    });
+    await coordinator.start(invocation);
+    await assert.rejects(coordinator.stop("target-one"), { code: "recording_owner_mismatch" });
+    assert.equal(coordinator.tracked, true);
+    assert.equal(stops, 1);
+  }
 });
 
 test("cancelling is nonterminal and mismatched host/target/surface/output never clears owner", async () => {
@@ -163,6 +389,7 @@ test("cancelling is nonterminal and mismatched host/target/surface/output never 
     run(action) {
       if (action === "status") return JSON.stringify(active ? record(status) : null);
       if (action === "start") { active = true; return JSON.stringify(record(status)); }
+      if (action === "recover") return JSON.stringify(unresolved());
       if (action === "stop") return JSON.stringify(status === "cancelling"
         ? { ...record(status), artifactId: "artifact-unsettled" } : record("completed"));
     },
@@ -170,7 +397,7 @@ test("cancelling is nonterminal and mismatched host/target/surface/output never 
   await coordinator.start(invocation);
   await assert.rejects(coordinator.stop("target-one"), { code: "recording_not_finalized" });
   status = "completed";
-  await assert.rejects(coordinator.finalize(), { code: "recording_stop_unresolved" });
+  await assert.rejects(coordinator.finalize(), { code: "recording_recovery_pending" });
   assert.equal(coordinator.tracked, true);
   for (const field of ["targetHostId", "targetId", "surfaceId", "outputFile"]) {
     const { coordinator: wrong } = fixture({
@@ -192,6 +419,7 @@ test("a failed or cancelled recording never reports a completed stop even with a
       run(action) {
         if (action === "status") return JSON.stringify(active ? record() : null);
         if (action === "start") { active = true; return JSON.stringify(record()); }
+        if (action === "recover") return JSON.stringify(unresolved());
         if (action === "stop") {
           stops += 1;
           return JSON.stringify({ ...record(state), artifactId: "artifact-needs-verification" });
@@ -200,7 +428,7 @@ test("a failed or cancelled recording never reports a completed stop even with a
     });
     await coordinator.start(invocation);
     await assert.rejects(coordinator.stop("target-one"), { code: "recording_not_finalized" });
-    await assert.rejects(coordinator.finalize(), { code: "recording_stop_unresolved" });
+    await assert.rejects(coordinator.finalize(), { code: "recording_recovery_pending" });
     assert.equal(coordinator.tracked, true);
     assert.equal(stops, 1);
   }
@@ -220,6 +448,7 @@ test("same-key concurrent starts submit exactly one native start and release a b
         active = true;
         return JSON.stringify(record());
       }
+      if (action === "recover") return JSON.stringify(recovery());
       active = false;
       return JSON.stringify(record("completed"));
     },
@@ -248,6 +477,7 @@ test("close queued during an unacknowledged start finalizes that accepted owner 
         tracked = true;
         return JSON.stringify(record());
       }
+      if (action === "recover") return JSON.stringify(recovery());
       tracked = false;
       return JSON.stringify(record("completed"));
     },
@@ -260,7 +490,7 @@ test("close queued during an unacknowledged start finalizes that accepted owner 
   await starting;
   await closing;
   assert.equal(coordinator.tracked, false);
-  assert.deepEqual(commands, ["status", "start", "status", "stop"]);
+  assert.deepEqual(commands, ["status", "start", "status", "stop", "recover"]);
 });
 
 test("the shared owner refuses a 65th queued recording intent without dispatching it", async () => {
@@ -329,6 +559,9 @@ test("a lost stop response cannot clear owner from a file without an authoritati
         active = true;
         return JSON.stringify({ ...record(), outputFile });
       }
+      if (action === "recover") return JSON.stringify(unresolved("unknown", {
+        ...record("completed"), outputFile,
+      }));
       stops += 1;
       active = false;
       await writeFile(outputFile, "synthetic-mp4-fixture");
@@ -338,7 +571,7 @@ test("a lost stop response cannot clear owner from a file without an authoritati
   try {
     await coordinator.start(invocation, { outputPath: outputFile });
     await assert.rejects(coordinator.stop("target-one"), /response lost/);
-    await assert.rejects(coordinator.finalize(), { code: "recording_state_unresolved" });
+    await assert.rejects(coordinator.finalize(), { code: "recording_recovery_unknown" });
     assert.equal(coordinator.tracked, true);
     assert.equal(stops, 1);
     assert.equal(await readFile(outputFile, "utf8"), "synthetic-mp4-fixture");
@@ -380,6 +613,9 @@ test("a lost start only pins its recording ID after the original owner-matched s
         active = true;
         throw new Error("lost accepted start response");
       }
+      if (action === "recover") return JSON.stringify(recovery({
+        ...record("completed"), recordingId: "replacement-recording",
+      }));
       stops += 1;
       return JSON.stringify({ ...record("completed"), recordingId: "replacement-recording" });
     },
@@ -389,7 +625,7 @@ test("a lost start only pins its recording ID after the original owner-matched s
   await assert.rejects(coordinator.stop("target-one"), { code: "recording_owner_mismatch" });
   assert.equal(stops, 1);
   assert.equal(coordinator.tracked, true);
-  await assert.rejects(coordinator.stop("target-one"), { code: "recording_stop_unresolved" });
+  await assert.rejects(coordinator.stop("target-one"), { code: "recording_owner_mismatch" });
   assert.equal(stops, 1);
 });
 
@@ -444,4 +680,48 @@ test("host output rejects invalid paths and generates unique local recording des
   const second = await recordingOutputPath(undefined, "ios");
   assert.notEqual(first, second);
   assert.match(first, /\.mobile-canvas\/artifacts\/recordings\/ios-.*\.mp4$/);
+});
+
+test("verified CLI preserves only typed nonzero recording recovery stdout", async () => {
+  const pin = { version: "synthetic-only", sourceSha: "a".repeat(40) };
+  const launchFor = (response) => createVerifiedAilohaCli({
+    pin,
+    sdk: {
+      async getVerifiedCliLaunch() {
+        return {
+          ...pin, file: process.execPath,
+          args: ["-e", `process.stdout.write(${JSON.stringify(response)});process.exit(1)`],
+        };
+      },
+    },
+  });
+  const pending = JSON.stringify({
+    outcome: "pending", code: "RecordingPending", recordingId: "",
+    targetHostId: "host-one", targetId: "target-one", surfaceId: "surface-one",
+  });
+  assert.equal(await launchFor(pending)(["recording", "recover", "--json"]), pending);
+  await assert.rejects(launchFor(pending)(["recording", "stop", "--json"]), { code: "ailoha_cli_failed" });
+  await assert.rejects(launchFor(JSON.stringify({ outcome: "downloaded" }))(
+    ["recording", "recover", "--json"]), { code: "ailoha_cli_failed" });
+  await assert.rejects(launchFor("<unstructured failure>")(
+    ["recording", "recover", "--json"]), { code: "ailoha_cli_failed" });
+  const controller = new AbortController();
+  const aborted = createVerifiedAilohaCli({
+    pin,
+    sdk: {
+      async getVerifiedCliLaunch() {
+        return {
+          ...pin, file: process.execPath,
+          args: ["-e", `process.stdout.write(${JSON.stringify(pending)});setInterval(() => {}, 1000)`],
+        };
+      },
+    },
+  });
+  const timer = setTimeout(() => controller.abort(), 150);
+  try {
+    await assert.rejects(aborted(["recording", "recover", "--json"], { signal: controller.signal }),
+      { code: "ailoha_cli_failed" });
+  } finally {
+    clearTimeout(timer);
+  }
 });

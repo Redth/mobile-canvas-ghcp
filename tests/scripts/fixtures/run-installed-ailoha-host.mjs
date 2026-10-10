@@ -365,6 +365,7 @@ try {
   let recordingCommands = readFileSync(`${process.env.AILOHA_TEST_CONTEXT_STATE}.recording-calls`, "utf8").trim().split("\n");
   assert.equal(recordingCommands.filter((command) => command === "start").length, 2);
   assert.equal(recordingCommands.filter((command) => command === "stop").length, 2);
+  assert.equal(recordingCommands.filter((command) => command === "recover").length, 2);
   assert.equal(existsSync(`${process.env.AILOHA_TEST_CONTEXT_STATE}.recording`), false);
   assert.deepEqual(units, [0, 1, 2, 3, 4, 5]);
   assert.equal(scenario.videos.size, 0);
@@ -411,6 +412,7 @@ try {
   recordingCommands = readFileSync(`${process.env.AILOHA_TEST_CONTEXT_STATE}.recording-calls`, "utf8").trim().split("\n");
   assert.equal(recordingCommands.filter((command) => command === "start").length, 3);
   assert.equal(recordingCommands.filter((command) => command === "stop").length, 3);
+  assert.equal(recordingCommands.filter((command) => command === "recover").length, 3);
   scenario.recordingEnabled = false;
   contextCommands[0] = {
     ...contextCommands[0], state: "detached", selection: null, observed: null,
