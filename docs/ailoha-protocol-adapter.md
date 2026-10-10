@@ -516,9 +516,10 @@ Finalization rechecks the monotonic deadline itself, not only its timer.
 Late results remain in the private `submissionResult`/original operation
 receipt, while the originating caller receives an explicit unknown outcome.
 HTTP 408/499 and disposed-client uncertainty are not definitive submission
-rejections: they cannot evict an uncertain lifecycle or video receipt and cause
-another mutation. A retained authoritative operation ID can still be recovered
-by GET without a new approval or POST.
+rejections: they cannot evict an uncertain lifecycle, app, creation, or video
+receipt and cause another mutation. Definitive local pre-admission denials and
+HTTP 403 still release their exact receipts. A retained authoritative operation
+ID can still be recovered by GET without a new approval or POST.
 The canonical adapter also captures a frozen, non-enumerable `contextOwner`
 (`processId`, exact `processStartedAt`) in the same snapshot and invocation.
 Install proof PID and owner birth must match this original value exactly;

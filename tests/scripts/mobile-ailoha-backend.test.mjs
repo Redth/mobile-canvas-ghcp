@@ -951,6 +951,51 @@ test("a timed-out accepted staged install resumes only the original operation re
     ["stage", "approval", "install", "wait", "cleanup", "wait"]);
 });
 
+test("accepted HTTP 202 staged install resumes GET on the original operation without another prompt or POST", async (t) => {
+  let state;
+  state = await stagedFixture(t, { stagedApps: {
+    async install() {
+      state.steps.push(["install"]);
+      throw new AilohaProtocolError("transport_error", { status: 202, operationId: "install-operation" });
+    },
+  } });
+  let reads = 0;
+  const wait = state.client.waitForOperation;
+  state.client.waitForOperation = async (id) => {
+    if (id === "install-operation" && reads++ === 0) {
+      state.steps.push(["wait", id]);
+      throw new MobileAilohaError("operation_timeout", "The accepted operation is still running.", 504);
+    }
+    return wait(id);
+  };
+  await assert.rejects(state.backend.installApp("one", state.sourcePath), { code: "operation_timeout" });
+  await rm(state.sourcePath);
+  await state.advanceSelection();
+  assert.equal((await state.backend.installApp("one", state.sourcePath)).success, true);
+  assert.equal(reads, 2);
+  assert.deepEqual(state.steps.map(([name]) => name),
+    ["stage", "approval", "install", "wait", "wait", "cleanup", "wait"]);
+});
+
+for (const [code, status] of [["http_error", 408], ["http_error", 499], ["client_disposed", undefined]]) {
+  test(`uncertain staged install ${code}/${status ?? "no-status"} retains the original receipt and cannot POST again`, async (t) => {
+    let state;
+    const operationState = new Map();
+    state = await stagedFixture(t, { operationState, stagedApps: {
+      async install() {
+        state.steps.push(["install"]);
+        throw new AilohaProtocolError(code, { status });
+      },
+    } });
+    await assert.rejects(state.backend.installApp("one", state.sourcePath), { code });
+    const [progress] = operationState.values();
+    assert.equal(progress.invocation.contextOwner.processStartedAt, "2026-10-10T00:00:00Z");
+    await assert.rejects(state.backend.installApp("one", state.sourcePath), { code: "app_install_outcome_uncertain" });
+    assert.equal(operationState.get(JSON.stringify(["host", "one", "staged-install", state.sourcePath])), progress);
+    assert.deepEqual(state.steps.map(([name]) => name), ["stage", "approval", "install"]);
+  });
+}
+
 test("approval expiry after an accepted install keeps the original operation ID for GET-only recovery", async (t) => {
   let state;
   state = await stagedFixture(t, {
