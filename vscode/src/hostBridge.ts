@@ -63,6 +63,7 @@ export class HostBridge implements vscode.Disposable {
   private signalOffset = 0;
   private selectionToRestore: string | undefined;
   private visibilityTask: Promise<void> = Promise.resolve();
+  private visibilityNeedsCleanup = false;
 
   constructor(
     private readonly command: string | undefined,
@@ -134,18 +135,29 @@ export class HostBridge implements vscode.Disposable {
 
   async setVisible(visible: boolean): Promise<void> {
     const previous = this.visibilityTask;
-    const task = previous.then(() => this.applyVisibility(visible));
+    const task = previous.then(
+      () => this.applyVisibility(visible),
+      () => this.applyVisibility(visible),
+    );
     this.visibilityTask = task;
     return task;
   }
 
   private async applyVisibility(visible: boolean): Promise<void> {
+    if (this.disposed) return;
+    if (visible && this.ailohaHost && this.visibilityNeedsCleanup) {
+      await this.ailohaHost.closeCanvas();
+      this.invalidateConnection();
+      this.visibilityNeedsCleanup = false;
+    }
     if (!visible) {
       this.closeSockets();
       if (this.ailohaHost) {
+        this.visibilityNeedsCleanup = true;
         this.selectionToRestore = await this.readSelectedDeviceId();
         await this.closeCanvas();
         this.invalidateConnection();
+        this.visibilityNeedsCleanup = false;
       }
     }
     await this.post({ type: "visibility", visible });
@@ -454,8 +466,9 @@ export class HostBridge implements vscode.Disposable {
       let opened = false;
 
       socket.on("open", () => {
+        if (this.sockets.get(id) !== socket || this.discarded.has(socket) || this.disposed) return;
         opened = true;
-        void this.post({ type: "socket-opened", id, protocol: socket.protocol });
+        void this.postSocket({ type: "socket-opened", id, protocol: socket.protocol }, socket);
       });
       socket.on("message", (data, isBinary) => {
         if (this.sockets.get(id) !== socket || this.discarded.has(socket) || this.disposed) return;
@@ -467,20 +480,7 @@ export class HostBridge implements vscode.Disposable {
           )
         ) return;
         const payload = isBinary ? toArrayBuffer(data) : data.toString();
-        void Promise.resolve(this.post({ type: "socket-message", id, data: payload })).then(
-          (delivered) => {
-            if (!delivered && this.ailohaHost && this.sockets.get(id) === socket) {
-              this.output.appendLine("Mobile Canvas: the owned Ailoha renderer declined a video message.");
-              this.discard(socket);
-            }
-          },
-          () => {
-            if (this.ailohaHost && this.sockets.get(id) === socket) {
-              this.output.appendLine("Mobile Canvas: the owned Ailoha renderer message failed.");
-              this.discard(socket);
-            }
-          },
-        );
+        void this.postSocket({ type: "socket-message", id, data: payload }, socket);
       });
       socket.on("error", (error) => {
         // A socket we retired reports the aborted handshake as an error. That is our doing,
@@ -491,19 +491,19 @@ export class HostBridge implements vscode.Disposable {
         if (!opened) {
           this.invalidateConnection(connection);
         }
-        void this.post({ type: "socket-error", id, message: this.ailohaHost ? "The owned Ailoha panel socket failed." : error.message });
+        void this.postSocket({ type: "socket-error", id, message: this.ailohaHost ? "The owned Ailoha panel socket failed." : error.message }, socket);
       });
       socket.on("close", (code, reason) => {
         if (this.sockets.get(id) !== socket) {
           return;
         }
         this.sockets.delete(id);
-        void this.post({
+        void this.postSocket({
           type: "socket-closed",
           id,
           code,
           reason: this.ailohaHost ? "" : reason.toString(),
-        });
+        }, socket);
       });
     } finally {
       this.openingSockets.delete(id);
@@ -543,6 +543,21 @@ export class HostBridge implements vscode.Disposable {
         );
       });
     });
+  }
+
+  private async postSocket(message: ExtensionMessage, socket: WebSocket): Promise<void> {
+    try {
+      const delivered = await this.post(message);
+      if (!delivered && this.ailohaHost) {
+        this.output.appendLine("Mobile Canvas: the owned Ailoha renderer declined a socket message.");
+        if (!this.discarded.has(socket) && socket.readyState !== WebSocket.CLOSED) this.discard(socket);
+      }
+    } catch {
+      this.output.appendLine(this.ailohaHost
+        ? "Mobile Canvas: the owned Ailoha renderer socket delivery failed."
+        : "Mobile Canvas: renderer socket delivery failed.");
+      if (!this.discarded.has(socket) && socket.readyState !== WebSocket.CLOSED) this.discard(socket);
+    }
   }
 
   private closeSocket(id: string): void {

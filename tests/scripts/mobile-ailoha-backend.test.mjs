@@ -4,6 +4,7 @@ import { productModule } from "../ailoha-test-module.mjs";
 const { AilohaMobileBackend } = await import(productModule("lib/ailoha/mobile-backend.mjs"));
 const { mobileCanvasBackend } = await import(productModule("lib/backend.mjs"));
 const { createAilohaMediaAdapter } = await import(productModule("lib/ailoha/media-adapter.mjs"));
+const { AilohaProtocolError } = await import(productModule("lib/ailoha/errors.mjs"));
 
 function deferred() {
   let resolve;
@@ -15,6 +16,7 @@ function fixture(options = {}) {
   const calls = [];
   const cleanups = new Set();
   let selection = null;
+  let contextState = "open";
   let revision = 7;
   const surface = () => ({
     surfaceId: "surface/opaque", kind: "display",
@@ -43,7 +45,11 @@ function fixture(options = {}) {
       if (options.wait) await options.wait.promise;
       if (id.startsWith("start") || id.startsWith("reboot")) targets.get(id.split("-")[1]).status = "running";
       if (id.startsWith("stop")) targets.get(id.split("-")[1]).status = "stopped";
-      return { operationId: id, status: "succeeded" };
+      return {
+        operationId: id, kind: `${id.split("-")[0]}Target`, targetId: id.split("-")[1], providerId: "provider",
+        status: "succeeded", destructive: id.startsWith("reset") || id.startsWith("delete"),
+        createdAt: "2026-10-09T23:00:00Z", startedAt: "2026-10-09T23:00:01Z", completedAt: "2026-10-09T23:00:02Z",
+      };
     },
     dispose() { calls.push(["client-dispose"]); },
     ...options.client,
@@ -71,6 +77,7 @@ function fixture(options = {}) {
     ...options.media,
   };
   const selectionStore = {
+    get state() { return contextState; },
     async read() { return selection; },
     async set(value) { selection = value; },
     async clear() { selection = null; },
@@ -89,9 +96,11 @@ function fixture(options = {}) {
     client, media, owner, selectionStore,
     confirmDestructive: options.confirmDestructive,
     saveScreenshot: options.saveScreenshot,
+    operationState: options.operationState,
   });
   return {
     backend, calls, targets, providers, client, media, cleanups,
+    retireContext() { contextState = "detached"; },
     geometryChanged() { revision += 1; },
     selectHost(hostId) { selection = { targetHostId: hostId, targetId: "one" }; },
   };
@@ -300,6 +309,7 @@ test("provider diagnostics distinguish control connection from unavailable/degra
     providerId: "unavailable-provider", name: "Missing platform tooling", version: "1", state: "unavailable",
     description: "Synthetic Xcode/Android SDK dependency is unavailable.", capabilities: [],
   });
+
   const mixed = await state.backend.catalog();
   assert.equal(mixed.providers.length, 2);
   assert.equal(mixed.devices[0].isAvailable, true);
@@ -317,4 +327,76 @@ test("provider diagnostics distinguish control connection from unavailable/degra
   assert.equal(none.devices.length, 0);
   assert.equal(none.diagnostics.every((diagnostic) => diagnostic.available === false && diagnostic.ready === false), true);
   assert.equal(none.catalogCompleteness, "inventory-only");
+});
+
+test("external named-authority retirement blocks new host operations instead of reusing explicit target IDs", async (t) => {
+  const state = fixture();
+  t.after(() => state.backend.dispose());
+  await state.backend.select("one");
+  await state.backend.display("one");
+  state.retireContext();
+  const before = state.calls.length;
+  await assert.rejects(state.backend.lifecycle("boot", "one"), { code: "view_closed" });
+  await assert.rejects(state.backend.input("tap", "one", { x: 1, y: 30 }), { code: "view_closed" });
+  await assert.rejects(state.backend.listDevices(), { code: "view_closed" });
+  await assert.rejects(state.backend.openVideo("one", () => {}, () => {}), { code: "view_closed" });
+  assert.equal(state.calls.length, before);
+});
+
+test("lost202 lifecycle acceptance polls the retained operation without submitting another mutation", async (t) => {
+  let submissions = 0;
+  const state = fixture({ client: {
+    async startTarget() {
+      submissions += 1;
+      throw new AilohaProtocolError("transport_error", { status: 202, operationId: "start-one" });
+    },
+  } });
+  t.after(() => state.backend.dispose());
+  const result = await state.backend.lifecycle("boot", "one");
+  assert.equal(result.id, "one");
+  assert.equal(submissions, 1);
+  assert.equal(state.calls.some(([name, id]) => name === "wait" && id === "start-one"), true);
+});
+
+test("timed-out lifecycle wait and view reopening recover the captured receipt with exactly one POST", async (t) => {
+  const operationState = new Map();
+  let submissions = 0;
+  let waits = 0;
+  const client = {
+    async startTarget() { submissions += 1; return { operationId: "captured-start" }; },
+    async waitForOperation() {
+      if (++waits === 1) throw new AilohaProtocolError("timeout", { operationId: "captured-start" });
+      return {
+        operationId: "captured-start", kind: "startTarget", targetId: "one", providerId: "provider",
+        status: "succeeded", destructive: false, createdAt: "2026-10-09T23:00:00Z",
+      };
+    },
+  };
+  const first = fixture({ operationState, client });
+  await assert.rejects(first.backend.lifecycle("boot", "one"), { code: "timeout" });
+  await first.backend.dispose();
+  const second = fixture({ operationState, client });
+  t.after(() => second.backend.dispose());
+  const result = await second.backend.lifecycle("boot", "one");
+  assert.equal(result.invocation.scope.viewId, "unique-view");
+  assert.equal(submissions, 1);
+  assert.equal(waits, 2);
+  assert.equal(operationState.size, 0);
+});
+
+test("unknown lifecycle outcomes cannot be replayed and mismatched completion never retargets", async (t) => {
+  let submissions = 0;
+  const unknown = fixture({ client: {
+    async startTarget() { submissions += 1; throw new AilohaProtocolError("transport_error"); },
+  } });
+  t.after(() => unknown.backend.dispose());
+  await assert.rejects(unknown.backend.lifecycle("boot", "one"), { code: "transport_error" });
+  await assert.rejects(unknown.backend.lifecycle("boot", "one"), { code: "lifecycle_outcome_uncertain" });
+  assert.equal(submissions, 1);
+
+  const mismatch = fixture({ client: {
+    async waitForOperation() { return { kind: "startTarget", status: "succeeded", targetId: "two" }; },
+  } });
+  t.after(() => mismatch.backend.dispose());
+  await assert.rejects(mismatch.backend.lifecycle("boot", "one"), { code: "operation_owner_mismatch" });
 });

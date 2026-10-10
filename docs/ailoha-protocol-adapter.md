@@ -267,8 +267,12 @@ intermediate pointer moves (maximum 30 seconds); held presses require the actual
 `long-press.point` surface capability, not just `tap.point`.
 
 Lifecycle submits an accepted operation and polls that captured ID to terminal
-success. Reset/delete require both the own literal confirmation gate and real
-scoped consent; the opt-in has no such human consent adapter and reports them
+success. Lost accepted bodies and timed-out waits retain a bounded receipt across
+view resource replacement; a subsequent action resumes the original operation
+with GET/wait, never a repeated POST. An outcome without a recovery receipt is
+explicitly uncertain and is not replayed. Reset/delete require both the own
+literal confirmation gate and real scoped consent; the opt-in has no such human
+consent adapter and reports them
 unsupported. Create/start omission semantics in the underlying client remain
 unchanged, but the existing creation/catalog compatibility workflow is not
 enabled in this slice.
