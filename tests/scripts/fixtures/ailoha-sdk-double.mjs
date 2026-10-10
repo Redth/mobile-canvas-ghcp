@@ -5,8 +5,10 @@ import { createCatalogModel } from "./ailoha-catalog-creation.mjs";
 
 export const scenario = {
   calls: [], leases: new Map(), videos: new Map(), operations: new Map(), status: "running", geometryRevision: 13,
-  catalog: null, createdTargets: new Map(), creationGate: null, appResponses: false,
-  fencedAppResponses: false, platform: "ios",
+  catalog: null, createdTargets: new Map(), creationGate: null,
+  appResponses: process.env.AILOHA_TEST_APP_RESPONSES === "1",
+  fencedAppResponses: process.env.AILOHA_TEST_FENCED_APP_RESPONSES === "1",
+  platform: process.env.AILOHA_TEST_APP_PLATFORM ?? "ios",
   targets: new Map(), providerId: "synthetic-provider", nativeId: "native-deployment-not-opaque-target",
   connectionRef: {
     schema: "ailoha.target-host.connection/v1", serviceId: "synthetic-service", pid: 12345,

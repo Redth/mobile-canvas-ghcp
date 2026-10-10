@@ -4,7 +4,7 @@ import { randomUUID } from "node:crypto";
 import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
-import { sourceSha } from "./ailoha-sdk-double.mjs";
+import { scenario, sourceSha } from "./ailoha-sdk-double.mjs";
 
 const source = resolve(dirname(fileURLToPath(import.meta.url)), "../../..");
 const product = resolve(process.argv[2]);
@@ -23,14 +23,19 @@ try {
   backend = await createRuntimeMobileBackend({ scope: { sessionId: randomUUID(), viewId: "owned-mcp-consent-view" } });
   const returned = await backend.getSelected();
   assert.equal(returned.hasSelection, false);
-  const binding = returned.contextBinding;
+  scenario.platform = "android";
+  await backend.select("opaque/target");
+  const binding = (await backend.getSelected()).contextBinding;
   child = spawn(process.execPath, [
     "--import", join(source, "tests/scripts/fixtures/ailoha-installed-hooks.mjs"),
     join(product, host === "github" ? "scripts/mcp.mjs" : "scripts/mcp-vscode.mjs"),
     "--session", returned.scope.sessionId, "--instance", returned.scope.viewId,
     "--context", binding.contextRef, "--context-epoch", binding.scopeEpoch,
     "--owner-process", String(binding.ownerProcessId),
-  ], { env: { ...process.env, MOBILE_CANVAS_BACKEND: "ailoha" }, stdio: ["pipe", "pipe", "pipe"] });
+  ], { env: {
+    ...process.env, MOBILE_CANVAS_BACKEND: "ailoha",
+    AILOHA_TEST_APP_RESPONSES: "1", AILOHA_TEST_FENCED_APP_RESPONSES: "1", AILOHA_TEST_APP_PLATFORM: "android",
+  }, stdio: ["pipe", "pipe", "pipe"] });
   const messages = [];
   let buffer = "";
   let diagnostic = "";
@@ -81,12 +86,57 @@ try {
   send({ jsonrpc: "2.0", id: cancelled.id, result: { action: "accept", content: { decision: "approve" } } });
   call(4, "mobile_device_get", { deviceId: "opaque/target" });
   assert.equal((await take((message) => message.id === 4)).result.structuredContent.id, "opaque/target");
+  call(5, "mobile_device_app_uninstall", {
+    deviceId: "opaque/target", bundleId: "com.example.native", confirm: true,
+  });
+  const uninstallDenied = await take((message) => message.method === "elicitation/create");
+  assert.match(uninstallDenied.params.message, /Native package: com\.example\.native/);
+  assert.equal(JSON.stringify(uninstallDenied).includes("installationEvidence"), false);
+  send({ jsonrpc: "2.0", id: uninstallDenied.id, result: { action: "decline" } });
+  assert.equal(JSON.parse((await take((message) => message.id === 5)).result.content[0].text).code, "consent_denied");
+  assert.equal(existsSync(`${process.env.AILOHA_TEST_CONTEXT_STATE}.fenced`), false);
+  call(6, "mobile_device_app_uninstall", {
+    deviceId: "opaque/target", bundleId: "com.example.native", confirm: true,
+  });
+  const uninstallApproved = await take((message) => message.method === "elicitation/create");
+  send({ jsonrpc: "2.0", id: uninstallApproved.id, result: {
+    action: "accept", content: { decision: "approve" },
+  } });
+  const uninstalled = await take((message) => message.id === 6);
+  assert.equal(uninstalled.result.structuredContent.operation, "uninstall");
+  assert.equal(JSON.stringify(uninstalled).includes("installationEvidence"), false);
+  call(7, "mobile_device_app_op_set", {
+    deviceId: "opaque/target", bundleId: "com.example.native",
+    operation: "SYSTEM_ALERT_WINDOW", mode: "ignore",
+  });
+  const appOpApproved = await take((message) => message.method === "elicitation/create");
+  assert.match(appOpApproved.params.message, /whole UID scope/);
+  send({ jsonrpc: "2.0", id: appOpApproved.id, result: {
+    action: "accept", content: { decision: "approve" },
+  } });
+  const updated = await take((message) => message.id === 7);
+  assert.equal(updated.result.structuredContent.mode, "ignore");
+  assert.equal(updated.result.structuredContent.operation, "SYSTEM_ALERT_WINDOW");
+  assert.equal(JSON.parse(readFileSync(`${process.env.AILOHA_TEST_CONTEXT_STATE}.fenced`, "utf8")).length, 2);
+  call(8, "mobile_device_app_op_set", {
+    deviceId: "opaque/target", bundleId: "com.example.native",
+    operation: "SYSTEM_ALERT_WINDOW", mode: "deny",
+  });
+  const cancelledAppOp = await take((message) => message.method === "elicitation/create");
+  send({ jsonrpc: "2.0", method: "notifications/cancelled", params: { requestId: 8 } });
+  await take((message) => message.method === "notifications/cancelled" && message.params.requestId === cancelledAppOp.id);
+  assert.equal(JSON.parse((await take((message) => message.id === 8)).result.content[0].text).code, "consent_cancelled");
+  send({ jsonrpc: "2.0", id: cancelledAppOp.id, result: {
+    action: "accept", content: { decision: "approve" },
+  } });
+  assert.equal(JSON.parse(readFileSync(`${process.env.AILOHA_TEST_CONTEXT_STATE}.fenced`, "utf8")).length, 2);
   child.stdin.end();
   assert.equal(await exited, 0);
   process.stdout.write(JSON.stringify({
     host, synthetic: true, actualInstalledMcpScript: true, returnedBindingConsumed: true,
     nestedHumanElicitationAnsweredWithoutQueueDeadlock: true, cancelledPromptRetired: true,
-    lateApprovalIgnored: true, targetSurvivedCancelledDelete: true, realDeviceMutation: false,
+    lateApprovalIgnored: true, targetSurvivedCancelledDelete: true,
+    fencedAppActionsThroughInstalledMcp: true, realDeviceMutation: false,
   }));
 } finally {
   if (child && child.exitCode === null) { child.kill("SIGTERM"); await exited; }
