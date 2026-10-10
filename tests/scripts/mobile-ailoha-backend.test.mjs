@@ -202,19 +202,23 @@ function featureFixture(options = {}) {
   let readsFail = false;
   let smsGate = options.smsGate;
   let appGate = options.appGate;
-  const context = { targetId: "one", providerId: "provider" };
+  const hardwareGate = options.hardwareGate;
+  const context = { targetId: "one" };
   const transport = {
     async response(path, request) {
       wire.push({ path, method: request.method, body: request.body });
       assert.ok(["GET", "POST", "PATCH", "DELETE"].includes(request.method));
       const reply = (body, status = 200, location) =>
         ({ status, contentType: status === 204 ? null : "application/json", location, body });
-      if (path.endsWith("/hardware")) return reply({
-        targetId: "one", platform: "ios", batteryLevel: 0.57, batteryState: "charging",
-        downloadBitsPerSecond: null, uploadBitsPerSecond: null, latencyMs: null,
-        networkIsIndicatorOnly: true, unreadable: ["location"],
-        "x-ailoha-target-host": options.wrongOwner ? { ...context, providerId: "other" } : context,
-      });
+      if (path.endsWith("/hardware")) {
+        if (hardwareGate) await hardwareGate.promise;
+        return reply({
+          targetId: "one", platform: "ios", batteryLevel: 0.57, batteryState: "charging",
+          downloadBitsPerSecond: null, uploadBitsPerSecond: null, latencyMs: null,
+          networkIsIndicatorOnly: true, unreadable: ["location"],
+          "x-ailoha-target-host": options.wrongOwner ? { ...context, providerId: "other" } : context,
+        });
+      }
       if (path.endsWith("/clipboard")) return reply({
         contentType: "text/plain", text: "pasteboard", "x-ailoha-target-host": context,
       });
@@ -273,6 +277,7 @@ function featureFixture(options = {}) {
     allowReads() { readsFail = false; },
     releaseSms() { smsGate?.resolve(); smsGate = null; },
     releaseApps() { appGate?.resolve(); appGate = null; },
+    releaseHardware() { hardwareGate?.resolve(); },
   };
 }
 
@@ -382,6 +387,20 @@ test("feature results require original provider and resolved native package cann
   t.after(() => state.backend.dispose());
   const pending = state.backend.invokeAction("push_notification", {
     deviceId: "one", bundleId: "com.example.native", payload: '{"aps":{}}',
+  });
+
+  test("target-only canonical response context is checked against the original provider inventory", async (t) => {
+    const gate = deferred();
+    const state = featureFixture({ hardwareGate: gate });
+    t.after(() => state.backend.dispose());
+    const pending = state.backend.deviceFeature("hardware_get", "one");
+    for (let tries = 0; tries < 100 && state.wire.length === 0; tries += 1) {
+      await new Promise((resolve) => setImmediate(resolve));
+    }
+    assert.equal(state.wire[0]?.path.endsWith("/hardware"), true);
+    state.targets.get("one").providerId = "different-provider";
+    state.releaseHardware();
+    await assert.rejects(pending, { code: "operation_owner_mismatch" });
   });
   for (let tries = 0; tries < 100
     && !state.wire.some(({ path }) => path.endsWith("/apps?includeSystem=true")); tries += 1) {

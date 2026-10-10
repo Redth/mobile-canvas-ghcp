@@ -308,6 +308,10 @@ native shell, or invokes the legacy engine in the opt-in. Every enabled feature
 requires an advertised target **and provider** operation, a running virtual mobile
 target with a native identity, and the captured view's original context and
 connection incarnation. Reads reject malformed or cross-target result context.
+Canonical feature responses may carry only `targetId` (their `providerId` is
+optional), so a target-only response is followed by an authoritative target
+read to confirm the original provider and native deployment before projection
+or mutation dispatch. A supplied but mismatched provider is rejected.
 Mutations retain captured receipts across accepted-operation polling or failed
 settings readback; an unknown submission cannot be replayed as a new mutation.
 The MCP names, request fields, and legacy output envelopes remain unchanged.

@@ -213,7 +213,7 @@ export async function openTargetHostTransport(leaseId) {
         const id = decodeURIComponent(featureRoute[1]);
         const device = id === targetId ? target() : createdTarget(id);
         if (!device) throw new Error("Unknown feature target");
-        const provenance = { "x-ailoha-target-host": { targetId: id, providerId: device.providerId } };
+        const provenance = { "x-ailoha-target-host": { targetId: id } };
         if (featureRoute[2] === "hardware" && options.method === "GET") return reply({
           ...provenance, targetId: id, platform: device.nativeIdentity.platform,
           batteryLevel: 0.8, batteryState: "charging", downloadBitsPerSecond: null,
