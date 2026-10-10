@@ -20,6 +20,7 @@ catch (error) { if (error.code !== "ENOENT") throw error; }
 process.env.AILOHA_TEST_CONTEXT_STATE = join(scratch, "context.json");
 process.env.MOBILE_CANVAS_BACKEND = "ailoha";
 const scope = { sessionId: `live-test-session-${process.pid}`, viewId: `${host}-view` };
+process.env.AILOHA_TEST_SESSION_ID = scope.sessionId;
 const { createAilohaVideoReceiver } = await import(pathToFileURL(join(root, "web", "ailoha-video-receiver.js")).href);
 const { createAilohaMcpDispatcher } = await import(pathToFileURL(join(root, "lib", "ailoha", "mcp-host.mjs")).href);
 const { ARTIFACT_FEATURE_GATES } = await import(pathToFileURL(join(root, "lib", "ailoha", "artifact-features.mjs")).href);

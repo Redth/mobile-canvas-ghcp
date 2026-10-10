@@ -54,6 +54,24 @@ test("owner response metadata retains strict accepted status/Location and real o
   assert.equal(calls[1].request.body, undefined);
 });
 
+test("destructive consumer options lower the original owner request budget without putting timeout or confirmation on the wire", async (t) => {
+  const { client, calls } = await fixture(t, (_path, request) => response({
+    ...operation, kind: request.method === "DELETE" ? "deleteTarget" : "resetTarget", destructive: true,
+  }, 202, "/api/v1/operations/accepted%2Fopaque"), { timeoutMs: 1000 });
+  await client.resetTarget(operation.targetId, { confirmed: true, timeoutMs: 25 });
+  await client.deleteTarget(operation.targetId, { confirmed: true, timeoutMs: 25 });
+  for (const call of calls.slice(1)) {
+    assert.ok(call.request.timeoutMs >= 1 && call.request.timeoutMs <= 25);
+    assert.equal(call.request.body, undefined);
+  }
+  const before = calls.length;
+  for (const timeoutMs of [0, -1, 1.5, NaN, 1001]) {
+    await assert.rejects(client.resetTarget(operation.targetId, { confirmed: true, timeoutMs }), { code: "invalid_options" });
+    await assert.rejects(client.deleteTarget(operation.targetId, { confirmed: true, timeoutMs }), { code: "invalid_options" });
+  }
+  assert.equal(calls.length, before);
+});
+
 for (const [pollIntervalMs, responseElapsedMs] of [[60_000, 0.25], [80, 0.25], [80, 0]]) {
   test(`a ${pollIntervalMs}ms poll interval with ${responseElapsedMs}ms elapsed never schedules a deadline GET`, async (t) => {
     let now = 0;

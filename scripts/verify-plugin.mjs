@@ -46,6 +46,7 @@ for (const relative of [
   "lib/ailoha/mobile-backend.mjs",
   "lib/ailoha/mobile-catalog.mjs",
   "lib/ailoha/operation-receipts.mjs",
+  "lib/ailoha/destructive-consent.mjs",
   "lib/ailoha/mobile-projection.mjs",
   "lib/ailoha/media-adapter.mjs",
   "lib/ailoha/runtime-sdk.mjs",
