@@ -124,9 +124,11 @@ canonical evidence identifies it; the conditional adapter returns null rather
 than inventing one and does not expose the host source path as `detail`.
 **This source approval is not a public runtime pin or production activation.**
 Both installed hosts still report install unsupported without a compatible
-verified public CLI, advertised target/host capability and genuine scoped
-host approval. The scoped approval interface is pending host review; no
-boolean `confirm` argument alone can enable staging or installation. The
+verified public CLI, coordinator-approved package/command provenance, advertised
+target/host capability and genuine scoped host approval. The reviewed c8
+feature-source hash is not an eventual merged public SDK pin and does not
+auto-enable the staged adapter. The scoped approval interface is pending host
+review; no boolean `confirm` argument alone can enable staging or installation. The
 existing combined install CLI/MCP commands lack this original-view fence;
 neither renderer buffering nor a direct native process fallback is used.
 Uninstall additionally requires real scoped host consent; `confirm=true` by

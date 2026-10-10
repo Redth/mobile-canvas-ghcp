@@ -797,6 +797,9 @@ test("a timed-out accepted staged install resumes only the original operation re
     return wait(id);
   };
   await assert.rejects(state.backend.installApp("one", state.sourcePath), { code: "operation_timeout" });
+  await rm(state.sourcePath);
+  await state.advanceSelection();
+  state.client.getTargetCapabilities = async () => { throw new Error("A new capability read must not replace an accepted owner."); };
   assert.equal((await state.backend.installApp("one", state.sourcePath)).success, true);
   assert.deepEqual(state.steps.map(([name]) => name),
     ["stage", "approval", "consumed", "install", "wait", "cleanup", "wait"]);
