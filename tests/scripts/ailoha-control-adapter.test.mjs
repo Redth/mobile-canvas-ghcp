@@ -53,9 +53,57 @@ test("advertises only target and surface operations actually available", () => {
   ] };
   assert.deepEqual(adapter.supported(capabilities, actual),
     { key: true, button: true, text: false, rotate: true, presentation: true });
+  const focused = capabilities.map((capability) => capability.id === "surface.input"
+    ? { ...capability, features: [...capability.features, "typeFocusedText"] } : capability);
+  assert.equal(adapter.supported(focused, actual).text, true);
+  assert.equal(adapter.supported(focused, { capabilities: [] }).text, false);
+  assert.equal(adapter.supported(focused, { capabilities: [
+    { id: "surface.input", version: 1, features: ["key", "button", "rotate"] },
+  ] }).text, false);
   assert.deepEqual(adapter.supported(capabilities, { capabilities: [] }),
     { key: false, button: false, text: false, rotate: false, presentation: true });
   assert.equal(adapter.supported([], actual).presentation, false);
+});
+
+test("focused text uses only the distinct canonical route and captured owner", async () => {
+  const { adapter, calls } = fixture();
+  let checks = 0;
+  const literal = `a'b";\n\u2603`;
+  await adapter.text(invocation, literal, () => { checks++; });
+  assert.equal(checks, 1);
+  assert.deepEqual(calls.map(({ path, options }) => [path, options.method, JSON.parse(options.body)]), [
+    [`${surface}/input/actions/type-focused-text`, "POST", { text: literal }],
+  ]);
+  const changed = fixture();
+  await assert.rejects(changed.adapter.text(invocation, "text", () => {
+    throw new Error("view superseded");
+  }), /view superseded/);
+  assert.equal(changed.calls.length, 0);
+  const wrong = fixture({ [`${surface}/input/actions/type-focused-text`]: reply({
+    success: true, "x-ailoha-target-host": { ...owner, surfaceId: "another-surface" },
+  }) });
+  await assert.rejects(wrong.adapter.text(invocation, "text", () => {}), { code: "control_owner_mismatch" });
+  assert.equal(wrong.calls.length, 1);
+  const incomplete = fixture({ [`${surface}/input/actions/type-focused-text`]: reply({
+    success: true, "x-ailoha-target-host": { targetId: invocation.targetId, surfaceId: invocation.surfaceId },
+  }) });
+  await assert.rejects(incomplete.adapter.text(invocation, "text", () => {}), { code: "invalid_control_response" });
+  assert.equal(incomplete.calls.length, 1);
+  const failed = fixture({ [`${surface}/input/actions/type-focused-text`]: reply({
+    success: false, "x-ailoha-target-host": owner,
+  }) });
+  await assert.rejects(failed.adapter.text(invocation, "text", () => {}), { code: "input_operation_failed" });
+  assert.equal(failed.calls.length, 1);
+  const unknown = fixture({ [`${surface}/input/actions/type-focused-text`]: () => {
+    throw new Error("uncertain delivery");
+  } });
+  await assert.rejects(unknown.adapter.text(invocation, "text", () => {}), /uncertain delivery/);
+  assert.equal(unknown.calls.length, 1);
+  for (const text of ["", "\0", "a\0b", "\uD800", "\uDC00", "é".repeat(2049)]) {
+    await assert.rejects(adapter.text(invocation, text, () => {}), { code: "invalid_request" });
+  }
+  await adapter.text(invocation, "é".repeat(2048), () => {});
+  assert.equal(calls.length, 2);
 });
 
 test("key and button use structured canonical key requests, not host commands", async () => {

@@ -540,12 +540,19 @@ test("lost create result remains explicit and cannot trigger a second create or 
 test("agentless controls use captured canonical view and explicit capability evidence across API/actions", async (t) => {
   const state = canonicalFixture({ client: {
     async getTargetCapabilities() {
-      return [{ id: "target.settings", version: 1, features: ["getTargetSettings", "updateTargetSettings"] }];
+      return [
+        { id: "target.settings", version: 1, features: ["getTargetSettings", "updateTargetSettings"] },
+        { id: "surface.input", version: 1, features: ["typeFocusedText"] },
+      ];
     },
   }, controls: {
-    supported() { return { key: true, button: true, text: false, rotate: true, presentation: true }; },
+    supported() { return { key: true, button: true, text: true, rotate: true, presentation: true }; },
     async key(invocation, value) { state.calls.push(["key", invocation, value]); },
     async button(invocation, value) { state.calls.push(["button", invocation, value]); },
+    async text(invocation, value, assertCurrent) {
+      assertCurrent();
+      state.calls.push(["text", invocation, value]);
+    },
     async rotate(invocation, value) { state.calls.push(["rotate", invocation, value]); },
     async presentation(invocation, value) {
       state.calls.push(["presentation", invocation, value]);
@@ -555,7 +562,7 @@ test("agentless controls use captured canonical view and explicit capability evi
   } });
   t.after(() => state.backend.dispose());
   const device = await state.backend.getDevice("one");
-  assert.equal(device.capabilities.text, false);
+  assert.equal(device.capabilities.text, true);
   assert.equal(device.capabilities.presentation, true);
   const key = await state.backend.invokeAction("press_key", { deviceId: "one", keyCode: 40 });
   assert.equal(key.operation, "press-key");
@@ -565,8 +572,8 @@ test("agentless controls use captured canonical view and explicit capability evi
   assert.equal(button.status, 200);
   const text = await state.backend.request("/api/v1/devices/one/input/text",
     { method: "POST", body: '{"text":"literal \\\\u2603"}' });
-  assert.equal(text.status, 501);
-  assert.equal(state.calls.some(([kind]) => kind === "text"), false);
+  assert.equal(text.status, 200);
+  assert.equal(state.calls.some(([kind]) => kind === "text"), true);
   const rotation = await state.backend.request("/api/v1/devices/one/input/rotate",
     { method: "POST", body: '{"orientation":"landscape-left"}' });
   assert.equal(rotation.status, 200);
@@ -585,14 +592,38 @@ test("agentless controls use captured canonical view and explicit capability evi
   assert.equal(state.calls.at(-1)[1].selectionGeneration, 0);
 });
 
-test("plain text never reaches fill even if a control adapter misreports support", async (t) => {
+test("plain text cannot reach explicit fill when only the old capability is available", async (t) => {
   const state = canonicalFixture({ controls: {
-    supported() { return { text: true }; },
+    supported() { return { text: false }; },
     async fillElement() { state.calls.push(["fill"]); },
   } });
   t.after(() => state.backend.dispose());
   await assert.rejects(state.backend.input("text", "one", { text: "hello" }), { code: "capability_not_supported" });
   assert.equal(state.calls.some(([kind]) => kind === "fill"), false);
+});
+
+test("focused text pins input and rejects a superseded view before dispatch", async (t) => {
+  for (const change of ["selection", "retirement"]) {
+    const pending = deferred();
+    const state = canonicalFixture({ controls: {
+      supported() { return { text: true }; },
+      async text(invocation, value, assertCurrent) {
+        await pending.promise;
+        assertCurrent();
+        state.calls.push(["text", invocation, value]);
+      },
+    } });
+    t.after(() => state.backend.dispose());
+    const input = { text: "first" };
+    const typing = state.backend.input("text", "one", input);
+    input.text = "later";
+    await new Promise((resolve) => setImmediate(resolve));
+    if (change === "selection") await state.advanceSelection();
+    else await state.retireAuthority();
+    pending.resolve();
+    await assert.rejects(typing, { code: change === "selection" ? "context_snapshot_superseded" : "view_closed" });
+    assert.equal(state.calls.some(([kind]) => kind === "text"), false);
+  }
 });
 
 test("input values remain immutable while the captured target is read", async (t) => {

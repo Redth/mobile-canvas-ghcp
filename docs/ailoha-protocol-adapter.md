@@ -456,13 +456,23 @@ the adapter must not bypass that transport or substitute a different method.
 The pinned Target Host `fill` implementation taps the field center before
 typing, even when it was already focused. Unlike legacy `TypeTextAsync`,
 successive character events or a paste can therefore move an existing caret.
-The opt-in explicitly advertises `text: false` and rejects plain typing and
-paste without sending `fill`; the shared adapter retains `fillElement` only
-for an explicitly named, observed editable element. The canonical
-contract/provider needs a cursor-preserving focused-text operation, with
-distinct capability evidence, before plain text entry can be enabled.
+The opt-in advertises `text: true` only when the target's `surface.input`
+advertises `typeFocusedText` **and** the selected surface's `surface.input`
+advertises `text`. Otherwise plain typing and paste return unsupported with
+no input POST; the shared adapter retains `fillElement` only for an explicitly
+named, observed editable element. The conditional source mapping follows
+reviewed Ailoha #73: synchronous `POST
+/api/v1/targets/{targetId}/surfaces/{surfaceId}/input/actions/type-focused-text`
+with literal JSON `{ "text": "..." }`, no tap/refocus/clear, 1..4096 strict
+UTF-8 bytes, valid Unicode and no NUL. The owner receipt must match the
+captured target/provider/surface/geometry. Accepted failures are not retried
+or sent through Fill/key/legacy. The first public SDK preview cannot advertise
+this operation; actual activation remains gated on a reviewed compatible
+public SDK/native Target Host and device verification. The native Android
+backend explicitly rejects text it cannot transmit literally (non-printable,
+non-ASCII, `%s`); Mobile does not approximate it.
 
-`ailoha-creation-browser-server.mjs <prepared-root> <github|vscode> <context-file>`
+`ailoha-creation-browser-server.mjs <prepared-root> <github|vscode> <context-file> [--focused-text]`
 serves the complete shared renderer with synthetic catalogs/creation. Its VS Code
 mode uses the actual compiled HTML builder, theme/transport scripts and HostBridge;
 only the browser's stand-in for native webview IPC uses a test-only HTTP/SSE shim.
@@ -471,6 +481,9 @@ Run `ailoha-creation-browser-check.mjs` in Playwright with
 compatible create controls, both-platform payload/native IDs, real WebCodecs
 resize/idle behavior, one video per creation handoff despite its selection echo,
 stale-selection protection and zero leases/videos after hide.
+The optional synthetic focused-text flag exercises positive per-character and
+paste events; without it the old Fill-only target remains text-unsupported.
+Neither mode proves a matching native/public SDK boundary.
 Stop the helper to restore/remove its explicitly synthetic prepared pin.
 
 ```sh

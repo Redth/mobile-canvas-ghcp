@@ -71,14 +71,30 @@ async (page) => {
   await page.locator("#device-screen").focus();
   await page.keyboard.press("Enter");
   await page.keyboard.type("A");
-  value = await waitFor((entry) => entry.calls.filter((item) => item.path?.endsWith("/input/actions/key")).length >= 2);
+  if (options.focusedText) await waitFor((entry) =>
+    entry.calls.filter((item) => item.path?.endsWith("/input/actions/type-focused-text")).length === 1);
+  await page.evaluate(() => {
+    const event = new Event("paste", { bubbles: true, cancelable: true });
+    Object.defineProperty(event, "clipboardData", { value: { getData: () => "literal \u2603" } });
+    document.querySelector("#device-screen").dispatchEvent(event);
+  });
+  value = await waitFor((entry) => entry.calls.filter((item) => item.path?.endsWith("/input/actions/key")).length >= 2
+    && (!options.focusedText || entry.calls.filter((item) => item.path?.endsWith("/input/actions/type-focused-text")).length === 2));
   verify(value.calls.some((item) => item.path?.endsWith("/input/actions/key")
     && JSON.parse(item.body).key === "home")
     && value.calls.some((item) => item.path?.endsWith("/input/actions/key")
       && JSON.parse(item.body).key === "40")
-    && (await page.locator("#toast").textContent())?.includes("cursor-preserving text input")
     && !value.calls.some((item) => item.path?.endsWith("/input/actions/fill")),
-  "The prepared renderer did not preserve button/key transport or reject unsafe plain text.");
+  "The prepared renderer did not preserve button/key transport or avoid explicit Fill.");
+  const typed = value.calls.filter((item) => item.path?.endsWith("/input/actions/type-focused-text"));
+  if (options.focusedText) verify(typed.length === 2
+    && typed.every((item) => item.method === "POST")
+    && JSON.parse(typed[0].body).text === "A"
+    && JSON.parse(typed[1].body).text === "literal \u2603",
+  "The prepared renderer did not send literal per-character and paste input through focused text.");
+  else verify(typed.length === 0
+    && (await page.locator("#toast").textContent())?.includes("cursor-preserving text input"),
+  "The old-capability renderer did not reject plain text without HTTP mutation.");
   await page.locator('[data-action="rotate"]').click();
   value = await waitFor((entry) => entry.calls.some((item) =>
     item.path?.endsWith("/presentation") && item.method === "PATCH"));

@@ -7,6 +7,7 @@ export const scenario = {
   calls: [], leases: new Map(), videos: new Map(), operations: new Map(), status: "running", geometryRevision: 13,
   orientation: "landscape", statusBar: { enabled: false, readable: true },
   catalog: null, createdTargets: new Map(), creationGate: null,
+  focusedText: false,
 };
 export const sourceSha = "0000000000000000000000000000000000000000";
 const targetId = "opaque/target";
@@ -44,11 +45,15 @@ function mergedCapabilities(values) {
   }
   return [...groups.values()];
 }
+function targetCapabilities() {
+  return captures.map((capability) => capability.id === "surface.input" && scenario.focusedText
+    ? { ...capability, features: [...capability.features, "typeFocusedText"] } : capability);
+}
 function providerRecords() {
   return [{
-    providerId: "synthetic-provider", name: "Synthetic provider", version: "synthetic", state: "ready", capabilities: captures,
+    providerId: "synthetic-provider", name: "Synthetic provider", version: "synthetic", state: "ready", capabilities: targetCapabilities(),
   }, ...(scenario.catalog?.providers ?? []).map((provider) => ({
-    ...provider, capabilities: mergedCapabilities([...provider.capabilities, ...captures]),
+    ...provider, capabilities: mergedCapabilities([...provider.capabilities, ...targetCapabilities()]),
   }))];
 }
 function target() {
@@ -123,7 +128,7 @@ export async function openTargetHostTransport(leaseId) {
       if (options.signal?.aborted) throw new Error("aborted double");
       if (path === "/api/v1/host/status") return reply({
         hostId: "synthetic-host", profile: "ailoha.target-host/v1", version: "synthetic",
-        state: "ready", capabilities: mergedCapabilities([...captures, ...(scenario.catalog?.status.capabilities ?? [])]),
+        state: "ready", capabilities: mergedCapabilities([...targetCapabilities(), ...(scenario.catalog?.status.capabilities ?? [])]),
       });
       if (path === "/api/v1/providers") return reply(providerRecords());
       const catalogRoute = /^\/api\/v1\/providers\/([^/]+)\/(catalogs|runtimes|target-types|templates)$/.exec(path);
@@ -236,9 +241,16 @@ export async function openTargetHostTransport(leaseId) {
           targetId: mediaTargetId, surfaceId: mediaSurfaceId, geometryRevision: scenario.geometryRevision,
         },
       }]);
-      if (path.includes("/input/actions/")) return reply({
-        success: true, "x-ailoha-target-host": { targetId: mediaTargetId, surfaceId: mediaSurfaceId, geometryRevision: scenario.geometryRevision },
-      });
+      if (path.includes("/input/actions/")) {
+        if (path.endsWith("/type-focused-text") && !scenario.focusedText) throw new Error("Focused text not advertised by synthetic host");
+        return reply({
+          success: true, "x-ailoha-target-host": {
+            targetId: mediaTargetId,
+            providerId: mediaTargetId === targetId ? "synthetic-provider" : scenario.createdTargets.get(mediaTargetId)?.providerId,
+            surfaceId: mediaSurfaceId, geometryRevision: scenario.geometryRevision,
+          },
+        });
+      }
       const collection = `/api/v1/targets/${encodeURIComponent(mediaTargetId)}/surfaces/${encodeURIComponent(mediaSurfaceId)}/video/sessions`;
       if (path === collection && options.method === "POST") {
         scenario.geometryRevision = 13;

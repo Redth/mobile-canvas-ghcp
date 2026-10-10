@@ -11,6 +11,7 @@ const root = resolve(dirname(fileURLToPath(import.meta.url)), "../..");
 const product = resolve(process.argv[2]);
 const hostKind = process.argv[3];
 const contextPath = resolve(process.argv[4]);
+scenario.focusedText = process.argv.includes("--focused-text");
 if (!["github", "vscode"].includes(hostKind)) throw new Error("Choose an owned github/vscode fixture.");
 const pinPath = join(product, "lib/ailoha/runtime-package.json");
 let previousPin;
@@ -86,7 +87,7 @@ const controls = createServer(async (request, response) => {
     if (url.pathname === "/test/evidence") {
       response.writeHead(200, { "Content-Type": "application/json" });
       response.end(JSON.stringify({
-        synthetic: true, host: hostKind, errors, calls: scenario.calls,
+        synthetic: true, host: hostKind, focusedText: scenario.focusedText, errors, calls: scenario.calls,
         leases: scenario.leases.size, videoResources: scenario.videos.size,
         created: [...scenario.createdTargets.values()], scope,
       }));
@@ -175,7 +176,7 @@ if (hostKind === "vscode") {
     .replace(`<script nonce="${nonce}"`, `<script nonce="${nonce}" src="/test/ipc.js"></script>\n  <script nonce="${nonce}"`);
 }
 console.log(JSON.stringify({
-  synthetic: true, host: hostKind, url: hostKind === "github" ? opened.url : `${origin}/`,
+  synthetic: true, host: hostKind, focusedText: scenario.focusedText, url: hostKind === "github" ? opened.url : `${origin}/`,
   evidenceUrl: `${origin}/test/evidence`, controlOrigin: origin,
 }));
 let closing;
