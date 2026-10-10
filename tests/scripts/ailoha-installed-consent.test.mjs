@@ -49,6 +49,7 @@ for (const [host, product] of [
       assert.equal(mcp.lateApprovalIgnored, true);
       assert.equal(mcp.targetSurvivedCancelledDelete, true);
       assert.equal(mcp.fencedAppActionsThroughInstalledMcp, true);
+      assert.equal(mcp.fencedAcceptedMismatchGetOnly, true);
     } finally { rmSync(scratch, { recursive: true }); }
   });
 }

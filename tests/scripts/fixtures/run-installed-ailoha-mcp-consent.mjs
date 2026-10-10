@@ -132,13 +132,39 @@ try {
     action: "accept", content: { decision: "approve" },
   } });
   assert.equal(JSON.parse(readFileSync(`${process.env.AILOHA_TEST_CONTEXT_STATE}.fenced`, "utf8")).length, 2);
+  writeFileSync(`${process.env.AILOHA_TEST_CONTEXT_STATE}.known-error`, JSON.stringify({
+    type: "AppActionAcceptedMismatch", operationId: "café",
+  }));
+  const setter = {
+    deviceId: "opaque/target", bundleId: "com.example.native",
+    operation: "SYSTEM_ALERT_WINDOW", mode: "allow",
+  };
+  call(9, "mobile_device_app_op_set", setter);
+  const mismatchApproval = await take((message) => message.method === "elicitation/create");
+  send({ jsonrpc: "2.0", id: mismatchApproval.id, result: {
+    action: "accept", content: { decision: "approve" },
+  } });
+  const mismatch = await take((message) => message.id === 9);
+  assert.equal(mismatch.result.isError, true);
+  const mismatchError = JSON.parse(mismatch.result.content[0].text);
+  assert.equal(mismatchError.code, "app_action_accepted_mismatch");
+  assert.equal(mismatchError.operationId, "café");
+  assert.equal(JSON.stringify(mismatch).includes("attemptId"), false);
+  const captured = readFileSync(`${process.env.AILOHA_TEST_CONTEXT_STATE}.captures`, "utf8");
+  call(10, "mobile_device_app_op_set", setter);
+  const recovered = await take((message) => message.id === 10);
+  assert.notEqual(recovered.result.isError, true);
+  assert.equal(recovered.result.structuredContent.mode, "allow");
+  assert.equal(readFileSync(`${process.env.AILOHA_TEST_CONTEXT_STATE}.captures`, "utf8"), captured);
+  assert.equal(JSON.parse(readFileSync(`${process.env.AILOHA_TEST_CONTEXT_STATE}.fenced`, "utf8")).length, 3);
   child.stdin.end();
   assert.equal(await exited, 0);
   process.stdout.write(JSON.stringify({
     host, synthetic: true, actualInstalledMcpScript: true, returnedBindingConsumed: true,
     nestedHumanElicitationAnsweredWithoutQueueDeadlock: true, cancelledPromptRetired: true,
     lateApprovalIgnored: true, targetSurvivedCancelledDelete: true,
-    fencedAppActionsThroughInstalledMcp: true, realDeviceMutation: false,
+    fencedAppActionsThroughInstalledMcp: true, fencedAcceptedMismatchGetOnly: true,
+    realDeviceMutation: false,
   }));
 } finally {
   if (child && child.exitCode === null) { child.kill("SIGTERM"); await exited; }

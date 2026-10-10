@@ -1,5 +1,5 @@
 import { createHash, randomUUID } from "node:crypto";
-import { appendFileSync, readFileSync, writeFileSync } from "node:fs";
+import { appendFileSync, existsSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 
 const hash = (value) => createHash("sha256").update(value).digest("hex");
 const required = (args, flag) => {
@@ -89,7 +89,10 @@ export function runFencedAppCli(args) {
     }));
     return 1;
   }
-  const operationId = process.env.AILOHA_TEST_FENCED_KNOWN_OPERATION_ID
+  const knownErrorPath = `${path}.known-error`;
+  const knownError = existsSync(knownErrorPath) ? JSON.parse(readFileSync(knownErrorPath, "utf8")) : null;
+  if (knownError) rmSync(knownErrorPath);
+  const operationId = knownError?.operationId ?? process.env.AILOHA_TEST_FENCED_KNOWN_OPERATION_ID
     ?? `synthetic-fenced-${randomUUID()}`;
   const operation = {
     operationId, kind: args[2] === "uninstall-fenced" ? "uninstallFencedTargetApp" : "updateFencedTargetAppOp",
@@ -115,10 +118,11 @@ export function runFencedAppCli(args) {
   }
   operations.push(completed);
   writeFileSync(recordPath, JSON.stringify(operations));
-  if (process.env.AILOHA_TEST_FENCED_KNOWN_ERROR_TYPE) {
+  if (knownError || process.env.AILOHA_TEST_FENCED_KNOWN_ERROR_TYPE) {
     process.stderr.write(JSON.stringify({
       error: "The captured native action was accepted with different observed state.",
-      type: process.env.AILOHA_TEST_FENCED_KNOWN_ERROR_TYPE, retryable: false, operationId,
+      type: knownError?.type ?? process.env.AILOHA_TEST_FENCED_KNOWN_ERROR_TYPE,
+      retryable: false, operationId,
     }));
     return 1;
   }
