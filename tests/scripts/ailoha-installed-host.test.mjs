@@ -31,8 +31,8 @@ for (const [host, product] of [
     assert.equal(evidence.noHostStop, true);
     assert.equal(evidence.createPosts, host === "github" ? 3 : 4);
     assert.equal(evidence.noSeparateBootPost, true);
-    assert.deepEqual(evidence.recordingCommands.filter((action) => action === "start"), ["start", "start"]);
-    assert.deepEqual(evidence.recordingCommands.filter((action) => action === "stop"), ["stop", "stop"]);
+    assert.deepEqual(evidence.recordingCommands.filter((action) => action === "start"), ["start", "start", "start"]);
+    assert.deepEqual(evidence.recordingCommands.filter((action) => action === "stop"), ["stop", "stop", "stop"]);
     assert.equal(evidence.recordingFinalizedOnClose, true);
     assert.equal(evidence.creationRecords[0].platform, "ios");
     assert.equal(evidence.creationRecords[1].platform, "android");

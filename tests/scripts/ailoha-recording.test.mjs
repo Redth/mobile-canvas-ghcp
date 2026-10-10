@@ -281,7 +281,7 @@ test("the shared owner refuses a 65th queued recording intent without dispatchin
   assert.equal(calls, 64);
 });
 
-test("an externally finalized recording clears only after its captured output exists", async () => {
+test("an externally written MP4 never proves the captured recording finalized", async () => {
   await mkdir(join(process.cwd(), ".build"), { recursive: true });
   const directory = await mkdtemp(join(process.cwd(), ".build", "recording-"));
   const outputFile = join(directory, "captured.mp4");
@@ -301,19 +301,22 @@ test("an externally finalized recording clears only after its captured output ex
     active = false;
     await assert.rejects(coordinator.status(invocation), { code: "recording_state_unresolved" });
     assert.equal(coordinator.tracked, true);
+    await writeFile(outputFile, "");
+    await assert.rejects(coordinator.status(invocation), { code: "recording_state_unresolved" });
     await writeFile(outputFile, "synthetic-mp4-fixture");
-    const status = await coordinator.status(invocation);
-    assert.equal(status.isRecording, false);
-    assert.equal(status.outputPath, outputFile);
-    assert.equal(coordinator.tracked, false);
+    await assert.rejects(coordinator.status(invocation), { code: "recording_state_unresolved" });
+    await assert.rejects(coordinator.finalize(), { code: "recording_state_unresolved" });
+    await assert.rejects(coordinator.start(invocation, { outputPath: outputFile }), { code: "recording_state_unresolved" });
+    assert.equal(coordinator.tracked, true);
     await assert.rejects(recordingOutputPath(outputFile, "ios"), { code: "recording_output_exists" });
+    assert.equal(calls.filter((call) => call.action === "start").length, 1);
     assert.equal(calls.filter((call) => call.action === "stop").length, 0);
   } finally {
     await rm(directory, { recursive: true, force: true });
   }
 });
 
-test("a lost stop response reconciles a landed output without repeating the stop", async () => {
+test("a lost stop response cannot clear owner from a file without an authoritative receipt", async () => {
   await mkdir(join(process.cwd(), ".build"), { recursive: true });
   const directory = await mkdtemp(join(process.cwd(), ".build", "recording-stop-"));
   const outputFile = join(directory, "landed.mp4");
@@ -335,13 +338,59 @@ test("a lost stop response reconciles a landed output without repeating the stop
   try {
     await coordinator.start(invocation, { outputPath: outputFile });
     await assert.rejects(coordinator.stop("target-one"), /response lost/);
-    await coordinator.finalize();
-    assert.equal(coordinator.tracked, false);
+    await assert.rejects(coordinator.finalize(), { code: "recording_state_unresolved" });
+    assert.equal(coordinator.tracked, true);
     assert.equal(stops, 1);
     assert.equal(await readFile(outputFile, "utf8"), "synthetic-mp4-fixture");
   } finally {
     await rm(directory, { recursive: true, force: true });
   }
+});
+
+test("a replacement recording ID on the same target and output never changes the captured owner", async () => {
+  let active = false;
+  let stops = 0;
+  const { coordinator } = fixture({
+    run(action) {
+      if (action === "status") return JSON.stringify(active
+        ? { ...record(), recordingId: "replacement-recording" } : null);
+      if (action === "start") {
+        active = true;
+        return JSON.stringify(record());
+      }
+      stops += 1;
+      return JSON.stringify(record("completed"));
+    },
+  });
+  await coordinator.start(invocation);
+  await assert.rejects(coordinator.status(invocation), { code: "recording_owner_mismatch" });
+  await assert.rejects(coordinator.finalize(), { code: "recording_owner_mismatch" });
+  await assert.rejects(coordinator.start(invocation), { code: "recording_owner_mismatch" });
+  assert.equal(coordinator.tracked, true);
+  assert.equal(stops, 0);
+});
+
+test("a lost start only pins its recording ID after the original owner-matched status", async () => {
+  let active = false;
+  let stops = 0;
+  const { coordinator } = fixture({
+    run(action) {
+      if (action === "status") return JSON.stringify(active ? record() : null);
+      if (action === "start") {
+        active = true;
+        throw new Error("lost accepted start response");
+      }
+      stops += 1;
+      return JSON.stringify({ ...record("completed"), recordingId: "replacement-recording" });
+    },
+  });
+  await assert.rejects(coordinator.start(invocation), /lost accepted/);
+  assert.equal((await coordinator.status(invocation)).isRecording, true);
+  await assert.rejects(coordinator.stop("target-one"), { code: "recording_owner_mismatch" });
+  assert.equal(stops, 1);
+  assert.equal(coordinator.tracked, true);
+  await assert.rejects(coordinator.stop("target-one"), { code: "recording_stop_unresolved" });
+  assert.equal(stops, 1);
 });
 
 test("a replacement runtime lease retains the original view's recording owner", async () => {

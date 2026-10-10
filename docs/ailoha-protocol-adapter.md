@@ -389,9 +389,11 @@ remains visible and prevents the canvas lease from releasing. The canonical
 CLI exposes generic errors for both indeterminate/failed stops and retryable
 downloads, and its
 retry can issue a new Target Host stop after a terminal failure. Mobile Canvas
-therefore never issues another CLI stop after an attempted stop; it can reconcile
-an externally landed file, but safe poll/download-only recovery of a failed or
-timed-out stop requires a new native contract.
+therefore never issues another CLI stop after an attempted stop, never treats an
+unrelated file at the output path as proof of finalization, and pins the first
+authoritatively identified recording ID across later status/stop responses.
+Safe poll/download-only recovery of a failed or timed-out stop requires a new
+native contract with a matching terminal receipt.
 The default host output is a unique MP4 under
 `~/.mobile-canvas/artifacts/recordings`; explicit absolute MP4 host paths are
 accepted, but the canonical landing refuses an existing file rather than
