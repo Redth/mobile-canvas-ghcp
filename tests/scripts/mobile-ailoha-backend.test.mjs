@@ -892,6 +892,7 @@ test("host-rejected staged install and denied approval never submit a second ins
     ["stage", "approval", "consumed", "install", "cleanup", "wait"]);
   const denied = await stagedFixture(t, { beginDestructiveApproval() {
     return { approved: Promise.reject(new MobileAilohaError("consent_denied", "Approval declined.", 403)),
+      signal: new AbortController().signal,
       remainingTimeoutMs(ceiling) { return ceiling; },
       async run() { throw Error("must not run"); },
       requireCurrent() {}, consume() { throw Error("must not consume"); }, dispose() {} };
@@ -923,7 +924,7 @@ test("stage uncertainty and accepted install errors cannot replay on retry or re
   assert.equal(replacement.steps.length, 0);
 });
 
-test("cancelled approval transport cannot dispatch or replay install after consumption", async (t) => {
+test("cancelled approval before admission cannot dispatch install and cleans the staged artifact", async (t) => {
   const caller = new AbortController();
   let state;
   state = await stagedFixture(t, {
@@ -952,11 +953,11 @@ test("cancelled approval transport cannot dispatch or replay install after consu
     },
   });
   await assert.rejects(state.backend.installApp("one", state.sourcePath), { code: "ailoha_operation_failed" });
-  await assert.rejects(state.backend.installApp("one", state.sourcePath), { code: "app_install_outcome_uncertain" });
-  assert.deepEqual(state.steps.map(([name]) => name), ["stage", "consumed"]);
+  await assert.rejects(state.backend.installApp("one", state.sourcePath), { code: "ailoha_operation_failed" });
+  assert.deepEqual(state.steps.map(([name]) => name), ["stage", "consumed", "cleanup", "wait"]);
 });
 
-test("spent submission budget blocks pre-wire install without borrowing a fresh deadline", async (t) => {
+test("spent submission budget blocks pre-wire install and cleans the original staged artifact", async (t) => {
   let state;
   state = await stagedFixture(t, {
     beginDestructiveApproval(action, invocation, { stagedArtifact }) {
@@ -978,8 +979,8 @@ test("spent submission budget blocks pre-wire install without borrowing a fresh 
     },
   });
   await assert.rejects(state.backend.installApp("one", state.sourcePath), { code: "consent_expired" });
-  await assert.rejects(state.backend.installApp("one", state.sourcePath), { code: "app_install_outcome_uncertain" });
-  assert.deepEqual(state.steps.map(([name]) => name), ["stage", "consumed"]);
+  await assert.rejects(state.backend.installApp("one", state.sourcePath), { code: "consent_expired" });
+  assert.deepEqual(state.steps.map(([name]) => name), ["stage", "consumed", "cleanup", "wait"]);
 });
 
 test("cleanup failure reports the secondary error without erasing the successful install receipt", async (t) => {

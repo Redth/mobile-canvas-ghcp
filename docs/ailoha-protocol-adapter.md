@@ -118,9 +118,11 @@ original scoped approval signal and remaining monotonic budget also bound the
 install submission attempt after consumption, including verified CLI launch
 acquisition, without restarting that budget. Owned cleanup has its own
 original-resource lifetime. Approval must actually resolve before revalidation
-and consumption, never merely be requested. The native host checks the expected
-process incarnation and stamped provider/target
-identity before accepting the staged install. Mobile Canvas retains the
+and consumption, never merely be requested. A definitive pre-dispatch expiry
+cleans the known staged artifact; an uncertain install submission retains its
+original receipt without retry or speculative cleanup. The native host checks
+the expected process incarnation and stamped provider/target identity before
+accepting the staged install. Mobile Canvas retains the
 full private stage proof and original lease `connectionRef`, waits for terminal
 install and artifact-delete operations, and never uploads package bytes or
 the receipt through a renderer. Unknown submission outcomes are not retried.
