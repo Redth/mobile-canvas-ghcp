@@ -58,7 +58,7 @@
           "enum": ["legacy", "ailoha"],
           "default": "legacy",
           "scope": "application",
-          "markdownDescription": "Use the production legacy engine (default) or explicitly opt into the pinned official Ailoha Target Host. Reload the VS Code window after changing. Read-only workspace evidence requires an explicitly chosen trusted local folder. Canonical read-only System inspection uses the selected target; App inspection requires an explicitly verified native instance in the named context. Target app lifecycle uses canonical operations; nonempty inventory requires reported native classification. Installation, recording and broader controls remain gated. No workspace application mapping or silent fallback is available."
+          "markdownDescription": "Use the production legacy engine (default) or explicitly opt into the pinned official Ailoha Target Host. Reload the VS Code window after changing. Read-only workspace evidence requires an explicitly chosen trusted local folder. Canonical read-only System inspection uses the selected target; App inspection requires an explicitly verified native instance in the named context. Target app lifecycle uses canonical operations; nonempty inventory requires reported native classification. Installation remains gated; recording requires verified CLI recovery and controls require canonical capabilities. No workspace application mapping or silent fallback is available."
         }
       }
     },

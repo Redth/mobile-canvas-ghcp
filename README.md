@@ -96,7 +96,8 @@ in installed hosts until the compatible reviewed public CLI and native host
 capabilities are packaged; ordinary uninstall/app-op routes cannot substitute.
 The App lens requires an explicitly selected verified native runtime instance
 in the canonical named context. Workspace application evidence cannot bind an
-agent. Recording, keyboard/buttons and broader controls remain unsupported.
+agent. Recording uses the verified scoped CLI only when recovery is positively
+advertised; keyboard/buttons and broader controls remain unsupported.
 See [the Ailoha adapter contract](docs/ailoha-protocol-adapter.md)
 for ownership, setup, package evidence and remaining gates.
 

@@ -41,6 +41,12 @@ for (const [host, product] of [
     assert.equal(evidence.noSeparateBootPost, true);
     assert.deepEqual(evidence.stagedEvidence, { mediaBatches: 2, approvals: 2, uncertainPosts: 1 });
     assert.deepEqual(evidence.guardedEvidence, { mutations: 7, submissions: 7, readbacks: 9, contentGets: 3 });
+    assert.deepEqual(evidence.recordingCommands.filter((action) => action === "start"), ["start", "start", "start", "start"]);
+    assert.deepEqual(evidence.recordingCommands.filter((action) => action === "stop"), ["stop", "stop", "stop", "stop"]);
+    assert.deepEqual(evidence.recordingCommands.filter((action) => action === "recover"),
+      ["recover", "recover", "recover", "recover", "recover", "recover"]);
+    assert.equal(evidence.recordingFinalizedOnClose, true);
+    assert.equal(evidence.recordingWithoutRecoveryRejected, true);
     assert.equal(evidence.creationRecords[0].platform, "ios");
     assert.equal(evidence.creationRecords[1].platform, "android");
     assert.equal(evidence.creationRecords.every((record) => record.state === "booted" && record.nativeId !== record.id), true);
@@ -49,7 +55,7 @@ for (const [host, product] of [
       ? ["invalid_request", ...Array(9).fill("capability_not_supported"),
         "consent_denied", "ailoha_cli_failed", "GuardedDestinationChanged",
         ...(focusedText
-          ? ["invalid_request", "capability_not_supported"]
-          : ["capability_not_supported", "capability_not_supported"])] : []);
+          ? ["invalid_request"]
+          : ["capability_not_supported"])] : []);
   });
 }

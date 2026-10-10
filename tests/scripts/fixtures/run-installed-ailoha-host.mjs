@@ -44,6 +44,8 @@ let createFromHost;
 let selectedFromHost;
 let requestFromHost;
 let presentationApi;
+let recordThroughHost;
+let stopThroughHost;
 const logs = [];
 const units = [];
 
@@ -971,6 +973,14 @@ try {
     assert.equal((await updateStatus.json()).enabled, true);
     const readStatus = await fetch(presentationRoute, { headers: { Cookie: cookie } });
     assert.equal((await readStatus.json()).overrides[0].value, "09:41");
+    recordThroughHost = async (outputPath) => {
+      const started = await action("start_recording", { deviceId: "opaque/target", outputPath, timeoutSeconds: 180 });
+      assert.equal(started.isRecording, true);
+      const response = await fetch(new URL("/api/v1/devices/opaque%2Ftarget/recording", url), { headers: { Cookie: cookie } });
+      assert.equal(response.status, 200);
+      assert.equal((await response.json()).outputPath, outputPath);
+    };
+    stopThroughHost = () => action("stop_recording", { deviceId: "opaque/target" });
     const socketUrl = new URL("/ws/video?deviceId=opaque%2Ftarget", url);
     socketUrl.protocol = "ws:";
     const socket = new WebSocket(socketUrl, "ailoha.video.v1", { headers: { Cookie: cookie } });
@@ -1110,7 +1120,21 @@ try {
     assert.equal((await changedStatus.json()).enabled, true);
     const readStatus = await api("/api/v1/devices/opaque%2Ftarget/presentation");
     assert.equal((await readStatus.json()).overrides[0].value, "09:41");
-    assert.equal((await api("/api/v1/devices/opaque%2Ftarget/recording")).status, 501);
+    const emptyRecording = await api("/api/v1/devices/opaque%2Ftarget/recording");
+    assert.equal(emptyRecording.status, 200);
+    assert.equal((await emptyRecording.json()).isRecording, false);
+    recordThroughHost = async (outputPath) => {
+      const response = await api("/api/v1/devices/opaque%2Ftarget/recording/start", "POST", { timeoutSeconds: 180, outputPath });
+      assert.equal(response.status, 200);
+      assert.equal((await response.json()).isRecording, true);
+      const status = await (await api("/api/v1/devices/opaque%2Ftarget/recording")).json();
+      assert.equal(status.outputPath, outputPath);
+    };
+    stopThroughHost = async () => {
+      const response = await api("/api/v1/devices/opaque%2Ftarget/recording/stop", "POST");
+      assert.equal(response.status, 200);
+      return response.json();
+    };
     await bridge.handleMessage({ type: "socket-open", id: "video", channel: "video", query: "deviceId=opaque%2Ftarget" });
     await waitFor(() => receiver?.lastAcknowledgedSequence === 5);
     await receiver.dispose();
@@ -1123,6 +1147,25 @@ try {
     assert.equal(messages.some((message) => JSON.stringify(message).includes("controlCredential")), false);
     assertPrivateConnectionRefAbsent(messages);
   } else throw new Error("Unknown installed host test.");
+  scenario.recordingEnabled = true;
+  const recorded = join(scratch, "owned-recording.mp4");
+  const finalizedOnClose = join(scratch, "owned-close.mp4");
+  await recordThroughHost(recorded);
+  const recordingMcp = await createAilohaMcpDispatcher({ version: "synthetic-only", binding: returnedBinding(selectedContext) });
+  try {
+    const tools = await recordingMcp.handle({ jsonrpc: "2.0", id: randomUUID(), method: "tools/list" });
+    const recordingStatus = tools.result.tools.find((tool) => tool.name === "mobile_device_recording_status");
+    assert.equal(recordingStatus.annotations.readOnlyHint, false);
+    assert.equal(recordingStatus.annotations.destructiveHint, false);
+    const status = await recordingMcp.handle(mcpCall("mobile_device_recording_status", { deviceId: "opaque/target" }));
+    assert.equal(status.result.structuredContent.isRecording, true);
+  } finally { await recordingMcp.dispose(); }
+  const stopped = await stopThroughHost();
+  assert.equal(stopped.isRecording, false);
+  assert.equal(stopped.outputPath, recorded);
+  assert.equal(existsSync(recorded), true);
+  await recordThroughHost(finalizedOnClose);
+  scenario.recordingEnabled = false;
   enableCatalogCreation();
   const creationCatalog = await readCatalog();
   assert.equal(creationCatalog.creationSupport.supported, true);
@@ -1307,6 +1350,12 @@ try {
     && call.method === "POST"), true);
   await release();
   release = null;
+  assert.equal(existsSync(finalizedOnClose), true);
+  let recordingCommands = readFileSync(`${process.env.AILOHA_TEST_CONTEXT_STATE}.recording-calls`, "utf8").trim().split("\n");
+  assert.equal(recordingCommands.filter((command) => command === "start").length, 2);
+  assert.equal(recordingCommands.filter((command) => command === "stop").length, 2);
+  assert.equal(recordingCommands.filter((command) => command === "recover").length, 2);
+  assert.equal(existsSync(`${process.env.AILOHA_TEST_CONTEXT_STATE}.recording`), false);
   assert.deepEqual(units, [0, 1, 2, 3, 4, 5]);
   assert.equal(scenario.videos.size, 0);
   assert.equal(scenario.leases.size, 0);
@@ -1347,6 +1396,100 @@ try {
   assert.deepEqual(mcpResult.result.structuredContent.scope, selectedContext.scope);
   assert.equal(mcpResult.result.structuredContent.device.id, selectedContext.device.id);
   assert.equal(mcpResult.result.structuredContent.device.nativeId, selectedContext.device.nativeId);
+  scenario.recordingEnabled = true;
+  const mcpOutput = join(scratch, "owned-mcp.mp4");
+  const startedMcp = await dispatcher.handle(mcpCall("mobile_device_recording_start", {
+    deviceId: selectedContext.device.id, outputPath: mcpOutput,
+  }));
+  assert.notEqual(startedMcp.result.isError, true, JSON.stringify(startedMcp.result));
+  assert.equal(startedMcp.result.structuredContent.isRecording, true);
+  const stoppingMcp = await createAilohaMcpDispatcher({
+    version: "synthetic-only", binding: returnedBinding(selectedContext),
+  });
+  try {
+    const status = await stoppingMcp.handle(mcpCall("mobile_device_recording_status", { deviceId: selectedContext.device.id }));
+    assert.equal(status.result.structuredContent.isRecording, true);
+    const foreignStop = await stoppingMcp.handle(mcpCall("mobile_device_recording_stop", { deviceId: selectedContext.device.id }));
+    assert.equal(foreignStop.result.isError, true);
+    assert.equal(JSON.parse(foreignStop.result.content[0].text).code, "recording_not_tracked");
+    assert.equal(existsSync(`${process.env.AILOHA_TEST_CONTEXT_STATE}.recording`), true);
+  } finally { await stoppingMcp.dispose(); }
+  const stoppedMcp = await dispatcher.handle(mcpCall("mobile_device_recording_stop", { deviceId: selectedContext.device.id }));
+  assert.equal(stoppedMcp.result.structuredContent.outputPath, mcpOutput);
+  assert.equal(stoppedMcp.result.structuredContent.isRecording, false);
+  assert.equal(existsSync(mcpOutput), true);
+  recordingCommands = readFileSync(`${process.env.AILOHA_TEST_CONTEXT_STATE}.recording-calls`, "utf8").trim().split("\n");
+  assert.equal(recordingCommands.filter((command) => command === "start").length, 3);
+  assert.equal(recordingCommands.filter((command) => command === "stop").length, 3);
+  assert.equal(recordingCommands.filter((command) => command === "recover").length, 3);
+  const recoveringMcp = await createAilohaMcpDispatcher({
+    version: "synthetic-only", binding: returnedBinding(selectedContext),
+  });
+  try {
+    const pendingOutput = join(scratch, "owned-recover.mp4");
+    const started = await recoveringMcp.handle(mcpCall("mobile_device_recording_start", {
+      deviceId: selectedContext.device.id, outputPath: pendingOutput,
+    }));
+    assert.notEqual(started.result.isError, true);
+    process.env.AILOHA_TEST_RECORDING_REPLACED_HOST = "1";
+    const wrongHost = await recoveringMcp.handle(mcpCall("mobile_device_recording_stop", {
+      deviceId: selectedContext.device.id,
+    }));
+    assert.equal(wrongHost.result.isError, true);
+    assert.equal(JSON.parse(wrongHost.result.content[0].text).code, "recording_owner_mismatch");
+    delete process.env.AILOHA_TEST_RECORDING_REPLACED_HOST;
+    process.env.AILOHA_TEST_RECORDING_DOWNLOAD_FAILED = "1";
+    const failedDownload = await recoveringMcp.handle(mcpCall("mobile_device_recording_stop", {
+      deviceId: selectedContext.device.id,
+    }));
+    assert.equal(failedDownload.result.isError, true);
+    assert.equal(JSON.parse(failedDownload.result.content[0].text).code, "recording_recovery_download_failed");
+    delete process.env.AILOHA_TEST_RECORDING_DOWNLOAD_FAILED;
+    const recovered = await recoveringMcp.handle(mcpCall("mobile_device_recording_stop", {
+      deviceId: selectedContext.device.id,
+    }));
+    assert.notEqual(recovered.result.isError, true);
+    assert.equal(recovered.result.structuredContent.outputPath, pendingOutput);
+    assert.equal(existsSync(pendingOutput), true);
+  } finally {
+    delete process.env.AILOHA_TEST_RECORDING_REPLACED_HOST;
+    delete process.env.AILOHA_TEST_RECORDING_DOWNLOAD_FAILED;
+    await recoveringMcp.dispose();
+  }
+  recordingCommands = readFileSync(`${process.env.AILOHA_TEST_CONTEXT_STATE}.recording-calls`, "utf8").trim().split("\n");
+  assert.equal(recordingCommands.filter((command) => command === "start").length, 4);
+  assert.equal(recordingCommands.filter((command) => command === "stop").length, 4);
+  assert.equal(recordingCommands.filter((command) => command === "recover").length, 6);
+  process.env.AILOHA_TEST_RECOVERY_COMMANDS = "missing";
+  let withoutRecovery;
+  try {
+    withoutRecovery = await createRuntimeMobileBackend({
+      scope: { sessionId: scope.sessionId, viewId: `${scope.viewId}-without-recovery` },
+    });
+    await withoutRecovery.select("opaque/target");
+    assert.equal((await withoutRecovery.getDevice("opaque/target")).capabilities.recording, false);
+    const blocked = await withoutRecovery.request("/api/v1/devices/opaque%2Ftarget/recording/start", {
+      method: "POST", body: JSON.stringify({ outputPath: join(scratch, "unsupported.mp4") }),
+    });
+    assert.equal(blocked.status, 501);
+    assert.equal((await blocked.json()).code, "capability_not_supported");
+    assert.equal(readFileSync(`${process.env.AILOHA_TEST_CONTEXT_STATE}.recording-calls`, "utf8").trim().split("\n").length,
+      recordingCommands.length);
+  } finally {
+    await withoutRecovery?.dispose();
+    delete process.env.AILOHA_TEST_RECOVERY_COMMANDS;
+  }
+  for (const mode of ["malformed", "fail"]) {
+    process.env.AILOHA_TEST_RECOVERY_COMMANDS = mode;
+    try {
+      await assert.rejects(createRuntimeMobileBackend({
+        scope: { sessionId: scope.sessionId, viewId: `${scope.viewId}-${mode}-recovery` },
+      }), { code: mode === "malformed" ? "ailoha_commands_invalid" : "ailoha_cli_failed" });
+    } finally {
+      delete process.env.AILOHA_TEST_RECOVERY_COMMANDS;
+    }
+  }
+  scenario.recordingEnabled = false;
   contextCommands[0] = {
     ...contextCommands[0], state: "detached", selection: null, observed: null,
     revision: String(BigInt(contextCommands[0].revision) + 1n),
@@ -1380,6 +1523,7 @@ try {
     })),
     createPosts: creationCalls.length, noSeparateBootPost: true,
     stagedEvidence, guardedEvidence,
+    recordingCommands, recordingFinalizedOnClose: true, recordingWithoutRecoveryRejected: true,
     connectionRefCapturedInternally: true, connectionRefNotSerialized: true,
     deviceFeaturesValidated: true,
     sourceFeatureResults,

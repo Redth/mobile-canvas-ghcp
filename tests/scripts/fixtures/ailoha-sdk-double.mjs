@@ -16,6 +16,7 @@ export const scenario = {
   fencedAppResponses: process.env.AILOHA_TEST_FENCED_APP_RESPONSES === "1",
   platform: process.env.AILOHA_TEST_APP_PLATFORM ?? "ios",
   focusedText: false,
+  recordingEnabled: false,
   targets: new Map(), providerId: "synthetic-provider", nativeId: "native-deployment-not-opaque-target",
   connectionRef: {
     schema: "ailoha.target-host.connection/v1", serviceId: "synthetic-service", pid: 12345,
@@ -90,6 +91,8 @@ function providerRecords() {
   ] : [];
   const features = mergedCapabilities([
     ...targetCapabilities(),
+    ...(scenario.recordingEnabled ? [{ id: "surface.capture", version: 1,
+      features: ["startTargetRecording", "getTargetRecording", "stopTargetRecording"] }] : []),
     ...(scenario.sourceFeatureContracts ? [
       { id: "target.permissions", version: 1, features: ["listTargetPermissions", "updateTargetPermission"] },
       { id: "target.telephony", version: 1, features: ["getTargetTelephony", "controlTargetCall"] },
@@ -229,6 +232,11 @@ export async function openTargetHostTransport(leaseId) {
       if (path === "/api/v1/providers") {
         if (scenario.beforeCatalogRead) await scenario.beforeCatalogRead(path, options);
         return reply(providerRecords());
+      }
+      if (path === "/api/v1/providers/synthetic-provider/target-types" && scenario.recordingEnabled) {
+        if (scenario.beforeCatalogRead) await scenario.beforeCatalogRead(path, options);
+        return reply([{ targetTypeId: "opaque/type", providerId: "synthetic-provider",
+          kind: "simulator", platform: "ios", name: "Fixture simulator" }]);
       }
       const catalogRoute = /^\/api\/v1\/providers\/([^/]+)\/(catalogs|runtimes|target-types|templates)$/.exec(path);
       if (catalogRoute) {

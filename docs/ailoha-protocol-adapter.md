@@ -741,6 +741,58 @@ session DELETE, then authoritative operation wait before lease release. A lost
 never DELETE or a broad 404-as-success fallback. Unknown create outcomes cannot
 automatically create a replacement on close/reopen.
 
+Recording preserves the Mobile Canvas `recording/start`, `recording` status and
+`recording/stop` API paths and the three MCP tool identifiers/output fields.
+Only a booted virtual iOS simulator or Android emulator whose exact target type
+and surface advertise start/get/stop recording is eligible. Recording is enabled
+only if the pinned, verified CLI additionally advertises exactly one
+`recording recover` entry marked `mutating: true` in its bounded offline
+`commands --json` metadata. Missing support disables new recording and its
+capability projection (including when a first target-only SDK advertises capture);
+invalid or unreadable metadata is an explicit error, not a silent fallback.
+The renderer can still read canonical recording status for its selected device;
+the missing recovery capability never authorizes a new start.
+An already-owned recording remains finalizable through its captured coordinator
+even if a replacement backend cannot advertise new recording. The verified Ailoha
+CLI's scoped recording coordinator owns cross-process acceptance markers,
+operation reconciliation, stop and bounded artifact download; Mobile Canvas
+does not implement provider recording or forward a credential to the renderer.
+Start synchronously snapshots and validates the caller's timeout and host MP4
+destination before target preparation can yield; MCP start additionally captures
+the device selector before awaiting backend initialization. It also captures
+the context ref/epoch/revision and host/target/surface. A lost start response
+is not submitted twice. Caller cancellation or view retirement before CLI
+dispatch blocks a new start; cancellation after dispatch does not
+abort or retarget an accepted recording. The view retains that captured owner
+across runtime lease replacement and selection changes. Stop uses the original
+bound owner even after selecting another target; failed finalization/download
+remains visible and prevents the canvas lease from releasing. The canonical
+active status or an existing-marker refusal is observational only for a second,
+untracked host, even within the same view: it does not acquire cleanup authority.
+That host cannot automatically stop on close or explicitly stop without its own
+validated original recovery receipt. The retaining host alone finalizes its
+accepted recording, including its own lost-start acknowledgment. The canonical
+CLI's recover-only operation is required after even a successful legacy stop:
+Mobile Canvas releases the owner only after a matching durable downloaded
+receipt proves the original context, host incarnation, recording and stop
+identities, nonempty landed artifact and output. A lost or failed stop/download
+response retries only captured recovery, never a second stop. Pending, failed and unknown
+recovery outcomes retain the owner and block lease release or another start;
+a file at the output path alone never proves completion. A pending start may
+have no recording ID; only the first authoritatively known ID is pinned.
+The Ailoha MCP status tool advertises `readOnlyHint: false` because status
+after a stop may recover and write that original output; it never deletes a
+target or overwrites an existing recording. The legacy catalog is unchanged.
+This source behavior requires the separately reviewed native recovery contract
+and a compatible public SDK pin; the current opt-in remains unavailable without
+those prepared public inputs.
+The default host output is a unique MP4 under
+`~/.mobile-canvas/artifacts/recordings`; explicit absolute MP4 host paths are
+accepted, but the canonical landing refuses an existing file rather than
+silently overwriting it. No remote/storage fallback is attempted. MCP process
+exit releases its own lease without finalizing a recording that belongs to the
+still-open view; view close/suspend finalizes before lease release.
+
 Hide/close/dispose retires only that view's sockets, receiver, decoder and owned
 resources. The shared host/broker/devices remain running. Provider state and
 description are projected separately from a connected control plane; unavailable
@@ -842,7 +894,8 @@ inventory/select, advertised start/stop/reboot and provider-owned window reveal,
 PNG screenshot,
 basic geometry-bound pointer gestures, shared ALHV WebCodecs display, and
 advertised reset/delete when the host can obtain genuine captured approval,
-plus [read-only explicit-root workspace/application evidence](ailoha-workspace-inspection.md)
+target-host recording through the verified scoped CLI when it advertises
+canonical recovery, [read-only explicit-root workspace/application evidence](ailoha-workspace-inspection.md),
 and read-only canonical composed `app_tree`, `app_query` and `app_status`
 through the host-owned MCP client. System reads require the selected Target
 Host target and request `target-host` routing; App reads require an explicitly
@@ -921,9 +974,9 @@ App tree/query/status through both prepared host clients against the real
 canonical broker and mock Target Host/Core-MAUI agents, including stale-context
 and missing-Agent failures. This does not qualify a public package, normal
 installation, native platform matrix or real-device acceptance.
-Unsupported: configuration-dependent creation, rotation/keyboard/buttons,
-reset/delete without scoped consent, app deployment,
-recording and broader settings/diagnostics/file/hardware operations. No claim of
+Unsupported: configuration-dependent creation, reset/delete without scoped
+consent, app deployment without canonical staging, and broader operations
+without their required native capability or compatible published runtime. No claim of
 device or full feature parity is made.
 
 Tests exercise actual prepared GitHub entrypoints and compiled VS Code bridge
@@ -945,8 +998,19 @@ an unchanged scoped selection announcement does not recreate the live resource.
 `tests/web/ailoha-device-browser-server.mjs` serves only the synthetic fixture;
 `ailoha-device-browser-check.mjs` is a Playwright MCP code file to repeat that
 check. On a blank page set `window.ailohaBrowserTestOptions` to the server's
-`{url, evidenceUrl}`, then run the code file; it navigates once into a fresh
-fixture host and verifies resource counts, pointer input and hide/resume.
+`{url, evidenceUrl, recording}`, then run the code file; it navigates once into
+a fresh fixture host and verifies resource counts, pointer input and hide/resume.
+Pass `--recording` to the server to enable synthetic recording support. This
+also checks the prepared shared renderer's start/stop button and hide-time
+finalization against its captured view, with recording output isolated under
+the fixture's context directory. Run it against both prepared plugin and VSIX
+roots; the compiled VS Code HostBridge is exercised by the separate installed
+entrypoint fixture. Combine `--recording --lost-start` to lose the first
+accepted start response: the renderer must offer captured resolution rather
+than replay start, then finalize one recording and land its MP4.
+The installed entrypoint fixture also rejects a changed host incarnation and a
+nonzero typed download failure before retrying only the captured recovery;
+each host submits one stop for that recording.
 Prepared VS Code shared renderer checks use the same host adapter; the separately
 tested compiled extension/webview bridge is not replaced by a browser-only proxy
 claim.

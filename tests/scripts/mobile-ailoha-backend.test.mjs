@@ -17,6 +17,7 @@ const { createAilohaContextStore } = await import(productModule("lib/ailoha/cont
 const { createAilohaMcpDispatcher } = await import(productModule("lib/ailoha/mcp-host.mjs"));
 const { ARTIFACT_FEATURE_GATES } = await import(productModule("lib/ailoha/artifact-features.mjs"));
 const { createVerifiedAilohaCli } = await import(productModule("lib/ailoha/runtime-sdk.mjs"));
+const { AilohaRecordingCoordinator } = await import(productModule("lib/ailoha/recording-coordinator.mjs"));
 
 function deferred() {
   let resolve;
@@ -89,6 +90,9 @@ function fixture(options = {}) {
       calls.push(["app-uninstall", id, appId, request.confirmed]); return { operationId: "app-uninstall" };
     },
     async listTargetAppOps(id, appId) { calls.push(["app-op-list", id, appId]); return options.appOps ?? []; },
+    async listProviderTargetTypes() { return [
+      { targetTypeId: "type", kind: "simulator", platform: "ios" },
+    ]; },
     async startTarget(id) { calls.push(["start", id]); return { operationId: `start-${id}` }; },
     async stopTarget(id) { calls.push(["stop", id]); return { operationId: `stop-${id}` }; },
     async rebootTarget(id) { calls.push(["reboot", id]); return { operationId: `reboot-${id}` }; },
@@ -175,13 +179,16 @@ function fixture(options = {}) {
     fencedApps: options.fencedApps,
     allowHostPackage: options.allowHostPackage,
     saveScreenshot: options.saveScreenshot,
+    recording: options.recording,
+    recordingAvailable: options.recordingAvailable,
+    finalizeRecordings: options.finalizeRecordings,
     operationState: options.operationState,
     videoState: options.videoState,
     artifactState: options.artifactState,
     runCli: options.runCli,
   });
   return {
-    backend, calls, targets, providers, client, media, cleanups, selectionStore, owner,
+    backend, calls, targets, providers, client, media, cleanups, selectionStore, capabilities, owner,
     retireContext() { contextState = "detached"; },
     geometryChanged() { revision += 1; },
     selectHost(hostId) { selection = { targetHostId: hostId, targetId: "one" }; },
@@ -3116,6 +3123,323 @@ test("caller cancellation after feature submission does not abandon its captured
   await cancelled;
   assert.equal((await recovery).operation, "sms-send");
   assert.equal(state.wire.filter(({ method }) => method === "POST").length, 1);
+});
+
+for (const viaAction of [false, true]) {
+  test(`recording start captures options before target preparation via ${viaAction ? "action" : "direct API"}`, async (t) => {
+    const input = { timeoutSeconds: 180, outputPath: "/owned/original.mp4" };
+    const submittedInput = viaAction ? { deviceId: "one", ...input } : input;
+    let submitted;
+    const state = fixture({
+      recording: {
+        async start(invocation, options, requireCurrent) {
+          requireCurrent();
+          submitted = { ...options };
+          return { deviceId: invocation.targetId, isRecording: true,
+            outputPath: options.outputPath, timeoutSeconds: options.timeoutSeconds };
+        },
+      },
+      client: {
+        async getTargetCapabilities() {
+          submittedInput.timeoutSeconds = 1;
+          submittedInput.outputPath = "/owned/replacement.mp4";
+          return [{ id: "surface.capture", version: 1,
+            features: ["startTargetRecording", "getTargetRecording", "stopTargetRecording"] }];
+        },
+      },
+    });
+    t.after(() => state.backend.dispose());
+    if (viaAction) {
+      await state.backend.invokeAction("start_recording", submittedInput);
+    } else {
+      await state.backend.recordingStart("one", submittedInput);
+    }
+    assert.deepEqual(submitted, { timeoutSeconds: 180, outputPath: "/owned/original.mp4" });
+  });
+}
+
+test("invalid recording start input is rejected before target IO", async (t) => {
+  const state = fixture({ recording: { async start() { throw new Error("must not submit"); } } });
+  t.after(() => state.backend.dispose());
+  await assert.rejects(state.backend.recordingStart("one", { timeoutSeconds: 0 }), { code: "invalid_request" });
+  await assert.rejects(state.backend.recordingStart("one", { outputPath: "relative.mp4" }), { code: "invalid_output" });
+  assert.deepEqual(state.calls, []);
+});
+
+test("shared recording API and action identifiers preserve legacy outputs and captured owner across selection", async () => {
+  const recordings = [];
+  let tracked = false;
+  const state = fixture({
+    recording: {
+      get tracked() { return tracked; },
+      async start(invocation, input) {
+        recordings.push(["start", invocation, input]);
+        tracked = true;
+        return { deviceId: invocation.targetId, isRecording: true, outputPath: "/host/record.mp4",
+          startedAt: "2026-10-10T01:00:00Z", timeoutSeconds: input.timeoutSeconds };
+      },
+      async status(invocation) {
+        recordings.push(["status", invocation.targetId]);
+        return { deviceId: invocation.targetId, isRecording: tracked && invocation.targetId === "one",
+          outputPath: tracked && invocation.targetId === "one" ? "/host/record.mp4" : null };
+      },
+      async stop(deviceId) {
+        recordings.push(["stop", deviceId]);
+        tracked = false;
+        return { deviceId, isRecording: false, outputPath: "/host/record.mp4" };
+      },
+      async finalize() { if (tracked) await this.stop("one"); },
+    },
+    finalizeRecordings: true,
+  });
+  state.capabilities.push({ id: "surface.capture", version: 1,
+    features: ["startTargetRecording", "getTargetRecording", "stopTargetRecording"] });
+  assert.equal((await state.backend.getDevice("one")).capabilities.recording, true);
+  const response = await state.backend.request("/api/v1/devices/one/recording/start", {
+    method: "POST", body: JSON.stringify({ timeoutSeconds: 180 }),
+  });
+  assert.equal(response.status, 200);
+  assert.deepEqual(await response.json(), {
+    deviceId: "one", isRecording: true, outputPath: "/host/record.mp4",
+    startedAt: "2026-10-10T01:00:00Z", timeoutSeconds: 180,
+  });
+  assert.equal(recordings[0][1].targetHostId, "host");
+  assert.equal(recordings[0][1].surfaceId, "surface/opaque");
+  await state.backend.select("two");
+  assert.deepEqual(await state.backend.invokeAction("get_recording_status", { deviceId: "two" }), {
+    deviceId: "two", isRecording: false, outputPath: null,
+  });
+  await state.backend.dispose();
+  assert.deepEqual(recordings.at(-1), ["stop", "one"]);
+  assert.ok(state.calls.findIndex((call) => call[0] === "client-dispose")
+    > state.calls.findIndex((call) => call[0] === "release-end"));
+  assert.equal(state.calls.some((call) => call[0] === "stop"), false);
+});
+
+test("cancelled recording API and action intents cannot start after target preparation", async () => {
+  const entered = deferred();
+  const targetReady = deferred();
+  let starts = 0;
+  const state = fixture({
+    recording: { async start() { starts++; } },
+  });
+  state.capabilities.push({ id: "surface.capture", version: 1,
+    features: ["startTargetRecording", "getTargetRecording", "stopTargetRecording"] });
+  const getTarget = state.client.getTarget.bind(state.client);
+  state.client.getTarget = async (id) => {
+    entered.resolve();
+    await targetReady.promise;
+    return getTarget(id);
+  };
+  const caller = new AbortController();
+  const pending = state.backend.request("/api/v1/devices/one/recording/start", {
+    method: "POST", signal: caller.signal,
+  });
+  await entered.promise;
+  caller.abort();
+  targetReady.resolve();
+  const response = await pending;
+  assert.equal(response.status, 409);
+  assert.equal((await response.json()).code, "request_cancelled");
+  await assert.rejects(state.backend.invokeAction("start_recording", { deviceId: "one" },
+    { signal: caller.signal }), { code: "request_cancelled" });
+  assert.equal(starts, 0);
+  await state.backend.dispose();
+});
+
+test("unavailable recovery hides recording despite capture support and rejects starts", async () => {
+  let starts = 0;
+  const state = fixture({
+    recordingAvailable: false,
+    recording: {
+      async start() { starts++; },
+      async status() { return { deviceId: "one", isRecording: false }; },
+    },
+  });
+  state.capabilities.push({ id: "surface.capture", version: 1,
+    features: ["startTargetRecording", "getTargetRecording", "stopTargetRecording"] });
+  await state.backend.select("one");
+  assert.equal((await state.backend.getDevice("one")).capabilities.recording, false);
+  await assert.rejects(state.backend.recordingStart("one"), { code: "capability_not_supported" });
+  assert.equal(starts, 0);
+  await state.backend.dispose();
+});
+
+test("recording finalization failure prevents lease release and retry stays on original target", async () => {
+  let failures = 1;
+  let stops = 0;
+  const state = fixture({
+    recording: {
+      get tracked() { return true; },
+      async finalize() {
+        stops += 1;
+        if (failures--) throw new Error("artifact download failed");
+      },
+    },
+    finalizeRecordings: true,
+  });
+  await assert.rejects(state.backend.dispose(), /artifact download failed/);
+  assert.equal(state.calls.some((call) => call[0] === "release-begin"), false);
+  await state.backend.dispose();
+  assert.equal(stops, 2);
+  assert.equal(state.calls.filter((call) => call[0] === "release-begin").length, 1);
+});
+
+test("retired contexts reject new recording work but finalize the captured owner", async () => {
+  let owner;
+  let tracked = false;
+  const finalized = [];
+  const state = fixture({
+    recording: {
+      get tracked() { return tracked; },
+      async start(invocation) {
+        owner = invocation;
+        tracked = true;
+        return { deviceId: invocation.targetId, isRecording: true, outputPath: "/host/record.mp4" };
+      },
+      async finalize() {
+        finalized.push(owner);
+        tracked = false;
+      },
+    },
+    finalizeRecordings: true,
+  });
+  state.capabilities.push({ id: "surface.capture", version: 1,
+    features: ["startTargetRecording", "getTargetRecording", "stopTargetRecording"] });
+  await state.backend.recordingStart("one");
+  state.retireContext();
+  await assert.rejects(state.backend.recordingStart("two"), { code: "view_closed" });
+  await state.backend.dispose();
+  assert.equal(finalized.length, 1);
+  assert.equal(finalized[0].targetHostId, "host");
+  assert.equal(finalized[0].targetId, "one");
+  assert.equal(finalized[0].surfaceId, "surface/opaque");
+  assert.equal(state.calls.filter((call) => call[0] === "release-end").length, 1);
+  assert.equal(state.calls.some((call) => call[0] === "stop"), false);
+});
+
+test("view close waits for a concurrent accepted recording start before releasing its lease", async () => {
+  const entered = deferred();
+  const accepted = deferred();
+  const calls = [];
+  let active = false;
+  const record = (state = "recording") => ({
+    recordingId: "owned-recording", targetHostId: "host", targetId: "one",
+    surfaceId: "surface/opaque", outputFile: "/host/record.mp4", state,
+    ...(state === "completed" ? { artifactId: "owned-artifact" } : {}),
+  });
+  const recording = new AilohaRecordingCoordinator({
+    output: async () => "/host/record.mp4",
+    async run(args, options) {
+      const action = args[1];
+      calls.push(action);
+      if (action === "status") return JSON.stringify(active ? record() : null);
+      if (action === "start") {
+        options.beforeDispatch();
+        entered.resolve();
+        await accepted.promise;
+        active = true;
+        return JSON.stringify(record());
+      }
+      if (action === "stop") {
+        active = false;
+        return JSON.stringify(record("completed"));
+      }
+      if (action === "recover") return JSON.stringify({
+        ...record("completed"), outcome: "downloaded", hostInstanceId: "instance-one",
+        stopOperationId: "stop-operation-one", stopRequestId: "stop-request-one",
+        contextRef: "ctx-canonical-snapshot", scopeEpoch: "original-epoch", contextRevision: "1",
+        downloadedAt: "2026-10-10T01:02:00Z", downloadedLength: 21,
+      });
+      throw new Error("Unexpected recording command");
+    },
+  });
+  const state = canonicalFixture({ recording, finalizeRecordings: true });
+  state.capabilities.push({ id: "surface.capture", version: 1,
+    features: ["startTargetRecording", "getTargetRecording", "stopTargetRecording"] });
+  const caller = new AbortController();
+  const starting = state.backend.recordingStart("one", {}, { signal: caller.signal });
+  await entered.promise;
+  caller.abort();
+  const closing = state.backend.dispose();
+  assert.equal(state.calls.some((call) => call[0] === "release-begin"), false);
+  accepted.resolve();
+  await starting;
+  await closing;
+  assert.deepEqual(calls, ["status", "start", "status", "stop", "recover"]);
+  assert.equal(state.calls.filter((call) => call[0] === "release-end").length, 1);
+  assert.equal(recording.tracked, false);
+});
+
+test("cancelled recording start after canonical status never dispatches or retains an unaccepted owner", async () => {
+  const entered = deferred();
+  const statusReady = deferred();
+  const commands = [];
+  const recording = new AilohaRecordingCoordinator({
+    output: async () => "/host/record.mp4",
+    async run(args) {
+      commands.push(args[1]);
+      if (args[1] !== "status") throw new Error("Cancelled intent submitted recording start.");
+      entered.resolve();
+      await statusReady.promise;
+      return "null";
+    },
+  });
+  const state = canonicalFixture({ recording });
+  state.capabilities.push({ id: "surface.capture", version: 1,
+    features: ["startTargetRecording", "getTargetRecording", "stopTargetRecording"] });
+  const caller = new AbortController();
+  const pending = state.backend.request("/api/v1/devices/one/recording/start", {
+    method: "POST", signal: caller.signal,
+  });
+  await entered.promise;
+  caller.abort();
+  statusReady.resolve();
+  const response = await pending;
+  assert.equal(response.status, 409);
+  assert.equal((await response.json()).code, "request_cancelled");
+  assert.deepEqual(commands, ["status"]);
+  assert.equal(recording.tracked, false);
+  await state.backend.dispose();
+});
+
+test("selection revision changed during recording status prevents a new start on the old target", async () => {
+  const entered = deferred();
+  const statusReady = deferred();
+  const commands = [];
+  const recording = new AilohaRecordingCoordinator({
+    output: async () => "/host/record.mp4",
+    async run(args) {
+      commands.push(args[1]);
+      if (args[1] !== "status") throw new Error("Superseded intent submitted recording start.");
+      entered.resolve();
+      await statusReady.promise;
+      return "null";
+    },
+  });
+  const state = canonicalFixture({ recording });
+  state.capabilities.push({ id: "surface.capture", version: 1,
+    features: ["startTargetRecording", "getTargetRecording", "stopTargetRecording"] });
+  const pending = state.backend.recordingStart("one");
+  await entered.promise;
+  await state.advanceSelection();
+  statusReady.resolve();
+  await assert.rejects(pending, { code: "context_snapshot_superseded" });
+  assert.deepEqual(commands, ["status"]);
+  assert.equal(recording.tracked, false);
+  await state.backend.dispose();
+});
+
+test("remote and non-virtual targets advertise no recording even when capture methods exist", async (t) => {
+  const state = fixture({ recording: { async start() { throw new Error("must not reach"); } } });
+  t.after(() => state.backend.dispose());
+  state.capabilities.push({ id: "surface.capture", version: 1,
+    features: ["startTargetRecording", "getTargetRecording", "stopTargetRecording"] });
+  state.client.listProviderTargetTypes = async () => [{ targetTypeId: "type", kind: "remote", platform: "ios" }];
+  assert.equal((await state.backend.getDevice("one")).capabilities.recording, false);
+  const response = await state.backend.request("/api/v1/devices/one/recording/start", { method: "POST" });
+  assert.equal(response.status, 501);
+  assert.equal((await response.json()).code, "capability_not_supported");
 });
 
 test("trusted backend captures the original full lease evidence without serializing it", async (t) => {
