@@ -818,6 +818,52 @@ test("unknown lifecycle outcomes cannot be replayed and mismatched completion ne
   await assert.rejects(mismatch.backend.lifecycle("boot", "one"), { code: "operation_owner_mismatch" });
 });
 
+for (const [name, code, status] of [
+  ["HTTP 408", "http_error", 408],
+  ["HTTP 499", "http_error", 499],
+  ["disposed client", "client_disposed", undefined],
+]) {
+  test(`direct boot retains the original ${name} receipt without replacement reads or replay`, async (t) => {
+    const operationState = new Map();
+    const state = fixture({ operationState });
+    t.after(() => state.backend.dispose());
+    const start = state.client.startTarget;
+    let submissions = 0;
+    state.client.startTarget = async () => {
+      submissions += 1;
+      throw new AilohaProtocolError(code, { status });
+    };
+    await assert.rejects(state.backend.lifecycle("boot", "one"), { code });
+    const receipt = [...operationState.values()][0];
+    assert.ok(receipt);
+    assert.equal(receipt.uncertain, true);
+    state.client.startTarget = async (...args) => { submissions += 1; return start(...args); };
+    const reads = state.calls.length;
+    await assert.rejects(state.backend.lifecycle("boot", "one"), { code: "lifecycle_outcome_uncertain" });
+    assert.equal([...operationState.values()][0], receipt);
+    assert.equal(submissions, 1);
+    assert.equal(state.calls.length, reads);
+  });
+}
+
+test("a definitive direct boot HTTP403 rejection evicts only its receipt and allows a new submission", async (t) => {
+  const operationState = new Map();
+  const state = fixture({ operationState });
+  t.after(() => state.backend.dispose());
+  const start = state.client.startTarget;
+  let submissions = 0;
+  state.client.startTarget = async () => {
+    submissions += 1;
+    throw new AilohaProtocolError("http_error", { status: 403 });
+  };
+  await assert.rejects(state.backend.lifecycle("boot", "one"), { code: "http_error", status: 403 });
+  assert.equal(operationState.size, 0);
+  state.client.startTarget = async (...args) => { submissions += 1; return start(...args); };
+  assert.equal((await state.backend.lifecycle("boot", "one")).id, "one");
+  assert.equal(submissions, 2);
+  assert.equal(operationState.size, 0);
+});
+
 test("succeeded reboot receipt survives target-read failure and selection/reopen without another POST", async (t) => {
   const operationState = new Map();
   let posts = 0;
