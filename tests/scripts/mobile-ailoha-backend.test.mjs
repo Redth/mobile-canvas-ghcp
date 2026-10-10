@@ -1,9 +1,10 @@
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
 import test from "node:test";
-import { access, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { access, rm, writeFile } from "node:fs/promises";
 import { basename, join, relative, resolve } from "node:path";
 import { productModule } from "../ailoha-test-module.mjs";
+import { ownedTestDirectory } from "./fixtures/owned-test-directory.mjs";
 const { AilohaMobileBackend } = await import(productModule("lib/ailoha/mobile-backend.mjs"));
 const { mobileCanvasBackend } = await import(productModule("lib/backend.mjs"));
 const { createAilohaMediaAdapter } = await import(productModule("lib/ailoha/media-adapter.mjs"));
@@ -1088,8 +1089,7 @@ test("a late accepted fenced operation retains its original ID for GET-only reco
 
 async function stagedFixture(t, overrides = {}) {
   const { stagedApps: stagedOverrides, beginDestructiveApproval, ...fixtureOverrides } = overrides;
-  const directory = await mkdtemp(join(process.cwd(), ".mobile-stage-"));
-  t.after(() => rm(directory, { recursive: true, force: true }));
+  const directory = await ownedTestDirectory(t, "mobile-stage-");
   const sourcePath = join(directory, "local app.apk");
   await writeFile(sourcePath, "controlled fixture");
   const steps = [];
@@ -1254,8 +1254,7 @@ test("cancelled original install authority during verified CLI acquisition canno
   const release = deferred();
   const caller = new AbortController();
   const pin = { version: "synthetic-only", sourceSha: "a".repeat(40) };
-  const directory = await mkdtemp(join(process.cwd(), ".mobile-native-"));
-  t.after(() => rm(directory, { recursive: true, force: true }));
+  const directory = await ownedTestDirectory(t, "mobile-native-");
   const marker = join(directory, "native-post");
   let launches = 0;
   const runCli = createVerifiedAilohaCli({ pin, sdk: {
@@ -4173,8 +4172,7 @@ test("parent: staged completion preserves its accepted destructive operation ide
 });
 
 test("owned zero-byte file push uses exact native receipt, captured approval and GET-only completion", async (t) => {
-  const dir = await mkdtemp(join(process.cwd(), "tests/scripts/fixtures/staged-owned-"));
-  t.after(() => rm(dir, { recursive: true, force: true }));
+  const dir = await ownedTestDirectory(t, "staged-owned-");
   const source = join(dir, "empty.txt");
   await writeFile(source, "");
   const artifactState = new Map();
@@ -4238,8 +4236,7 @@ test("owned zero-byte file push uses exact native receipt, captured approval and
 });
 
 test("installed app selector uses its package and preserves a nonempty legacy push envelope", async (t) => {
-  const dir = await mkdtemp(join(process.cwd(), "tests/scripts/fixtures/app-push-owned-"));
-  t.after(() => rm(dir, { recursive: true, force: true }));
+  const dir = await ownedTestDirectory(t, "app-push-owned-");
   const source = join(dir, "seed.db");
   await writeFile(source, "abc");
   const requestedSource = relative(process.cwd(), source);
@@ -4297,8 +4294,7 @@ test("installed app selector uses its package and preserves a nonempty legacy pu
 });
 
 test("owned media paths use one native staged batch and project every accepted host path", async (t) => {
-  const dir = await mkdtemp(join(process.cwd(), "tests/scripts/fixtures/media-owned-"));
-  t.after(() => rm(dir, { recursive: true, force: true }));
+  const dir = await ownedTestDirectory(t, "media-owned-");
   const paths = [join(dir, "contact.vcf"), join(dir, "image.png")];
   const requestedPaths = [relative(process.cwd(), paths[0]), paths[1]];
   await Promise.all(paths.map((path) => writeFile(path, "")));
@@ -4361,8 +4357,7 @@ test("unrepresentable media batch never stages a truncated subset", async (t) =>
 });
 
 test("concurrent same-destination calls cannot race a second native stage or device POST", async (t) => {
-  const dir = await mkdtemp(join(process.cwd(), "tests/scripts/fixtures/concurrent-owned-"));
-  t.after(() => rm(dir, { recursive: true, force: true }));
+  const dir = await ownedTestDirectory(t, "concurrent-owned-");
   const source = join(dir, "concurrent.png");
   await writeFile(source, "");
   const stalled = deferred();
@@ -4404,8 +4399,7 @@ test("concurrent same-destination calls cannot race a second native stage or dev
 });
 
 test("uncertain native device acceptance retains the original attempt without a second POST", async (t) => {
-  const dir = await mkdtemp(join(process.cwd(), "tests/scripts/fixtures/unknown-owned-"));
-  t.after(() => rm(dir, { recursive: true, force: true }));
+  const dir = await ownedTestDirectory(t, "unknown-owned-");
   const source = join(dir, "unknown.txt");
   await writeFile(source, "");
   let receipt;
@@ -4441,8 +4435,7 @@ test("uncertain native device acceptance retains the original attempt without a 
 });
 
 test("stalled native stage cannot continue after the original context is retired", async (t) => {
-  const dir = await mkdtemp(join(process.cwd(), "tests/scripts/fixtures/stale-owned-"));
-  t.after(() => rm(dir, { recursive: true, force: true }));
+  const dir = await ownedTestDirectory(t, "stale-owned-");
   const source = join(dir, "stale.txt");
   await writeFile(source, "");
   let receipt;
@@ -4472,8 +4465,7 @@ test("stalled native stage cannot continue after the original context is retired
 });
 
 test("a restarted same-key target host cannot inherit staged file authority", async (t) => {
-  const dir = await mkdtemp(join(process.cwd(), "tests/scripts/fixtures/restart-owned-"));
-  t.after(() => rm(dir, { recursive: true, force: true }));
+  const dir = await ownedTestDirectory(t, "restart-owned-");
   const source = join(dir, "restart.txt");
   await writeFile(source, "");
   const actions = [];
@@ -4512,8 +4504,7 @@ test("a restarted same-key target host cannot inherit staged file authority", as
 });
 
 test("accepted file import recovers from failed completion GET without restaging or resubmitting", async (t) => {
-  const dir = await mkdtemp(join(process.cwd(), "tests/scripts/fixtures/recover-owned-"));
-  t.after(() => rm(dir, { recursive: true, force: true }));
+  const dir = await ownedTestDirectory(t, "recover-owned-");
   const source = join(dir, "recover.txt");
   await writeFile(source, "");
   const actions = [];
@@ -4559,8 +4550,7 @@ test("accepted file import recovers from failed completion GET without restaging
 test("late accepted staged import retains its receipt and recovers without a second approval", async (t) => {
   let clock = 0;
   t.mock.method(performance, "now", () => clock);
-  const dir = await mkdtemp(join(process.cwd(), "tests/scripts/fixtures/late-owned-"));
-  t.after(() => rm(dir, { recursive: true, force: true }));
+  const dir = await ownedTestDirectory(t, "late-owned-");
   const source = join(dir, "late.txt");
   await writeFile(source, "");
   let prompts = 0;
@@ -4603,8 +4593,7 @@ test("late accepted staged import retains its receipt and recovers without a sec
 });
 
 test("staged readback uncertainty retries only original-host confirm GET before one continuation", async (t) => {
-  const dir = await mkdtemp(join(process.cwd(), "tests/scripts/fixtures/confirm-owned-"));
-  t.after(() => rm(dir, { recursive: true, force: true }));
+  const dir = await ownedTestDirectory(t, "confirm-owned-");
   const source = join(dir, "confirm.txt");
   await writeFile(source, "");
   let receipt;
@@ -4650,8 +4639,7 @@ test("staged readback uncertainty retries only original-host confirm GET before 
 });
 
 test("uncertain original-host cleanup preserves accepted import and never repeats device continuation", async (t) => {
-  const dir = await mkdtemp(join(process.cwd(), "tests/scripts/fixtures/cleanup-owned-"));
-  t.after(() => rm(dir, { recursive: true, force: true }));
+  const dir = await ownedTestDirectory(t, "cleanup-owned-");
   const source = join(dir, "cleanup.txt");
   await writeFile(source, "");
   const actions = [];
@@ -4698,8 +4686,7 @@ test("uncertain original-host cleanup preserves accepted import and never repeat
 });
 
 test("denied file replacement cleans only original staged artifact without device continuation", async (t) => {
-  const dir = await mkdtemp(join(process.cwd(), "tests/scripts/fixtures/denied-owned-"));
-  t.after(() => rm(dir, { recursive: true, force: true }));
+  const dir = await ownedTestDirectory(t, "denied-owned-");
   const source = join(dir, "denied.txt");
   await writeFile(source, "");
   let receipt;
@@ -4732,8 +4719,7 @@ test("denied file replacement cleans only original staged artifact without devic
 });
 
 test("native failed copy is never a successful zero-byte transfer and still cleans original staging", async (t) => {
-  const dir = await mkdtemp(join(process.cwd(), "tests/scripts/fixtures/failed-owned-"));
-  t.after(() => rm(dir, { recursive: true, force: true }));
+  const dir = await ownedTestDirectory(t, "failed-owned-");
   const source = join(dir, "failed.txt");
   await writeFile(source, "");
   let receipt;

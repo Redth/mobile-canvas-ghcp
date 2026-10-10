@@ -1,9 +1,10 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { access, mkdtemp, mkdir, rm, symlink, writeFile } from "node:fs/promises";
+import { access, mkdir, symlink, writeFile } from "node:fs/promises";
 import { createHash } from "node:crypto";
 import { basename, join } from "node:path";
 import { productModule } from "../ailoha-test-module.mjs";
+import { ownedTestDirectory } from "./fixtures/owned-test-directory.mjs";
 
 const { createStagedAppCli, localAppPackage } = await import(productModule("lib/ailoha/staged-apps.mjs"));
 const { createVerifiedAilohaCli } = await import(productModule("lib/ailoha/runtime-sdk.mjs"));
@@ -90,8 +91,7 @@ test("staged receipt and accepted operation cannot substitute host, provider, na
 });
 
 test("host package topology rejects links, directories and unreadable/missing files before CLI", async (t) => {
-  const directory = await mkdtemp(join(process.cwd(), ".mobile-stage-"));
-  t.after(() => rm(directory, { recursive: true, force: true }));
+  const directory = await ownedTestDirectory(t, "mobile-stage-");
   const apk = join(directory, "app.apk");
   await writeFile(apk, "local fixture");
   const bundle = join(directory, "bundle.app");
@@ -148,8 +148,7 @@ test("verified native CLI maps definitive rejection without leaking private path
     });
 
     test("the staged submission budget includes verified launch acquisition and cannot spawn after it expires", async (t) => {
-      const directory = await mkdtemp(join(process.cwd(), ".mobile-cli-deadline-"));
-      t.after(() => rm(directory, { recursive: true, force: true }));
+      const directory = await ownedTestDirectory(t, "mobile-cli-deadline-");
       const marker = join(directory, "native-post-started");
       const pin = { version: "reviewed-source", sourceSha: "c8caabd589d8c008adac33107846bc322632977a" };
       const sdk = { async getVerifiedCliLaunch() {
