@@ -82,9 +82,15 @@ export async function openTargetHostTransport(leaseId) {
   const transport = Object.freeze({
     get closed() { return closed; },
     async response(path, options = {}) {
-      scenario.calls.push({ path, method: options.method ?? "GET", body: options.body });
+      if (scenario.beforeMutationAdmission && (path.endsWith("/actions/reset")
+        || (options.method === "DELETE" && /^\/api\/v1\/targets\/[^/]+$/.test(path)))) {
+        await scenario.beforeMutationAdmission(path, options);
+      }
       if (closed) throw new Error("closed double");
-      if (options.signal?.aborted) throw new Error("aborted double");
+      if (options.signal?.aborted) {
+        throw Object.assign(new Error("synthetic queued transport aborted"), { name: "TargetHostTransportError", code: "cancelled" });
+      }
+      scenario.calls.push({ path, method: options.method ?? "GET", body: options.body });
       if (path === "/api/v1/host/status") return reply({
         hostId: "synthetic-host", profile: "ailoha.target-host/v1", version: "synthetic",
         state: "ready", capabilities: captures,

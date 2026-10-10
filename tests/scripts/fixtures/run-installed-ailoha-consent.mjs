@@ -53,9 +53,9 @@ async function open(name) {
   scenario.targets.clear();
   if (kind === "github") {
     const context = { sessionId: scope.sessionId, instanceId: scope.viewId };
-    await canvas.open(context);
+    const opened = await canvas.open(context);
     return {
-      scope,
+      scope, opened,
       action(name, input = {}) {
         return canvas.actions.find((action) => action.name === name).handler({ ...context, input });
       },
@@ -73,7 +73,7 @@ async function open(name) {
   }, { appendLine() {} }, undefined, host);
   await bridge.handleMessage({ type: "ready" });
   return {
-    scope,
+    scope, opened: await host.openCanvas(),
     async action(name, input = {}) {
       const id = randomUUID();
       const paths = {
@@ -273,6 +273,60 @@ try {
     assert.equal(mutationCount(), before);
     evidence.cases.push("external-during-probe");
     await close();
+  }
+  for (const cancellation of ["deadline", "owner", "caller"]) {
+    current = await open(`queued-${cancellation}`);
+    const timeout = globalThis.setTimeout;
+    let expire;
+    let release;
+    let queuedSignal;
+    const before = mutationCount();
+    scenario.beforeMutationAdmission = async (_path, options) => {
+      queuedSignal = options.signal;
+      await new Promise((resolve) => { release = resolve; });
+    };
+    globalThis.setTimeout = (callback, delay, ...args) => {
+      if (delay === 60_000) expire = () => callback(...args);
+      return timeout(callback, delay, ...args);
+    };
+    try {
+      const caller = new AbortController();
+      let work;
+      if (cancellation === "caller") {
+        const url = new URL(current.opened.url);
+        const fragment = new URLSearchParams(url.hash.slice(1));
+        const bootstrap = await fetch(new URL("/api/v1/auth/bootstrap", url), {
+          method: "POST", headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            secret: fragment.get("bootstrap"), sessionId: current.scope.sessionId, instanceId: current.scope.viewId,
+          }),
+        });
+        assert.equal(bootstrap.status, 204);
+        work = fetch(new URL("/api/v1/devices/opaque%2Ftarget/erase", url), {
+          method: "POST", signal: caller.signal,
+          headers: { "Content-Type": "application/json", Cookie: bootstrap.headers.get("set-cookie").split(";", 1)[0] },
+          body: JSON.stringify({ confirm: true }),
+        });
+      } else work = current.action("erase_device", { deviceId: "opaque/target", confirm: true });
+      const rejected = assert.rejects(work);
+      const prompt = await promptFor();
+      prompt.answer("approve");
+      await waitFor(() => queuedSignal);
+      if (cancellation === "deadline") expire();
+      else if (cancellation === "owner") await close();
+      else caller.abort();
+      await waitFor(() => queuedSignal.aborted);
+      release();
+      await rejected;
+      await new Promise((resolve) => setImmediate(resolve));
+      assert.equal(mutationCount(), before);
+      assert.equal(prompt.answer("approve"), false);
+      evidence.cases.push(`queued-${cancellation}`);
+    } finally {
+      scenario.beforeMutationAdmission = undefined;
+      globalThis.setTimeout = timeout;
+      await close();
+    }
   }
   current = await open("unsupported-host");
   {

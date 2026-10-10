@@ -121,6 +121,10 @@ not use the reset/delete confirmation gate.
 an explicitly empty body. `resetTarget` has the same shape plus mandatory
 `confirmed: true`. `deleteTarget(targetId, { confirmed: true, signal? })` uses
 `DELETE /api/v1/targets/{encoded targetId}` without a body.
+Lifecycle/reset/delete consumer options accept an optional integer `timeoutMs`
+that can only lower the configured client request ceiling. It bounds original
+admission and body work through the existing owner transport and is not a REST
+body field or a new official SDK signature.
 
 Reset and deletion require an own data property with value exactly `true`;
 missing, inherited, accessor, false, or non-boolean confirmation is rejected
@@ -321,7 +325,8 @@ host prompt instead.
 
 The private shared authority captures the original action, invocation object,
 canonical ref/epoch/revision, provider/native target, and frozen full
-`connectionRef`. One monotonic 60-second budget covers prompt and revalidation,
+`connectionRef`. One monotonic 60-second budget covers prompt, revalidation and
+the submission attempt,
 not a fresh timeout after approval. Selection change, observed authority
 retirement/replacement, owner disposal, caller cancellation, or expiry retires
 the approval; a late result cannot revive it. The pending prompt pool is bounded
@@ -343,10 +348,27 @@ elicitation receive explicit `consent_not_supported`, not automatic approval.
 Trusted app adapters reuse `backend.supportsDestructiveApproval` and
 `backend.beginDestructiveApproval(action, originalInvocation, options)`.
 The returned private handle has `approved`, `signal`, `run(work)`,
-`requireCurrent()`, `consume(originalInvocation, currentStagedArtifact?)`, and
-`dispose()`. `run` bounds pre-submit revalidation; after `consume` has spent the
-approval, the original accepted submission may finish inside that run without
-resetting the approval budget or replaying it.
+`requireCurrent()`, `remainingTimeoutMs(ceiling)`,
+`consume(originalInvocation, currentStagedArtifact?)`, `submitted()`, and
+`dispose()`. `run` waits for genuine approval before starting revalidation.
+One original monotonic 60-second deadline spans question, revalidation and the
+submission attempt; consuming the approval does not clear or reset that budget.
+The submission signal retains caller/backend lifetime cancellation.
+`remainingTimeoutMs` gives the smaller of the original remaining whole
+milliseconds and the existing CLI/client ceiling (30/15 seconds respectively).
+The submission adapter signals `submitted()` only after capturing its actual
+acceptance, typed failure, or unknown result; `run` does so when its consumed
+attempt settles. Neither expiry nor cancellation rolls back or replays accepted
+work. Cooperative metadata may settle within the remaining original budget;
+if the attempt has not settled at expiry, its outward outcome is explicitly
+unknown and its original receipt remains owned. No universal late Location
+recovery beyond that boundary is claimed.
+The canonical adapter also captures a frozen, non-enumerable `contextOwner`
+(`processId`, exact `processStartedAt`) in the same snapshot and invocation.
+Install proof PID and owner birth must match this original value exactly;
+missing owner evidence fails closed. Public cloning drops it deliberately,
+without inventing a public context field or normalizing precision through
+JavaScript `Date`.
 
 For the separately owned install workflow, `options.stagedArtifact` is the exact
 canonical staged record: artifact ID, literal source path, receipt, size,

@@ -24,7 +24,7 @@ for (const [host, product] of [
       assert.deepEqual(evidence.cases, [
         "deny", "cancel", "erase_device", "delete_device", "selection", "retirement", "epoch",
         "native", "provider", "replacement", "deadline", "revalidation-deadline", "external-during-probe",
-        "unsupported-host", "admission-and-resume",
+        "queued-deadline", "queued-owner", "queued-caller", "unsupported-host", "admission-and-resume",
       ]);
       assert.equal(evidence.synthetic, true);
       assert.equal(evidence.realDeviceMutation, false);

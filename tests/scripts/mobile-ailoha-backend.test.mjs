@@ -472,6 +472,69 @@ test("known revision replacement during post-approval target revalidation cancel
   assert.equal(state.calls.some(([kind]) => kind === "delete"), false);
 });
 
+for (const cancellation of ["caller", "owner", "deadline"]) {
+  test(`captured ${cancellation} cancellation after consume prevents a queued destructive POST and retains its uncertain owner`, async (t) => {
+    if (cancellation === "deadline") t.mock.timers.enable({ apis: ["setTimeout"] });
+    const caller = new AbortController();
+    const queued = deferred();
+    const entered = deferred();
+    const operationState = new Map();
+    let prompts = 0;
+    let wirePosts = 0;
+    const state = canonicalFixture({
+      operationState,
+      confirmDestructive: async () => { prompts += 1; return true; },
+      client: {
+        async resetTarget(id, options) {
+          entered.resolve(options);
+          await queued.promise;
+          if (options.signal.aborted) throw new AilohaProtocolError("cancelled");
+          wirePosts += 1;
+          return { operationId: `reset-${id}` };
+        },
+      },
+    });
+    t.after(() => state.backend.dispose());
+    const work = state.backend.lifecycle("erase", "one", { confirm: true }, { signal: caller.signal });
+    const rejected = assert.rejects(work, { code: "cancelled" });
+    const options = await entered.promise;
+    assert.ok(options.timeoutMs > 0 && options.timeoutMs <= 15_000);
+    if (cancellation === "caller") caller.abort();
+    else if (cancellation === "owner") await state.backend.dispose();
+    else t.mock.timers.tick(60_000);
+    assert.equal(options.signal.aborted, true);
+    queued.resolve();
+    await rejected;
+    assert.equal(wirePosts, 0);
+    assert.equal(prompts, 1);
+    const receipt = [...operationState.values()][0];
+    assert.equal(receipt.invocation.targetId, "one");
+    assert.equal(receipt.invocation.executionContext.revision, "1");
+    assert.equal(receipt.uncertain, true);
+    if (cancellation !== "owner") {
+      await assert.rejects(state.backend.lifecycle("erase", "one", { confirm: true }), { code: "lifecycle_outcome_uncertain" });
+      assert.equal(prompts, 1);
+      assert.equal(wirePosts, 0);
+    }
+  });
+}
+
+test("a consumed approval with no whole millisecond remaining fails before client dispatch and does not create an uncertain receipt", async (t) => {
+  let clock = 0;
+  t.mock.method(performance, "now", () => clock);
+  const operationState = new Map();
+  let prompts = 0;
+  const state = canonicalFixture({
+    operationState,
+    confirmDestructive: async () => { prompts += 1; clock = 59_999.5; return true; },
+  });
+  t.after(() => state.backend.dispose());
+  await assert.rejects(state.backend.lifecycle("erase", "one", { confirm: true }), { code: "consent_timeout" });
+  assert.equal(state.calls.some(([kind]) => kind === "reset"), false);
+  assert.equal(operationState.size, 0);
+  assert.equal(prompts, 1);
+});
+
 test("geometry-observed input uses logical bounds and rejects later revisions before dispatch", async (t) => {
   const state = fixture();
   t.after(() => state.backend.dispose());

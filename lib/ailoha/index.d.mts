@@ -119,11 +119,14 @@ export interface LifecycleRequest {
 
 export interface LifecycleOptions extends RequestOptions {
   request?: LifecycleRequest;
+  /** Optional total request budget, no greater than the configured client ceiling. */
+  timeoutMs?: number;
 }
 
 /** A caller-side gate, not evidence that user consent has been obtained. */
 export interface ConfirmationOptions extends RequestOptions {
   confirmed: true;
+  timeoutMs?: number;
 }
 
 export interface ConfirmedLifecycleOptions extends LifecycleOptions, ConfirmationOptions {}

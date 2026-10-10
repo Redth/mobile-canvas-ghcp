@@ -25,8 +25,8 @@ async function exercise(connection: TargetHostConnection, signal: AbortSignal) {
     });
     await client.stopTarget("target/opaque", { signal });
     await client.rebootTarget("target/opaque", { request: {} });
-    await client.resetTarget("target/opaque", { confirmed: true, signal, request: { reason: "reset" } });
-    await client.deleteTarget("target/opaque", { confirmed: true, signal });
+    await client.resetTarget("target/opaque", { confirmed: true, signal, timeoutMs: 100, request: { reason: "reset" } });
+    await client.deleteTarget("target/opaque", { confirmed: true, signal, timeoutMs: 100 });
     const operations: Operation[] = await client.listOperations({ signal, targetId: "target/opaque", status: "cancelling" });
     const operation: Operation = await client.getOperation(created.operationId, { signal });
     const cancellation: Operation = await client.cancelOperation(accepted.operationId, { signal });
