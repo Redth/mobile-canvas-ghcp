@@ -84,6 +84,9 @@ container, so a nonempty app list cannot be represented faithfully and
 is returned as empty, not inferred from a failed read. Canonical `AppOp` omits
 the legacy effective UID-scoped flag: nonempty app-op lists are explicitly
 unsupported, as is app-op mutation without scoped consent and readback.
+The current native adapter also discards the legacy launch result's optional
+process ID and detail, so the source adapter reports null for those nullable
+action fields rather than inventing a PID or platform launcher activity.
 Install remains unsupported until a reviewed host-owned package staging API can
 validate local paths, stream `.apk` files or archive `.app` directories, recheck
 the original named context before submission, and clean up the owned artifact.
