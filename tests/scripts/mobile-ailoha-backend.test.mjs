@@ -403,18 +403,27 @@ test("native System UI tap never posts after a changed context, geometry or proc
 });
 
 test("cancelled System UI caller cannot submit a tap after the captured snapshot", async (t) => {
-  const controller = new AbortController();
-  const state = systemUiFixture((path) => {
-    if (path.includes("system-snapshot")) controller.abort();
-    return systemUiResponse(path.includes("system-snapshot") ? "snapshot" : "tap");
-  });
-  t.after(() => state.backend.dispose());
-  await assert.rejects(
-    state.backend.invokeAction("ui_tap", { deviceId: "one", text: "Save" }, { signal: controller.signal }),
-    { code: "cancelled" },
-  );
-  assert.equal(state.calls.filter(([kind, path]) =>
-    kind === "system-ui" && path.includes("/actions/tap")).length, 0);
+  for (const channel of ["action", "http"]) {
+    const controller = new AbortController();
+    const state = systemUiFixture((path) => {
+      if (path.includes("system-snapshot")) controller.abort();
+      return systemUiResponse(path.includes("system-snapshot") ? "snapshot" : "tap");
+    });
+    t.after(() => state.backend.dispose());
+    if (channel === "action") {
+      await assert.rejects(
+        state.backend.invokeAction("ui_tap", { deviceId: "one", text: "Save" }, { signal: controller.signal }),
+        { code: "cancelled" },
+      );
+    } else {
+      const response = await state.backend.request("/api/v1/devices/one/ui/tap", {
+        method: "POST", body: '{"text":"Save"}', signal: controller.signal,
+      });
+      assert.equal((await response.json()).code, "cancelled");
+    }
+    assert.equal(state.calls.filter(([kind, path]) =>
+      kind === "system-ui" && path.includes("/actions/tap")).length, 0);
+  }
 });
 
 test("App UI or absent System UI capability never enables native System compatibility", async (t) => {
