@@ -26,6 +26,7 @@ for (const [host, product] of [
         "native", "provider", "replacement", "deadline", "revalidation-deadline", "external-during-probe",
         "queued-deadline", "queued-owner", "queued-caller", "unsupported-host", "admission-and-resume",
         "fenced-uninstall-denial", "fenced-uninstall-deadline", "fenced-uninstall-owner",
+        "fenced-uninstall-queued-deadline", "fenced-uninstall-queued-owner",
         "fenced-uninstall-approved", "fenced-uninstall-accepted-nonzero",
         "fenced-android-app-op", "fenced-android-app-op-denial",
       ]);

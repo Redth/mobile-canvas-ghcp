@@ -446,6 +446,43 @@ try {
       await close();
     }
   }
+  for (const interruption of ["deadline", "owner"]) {
+    current = await open(`fenced-uninstall-queued-${interruption}`);
+    const timeout = globalThis.setTimeout;
+    let expire;
+    let release;
+    let launchBlocked = false;
+    globalThis.setTimeout = (callback, delay, ...args) => {
+      if (delay === 60_000) expire = () => callback(...args);
+      return timeout(callback, delay, ...args);
+    };
+    try {
+      await current.action("select_device", { deviceId: "opaque/target" });
+      const work = current.action("uninstall_app", {
+        deviceId: "opaque/target", bundleId: "com.example.native", confirm: true,
+      });
+      const rejected = interruption === "deadline"
+        ? assert.rejects(work, { code: "consent_timeout" }) : assert.rejects(work);
+      const prompt = await promptFor();
+      scenario.beforeCliLaunch = async () => {
+        launchBlocked = true;
+        await new Promise((resolve) => { release = resolve; });
+      };
+      prompt.answer("approve");
+      await waitFor(() => launchBlocked);
+      if (interruption === "deadline") { assert.ok(expire); expire(); }
+      else await current.close();
+      release();
+      await rejected;
+      assert.equal(existsSync(`${process.env.AILOHA_TEST_CONTEXT_STATE}.fenced`), false);
+      evidence.cases.push(`fenced-uninstall-queued-${interruption}`);
+    } finally {
+      if (release) release();
+      scenario.beforeCliLaunch = undefined;
+      globalThis.setTimeout = timeout;
+      await close();
+    }
+  }
   current = await open("fenced-uninstall-approved");
   {
     await current.action("select_device", { deviceId: "opaque/target" });

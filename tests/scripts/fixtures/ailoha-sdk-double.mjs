@@ -91,6 +91,7 @@ export async function getRuntimePin({ expectedVersion }) {
   return Object.freeze({ version: expectedVersion, rid: "synthetic", sourceSha, manifestSha512: "synthetic-only" });
 }
 export async function getVerifiedCliLaunch({ expectedVersion }) {
+  await scenario.beforeCliLaunch?.();
   return {
     file: process.execPath,
     args: [
