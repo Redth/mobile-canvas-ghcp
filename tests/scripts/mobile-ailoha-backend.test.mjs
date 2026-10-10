@@ -185,9 +185,11 @@ test("legacy remains the default and invalid opt-in never becomes a fallback", (
 
 const deviceFeatures = [
   { id: "target.hardware", version: 1, features: ["getTargetHardware"] },
-  { id: "target.clipboard", version: 1, features: ["getTargetClipboard"] },
+  { id: "target.clipboard", version: 1, features: ["getTargetClipboard", "updateTargetClipboard"] },
   { id: "target.settings", version: 1, features: ["getTargetSettings", "updateTargetSettings"] },
-  { id: "target.location", version: 1, features: ["clearTargetLocation"] },
+  { id: "target.location", version: 1, features: ["clearTargetLocation", "updateTargetLocation"] },
+  { id: "target.battery", version: 1, features: ["updateTargetBattery"] },
+  { id: "target.network", version: 1, features: ["updateTargetNetwork"] },
   { id: "target.telephony", version: 1, features: ["simulateTargetSms"] },
   { id: "target.biometrics", version: 1, features: ["simulateTargetBiometricResult"] },
   { id: "target.apps", version: 1, features: ["listTargetApps"] },
