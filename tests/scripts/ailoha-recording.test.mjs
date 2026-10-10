@@ -313,6 +313,37 @@ test("an externally finalized recording clears only after its captured output ex
   }
 });
 
+test("a lost stop response reconciles a landed output without repeating the stop", async () => {
+  await mkdir(join(process.cwd(), ".build"), { recursive: true });
+  const directory = await mkdtemp(join(process.cwd(), ".build", "recording-stop-"));
+  const outputFile = join(directory, "landed.mp4");
+  let active = false;
+  let stops = 0;
+  const { coordinator } = fixture({
+    async run(action) {
+      if (action === "status") return JSON.stringify(active ? { ...record(), outputFile } : null);
+      if (action === "start") {
+        active = true;
+        return JSON.stringify({ ...record(), outputFile });
+      }
+      stops += 1;
+      active = false;
+      await writeFile(outputFile, "synthetic-mp4-fixture");
+      throw new Error("accepted stop response lost after artifact landing");
+    },
+  });
+  try {
+    await coordinator.start(invocation, { outputPath: outputFile });
+    await assert.rejects(coordinator.stop("target-one"), /response lost/);
+    await coordinator.finalize();
+    assert.equal(coordinator.tracked, false);
+    assert.equal(stops, 1);
+    assert.equal(await readFile(outputFile, "utf8"), "synthetic-mp4-fixture");
+  } finally {
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
 test("a replacement runtime lease retains the original view's recording owner", async () => {
   await mkdir(join(process.cwd(), ".build"), { recursive: true });
   const directory = await mkdtemp(join(process.cwd(), ".build", "recording-lease-"));
