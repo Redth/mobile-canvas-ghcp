@@ -488,6 +488,16 @@ approval facility report these actions as unsupported. Create/start omission
 semantics in the underlying client remain unchanged; the compatibility creation
 path explicitly requests `start: true`.
 
+Creation and direct lifecycle submission share one definitive-rejection policy:
+HTTP 408, HTTP 499 and a disposed client retain the original uncertain receipt
+and cannot authorize replay. HTTP 403 and known pre-admission protocol failures
+may release only the same receipt identity. A trusted approval budget that
+expires before the client is invoked is also pre-admission; once invoked,
+unknown outcomes remain owned. Creation keys stay bound to the original
+compatibility-choice tuple, with the shared 64-receipt admission bound.
+Preparation observes even immediate submission failures before handing off the
+receipt; an admitted intent counts only once against that bound.
+
 PNG capture validates its 201 artifact/Location, ownership, MIME and applicable
 size/digest before reading content. Video session creation preserves omitted
 encoder settings; the renderer receives only owned session/geometry/source

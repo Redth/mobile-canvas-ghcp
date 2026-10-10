@@ -26,6 +26,7 @@ const tests = [
   "tests/scripts/mobile-ailoha-projection.test.mjs",
   "tests/scripts/mobile-ailoha-backend.test.mjs",
   "tests/scripts/mobile-ailoha-creation.test.mjs",
+  "tests/scripts/parent-operation-receipts.test.mjs",
   "tests/scripts/ailoha-owner-transport.test.mjs",
   "tests/scripts/ailoha-media-adapter.test.mjs",
   "tests/scripts/ailoha-canvas-host.test.mjs",

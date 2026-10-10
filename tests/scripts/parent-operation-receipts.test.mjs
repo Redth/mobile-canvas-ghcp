@@ -1,7 +1,9 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { AilohaProtocolError } from "../../lib/ailoha/index.mjs";
-import { submitOperationReceipt } from "../../lib/ailoha/operation-receipts.mjs";
+import { productModule } from "../ailoha-test-module.mjs";
+
+const { AilohaProtocolError } = await import(productModule("lib/ailoha/index.mjs"));
+const { submitOperationReceipt } = await import(productModule("lib/ailoha/operation-receipts.mjs"));
 
 for (const [name, code, status] of [
   ["HTTP 408", "http_error", 408],

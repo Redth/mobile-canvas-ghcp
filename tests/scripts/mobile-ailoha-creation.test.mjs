@@ -819,6 +819,39 @@ test("pool admission is rechecked after asynchronous catalog validation and cann
   assert.equal(map.get(key), newer);
 });
 
+test("64 staggered creation submissions remain admissible while waiting for acceptance", async (t) => {
+  const state = await fixture(t);
+  const input = inputFor(await state.backend.catalog());
+  const submit = state.client.createTarget.bind(state.client);
+  const gates = [];
+  const pending = [];
+  let entered;
+  state.client.createTarget = async (...args) => {
+    const gate = deferred();
+    gates.push(gate);
+    entered.resolve();
+    await gate.promise;
+    return submit(...args);
+  };
+  for (let index = 0; index < 64; index += 1) {
+    entered = deferred();
+    const creation = state.backend.create({ ...input, name: `Bounded creation ${index}` });
+    pending.push(creation);
+    await Promise.race([entered.promise, creation]);
+    assert.equal(state.operationState.size, index + 1);
+  }
+  const reads = state.state.calls.length;
+  await assert.rejects(state.backend.create({ ...input, name: "Outside the bound" }), { code: "operation_receipt_limit" });
+  assert.equal(gates.length, 64);
+  assert.equal(state.state.calls.length, reads);
+  for (let index = 0; index < gates.length; index += 1) {
+    gates[index].resolve();
+    assert.equal((await pending[index]).state, "booted");
+  }
+  assert.equal(posts(state.state).length, 64);
+  assert.equal(state.operationState.size, 0);
+});
+
 for (const kind of ["action", "api", "mcp", "vscode-mcp"]) {
   test(`${kind} error envelopes retain unknown/timeout/boot failure receipts with exact single-POST semantics`, async (t) => {
     for (const outcome of ["unknown", "timeout", "boot-failed", "cancelled"]) {
