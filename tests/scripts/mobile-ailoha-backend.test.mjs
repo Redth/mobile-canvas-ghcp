@@ -880,6 +880,17 @@ test("cleanup failure reports the secondary error without erasing the successful
   assert.equal(JSON.stringify(body).includes(state.sourcePath), false);
   assert.deepEqual(state.steps.map(([name]) => name),
     ["stage", "approval", "consumed", "install", "wait", "cleanup"]);
+  const unknown = await stagedFixture(t, { stagedApps: {
+    async cleanup() {
+      unknown.steps.push(["cleanup"]);
+      throw new Error("private cleanup source /secret/app.apk");
+    },
+  } });
+  await assert.rejects(unknown.backend.installApp("one", unknown.sourcePath), { code: "ailoha_operation_failed" });
+  await assert.rejects(unknown.backend.installApp("one", unknown.sourcePath), {
+    code: "app_stage_cleanup_outcome_uncertain",
+  });
+  assert.equal(unknown.steps.filter(([name]) => name === "cleanup").length, 1);
 });
 
 test("missing scoped consent, host topology or source capability cannot stage a package", async (t) => {
