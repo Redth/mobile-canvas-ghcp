@@ -38,11 +38,14 @@ for (const [host, product] of [
     assert.equal(evidence.createPosts, host === "github" ? 3 : 4);
     assert.equal(evidence.noSeparateBootPost, true);
     assert.deepEqual(evidence.stagedEvidence, { mediaBatches: 2, approvals: 2, uncertainPosts: 1 });
+    assert.deepEqual(evidence.guardedEvidence, { mutations: 7, submissions: 7, readbacks: 9, contentGets: 3 });
     assert.equal(evidence.creationRecords[0].platform, "ios");
     assert.equal(evidence.creationRecords[1].platform, "android");
     assert.equal(evidence.creationRecords.every((record) => record.state === "booted" && record.nativeId !== record.id), true);
     assert.equal(evidence.creationRecords[2].selectionApplied, false);
     assert.deepEqual(evidence.logs, host === "vscode"
-      ? [...Array(3).fill("artifact_contract_unavailable"), ...Array(10).fill("capability_not_supported")] : []);
+      ? ["invalid_request", ...Array(9).fill("capability_not_supported"),
+        "consent_denied", "ailoha_cli_failed", "GuardedDestinationChanged",
+        "capability_not_supported"] : []);
   });
 }

@@ -96,6 +96,11 @@ function providerRecords() {
     { id: "target.files", version: 1, features: ["importStagedTargetFile"] },
     { id: "target.media", version: 1, features: ["importStagedTargetMediaBatch"] },
   );
+  if (scenario.artifactGuarded) readCapabilities.push(
+    { id: "target.files", version: 1,
+      features: ["exportTargetFile", "deleteTargetFileWithOptions", "createTargetDirectory"] },
+    { id: "target.apps", version: 1, features: ["listTargetApps"] },
+  );
   return [{
     providerId: scenario.providerId, name: "Synthetic provider", version: "synthetic", state: "ready",
     capabilities: mergedCapabilities([...features, ...readCapabilities]),
@@ -323,7 +328,7 @@ export async function openTargetHostTransport(leaseId) {
         if (scenario.beforeTargetRead) await scenario.beforeTargetRead(selectedId);
         return reply(selected);
       }
-      if (scenario.artifactReads) {
+      if (scenario.artifactReads || scenario.artifactGuarded) {
         const prefix = `/api/v1/targets/${encodeURIComponent(targetId)}`;
         const owner = { "x-ailoha-target-host": { targetId, providerId: scenario.providerId } };
         if (path === `${prefix}/apps?includeSystem=true`) {

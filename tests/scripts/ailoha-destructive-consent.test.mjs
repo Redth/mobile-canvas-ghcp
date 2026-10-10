@@ -155,6 +155,24 @@ test("file replacement approval names the captured path and never treats confirm
   assert.equal(JSON.stringify(request).includes("connectionRef"), false);
 });
 
+test("export approval names the captured host overwrite destination rather than a device path", async (t) => {
+  const owner = new AbortController();
+  let request;
+  const authority = new ScopedDestructiveConsent(async (value) => {
+    request = value;
+    return true;
+  }, owner.signal);
+  t.after(() => authority.dispose());
+  const captured = invocation();
+  const approval = authority.begin("file_pull", captured, { subject: "/owned/output.bin" });
+  await approval.approved;
+  assert.equal(request.action, "file_pull");
+  assert.match(request.message, /Host destination: \/owned\/output\.bin/);
+  assert.match(request.message, /replacing any existing file/);
+  approval.consume(captured);
+  assert.throws(() => approval.consume(captured), { code: "consent_already_consumed" });
+});
+
 for (const result of [false, "cancel"]) {
   test(`the actual prompt decision ${result} never becomes an approval`, async (t) => {
     const owner = new AbortController();

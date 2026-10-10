@@ -793,6 +793,25 @@ compatibility paths, not a public SDK/runtime pin. The normal Ailoha opt-in
 remains unavailable until an approved public runtime graph is prepared; no
 public binary, real-device parity or default migration is claimed.
 
+The locally implemented guarded pull, delete and mkdir adapters prepare
+against the original named view and native owner and recover accepted
+operations by original-operation GET without resubmission, even if the view
+retires after admission while the owning backend remains active. New admission
+remains bound to the open original view; cancelled readback retains the accepted
+receipt for later recovery, but disposal cannot launch new CLI work.
+Pull projects only the backend-confirmed export `devicePath` associated with the original
+operation's artifact, actual verified byte count (including zero), and native
+resolved absolute host destination. The canonical CLI owns bounded streaming,
+SHA-256 verification, destination overwrite and repeat-readback checks; JS
+never downloads or substitutes a guessed source path. Delete and mkdir require
+backend-confirmed mutation paths on terminal success, correlated with the
+original operation result. Pull and delete require scoped human approval;
+a literal confirmation flag is not approval. The
+corresponding GitHub API and VS Code API/MCP routes are conditionally mapped
+in local source only, pending consumer review and publication against the
+reviewed native source. No public native runtime pin or device execution is
+claimed.
+
 For comparison, at the earlier canonical `microsoft/ailoha` source
 `f5eadd9f7a31b6da9322bf74e7549286d8844668`, the root Target Host feature
 API and provider adapter did not yet supply the legacy guarantees below.

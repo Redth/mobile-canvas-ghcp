@@ -118,6 +118,7 @@ test("an unreadable pin reports a sanitized read failure rather than missing run
       },
     } });
     assert.deepEqual(JSON.parse(await cli(["target", "native-stage", "stage"], { timeoutMs: 30_001 })), outcome);
+    assert.deepEqual(JSON.parse(await cli(["target", "native-file", "recover"], { timeoutMs: 30_001 })), outcome);
     await assert.rejects(cli(["context", "get"], { timeoutMs: 30_001 }), { code: "ailoha_cli_budget_invalid" });
   });
 });
