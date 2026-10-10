@@ -142,8 +142,19 @@ lets a window of one progress when H.264 reorders/buffers output.
 
 The player retains only eight pending pictures and 16 MiB of copied encoded
 data, with a five-second output lifetime and bounded decoded dimensions.
-It caches SPS/PPS and includes them in every Annex B key chunk; decoder
-`description` is absent (the encoder-only `avc.format` dictionary is not used).
+The ALHV wire remains complete Annex B access units, byte-for-byte unchanged.
+The decoder-local adapter caches bounded SPS/PPS, validates their identities and
+required profile/chroma/bit-depth fields, and builds an
+`AVCDecoderConfigurationRecord` for `VideoDecoderConfig.description`.
+That description selects AVC under the
+[WebCodecs AVC registration](https://www.w3.org/TR/webcodecs-avc-codec-registration/):
+decoder chunks therefore use four-byte big-endian NAL lengths, not Annex B
+start codes. Parameter-set bytes move only into the description; other NAL
+bytes are preserved. A single AUD is placed first in the canonical decoder
+access unit, including combined config/key input with prepended SEI.
+Malformed/missing parameter sets, incompatible SPS/PPS references or multiple/
+late delimiters fail explicitly. There is no encoder-only `avc.format` option,
+browser-version branch, second decoder-format attempt or recreated stream.
 Combined config+key units cache and decode their picture. Idle flush drains
 buffered/reordered pictures and requires a new key afterward.
 

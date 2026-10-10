@@ -123,14 +123,17 @@ not use the reset/delete confirmation gate.
 an explicitly empty body. `resetTarget` has the same shape plus mandatory
 `confirmed: true`. `deleteTarget(targetId, { confirmed: true, signal? })` uses
 `DELETE /api/v1/targets/{encoded targetId}` without a body.
+Lifecycle/reset/delete consumer options accept an optional integer `timeoutMs`
+that can only lower the configured client request ceiling. It bounds original
+admission and body work through the existing owner transport and is not a REST
+body field or a new official SDK signature.
 
 Reset and deletion require an own data property with value exactly `true`;
 missing, inherited, accessor, false, or non-boolean confirmation is rejected
 **before any network IO**. `confirmed` is a consumer-side gate and is never sent
-to the server. It does not claim user consent has been obtained: the eventual
-product adapter must obtain and scope the real confirmation before setting it.
-The compatibility adapters still obtain scoped consent before using that gate;
-creation is explicitly requested through the existing non-erasing workflow.
+to the server. It is not evidence of human consent: the product adapters obtain
+the separately captured approval described below before setting it.
+Creation is explicitly requested through the existing non-erasing workflow.
 
 Mutation bodies are strict JSON snapshots, capped at 64 KiB of serialized UTF-8
 and 64 nesting levels. Unknown request fields, non-JSON values, accessors,
@@ -366,6 +369,86 @@ or reject that old transport, while reused external credentials leave a
 request-time race. Mobile Canvas neither refreshes/replays mutations across
 changed evidence nor claims that comparing a precheck eliminates that race.
 
+### Captured human approval
+
+`confirm: true` remains the compatibility intent flag, not proof that a person
+approved. The GitHub canvas uses the joined SDK session's advertised
+`capabilities.ui.elicitation`, `session.ui.elicitation`, and the matching
+`elicitation.requested` event. Cancellation uses that event's request ID through
+`session.rpc.ui.handlePendingElicitation`; no permission hook auto-approves.
+VS Code uses a native `createQuickPick` with an explicit "Approve once" choice
+and a non-destructive default. Accept/hide callbacks and abort dispose that
+picker. Renderer JSON never supplies an approval. Legacy confirmation UX is
+unchanged; Ailoha skips the renderer-only confirmation and requests its trusted
+host prompt instead.
+
+The private shared authority captures the original action, invocation object,
+canonical ref/epoch/revision, provider/native target, and frozen full
+`connectionRef`. One monotonic 60-second budget covers prompt, revalidation and
+the submission attempt,
+not a fresh timeout after approval. Selection change, observed authority
+retirement/replacement, owner disposal, caller cancellation, or expiry retires
+the approval; a late result cannot revive it. The pending prompt pool is bounded
+to 128 independently of the unchanged 64 accepted-operation receipts.
+Immediately before a new reset/delete submission, the backend rereads the
+canonical context and target/provenance/capabilities, compares the captured
+snapshot and native identity, checks admission again, and spends approval in
+the same synchronous turn as receipt insertion and submission. It does not
+serialize unrelated operations. Accepted or uncertain work retains its original
+receipt and is not replayed or rebound to a replacement incarnation.
+
+MCP requires the client's supported form-elicitation capability and sends a
+nested `elicitation/create` request. The stdio parser correlates those responses
+outside the serialized tool queue, preventing an approval deadlock.
+`notifications/cancelled`, EOF, and owned shutdown retire pending prompts.
+Unsolicited/late replies are ignored with diagnostics; clients without form
+elicitation receive explicit `consent_not_supported`, not automatic approval.
+
+Trusted app adapters reuse `backend.supportsDestructiveApproval` and
+`backend.beginDestructiveApproval(action, originalInvocation, options)`.
+The returned private handle has `approved`, `signal`, `run(work)`,
+`requireCurrent()`, `remainingTimeoutMs(ceiling)`,
+`consume(originalInvocation, currentStagedArtifact?)`, `submitted()`, and
+`dispose()`. `run` waits for genuine approval before starting revalidation.
+One original monotonic 60-second deadline spans question, revalidation and the
+submission attempt; consuming the approval does not clear or reset that budget.
+The submission signal retains caller/backend lifetime cancellation.
+`remainingTimeoutMs` gives the smaller of the original remaining whole
+milliseconds and the existing CLI/client ceiling (30/15 seconds respectively).
+The submission adapter signals `submitted()` only after capturing its actual
+acceptance, typed failure, or unknown result; `run` does so when its consumed
+attempt settles. Neither expiry nor cancellation rolls back or replays accepted
+work. Cooperative metadata may settle within the remaining original budget;
+if the attempt has not settled at expiry, its outward outcome is explicitly
+unknown and its original receipt remains owned. No universal late Location
+recovery beyond that boundary is claimed.
+Finalization rechecks the monotonic deadline itself, not only its timer.
+Late results remain in the private `submissionResult`/original operation
+receipt, while the originating caller receives an explicit unknown outcome.
+HTTP 408/499 and disposed-client uncertainty are not definitive submission
+rejections: they cannot evict an uncertain lifecycle or video receipt and cause
+another mutation. A retained authoritative operation ID can still be recovered
+by GET without a new approval or POST.
+The canonical adapter also captures a frozen, non-enumerable `contextOwner`
+(`processId`, exact `processStartedAt`) in the same snapshot and invocation.
+Install proof PID and owner birth must match this original value exactly;
+missing owner evidence fails closed. Public cloning drops it deliberately,
+without inventing a public context field or normalizing precision through
+JavaScript `Date`.
+
+For the separately owned install workflow, `options.stagedArtifact` is the exact
+canonical staged record: artifact ID, literal source path, receipt, size,
+SHA-256, and its whole native receipt proof. A private immutable copy is bound
+to the approval, including source-path/receipt hashes and literal native
+`proof.hostInstanceId`; this existing native field is not derived into a
+consumer incarnation alias. Only package name/digest/size and captured
+target/view details are presented to the human. Source path, receipt, full
+proof, and process evidence never cross renderer/MCP boundaries. Install
+adapters must retain the original invocation before public cloning, revalidate
+their native stage/target/context, and pass the unchanged complete staged record
+to `consume` immediately before submission. This host seam does not implement
+or claim public/native installation readiness.
+
 `get_selected_device`/`mobile_device_get_selected` include a non-secret
 `contextBinding` projection when backed by the canonical authority:
 `contextRef`, `scopeEpoch`, string `revision` and the actual product
@@ -400,10 +483,20 @@ success. Lost accepted bodies and timed-out waits retain a bounded receipt acros
 view resource replacement; a subsequent action resumes the original operation
 with GET/wait, never a repeated POST. An outcome without a recovery receipt is
 explicitly uncertain and is not replayed. Reset/delete require both the own
-literal confirmation gate and real scoped consent; the opt-in has no such human
-consent adapter and reports them unsupported. Create/start omission semantics
-in the underlying client remain unchanged; the compatibility creation path
-explicitly requests `start: true`.
+literal confirmation gate and real scoped consent. Hosts without the required
+approval facility report these actions as unsupported. Create/start omission
+semantics in the underlying client remain unchanged; the compatibility creation
+path explicitly requests `start: true`.
+
+Creation and direct lifecycle submission share one definitive-rejection policy:
+HTTP 408, HTTP 499 and a disposed client retain the original uncertain receipt
+and cannot authorize replay. HTTP 403 and known pre-admission protocol failures
+may release only the same receipt identity. A trusted approval budget that
+expires before the client is invoked is also pre-admission; once invoked,
+unknown outcomes remain owned. Creation keys stay bound to the original
+compatibility-choice tuple, with the shared 64-receipt admission bound.
+Preparation observes even immediate submission failures before handing off the
+receipt; an admitted intent counts only once against that bound.
 
 PNG capture validates its 201 artifact/Location, ownership, MIME and applicable
 size/digest before reading content. Video session creation preserves omitted
@@ -425,8 +518,9 @@ tooling is not a ready-shaped empty inventory.
 Implemented: authoritative advertised catalogs and compatible create+boot,
 inventory/select, advertised start/stop/reboot, PNG screenshot,
 basic geometry-bound pointer gestures, shared ALHV WebCodecs display, and
-[read-only explicit-root workspace/application evidence](ailoha-workspace-inspection.md),
-plus read-only canonical composed `app_tree`, `app_query` and `app_status`
+advertised reset/delete when the host can obtain genuine captured approval,
+plus [read-only explicit-root workspace/application evidence](ailoha-workspace-inspection.md)
+and read-only canonical composed `app_tree`, `app_query` and `app_status`
 through the host-owned MCP client. System reads require the selected Target
 Host target and request `target-host` routing; App reads require an explicitly
 selected `verified-native-instance` in the named context and request

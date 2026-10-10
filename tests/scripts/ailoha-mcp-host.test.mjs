@@ -130,3 +130,24 @@ test("operational failure is sanitized and never triggers a legacy or second-own
   assert.equal(JSON.stringify(result).includes("private"), false);
   assert.equal(calls, 1);
 });
+
+for (const params of [
+  { protocolVersion: "2025-03-26", capabilities: { elicitation: {} } },
+  { protocolVersion: "2025-11-25", capabilities: {} },
+  { protocolVersion: "2025-11-25", capabilities: { elicitation: { url: {} } } },
+]) {
+  test(`MCP cannot treat confirm=true as consent without supported form elicitation: ${JSON.stringify(params)}`, async (t) => {
+    let runtimeCalls = 0;
+    const dispatcher = await createAilohaMcpDispatcher({
+      binding, version: "test",
+      createBackend() { runtimeCalls += 1; throw new Error("No runtime should be acquired."); },
+      requestElicitation() { throw new Error("No unsupported host prompt should be requested."); },
+    });
+    t.after(() => dispatcher.dispose());
+    await dispatcher.handle(message("initialize", params));
+    const result = await dispatcher.handle(call("mobile_device_delete", { deviceId: "opaque", confirm: true }));
+    assert.equal(result.result.isError, true);
+    assert.equal(JSON.parse(result.result.content[0].text).code, "consent_not_supported");
+    assert.equal(runtimeCalls, 0);
+  });
+}

@@ -2487,21 +2487,24 @@ elements.createForm.addEventListener("submit", (event) => {
 
 document.querySelector("#erase-button").addEventListener("click", async (event) => {
   const trigger = event.currentTarget;
+  const captured = state.selected?.backend === "ailoha" ? captureCanvasInvocation(state) : null;
   // Stacking a second modal on the data dialog would leave the destructive sheet visible behind the
   // confirmation, so hand the top layer over first.
   elements.dataDialog.close();
-  if (!await requestConfirmation({
+  if (!captured && !await requestConfirmation({
     title: `Erase ${state.selected.name}?`,
     message: `All content and settings on this ${selectedNoun()} will be permanently removed.`,
     action: `Erase ${selectedNoun()}`,
   })) return;
 
   runBusy(trigger, async () => {
-    const response = await api(`/api/v1/devices/${encodeURIComponent(state.selected.id)}/erase`, {
+    const response = await api(`/api/v1/devices/${encodeURIComponent(captured?.deviceId ?? state.selected.id)}/erase`, {
       method: "POST",
       body: JSON.stringify({ confirm: true }),
     });
-    state.selected = await response.json();
+    const device = await response.json();
+    if (captured && !isDestructiveSelectionCurrent(captured)) return;
+    state.selected = device;
     await refresh();
     showToast(`${capitalize(selectedNoun())} erased`);
   }).catch(showError);
@@ -2509,19 +2512,21 @@ document.querySelector("#erase-button").addEventListener("click", async (event) 
 
 document.querySelector("#delete-button").addEventListener("click", async (event) => {
   const trigger = event.currentTarget;
+  const captured = state.selected?.backend === "ailoha" ? captureCanvasInvocation(state) : null;
   const noun = selectedNoun();
   elements.dataDialog.close();
-  if (!await requestConfirmation({
+  if (!captured && !await requestConfirmation({
     title: `Delete ${state.selected.name}?`,
     message: `The ${selectedNoun()} and all of its data will be permanently deleted.`,
     action: `Delete ${selectedNoun()}`,
   })) return;
 
   runBusy(trigger, async () => {
-    await api(`/api/v1/devices/${encodeURIComponent(state.selected.id)}`, {
+    await api(`/api/v1/devices/${encodeURIComponent(captured?.deviceId ?? state.selected.id)}`, {
       method: "DELETE",
       body: JSON.stringify({ confirm: true }),
     });
+    if (captured && !isDestructiveSelectionCurrent(captured)) return;
     stopStream();
     state.selected = null;
     elements.view.classList.add("hidden");
@@ -2530,6 +2535,14 @@ document.querySelector("#delete-button").addEventListener("click", async (event)
     showToast(`${capitalize(noun)} deleted`);
   }).catch(showError);
 });
+
+function isDestructiveSelectionCurrent(captured) {
+  return state.panelVisible && !state.detached
+    && state.selected?.backend === captured.backend
+    && state.selected?.id === captured.deviceId
+    && state.selected?.targetHostId === captured.targetHostId
+    && state.selectionVersion === captured.selectionVersion;
+}
 
 elements.copyUdid.addEventListener("click", async () => {
   const identifier = identifierLabels(state.selected?.platform);
