@@ -20,8 +20,12 @@
     return crypto.randomUUID();
   }
 
-  function request(message) {
+  function request(message, signal) {
     return new Promise((resolve, reject) => {
+      if (signal?.aborted) {
+        reject(new DOMException("The captured API request was cancelled.", "AbortError"));
+        return;
+      }
       const key = message.requestId ?? message.id;
       let timer;
       if (message.type === "socket-send") {
@@ -34,8 +38,15 @@
           reject(new Error("The owned video control send exceeded its deadline."));
         }, 30_000);
       }
-      pending.set(key, { resolve, reject, timer, socketId: message.type === "socket-send" ? message.id : undefined });
-      vscode.postMessage(message);
+      const cancel = () => {
+        completePending(key, undefined, new DOMException("The captured API request was cancelled.", "AbortError"));
+        if (message.type === "api") vscode.postMessage({ type: "api-cancel", id: message.id });
+      };
+      const cleanup = () => signal?.removeEventListener("abort", cancel);
+      pending.set(key, { resolve, reject, timer, cleanup, socketId: message.type === "socket-send" ? message.id : undefined });
+      signal?.addEventListener("abort", cancel, { once: true });
+      try { vscode.postMessage(message); }
+      catch (error) { completePending(key, undefined, error); }
     });
   }
 
@@ -43,6 +54,7 @@
     const entry = pending.get(key);
     if (!entry) return;
     if (entry.timer !== undefined) clearTimeout(entry.timer);
+    entry.cleanup?.();
     pending.delete(key);
     if (error) entry.reject(error);
     else entry.resolve(value);
@@ -209,7 +221,7 @@
         path,
         method: options.method || "GET",
         body: options.body,
-      });
+      }, options.signal);
     },
 
     createSocket(channel, query) {
