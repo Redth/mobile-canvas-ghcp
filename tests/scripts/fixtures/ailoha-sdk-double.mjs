@@ -6,6 +6,7 @@ import { createCatalogModel } from "./ailoha-catalog-creation.mjs";
 export const scenario = {
   calls: [], leases: new Map(), videos: new Map(), operations: new Map(), status: "running", geometryRevision: 13,
   catalog: null, createdTargets: new Map(), creationGate: null,
+  targets: new Map(), providerId: "synthetic-provider", nativeId: "native-deployment-not-opaque-target",
   connectionRef: {
     schema: "ailoha.target-host.connection/v1", serviceId: "synthetic-service", pid: 12345,
     startedAt: "2026-10-09T23:00:00Z", processStartedAt: "2026-10-09T22:59:59Z",
@@ -14,17 +15,24 @@ export const scenario = {
 export const sourceSha = "0000000000000000000000000000000000000000";
 const targetId = "opaque/target";
 const surfaceId = "opaque/surface";
-const packetRoot = new URL("../../web/fixtures/ailoha-baseline/", import.meta.url);
+const fixtureName = process.env.AILOHA_TEST_VIDEO_FIXTURE ?? "baseline";
+if (!["baseline", "bframes"].includes(fixtureName)) throw new Error("The owned video fixture must be baseline or bframes.");
+const packetRoot = new URL(`../../web/fixtures/ailoha-${fixtureName}/`, import.meta.url);
+const imageRoot = new URL("../../web/fixtures/ailoha-baseline/", import.meta.url);
 const fixture = JSON.parse(readFileSync(new URL("manifest.json", packetRoot), "utf8"));
+const pacingMs = Number(process.env.AILOHA_TEST_VIDEO_PACING_MS ?? 0);
+if (!Number.isSafeInteger(pacingMs) || pacingMs < 0 || pacingMs > 1000) throw new Error("Invalid owned video fixture pacing.");
+const initialGeometryRevision = fixture.geometry[0].geometryRevision;
+scenario.geometryRevision = initialGeometryRevision;
 const captures = [
-  { id: "target.lifecycle", version: 1, features: ["listTargets", "getTarget", "getTargetCapabilities", "startTarget", "stopTarget", "rebootTarget"] },
+  { id: "target.lifecycle", version: 1, features: ["listTargets", "getTarget", "getTargetCapabilities", "startTarget", "stopTarget", "rebootTarget", "resetTarget", "deleteTarget"] },
   { id: "target.surfaces", version: 1, features: ["listTargetSurfaces", "getTargetSurface"] },
   { id: "surface.capture", version: 1, features: ["captureTargetScreenshot", "createLiveVideoSession", "getLiveVideoSession", "stopLiveVideoSession"] },
   { id: "surface.input", version: 1, features: ["tapTargetElement", "performTargetGesture"] },
 ];
 const surface = {
   surfaceId, kind: "display", bounds: { x: 0, y: 0, width: 48, height: 32 },
-  geometryRevision: 13, pixelDensity: 2, orientation: "landscape",
+  geometryRevision: initialGeometryRevision, pixelDensity: 2, orientation: "landscape",
   capabilities: [{ id: "surface.input", version: 1, features: ["tap.point", "long-press.point", "gesture", "swipe.point"] }],
 };
 export function enableCatalogCreation() {
@@ -45,16 +53,16 @@ function mergedCapabilities(values) {
 }
 function providerRecords() {
   return [{
-    providerId: "synthetic-provider", name: "Synthetic provider", version: "synthetic", state: "ready", capabilities: captures,
+    providerId: scenario.providerId, name: "Synthetic provider", version: "synthetic", state: "ready", capabilities: captures,
   }, ...(scenario.catalog?.providers ?? []).map((provider) => ({
     ...provider, capabilities: mergedCapabilities([...provider.capabilities, ...captures]),
   }))];
 }
 function target() {
   return {
-    targetId, providerId: "synthetic-provider", targetTypeId: "opaque/type", name: "Synthetic device",
+    targetId, providerId: scenario.providerId, targetTypeId: "opaque/type", name: "Synthetic device",
     status: scenario.status, surfaces: scenario.status === "running" ? [{ ...surface, geometryRevision: scenario.geometryRevision }] : [],
-    nativeIdentity: { platform: "ios", nativeId: "native-deployment-not-opaque-target", isVirtual: true },
+    nativeIdentity: { platform: "ios", nativeId: scenario.nativeId, isVirtual: true },
   };
 }
 function createdTarget(id) {
@@ -117,9 +125,15 @@ export async function openTargetHostTransport(leaseId) {
     async response(path, options = {}) {
       const body = options.body === undefined || typeof options.body === "string"
         ? options.body : Buffer.from(options.body).toString("utf8");
-      scenario.calls.push({ path, method: options.method ?? "GET", body });
+      if (scenario.beforeMutationAdmission && (path.endsWith("/actions/reset")
+        || (options.method === "DELETE" && /^\/api\/v1\/targets\/[^/]+$/.test(path)))) {
+        await scenario.beforeMutationAdmission(path, options);
+      }
       if (closed) throw new Error("closed double");
-      if (options.signal?.aborted) throw new Error("aborted double");
+      if (options.signal?.aborted) {
+        throw Object.assign(new Error("synthetic queued transport aborted"), { name: "TargetHostTransportError", code: "cancelled" });
+      }
+      scenario.calls.push({ path, method: options.method ?? "GET", body });
       if (path === "/api/v1/host/status") return reply({
         hostId: "synthetic-host", profile: "ailoha.target-host/v1", version: "synthetic",
         state: "ready", capabilities: mergedCapabilities([...captures, ...(scenario.catalog?.status.capabilities ?? [])]),
@@ -168,23 +182,44 @@ export async function openTargetHostTransport(leaseId) {
         if (scenario.creationAcceptance === "unknown") return reply({}, 202);
         return reply(operation, 202, `/api/v1/operations/${encodeURIComponent(operationId)}`);
       }
-      if (path === "/api/v1/targets") return reply([target(), ...[...scenario.createdTargets.keys()].map(createdTarget)]);
+      if (path === "/api/v1/targets") return reply([
+        ...(scenario.targets.size ? [...scenario.targets.values()] : scenario.deleted ? [] : [target()]),
+        ...[...scenario.createdTargets.keys()].map(createdTarget),
+      ]);
       const targetRoute = /^\/api\/v1\/targets\/([^/]+)(?:\/(capabilities|surfaces))?$/.exec(path);
       const selectedId = targetRoute ? decodeURIComponent(targetRoute[1]) : undefined;
-      const selected = selectedId === targetId ? target() : createdTarget(selectedId);
+      const selected = scenario.targets.get(selectedId)
+        ?? (selectedId === targetId && !scenario.deleted ? target() : createdTarget(selectedId));
       if (targetRoute) {
-        if (!selected) throw new Error("Unknown synthetic target");
+        if (!selected) return reply({ status: 404, title: "Synthetic target not found" }, 404);
         if (targetRoute[2] === "capabilities") return reply(providerRecords().find((provider) => provider.providerId === selected.providerId).capabilities);
         if (targetRoute[2] === "surfaces") return reply(selected.surfaces);
+        if (options.method === "DELETE") {
+          const operationId = randomUUID();
+          const operation = {
+            operationId, kind: "deleteTarget", targetId: selectedId, providerId: selected.providerId,
+            status: "queued", destructive: true, createdAt: "2026-10-09T23:00:00Z",
+          };
+          scenario.targets.delete(selectedId);
+          scenario.createdTargets.delete(selectedId);
+          if (selectedId === targetId) scenario.deleted = true;
+          scenario.operations.set(operationId, { ...operation, status: "succeeded", startedAt: "2026-10-09T23:00:01Z", completedAt: "2026-10-09T23:00:02Z" });
+          return reply(operation, 202, `/api/v1/operations/${operationId}`);
+        }
+        if (scenario.beforeTargetRead) await scenario.beforeTargetRead(selectedId);
         return reply(selected);
       }
-      if (/\/actions\/(start|stop|reboot)$/.test(path)) {
+      if (/\/actions\/(start|stop|reboot|reset)$/.test(path)) {
         const action = path.split("/").at(-1);
+        const id = decodeURIComponent(path.split("/").at(-3));
+        const record = scenario.targets.get(id) ?? scenario.createdTargets.get(id);
         const operationId = randomUUID();
-        scenario.status = action === "stop" ? "stopped" : "running";
+        const status = action === "stop" || action === "reset" ? "stopped" : "running";
+        if (record) record.status = status;
+        else scenario.status = status;
         const operation = {
-          operationId, kind: `${action}Target`, targetId, providerId: "synthetic-provider",
-          status: "queued", destructive: false, createdAt: "2026-10-09T23:00:00Z",
+          operationId, kind: `${action}Target`, targetId: id, providerId: record?.providerId ?? scenario.providerId,
+          status: "queued", destructive: action === "reset", createdAt: "2026-10-09T23:00:00Z",
         };
         scenario.operations.set(operationId, {
           ...operation, status: "succeeded", startedAt: "2026-10-09T23:00:01Z", completedAt: "2026-10-09T23:00:02Z",
@@ -192,6 +227,7 @@ export async function openTargetHostTransport(leaseId) {
         return reply(operation, 202, `/api/v1/operations/${operationId}`);
       }
       if (path.startsWith("/api/v1/operations/")) {
+        if (scenario.operationUnavailable) return reply({ status: 503, title: "Synthetic operation observation unavailable" }, 503);
         const id = decodeURIComponent(path.split("/").at(-1));
         if (id.startsWith("creation/") && scenario.creationPollFailure) {
           throw new Error("Owned synthetic operation read failed before completion.");
@@ -203,7 +239,7 @@ export async function openTargetHostTransport(leaseId) {
       const mediaTargetId = surfaceRoute ? decodeURIComponent(surfaceRoute[1]) : targetId;
       const mediaSurfaceId = surfaceRoute ? decodeURIComponent(surfaceRoute[2]) : surfaceId;
       if (path.endsWith("/screenshots")) {
-        const image = readFileSync(new URL("reference-1.png", packetRoot));
+        const image = readFileSync(new URL("reference-1.png", imageRoot));
         return reply({
           artifactId: "synthetic/screenshot", kind: "screenshot", status: "ready", contentType: "image/png",
           targetId: mediaTargetId, surfaceId: mediaSurfaceId, createdAt: "2026-10-09T23:00:00Z", size: image.length,
@@ -214,11 +250,11 @@ export async function openTargetHostTransport(leaseId) {
       });
       const collection = `/api/v1/targets/${encodeURIComponent(mediaTargetId)}/surfaces/${encodeURIComponent(mediaSurfaceId)}/video/sessions`;
       if (path === collection && options.method === "POST") {
-        scenario.geometryRevision = 13;
+        scenario.geometryRevision = initialGeometryRevision;
         const videoSessionId = randomUUID();
         const session = {
           videoSessionId, targetId: mediaTargetId, surfaceId: mediaSurfaceId, codec: "h264", state: "ready",
-          createdAt: "2026-10-09T23:00:00Z", geometryRevision: 13, source: "synthetic-fixture",
+          createdAt: "2026-10-09T23:00:00Z", geometryRevision: initialGeometryRevision, source: "synthetic-fixture",
           websocketUrl: `/ws/v1/targets/${encodeURIComponent(mediaTargetId)}/surfaces/${encodeURIComponent(mediaSurfaceId)}/video/${videoSessionId}`,
         };
         scenario.videos.set(videoSessionId, session);
@@ -245,19 +281,20 @@ export async function openTargetHostTransport(leaseId) {
       scenario.calls.push({ bytes: path });
       return {
         status: 200, location: null, contentType: "image/png", retryAfterMs: null,
-        bytes: new Uint8Array(readFileSync(new URL("reference-1.png", packetRoot))),
+        bytes: new Uint8Array(readFileSync(new URL("reference-1.png", imageRoot))),
       };
     },
     async websocket(path, callbacks) {
       scenario.calls.push({ websocket: path });
       let next = 0;
       let active = true;
+      let nextTimer;
       const videoSessionId = path.split("/").at(-1);
       function text(control) { callbacks.onMessage(new TextEncoder().encode(JSON.stringify(control)), false); }
       function sendNext() {
         if (!active || next >= fixture.units.length) return;
         const unit = fixture.units[next++];
-        if (unit.sequence === 0 || unit.sequence === 3) {
+        if (unit.sequence === 0 || unit.geometryRevision !== scenario.geometryRevision) {
           scenario.geometryRevision = unit.geometryRevision;
           text({ type: "geometryChanged", ...fixture.geometry.find((geometry) => geometry.geometryRevision === unit.geometryRevision) });
         }
@@ -270,11 +307,19 @@ export async function openTargetHostTransport(leaseId) {
           const control = JSON.parse(data);
           scenario.calls.push({ control });
           if (control.type === "hello") {
-            text({ type: "ready", videoSessionId, codec: "h264", geometryRevision: 13, resumeFromSequence: 0, maxInFlightFrames: 1 });
+            text({ type: "ready", videoSessionId, codec: "h264", geometryRevision: initialGeometryRevision, resumeFromSequence: 0, maxInFlightFrames: 1 });
             sendNext();
-          } else if (control.type === "ack") sendNext();
+          } else if (control.type === "ack") {
+            if (pacingMs && next < fixture.units.length) nextTimer = setTimeout(sendNext, pacingMs);
+            else sendNext();
+          }
         },
-        async close() { active = false; scenario.calls.push({ socketClosed: path }); callbacks.onClose?.(1000, ""); },
+        async close() {
+          active = false;
+          clearTimeout(nextTimer);
+          scenario.calls.push({ socketClosed: path });
+          callbacks.onClose?.(1000, "");
+        },
       });
     },
     async close() { closed = true; },

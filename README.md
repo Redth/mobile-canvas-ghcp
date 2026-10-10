@@ -84,8 +84,8 @@ screenshots, observed-geometry tap/held-press/swipe/scroll, and complete ALHV
 H.264 access units. Device control and System inspection require no app
 instrumentation; App inspection does. Creation uses exact
 host/provider catalog choices and one canonical operation; accepted retries do
-not submit another create or boot. Destructive reset/delete without scoped human
-consent remains unsupported. The read-only System lens uses the selected Target Host target;
+not submit another create or boot. Destructive reset/delete on hosts without
+genuine scoped human approval remain unsupported. The read-only System lens uses the selected Target Host target;
 the App lens requires an explicitly selected verified native runtime instance
 in the canonical named context. Workspace application evidence cannot bind an
 agent. Recording, keyboard/buttons and broader controls remain unsupported.
