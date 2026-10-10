@@ -38,8 +38,8 @@ test("actual dispatch uses the bound context with original tool meanings and cap
       assert.deepEqual(options.scope, binding.scope);
       assert.equal(options.ownerProcessId, binding.ownerProcessId);
       return {
-        async invokeAction(name, input) {
-          calls.push({ name, input });
+        async invokeAction(name, input, options) {
+          calls.push({ name, input, options });
           return { success: true, operation: name, deviceId: input.deviceId };
         },
         async screenshot(deviceId) {
@@ -68,6 +68,25 @@ test("actual dispatch uses the bound context with original tool meanings and cap
   assert.deepEqual(calls.at(-1).input, {
     deviceId: "opaque-target", bundleId: "com.example.fixture", relaunch: true,
   });
+  const caller = new AbortController();
+  const uninstall = await dispatcher.handle(call("mobile_device_app_uninstall", {
+    deviceId: "opaque-target", bundleId: "com.example.fixture", confirm: true,
+  }), { signal: caller.signal });
+  assert.equal(uninstall.result.structuredContent.operation, "uninstall_app");
+  assert.deepEqual(calls.at(-1).input, {
+    deviceId: "opaque-target", bundleId: "com.example.fixture", confirm: true,
+  });
+  assert.equal(calls.at(-1).options.signal, caller.signal);
+  const setter = await dispatcher.handle(call("mobile_device_app_op_set", {
+    deviceId: "opaque-target", bundleId: "com.example.fixture",
+    operation: "SYSTEM_ALERT_WINDOW", mode: "ignore",
+  }), { signal: caller.signal });
+  assert.equal(setter.result.structuredContent.operation, "set_app_op");
+  assert.deepEqual(calls.at(-1).input, {
+    deviceId: "opaque-target", bundleId: "com.example.fixture",
+    operation: "SYSTEM_ALERT_WINDOW", mode: "ignore",
+  });
+  assert.equal(calls.at(-1).options.signal, caller.signal);
 });
 
 test("unsupported/invalid/cross-scope calls are positive failures before any runtime resolution", async (t) => {
