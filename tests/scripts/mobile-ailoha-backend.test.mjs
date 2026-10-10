@@ -202,7 +202,11 @@ function featureFixture(options = {}) {
   const wire = [];
   const platform = options.platform ?? "ios";
   let appearance = "light";
+  let batteryLevel = 0.57;
+  let clipboardText = "pasteboard";
+  let latencyMs = null;
   let readsFail = false;
+  let hardwareReadsFail = false;
   let smsGate = options.smsGate;
   let appGate = options.appGate;
   const hardwareGate = options.hardwareGate;
@@ -211,20 +215,36 @@ function featureFixture(options = {}) {
     async response(path, request) {
       wire.push({ path, method: request.method, body: request.body });
       assert.ok(["GET", "POST", "PATCH", "DELETE", ...(options.allowPut ? ["PUT"] : [])].includes(request.method));
+      if (request.method === "PUT" && options.putFailure === "unknown") {
+        throw new Error("private PUT transport diagnostics");
+      }
       const reply = (body, status = 200, location) =>
         ({ status, contentType: status === 204 ? null : "application/json", location, body });
       if (path.endsWith("/hardware")) {
         if (hardwareGate) await hardwareGate.promise;
+        if (hardwareReadsFail) throw new Error("private hardware readback diagnostics");
         return reply({
-          targetId: "one", platform, batteryLevel: 0.57, batteryState: "charging",
-          downloadBitsPerSecond: null, uploadBitsPerSecond: null, latencyMs: null,
-          networkIsIndicatorOnly: true, unreadable: ["location"],
+          targetId: "one", platform, batteryLevel, batteryState: "charging",
+          downloadBitsPerSecond: null, uploadBitsPerSecond: null, latencyMs,
+          networkIsIndicatorOnly: platform === "ios", unreadable: ["location"],
           "x-ailoha-target-host": options.wrongOwner ? { ...context, providerId: "other" }
             : options.nullOwner ? { ...context, providerId: null } : context,
         });
       }
-      if (path.endsWith("/clipboard")) return reply({
-        contentType: "text/plain", text: "pasteboard", "x-ailoha-target-host": context,
+      if (path.endsWith("/clipboard")) {
+        if (request.method === "PUT") clipboardText = JSON.parse(request.body).text;
+        return reply({ contentType: "text/plain", text: clipboardText, "x-ailoha-target-host": context });
+      }
+      if (path.endsWith("/battery") && request.method === "PUT") {
+        batteryLevel = JSON.parse(request.body).level;
+        return reply({ simulated: true, level: batteryLevel, "x-ailoha-target-host": context });
+      }
+      if (path.endsWith("/network") && request.method === "PUT") {
+        latencyMs = JSON.parse(request.body).latencyMs;
+        return reply({ connectionProfiles: [], "x-ailoha-target-host": context });
+      }
+      if (path.endsWith("/location") && request.method === "PUT") return reply({
+        simulated: true, ...JSON.parse(request.body), "x-ailoha-target-host": context,
       });
       if (path.endsWith("/settings/device") && request.method === "GET") {
         if (readsFail) throw new Error("private readback diagnostics");
@@ -260,11 +280,14 @@ function featureFixture(options = {}) {
         "x-ailoha-target-host": context,
       });
       if (path.endsWith("/telephony/sms") || path.endsWith("/biometrics/results")
-        || path.endsWith("/push/notifications") || path.endsWith("/telephony/calls/actions")) {
+        || path.endsWith("/push/notifications") || path.endsWith("/telephony/calls/actions")
+        || path.endsWith("/network/profiles/native")) {
         if (smsGate) await smsGate.promise;
         const kind = path.endsWith("/telephony/sms") ? "simulateTargetSms"
           : path.endsWith("/biometrics/results") ? "simulateTargetBiometricResult"
-          : path.endsWith("/telephony/calls/actions") ? "controlTargetCall" : "sendTargetPushNotification";
+          : path.endsWith("/telephony/calls/actions") ? "controlTargetCall"
+          : path.endsWith("/network/profiles/native") ? "applyTargetNativeNetworkProfile"
+          : "sendTargetPushNotification";
         const operationId = `op-${kind}`;
         if (options.submitFailure === "unknown") throw new Error("private transport diagnostics");
         if (options.submitFailure === "accepted") {
@@ -293,11 +316,15 @@ function featureFixture(options = {}) {
           "x-ailoha-target-host": context,
         } : id === "op-simulateTargetBiometricResult" && options.allowNativeFidelity
           ? { action: "match", confirmed: platform === "android" ? true : null } : undefined;
+        const nativeProfile = id === "op-applyTargetNativeNetworkProfile" ? {
+          networkIsIndicatorOnly: options.indicatorMismatch ? platform !== "ios" : platform === "ios",
+          "x-ailoha-target-host": context,
+        } : undefined;
         return {
           operationId: id, kind: id.slice(3), status: "succeeded", destructive: false,
           targetId: "one", providerId: "provider", createdAt: "2026-10-10T03:00:00Z",
           completedAt: "2026-10-10T03:00:01Z",
-          ...(result === undefined ? {} : { result }),
+          ...(result === undefined && nativeProfile === undefined ? {} : { result: result ?? nativeProfile }),
         };
       },
     },
@@ -307,6 +334,8 @@ function featureFixture(options = {}) {
     ...state, wire,
     failReads() { readsFail = true; },
     allowReads() { readsFail = false; },
+    failHardware() { hardwareReadsFail = true; },
+    allowHardware() { hardwareReadsFail = false; },
     releaseSms() { smsGate?.resolve(); smsGate = null; },
     releaseApps() { appGate?.resolve(); appGate = null; },
     releaseHardware() { hardwareGate?.resolve(); },
@@ -506,6 +535,106 @@ test("draft permission lookup and accepted call retain original target and proce
   });
   assert.equal((await call).calls[0].state, "RINGING");
   assert.equal(accepted.wire.filter(({ method }) => method === "POST").length, 1);
+});
+
+test("source-conditional official PUT routes preserve all four legacy setter outputs and readback", async (t) => {
+  const state = featureFixture({ platform: "android", allowPut: true });
+  t.after(() => state.backend.dispose());
+  const battery = await state.backend.invokeAction("set_battery", { deviceId: "one", level: 80 });
+  assert.equal(battery.batteryLevel, 80);
+  assert.equal(battery.networkIsIndicatorOnly, false);
+  const network = await state.backend.invokeAction("set_network", { deviceId: "one", latencyMs: 125 });
+  assert.equal(network.latencyMs, 125);
+  assert.deepEqual(await state.backend.invokeAction("set_location", {
+    deviceId: "one", latitude: 1.5, longitude: -2.5,
+  }), { success: true, operation: "location-set", deviceId: null });
+  assert.deepEqual(await state.backend.invokeAction("set_clipboard", {
+    deviceId: "one", text: "new native text",
+  }), { schemaVersion: "1.0", deviceId: "one", platform: "android", text: "new native text" });
+  assert.deepEqual(state.wire.filter(({ method }) => method === "PUT")
+    .map(({ path, body }) => [path, JSON.parse(body)]), [
+    ["/api/v1/targets/one/battery", { level: 0.8 }],
+    ["/api/v1/targets/one/network", { latencyMs: 125 }],
+    ["/api/v1/targets/one/location", { latitude: 1.5, longitude: -2.5 }],
+    ["/api/v1/targets/one/clipboard", { contentType: "text/plain", text: "new native text" }],
+  ]);
+});
+
+test("setter readback failures and wrong capability never resubmit an uncertain PUT", async (t) => {
+  const state = featureFixture({ allowPut: true });
+  t.after(() => state.backend.dispose());
+  state.failReads();
+  await assert.rejects(state.backend.invokeAction("set_settings", { deviceId: "one", appearance: "dark" }));
+  state.allowReads();
+  assert.equal((await state.backend.invokeAction("set_settings", {
+    deviceId: "one", appearance: "dark",
+  })).appearance, "dark");
+  assert.equal(state.wire.filter(({ method }) => method === "PATCH").length, 1);
+  state.failHardware();
+  await assert.rejects(state.backend.invokeAction("set_battery", { deviceId: "one", level: 80 }));
+  state.allowHardware();
+  assert.equal((await state.backend.invokeAction("set_battery", {
+    deviceId: "one", level: 80,
+  })).batteryLevel, 80);
+  assert.equal(state.wire.filter(({ method, path }) => method === "PUT" && path.endsWith("/battery")).length, 1);
+  const uncertain = featureFixture({ allowPut: true, putFailure: "unknown" });
+  t.after(() => uncertain.backend.dispose());
+  await assert.rejects(uncertain.backend.invokeAction("set_location", {
+    deviceId: "one", latitude: 1, longitude: 2,
+  }));
+  await assert.rejects(uncertain.backend.invokeAction("set_location", {
+    deviceId: "one", latitude: 1, longitude: 2,
+  }), { code: "feature_outcome_uncertain" });
+  assert.equal(uncertain.wire.filter(({ method }) => method === "PUT").length, 1);
+  const disabled = featureFixture({ allowPut: true, featureCapabilities: [] });
+  t.after(() => disabled.backend.dispose());
+  await assert.rejects(disabled.backend.invokeAction("set_battery", {
+    deviceId: "one", level: 20,
+  }), { code: "capability_not_supported" });
+  assert.equal(disabled.wire.length, 0);
+});
+
+test("draft native profile and Android biometric require terminal evidence without inventing confirmation", async (t) => {
+  const android = featureFixture({ platform: "android", allowNativeFidelity: true });
+  t.after(() => android.backend.dispose());
+  const network = await android.backend.invokeAction("set_network", {
+    deviceId: "one", profile: "lte", latencyMs: 175,
+  });
+  assert.equal(network.networkIsIndicatorOnly, false);
+  assert.equal(network.batteryLevel, 57);
+  assert.deepEqual(await android.backend.invokeAction("send_biometric", {
+    deviceId: "one", action: "match", fingerId: 7,
+  }), { schemaVersion: "1.0", deviceId: "one", platform: "android", action: "match", confirmed: true });
+  assert.deepEqual(android.wire.filter(({ method }) => method === "POST")
+    .map(({ path, body }) => [path, JSON.parse(body)]), [
+    ["/api/v1/targets/one/network/profiles/native", { profile: "lte", latencyMs: 175 }],
+    ["/api/v1/targets/one/biometrics/results", { result: "success", fingerId: 7 }],
+  ]);
+  const ios = featureFixture({ allowNativeFidelity: true });
+  t.after(() => ios.backend.dispose());
+  assert.equal((await ios.backend.invokeAction("set_network", { deviceId: "one", profile: "wifi" }))
+    .networkIsIndicatorOnly, true);
+  await assert.rejects(ios.backend.invokeAction("set_network", {
+    deviceId: "one", profile: "wifi", latencyMs: 100,
+  }), { code: "capability_not_supported" });
+  assert.equal(ios.wire.filter(({ method }) => method === "POST").length, 1);
+  const recovered = featureFixture({ allowNativeFidelity: true });
+  t.after(() => recovered.backend.dispose());
+  recovered.failHardware();
+  await assert.rejects(recovered.backend.invokeAction("set_network", {
+    deviceId: "one", profile: "wifi",
+  }));
+  recovered.allowHardware();
+  assert.equal((await recovered.backend.invokeAction("set_network", {
+    deviceId: "one", profile: "wifi",
+  })).networkIsIndicatorOnly, true);
+  assert.equal(recovered.wire.filter(({ method }) => method === "POST").length, 1);
+  const mismatch = featureFixture({ allowNativeFidelity: true, indicatorMismatch: true });
+  t.after(() => mismatch.backend.dispose());
+  const profile = { deviceId: "one", profile: "wifi" };
+  await assert.rejects(mismatch.backend.invokeAction("set_network", profile), { code: "invalid_feature_response" });
+  await assert.rejects(mismatch.backend.invokeAction("set_network", profile), { code: "invalid_feature_response" });
+  assert.equal(mismatch.wire.filter(({ method }) => method === "POST").length, 1);
 });
 
 test("accepted feature work is single-flight and changed-incarnation retry never rebinds", async (t) => {
