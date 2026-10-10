@@ -27,6 +27,10 @@ test("MCP preserves all61 installed identities and advertises broader opt-in lim
     assert.equal(catalog.find((tool) => tool.name === `mobile_device_${name}`)
       .description.includes("positively unsupported"), true);
   }
+  assert.match(catalog.find((tool) => tool.name === "mobile_device_reveal").description, /capability evidence is required/);
+  for (const name of ["mobile_device_ui_dump", "mobile_device_ui_find", "mobile_device_ui_tap"]) {
+    assert.match(catalog.find((tool) => tool.name === name).description, /unavailable until canonical System UI/);
+  }
   assert.equal(catalog.every((tool) => tool.execution.taskSupport === "forbidden"), true);
   assert.equal(catalog.find((tool) => tool.name === "mobile_device_tap").inputSchema.properties.geometryRevision.maximum, 0xffffffff);
   const selected = catalog.find((tool) => tool.name === "mobile_device_get_selected");
@@ -47,6 +51,10 @@ test("actual dispatch uses the bound context with original tool meanings and cap
       assert.deepEqual(options.scope, binding.scope);
       assert.equal(options.ownerProcessId, binding.ownerProcessId);
       return {
+        async reveal(deviceId, options) {
+          calls.push({ name: "reveal", deviceId, options });
+          return { id: deviceId, platform: "ios", nativeId: "owned-native-id" };
+        },
         async invokeAction(name, input) {
           calls.push({ name, input });
           return { success: true, operation: name, deviceId: input.deviceId };
@@ -85,6 +93,10 @@ test("actual dispatch uses the bound context with original tool meanings and cap
   const screenshot = await dispatcher.handle(call("mobile_device_screenshot", { deviceId: "opaque-target" }));
   assert.equal(screenshot.result.content[1].type, "image");
   assert.equal(screenshot.result.content[1].mimeType, "image/png");
+  const revealed = await dispatcher.handle(call("mobile_device_reveal", { deviceId: "opaque-target" }));
+  assert.equal(revealed.result.structuredContent.id, "opaque-target");
+  assert.equal(calls.at(-1).name, "reveal");
+  assert.deepEqual(calls.at(-1).options, { selectRevealed: false });
 });
 
 test("unsupported/invalid/cross-scope calls are positive failures before any runtime resolution", async (t) => {
@@ -102,11 +114,32 @@ test("unsupported/invalid/cross-scope calls are positive failures before any run
     call("mobile_device_location_set", { deviceId: "target", latitude: 1, longitude: 2 }),
     call("mobile_device_clipboard_set", { deviceId: "target", text: "hello" }),
     call("mobile_device_permission_list", { deviceId: "target", bundleId: "com.example.app" }),
+    call("mobile_device_ui_dump", { deviceId: "target", includeRaw: true }),
+    call("mobile_device_ui_find", { deviceId: "target", text: "Save", limit: 1 }),
+    call("mobile_device_ui_tap", { deviceId: "target", text: "Save" }),
   ]) {
     const result = await dispatcher.handle(request);
     assert.equal(result.result.isError, true);
   }
   assert.equal(backendCalls, 0);
+});
+
+test("VS Code's bound MCP reveal follows the selected target while raw GitHub MCP does not", async (t) => {
+  const calls = [];
+  const dispatcher = await createAilohaMcpDispatcher({
+    binding, version: "test", selectCreated: true,
+    createBackend: async () => ({
+      async reveal(deviceId, options) {
+        calls.push([deviceId, options]);
+        return { id: deviceId, platform: "ios", nativeId: "native" };
+      },
+      async dispose() {},
+    }),
+  });
+  t.after(() => dispatcher.dispose());
+  const reply = await dispatcher.handle(call("mobile_device_reveal", { deviceId: "opaque-target" }));
+  assert.equal(reply.result.structuredContent.id, "opaque-target");
+  assert.deepEqual(calls, [["opaque-target", { selectRevealed: true }]]);
 });
 
 test("bound empty-context inventory retains the installed MCP list output envelope", async (t) => {
