@@ -1,9 +1,10 @@
 import assert from "node:assert/strict";
 import test from "node:test";
+import { readFileSync } from "node:fs";
 import { productModule } from "../ailoha-test-module.mjs";
-const { createAilohaVideoPlayer } = await import(productModule("web/ailoha-video-player.js"));
+const { createAilohaVideoPlayer, AILOHA_VIDEO_PLAYER_LIMITS } = await import(productModule("web/ailoha-video-player.js"));
 
-const config = new Uint8Array([0, 0, 0, 1, 0x67, 0x42, 0xe0, 0x1e, 0, 0, 0, 1, 0x68, 0xaa]);
+const config = new Uint8Array([0, 0, 0, 1, 0x67, 0x42, 0xe0, 0x1e, 0x80, 0, 0, 0, 1, 0x68, 0xe0]);
 const key = new Uint8Array([0, 0, 1, 0x65, 0xaa]);
 const delta = new Uint8Array([0, 0, 1, 0x41, 0xaa]);
 
@@ -108,25 +109,184 @@ test("window-one configuration is cached/ACKed before decoding an equal-PTS key 
   assert.equal(await state.connection.receive(packet(1, 1, key)), true);
   assert.deepEqual(state.ack(), [0, 1]);
   assert.equal(state.decoders[0].configuration.codec, "avc1.42e01e");
-  assert.deepEqual(state.decoders[0].chunks[0].data, new Uint8Array([...config, ...key]));
+  assert.deepEqual(state.decoders[0].configuration.description,
+    new Uint8Array([1, 0x42, 0xe0, 0x1e, 0xff, 0xe1, 0, 5, 0x67, 0x42, 0xe0, 0x1e, 0x80, 1, 0, 2, 0x68, 0xe0]));
+  assert.deepEqual(state.decoders[0].chunks[0].data, new Uint8Array([0, 0, 0, 2, 0x65, 0xaa]));
   assert.equal(state.presented[0].sequence, 1);
   assert.equal(state.presented[0].timestampMicroseconds, 0x0102030405060708n);
   assert.equal(state.outputs.every((frame) => frame.closed), true);
 });
 
-test("separate SPS and PPS units are retained together for every Annex B key chunk", async (t) => {
+test("separate Annex B SPS and PPS units are retained in one AVC description without duplicating them into chunks", async (t) => {
   const state = harness();
   t.after(() => state.player.dispose());
   await start(state);
   await geometry(state);
-  await state.connection.receive(packet(0, 2, config.subarray(0, 8)));
-  await state.connection.receive(packet(1, 2, config.subarray(8)));
+  await state.connection.receive(packet(0, 2, config.subarray(0, 9)));
+  await state.connection.receive(packet(1, 2, config.subarray(9)));
   await state.connection.receive(packet(2, 1, key));
   await state.connection.receive(packet(3, 1, key));
   assert.deepEqual(state.ack(), [0, 1, 2, 3]);
-  assert.deepEqual(state.decoders[0].chunks[0].data, new Uint8Array([...config, ...key]));
-  assert.deepEqual(state.decoders[0].chunks[1].data, new Uint8Array([...config, ...key]));
+  assert.ok(state.decoders[0].configuration.description instanceof Uint8Array);
+  assert.deepEqual(state.decoders[0].chunks[0].data, new Uint8Array([0, 0, 0, 2, 0x65, 0xaa]));
+  assert.deepEqual(state.decoders[0].chunks[1].data, state.decoders[0].chunks[0].data);
 });
+
+test("High-profile AVC description carries the SPS-derived chroma and bit-depth fields", async (t) => {
+  const state = harness();
+  t.after(() => state.player.dispose());
+  await start(state);
+  await geometry(state);
+  const high = new Uint8Array([0, 0, 0, 1, 0x67, 100, 0, 30, 0xac, 0, 0, 0, 1, 0x68, 0xe0]);
+  assert.equal(await state.connection.receive(packet(0, 3, new Uint8Array([...high, ...key]))), true);
+  assert.deepEqual(state.decoders[0].configuration.description.slice(-4), new Uint8Array([0xfd, 0xf8, 0xf8, 0]));
+  assert.deepEqual(state.decoders[0].chunks[0].data, new Uint8Array([0, 0, 0, 2, 0x65, 0xaa]));
+  assert.equal(state.presented[0].sequence, 0);
+});
+
+for (const [name, invalid] of [
+  ["truncated SPS", new Uint8Array([0, 0, 1, 0x67, 0x42, 0xe0, 30])],
+  ["truncated PPS", new Uint8Array([...config.subarray(0, 9), 0, 0, 1, 0x68])],
+  ["missing PPS", config.subarray(0, 9)],
+  ["missing SPS reference", new Uint8Array([...config.subarray(0, 9), 0, 0, 1, 0x68, 0xa0])],
+  ["truncated SPS fields", new Uint8Array([0, 0, 1, 0x67, 0x42, 0xe0, 30, 0, 0, 0, 1, 0x68, 0xe0])],
+]) {
+  test(`${name} is an explicit configuration failure, not a decoder retry or an acknowledged picture`, async (t) => {
+    const state = harness();
+    t.after(() => state.player.dispose());
+    await start(state);
+    await geometry(state);
+    await state.connection.receive(packet(0, 3, new Uint8Array([...invalid, ...key])));
+    assert.equal(state.errors.length, 1);
+    assert.ok(["InvalidConfiguration", "ConfigurationUnavailable"].includes(state.errors[0].code));
+    assert.equal(state.decoders.length, 0);
+    assert.deepEqual(state.ack(), []);
+  });
+}
+
+test("AVC chunks preserve non-parameter NAL bytes and order with independent four-byte lengths", async (t) => {
+  const state = harness();
+  t.after(() => state.player.dispose());
+  await start(state);
+  await geometry(state);
+  const accessUnit = new Uint8Array([0, 0, 0, 1, 9, 0xf0, 0, 0, 1, 6, 0x80, ...key]);
+  await state.connection.receive(packet(0, 2, config));
+  await state.connection.receive(packet(1, 1, accessUnit));
+  assert.deepEqual(state.decoders[0].chunks[0].data,
+    new Uint8Array([0, 0, 0, 2, 9, 0xf0, 0, 0, 0, 2, 6, 0x80, 0, 0, 0, 2, 0x65, 0xaa]));
+  assert.deepEqual(state.ack(), [0, 1]);
+});
+
+test("a prepended SEI plus combined config/key unit is normalized to canonical AUD-first AVC without changing NAL bytes", async (t) => {
+  const state = harness();
+  t.after(() => state.player.dispose());
+  await start(state);
+  await geometry(state);
+  const unit = new Uint8Array([0, 0, 1, 6, 0x80, 0, 0, 1, 9, 0xf0, ...config, ...key]);
+  await state.connection.receive(packet(0, 3, unit));
+  assert.deepEqual(state.decoders[0].chunks[0].data,
+    new Uint8Array([0, 0, 0, 2, 9, 0xf0, 0, 0, 0, 2, 6, 0x80, 0, 0, 0, 2, 0x65, 0xaa]));
+  assert.deepEqual(unit, new Uint8Array([0, 0, 1, 6, 0x80, 0, 0, 1, 9, 0xf0, ...config, ...key]));
+  assert.deepEqual(state.ack(), [0]);
+});
+
+test("the real High/B-frame access unit retains exact parameter sets and all non-config NAL payloads", async (t) => {
+  const state = harness();
+  t.after(() => state.player.dispose());
+  await start(state, 0, 21);
+  await geometry(state, 21);
+  const bytes = new Uint8Array(readFileSync(new URL("./fixtures/ailoha-bframes/00-config-key.alhv", import.meta.url)));
+  const original = bytes.slice();
+  assert.equal(await state.connection.receive(bytes), true);
+  assert.deepEqual(bytes, original);
+  const description = state.decoders[0].configuration.description;
+  assert.equal(state.decoders[0].configuration.codec, "avc1.64001e");
+  assert.deepEqual(description.slice(0, 8), new Uint8Array([1, 100, 0, 30, 255, 225, 0, 24]));
+  assert.deepEqual(description.slice(-4), new Uint8Array([253, 248, 248, 0]));
+  const payload = original.subarray(28);
+  assert.deepEqual(description.subarray(8, 32), payload.subarray(697, 721));
+  assert.deepEqual(description.subarray(35, 41), payload.subarray(725, 731));
+  const chunk = state.decoders[0].chunks[0].data;
+  const nals = [];
+  const nalBytes = [];
+  for (let offset = 0; offset < chunk.length;) {
+    const length = new DataView(chunk.buffer, chunk.byteOffset + offset, 4).getUint32(0, false);
+    offset += 4;
+    assert.ok(length > 0 && offset + length <= chunk.length);
+    nals.push({ type: chunk[offset] & 31, length });
+    nalBytes.push(chunk.subarray(offset, offset + length));
+    offset += length;
+  }
+  assert.deepEqual(nals, [
+    { type: 9, length: 2 }, { type: 6, length: 684 }, { type: 6, length: 684 }, { type: 5, length: 1979 },
+  ]);
+  assert.deepEqual(nalBytes, [
+    payload.subarray(691, 693), payload.subarray(4, 688), payload.subarray(734, 1418), payload.subarray(1421, 3400),
+  ]);
+  assert.equal(state.presented[0].sequence, 0);
+});
+
+for (const payload of [
+  new Uint8Array([...config, ...key, 0, 0, 1, 9, 0xf0]),
+  new Uint8Array([0, 0, 1, 9, 0xf0, ...config, 0, 0, 1, 9, 0xf0, ...key]),
+  new Uint8Array([0, 0, 1]),
+  new Uint8Array([0, 0, 1, 0xe7, 1, 2, 3, 4]),
+]) {
+  test(`malformed NAL headers or delimiter placement fail explicitly: ${Array.from(payload.slice(0, 8))}`, async (t) => {
+    const state = harness();
+    t.after(() => state.player.dispose());
+    await start(state);
+    await geometry(state);
+    await state.connection.receive(packet(0, 3, payload));
+    assert.equal(state.errors.length, 1);
+    assert.equal(state.errors[0].code, "InvalidAccessUnit");
+    assert.deepEqual(state.ack(), []);
+    assert.equal(state.decoders.some((decoder) => decoder.chunks.length > 0), false);
+  });
+}
+
+test("decoder configuration and NAL count retain hard bounds before handoff", async (t) => {
+  for (const [payload, flags, expectedCode] of [
+    [new Uint8Array([...config, ...new Uint8Array(AILOHA_VIDEO_PLAYER_LIMITS.maxConfigurationBytes).fill(0xff)]), 2, "PayloadLimit"],
+    [new Uint8Array(Array.from({ length: AILOHA_VIDEO_PLAYER_LIMITS.maxNalsPerAccessUnit + 1 }, () => [...key]).flat()), 1, "InvalidAccessUnit"],
+  ]) {
+    const state = harness();
+    t.after(() => state.player.dispose());
+    await start(state);
+    await geometry(state);
+    await state.connection.receive(packet(0, flags, payload));
+    assert.equal(state.errors.length, 1);
+    assert.equal(state.errors[0].code, expectedCode);
+    assert.deepEqual(state.ack(), []);
+    assert.equal(state.decoders.length, 0);
+  }
+});
+
+for (const changedParameter of ["SPS", "PPS"]) {
+  test(`changed ${changedParameter} config retires original decoder owners and requires a fresh key`, async (t) => {
+    const state = harness({ automaticOutput: false });
+    t.after(() => state.player.dispose());
+    await start(state);
+    await geometry(state);
+    await state.connection.receive(packet(0, 2, config));
+    await state.connection.receive(packet(1, 1, key));
+    const original = state.decoders[0];
+    const changed = config.slice();
+    changed[changedParameter === "SPS" ? 7 : changed.length - 1] += 1;
+    await state.connection.receive(packet(2, 2, changed));
+    assert.equal(original.state, "closed");
+    original.output(1);
+    assert.equal(state.presented.length, 0);
+    await state.connection.receive(packet(3, 0, delta));
+    assert.equal(state.decoders.length, 1);
+    await state.connection.receive(packet(4, 1, key));
+    state.decoders[1].output(4);
+    assert.equal(state.presented.length, 1);
+    assert.equal(state.presented[0].sequence, 4);
+    assert.notDeepEqual(state.decoders[1].configuration.description, original.configuration.description);
+    assert.deepEqual(state.ack(), [0, 1, 2, 3, 4]);
+  });
+}
 
 test("drop followed by configuration does not authorize decoding dependent pictures", async (t) => {
   const state = harness();

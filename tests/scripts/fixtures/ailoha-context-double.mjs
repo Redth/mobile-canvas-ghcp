@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import { readFileSync, writeFileSync } from "node:fs";
+import { readFileSync, renameSync, writeFileSync } from "node:fs";
 
 const args = process.argv.slice(2);
 if (args[0] === "workspace") {
@@ -46,5 +46,9 @@ if (args[1] === "detach") {
   context.observed = null;
   context.revision = String(BigInt(context.revision) + 1n);
 }
-writeFileSync(path, JSON.stringify(contexts));
+if (args[1] !== "get") {
+  const temporary = `${path}.${process.pid}.${randomUUID()}.tmp`;
+  writeFileSync(temporary, JSON.stringify(contexts), { flag: "wx" });
+  renameSync(temporary, path);
+}
 process.stdout.write(JSON.stringify({ ok: true, context, error: null }));

@@ -81,7 +81,7 @@ this is not a normal-install-ready release.
 The opt-in covers inventory/selection, advertised start/stop/reboot, PNG
 screenshots, observed-geometry tap/held-press/swipe/scroll, and complete ALHV
 H.264 access units. It requires no app instrumentation. Creation/catalog
-mapping, destructive reset/delete without scoped human consent, app/system
+mapping, destructive reset/delete on hosts without genuine scoped approval, app/system
 inspection, recording, keyboard/buttons and broader controls remain explicitly
 unsupported. See [the Ailoha adapter contract](docs/ailoha-protocol-adapter.md)
 for ownership, setup, package evidence and remaining gates.
