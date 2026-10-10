@@ -318,16 +318,22 @@ The MCP names, request fields, and legacy output envelopes remain unchanged.
 
 | Existing identity | Opt-in delivery | Canonical contract / gate |
 | --- | --- | --- |
+| `mobile_device_battery_set` | Gated; source-conditional | `target.battery` PUT `/battery` takes legacy integer percentage as ratio, then `target.hardware` readback. Official runtime PUT and installed acceptance are pending. |
 | `mobile_device_hardware_get` | Enabled with `target.hardware` | `GET /hardware`; nullable battery/network values and `unreadable` are retained; battery ratio maps to legacy integer percentage. |
-| `mobile_device_clipboard_get` | Enabled with `target.clipboard` | `GET /clipboard` only when the content is `text/plain` with a reported `text`. |
-| `mobile_device_settings_get`, `mobile_device_settings_set` | Enabled with `target.settings` | `GET` and `PATCH /settings/device`; setters require the actual device namespace and read back the resulting settings. |
+| `mobile_device_network_set` | Gated; partial source-conditional | `target.network` PUT `/network` could update Android `latencyMs` with `target.hardware` readback after official runtime PUT lands. Legacy `profile` is not expressible for raw platform names, iOS indicator overrides, or combined profile and latency. |
+| `mobile_device_location_set` | Gated; source-conditional | `target.location` PUT `/location` verifies a 200 simulated fix but preserves the legacy success-only result; no unreadable location is fabricated. Official runtime PUT and installed acceptance are pending. |
 | `mobile_device_location_clear` | Enabled with `target.location` | `DELETE /location` requires a completed 204; no simulated fix is fabricated. |
+| `mobile_device_clipboard_get` | Enabled with `target.clipboard` | `GET /clipboard` only when the content is `text/plain` with a reported `text`. |
+| `mobile_device_clipboard_set` | Gated; source-conditional | `target.clipboard` PUT `/clipboard` sends `text/plain`, verifies returned text, then reads `target.clipboard` again. Official runtime PUT and installed acceptance are pending. |
+| `mobile_device_biometric` | iOS match/nomatch enabled with `target.biometrics`; Android gated | `POST /biometrics/results` confirms completion; `confirmed` remains false on iOS, which cannot confirm the scan listener. Android canonical completion discards the legacy `confirmed` signal, and `fingerId` has no canonical representation. |
+| `mobile_device_call` | Gated | Canonical telephony has no accept/hold/cancel actions; its incoming-call primitive cannot preserve all legacy actions. |
+| `mobile_device_calls` | Gated | Canonical telephony exposes only a single normalized call state/number, not the full list and platform-native state. |
 | `mobile_device_sms_send` | Enabled with `target.telephony` | `POST /telephony/sms`, confirmed by the matching terminal operation. |
 | `mobile_device_notification_push` | Enabled on iOS with `target.push` and `target.apps` | Resolve exactly one installed app by `packageId` through `GET /apps?includeSystem=true`; use the returned `appId` for `POST /push/notifications` and confirm the matching terminal operation. Workspace IDs are never substituted for native package IDs. |
-| `mobile_device_biometric` | iOS match/nomatch only with `target.biometrics` | `POST /biometrics/results` confirms completion, while `confirmed` remains false because iOS cannot confirm the scan listener. Android is gated: canonical completion discards the legacy `confirmed` signal; `fingerId` has no canonical representation. |
-| `mobile_device_battery_set`, `mobile_device_network_set`, `mobile_device_location_set`, `mobile_device_clipboard_set`, `mobile_device_permission_set` | Gated | Canonical setters are PUT; the reviewed official runtime transport currently allows GET/POST/PATCH/DELETE, **not** PUT. No synthetic alternate verb is used. Battery, location, clipboard and Android latency-only requests have source-conditional mappings, but none is activated without reviewed official PUT support and installed-host verification. |
 | `mobile_device_permission_list` | Gated | Canonical permission state omits the legacy `platformName` for each permission. The setter also collapses a multi-permission fan-out to one record. |
-| `mobile_device_call`, `mobile_device_calls` | Gated | Canonical telephony has only a single normalized call state/number; it loses the full list and platform-native state, and has no accept/hold/cancel action. |
+| `mobile_device_permission_set` | Gated | Requires official PUT `/permissions/{name}` plus exact native `platformName` and multi-permission fan-out/readback fidelity. |
+| `mobile_device_settings_get` | Enabled with `target.settings` | `GET /settings/device` projects the nullable appearance/accessibility fields. |
+| `mobile_device_settings_set` | Enabled with `target.settings` | `PATCH /settings/device` requires the device namespace and reads back the resulting settings. |
 
 These source-level gates do not indicate that the current public Ailoha package
 can run the opt-in: no compatible public runtime pin has been approved. Enabling
