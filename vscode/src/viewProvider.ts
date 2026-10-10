@@ -68,6 +68,7 @@ export class MobileCanvasViewProvider implements vscode.WebviewViewProvider {
       { sessionId: this.sessionId, viewId: VIEW_INSTANCE_ID },
       (error) => this.output.appendLine(`Mobile Canvas Ailoha: ${error.code}: ${error.message}`),
       workspaceRoots?.validate,
+      () => !vscode.env.remoteName,
     ) : undefined;
     if (!this.lifecycle.isCurrent(generation)) {
       return;

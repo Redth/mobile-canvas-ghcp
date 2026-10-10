@@ -1,5 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
+import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { join } from "node:path";
 import { productModule } from "../ailoha-test-module.mjs";
 const { AilohaMobileBackend } = await import(productModule("lib/ailoha/mobile-backend.mjs"));
 const { mobileCanvasBackend } = await import(productModule("lib/backend.mjs"));
@@ -33,11 +35,13 @@ function fixture(options = {}) {
   const capabilities = [{ id: "target.lifecycle", version: 1, features: ["startTarget", "stopTarget", "rebootTarget", "resetTarget", "deleteTarget"] }];
   if (options.app) {
     capabilities.push({ id: "target.apps", version: 1,
-      features: ["listTargetApps", "launchTargetApp", "terminateTargetApp", "uninstallTargetApp"] });
+      features: ["listTargetApps", "launchTargetApp", "terminateTargetApp",
+        "uninstallTargetApp", "installStagedTargetApp"] });
     capabilities.push({ id: "target.app-ops", version: 1, features: ["listTargetAppOps", "updateTargetAppOp"] });
   }
   const client = {
-    async getHostStatus() { return { hostId: "host", profile: "ailoha.target-host/v1", version: "test", state: "ready", capabilities: [] }; },
+    async getHostStatus() { return { hostId: "host", profile: "ailoha.target-host/v1", version: "test", state: "ready",
+      capabilities: options.stagedApps ? [{ id: "host.artifacts", version: 1, features: ["createArtifact"] }] : [] }; },
     async listProviders() { return providers; },
     async listTargets() { return [...targets.values()]; },
     async getTarget(id) { calls.push(["get", id]); return { ...targets.get(id), surfaces: [surface()] }; },
@@ -140,6 +144,9 @@ function fixture(options = {}) {
     scope: { sessionId: "unique-session", viewId: "unique-view" },
     client, media, owner, selectionStore,
     confirmDestructive: options.confirmDestructive,
+    beginDestructiveApproval: options.beginDestructiveApproval,
+    stagedApps: options.stagedApps,
+    allowHostPackage: options.allowHostPackage,
     saveScreenshot: options.saveScreenshot,
     operationState: options.operationState,
     videoState: options.videoState,
@@ -716,6 +723,174 @@ test("install, destructive uninstall and Android app-op mutation remain explicit
     { appOpId: "SYSTEM_ALERT_WINDOW", appId: "opaque-app", mode: "foreground", uidScoped: true },
   ];
   await assert.rejects(state.backend.listAppOps("one", "com.example.native"), { code: "capability_not_supported" });
+});
+
+async function stagedFixture(t, overrides = {}) {
+  const { stagedApps: stagedOverrides, ...fixtureOverrides } = overrides;
+  const directory = await mkdtemp(join(process.cwd(), ".mobile-stage-"));
+  t.after(() => rm(directory, { recursive: true, force: true }));
+  const sourcePath = join(directory, "local app.apk");
+  await writeFile(sourcePath, "controlled fixture");
+  const steps = [];
+  const stagedApps = {
+    async stage(invocation, path) {
+      steps.push(["stage", path, invocation.executionContext?.revision]);
+      return { artifactId: "private-artifact", proof: { packageName: "local app.apk", receiptHash: "private-hash" } };
+    },
+    async install(invocation) {
+      steps.push(["install", invocation.executionContext?.revision]);
+      return { operationId: "install-operation" };
+    },
+    async cleanup(invocation) {
+      steps.push(["cleanup", invocation.executionContext?.revision]);
+      return { operationId: "cleanup-operation" };
+    },
+    ...stagedOverrides,
+  };
+  const state = canonicalFixture({
+    app: true, stagedApps, allowHostPackage: () => true,
+    beginDestructiveApproval(action, invocation, { stagedArtifact: proof }) {
+      assert.equal(action, "install");
+      assert.equal(JSON.stringify(invocation).includes("connectionRef"), false);
+      steps.push(["approval", action, proof.artifactId, invocation.executionContext.revision]);
+      return {
+        async run(work) { return work(); },
+        requireCurrent() {},
+        consume(owned, receipt) {
+          assert.equal(owned, invocation);
+          assert.equal(receipt, proof);
+          steps.push(["consumed", proof.artifactId]);
+        },
+        dispose() {},
+      };
+    },
+    ...fixtureOverrides,
+  });
+  state.client.waitForOperation = async (id) => {
+    steps.push(["wait", id]);
+    return { operationId: id, targetId: "one", providerId: "provider",
+      kind: id === "install-operation" ? "installTargetApp" : "deleteArtifact",
+      status: "succeeded", destructive: true };
+  };
+  t.after(() => state.backend.dispose());
+  return { ...state, sourcePath, steps };
+}
+
+test("source-conditional install stages on host, waits for accepted install and owned deletion, never exposes path", async (t) => {
+  const state = await stagedFixture(t);
+  const result = await state.backend.installApp("one", state.sourcePath);
+  assert.deepEqual(result, {
+    schemaVersion: "1.0", success: true, deviceId: "one",
+    bundleId: null, operation: "install", processId: null, detail: null,
+  });
+  assert.deepEqual(state.steps.map(([name]) => name),
+    ["stage", "approval", "consumed", "install", "wait", "cleanup", "wait"]);
+  assert.equal(JSON.stringify(result).includes(state.sourcePath), false);
+});
+
+test("a timed-out accepted staged install resumes only the original operation read", async (t) => {
+  const state = await stagedFixture(t);
+  let reads = 0;
+  const wait = state.client.waitForOperation;
+  state.client.waitForOperation = async (id) => {
+    if (id === "install-operation" && reads++ === 0) throw new MobileAilohaError("operation_timeout", "Read timed out.", 504);
+    return wait(id);
+  };
+  await assert.rejects(state.backend.installApp("one", state.sourcePath), { code: "operation_timeout" });
+  assert.equal((await state.backend.installApp("one", state.sourcePath)).success, true);
+  assert.deepEqual(state.steps.map(([name]) => name),
+    ["stage", "approval", "consumed", "install", "wait", "cleanup", "wait"]);
+});
+
+test("view revision changed during staged upload blocks install but permits owned artifact cleanup", async (t) => {
+  let state;
+  state = await stagedFixture(t, { stagedApps: {
+    async stage(invocation, path) {
+      state.steps.push(["stage", path]);
+      await state.advanceSelection();
+      return { artifactId: "private-artifact", proof: { packageName: "local app.apk", receiptHash: "private-hash" } };
+    },
+  } });
+  await assert.rejects(state.backend.installApp("one", state.sourcePath), { code: "context_snapshot_superseded" });
+  assert.deepEqual(state.steps.map(([name]) => name), ["stage", "cleanup", "wait"]);
+  await state.store.set({ targetHostId: "host", targetId: "one", surfaceId: "surface/opaque" });
+  await assert.rejects(state.backend.installApp("one", state.sourcePath), { code: "context_snapshot_superseded" });
+  assert.deepEqual(state.steps.map(([name]) => name), ["stage", "cleanup", "wait"]);
+});
+
+test("host-rejected staged install and denied approval never submit a second install", async (t) => {
+  const rejected = await stagedFixture(t, { stagedApps: {
+    async install() {
+      rejected.steps.push(["install"]);
+      throw new MobileAilohaError("install_rejected", "Host incarnation changed.", 409);
+    },
+  } });
+  await assert.rejects(rejected.backend.installApp("one", rejected.sourcePath), { code: "install_rejected" });
+  await assert.rejects(rejected.backend.installApp("one", rejected.sourcePath), { code: "install_rejected" });
+  assert.deepEqual(rejected.steps.map(([name]) => name),
+    ["stage", "approval", "consumed", "install", "cleanup", "wait"]);
+  const denied = await stagedFixture(t, { beginDestructiveApproval() {
+    return { async run() { throw new MobileAilohaError("consent_denied", "Approval declined.", 403); },
+      requireCurrent() {}, consume() { throw Error("must not consume"); }, dispose() {} };
+  } });
+  await assert.rejects(denied.backend.installApp("one", denied.sourcePath), { code: "consent_denied" });
+  assert.deepEqual(denied.steps.map(([name]) => name), ["stage", "cleanup", "wait"]);
+  const booleanOnly = await stagedFixture(t, { beginDestructiveApproval() { return true; } });
+  await assert.rejects(booleanOnly.backend.installApp("one", booleanOnly.sourcePath), { code: "capability_not_supported" });
+  assert.deepEqual(booleanOnly.steps.map(([name]) => name), ["stage", "cleanup", "wait"]);
+});
+
+test("stage uncertainty and accepted install errors cannot replay on retry or replacement incarnation", async (t) => {
+  const unknown = await stagedFixture(t, { stagedApps: {
+    async stage() { unknown.steps.push(["stage"]); throw new Error("private package /hidden/app.apk"); },
+  } });
+  await assert.rejects(unknown.backend.installApp("one", unknown.sourcePath), { code: "ailoha_operation_failed" });
+  await assert.rejects(unknown.backend.installApp("one", unknown.sourcePath), { code: "stage_outcome_uncertain" });
+  assert.deepEqual(unknown.steps.map(([name]) => name), ["stage"]);
+
+  const shared = new Map();
+  const original = await stagedFixture(t, { operationState: shared });
+  original.client.waitForOperation = async () => { throw new MobileAilohaError("operation_timeout", "Pending.", 504); };
+  await assert.rejects(original.backend.installApp("one", original.sourcePath), { code: "operation_timeout" });
+  const replacement = await stagedFixture(t, {
+    operationState: shared,
+    connectionRef: { ...original.backend.connectionRef, processStartedAt: "2026-10-10T00:01:00Z" },
+  });
+  await assert.rejects(replacement.backend.installApp("one", original.sourcePath), { code: "runtime_incarnation_changed" });
+  assert.equal(replacement.steps.length, 0);
+});
+
+test("cleanup failure reports the secondary error without erasing the successful install receipt", async (t) => {
+  const state = await stagedFixture(t, { stagedApps: {
+    async cleanup() {
+      state.steps.push(["cleanup"]);
+      throw new MobileAilohaError("cleanup_rejected", "Owned deletion rejected.", 409);
+    },
+  } });
+  const response = await state.backend.request("/api/v1/devices/one/apps/install", {
+    method: "POST", body: JSON.stringify({ path: state.sourcePath }),
+  });
+  assert.equal(response.status, 409);
+  const body = await response.json();
+  assert.equal(body.cleanupProblem.code, "cleanup_rejected");
+  assert.equal(body.operationId, "install-operation");
+  assert.equal(JSON.stringify(body).includes(state.sourcePath), false);
+  assert.deepEqual(state.steps.map(([name]) => name),
+    ["stage", "approval", "consumed", "install", "wait", "cleanup"]);
+});
+
+test("missing scoped consent, host topology or source capability cannot stage a package", async (t) => {
+  for (const options of [
+    { beginDestructiveApproval: undefined },
+    { allowHostPackage: () => false },
+    { client: { async getHostStatus() {
+      return { hostId: "host", profile: "ailoha.target-host/v1", state: "ready", version: "test", capabilities: [] };
+    } } },
+  ]) {
+    const state = await stagedFixture(t, options);
+    await assert.rejects(state.backend.installApp("one", state.sourcePath), { code: "capability_not_supported" });
+    assert.equal(state.steps.length, 0);
+  }
 });
 
 function canonicalFixture(options = {}) {

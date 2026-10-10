@@ -24,6 +24,7 @@ interface AilohaRuntimeModule {
     scope: { sessionId: string; viewId: string };
     onError(error: { code: string; message: string }): void;
     validateWorkspaceRoot?(path: string): WorkspaceRootError | undefined;
+    allowHostPackage?(): boolean;
   }): AilohaCanvasHost;
   getRuntimeContextBinding(scope: { sessionId: string; viewId: string }): Promise<AilohaContextBinding>;
 }
@@ -52,11 +53,12 @@ export async function resolveAilohaCanvasHost(
   scope: { sessionId: string; viewId: string },
   onError: (error: { code: string; message: string }) => void,
   validateWorkspaceRoot?: (path: string) => WorkspaceRootError | undefined,
+  allowHostPackage?: () => boolean,
 ): Promise<AilohaCanvasHost> {
   const module: AilohaRuntimeModule = await import(
     pathToFileURL(context.asAbsolutePath("dist/lib/ailoha/runtime-backend.mjs")).href
   );
-  return module.createRuntimeCanvasHost({ scope, onError, validateWorkspaceRoot });
+  return module.createRuntimeCanvasHost({ scope, onError, validateWorkspaceRoot, allowHostPackage });
 }
 
 export async function resolveAilohaContextBinding(

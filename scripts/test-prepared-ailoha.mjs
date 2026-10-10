@@ -13,7 +13,8 @@ const products = process.argv.length > 2
 const modules = [
   "lib/ailoha/mobile-backend.mjs", "lib/ailoha/mobile-projection.mjs", "lib/ailoha/context-adapter.mjs",
   "lib/ailoha/media-adapter.mjs", "lib/ailoha/canvas-host.mjs", "lib/ailoha/mcp-host.mjs",
-  "lib/ailoha/runtime-sdk.mjs", "lib/ailoha/runtime-backend.mjs", "lib/ailoha/github-adapter.mjs",
+  "lib/ailoha/runtime-sdk.mjs", "lib/ailoha/runtime-backend.mjs", "lib/ailoha/staged-apps.mjs",
+  "lib/ailoha/github-adapter.mjs",
   "lib/ailoha/index.mjs", "web/ailoha-canvas-state.js", "web/ailoha-video-player.js", "web/ailoha-video-receiver.js",
   "lib/ailoha/protocol.mjs", "lib/ailoha/mobile-catalog.mjs", "lib/ailoha/operation-receipts.mjs",
   "web/create-device-options.js",
@@ -24,6 +25,7 @@ const modules = [
 const tests = [
   "tests/scripts/mobile-ailoha-projection.test.mjs",
   "tests/scripts/mobile-ailoha-backend.test.mjs",
+  "tests/scripts/ailoha-staged-apps.test.mjs",
   "tests/scripts/mobile-ailoha-creation.test.mjs",
   "tests/scripts/ailoha-owner-transport.test.mjs",
   "tests/scripts/ailoha-media-adapter.test.mjs",

@@ -104,10 +104,30 @@ unsupported. App-op mutation still requires scoped consent and readback.
 The reviewed native adapter optionally preserves launch result process ID and
 detail in the completed operation, which are returned when present and valid;
 unknown optional values remain null rather than invented.
-Install remains unsupported until a reviewed host-owned package staging API can
-validate local paths, stream `.apk` files or archive `.app` directories, recheck
-the original named context before submission, and clean up the owned artifact.
-The existing combined install CLI/MCP commands do not expose that fence;
+The source-conditional install adapter uses the reviewed **source** contract at
+`microsoft/ailoha` `c8caabd589d8c008adac33107846bc322632977a`:
+verified host CLI `target app stage` streams a readable local `.apk`, `.ipa`
+or `.zip` file or archives a `.app` directory, then `install-staged` submits
+an accepted operation against its exact captured ref/epoch/revision and
+`stage-cleanup` requests deletion of the original owned artifact. The native
+artifact stream is capped at 512 MiB and its upload deadline is ten minutes;
+the verified CLI stage process has an eleven-minute ceiling for local bundle
+archiving plus that bounded upload, rather than the 30-second control deadline.
+The native
+host checks the expected process incarnation and stamped provider/target
+identity before accepting the staged install. Mobile Canvas retains the
+full private stage proof and original lease `connectionRef`, waits for terminal
+install and artifact-delete operations, and never uploads package bytes or
+the receipt through a renderer. Unknown submission outcomes are not retried.
+The legacy install result can only report a native bundle/package ID when
+canonical evidence identifies it; the conditional adapter returns null rather
+than inventing one and does not expose the host source path as `detail`.
+**This source approval is not a public runtime pin or production activation.**
+Both installed hosts still report install unsupported without a compatible
+verified public CLI, advertised target/host capability and genuine scoped
+host approval. The scoped approval interface is pending host review; no
+boolean `confirm` argument alone can enable staging or installation. The
+existing combined install CLI/MCP commands lack this original-view fence;
 neither renderer buffering nor a direct native process fallback is used.
 Uninstall additionally requires real scoped host consent; `confirm=true` by
 itself never authorizes it. The installed hosts do not currently supply that

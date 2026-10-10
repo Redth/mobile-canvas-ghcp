@@ -50,6 +50,7 @@ for (const relative of [
   "lib/ailoha/media-adapter.mjs",
   "lib/ailoha/runtime-sdk.mjs",
   "lib/ailoha/runtime-backend.mjs",
+  "lib/ailoha/staged-apps.mjs",
   "lib/ailoha/context-adapter.mjs",
   "lib/ailoha/canvas-host.mjs",
   "lib/ailoha/github-adapter.mjs",
