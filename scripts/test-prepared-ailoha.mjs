@@ -26,6 +26,7 @@ const tests = [
   "tests/scripts/ailoha-media-adapter.test.mjs",
   "tests/scripts/ailoha-canvas-host.test.mjs",
   "tests/scripts/ailoha-context-adapter.test.mjs",
+  "tests/scripts/ailoha-runtime-pin.test.mjs",
   "tests/scripts/ailoha-mcp-host.test.mjs",
   "tests/web/ailoha-video-player.test.mjs",
   "tests/web/ailoha-presentation-lease.test.mjs",
