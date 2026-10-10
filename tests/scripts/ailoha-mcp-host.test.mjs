@@ -73,6 +73,35 @@ test("actual dispatch uses the bound context with original tool meanings and cap
   }
 });
 
+test("recording MCP arguments retain the original selector and options while backend initialization waits", async (t) => {
+  let ready;
+  const pending = new Promise((resolve) => { ready = resolve; });
+  let submitted;
+  const dispatcher = await createAilohaMcpDispatcher({
+    binding, version: "test",
+    createBackend: () => pending,
+  });
+  t.after(() => dispatcher.dispose());
+  const input = { deviceId: "original-target", timeoutSeconds: 180, outputPath: "/owned/original.mp4" };
+  const response = dispatcher.handle(call("mobile_device_recording_start", input));
+  input.deviceId = "replacement-target";
+  input.timeoutSeconds = 1;
+  input.outputPath = "/owned/replacement.mp4";
+  ready({
+    async invokeAction(action, args) {
+      assert.equal(action, "start_recording");
+      submitted = args;
+      return { deviceId: args.deviceId, isRecording: true, outputPath: args.outputPath, timeoutSeconds: args.timeoutSeconds };
+    },
+    async dispose() {},
+  });
+  const result = await response;
+  assert.equal(result.result.isError, undefined);
+  assert.deepEqual(submitted, {
+    deviceId: "original-target", timeoutSeconds: 180, outputPath: "/owned/original.mp4",
+  });
+});
+
 test("unsupported/invalid/cross-scope calls are positive failures before any runtime resolution", async (t) => {
   let backendCalls = 0;
   const dispatcher = await createAilohaMcpDispatcher({
@@ -83,6 +112,8 @@ test("unsupported/invalid/cross-scope calls are positive failures before any run
     call("mobile_device_app_launch", { deviceId: "target", bundleId: "app" }),
     call("mobile_device_tap", { deviceId: "target", x: "bad", y: 1 }),
     call("mobile_device_select", { deviceId: "target", sessionId: "other" }),
+    call("mobile_device_recording_start", { deviceId: "target", timeoutSeconds: 0 }),
+    call("mobile_device_recording_start", { deviceId: "target", outputPath: "relative.mp4" }),
   ]) {
     const result = await dispatcher.handle(request);
     assert.equal(result.result.isError, true);
