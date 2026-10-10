@@ -48,6 +48,13 @@ test("reviewed System surface snapshot projects legacy nullable frames, raw byte
   assert.equal(dump.elementCount, 4);
   assert.equal(dump.root.frame, null);
   assert.equal(dump.root.children[0].rawRole, "AXButton");
+  assert.equal(dump.root.children[0].frame, null);
+  assert.deepEqual(dump.root.children[1].frame, {
+    x: 10, y: 20, width: 40, height: 60, centerX: 30, centerY: 50,
+  });
+  assert.deepEqual(dump.root.children[1].children[0].frame, {
+    x: 10, y: 20, width: 40, height: 60, centerX: 30, centerY: 50,
+  });
   assert.equal(dump.raw, "é😀");
   assert.equal(calls[0].path,
     "/api/v1/targets/target%2Fone/surfaces/surface%2Fone/ui/system-snapshot?includeRaw=true");
@@ -68,6 +75,10 @@ test("native find retains full total, child paths, null-frame zero centers and e
   assert.equal(found.total, 3);
   assert.deepEqual(found.matches.map(({ path, centerX, centerY }) => [path, centerX, centerY]),
     [["0", 0, 0], ["1/0", 30, 50]]);
+  assert.equal(found.matches[0].element.frame, null);
+  assert.deepEqual(found.matches[1].element.frame, {
+    x: 10, y: 20, width: 40, height: 60, centerX: 30, centerY: 50,
+  });
   const url = new URL(calls[0].path, "http://example.invalid");
   assert.equal(url.pathname, "/api/v1/targets/target%2Fone/surfaces/surface%2Fone/ui/system-elements");
   assert.equal(url.searchParams.get("role"), "AXButton");
@@ -87,6 +98,9 @@ test("native tap sends revision-fenced fresh selector, never a client coordinate
   const tapped = await adapter.tap(invocation, { text: "Save", interactableOnly: false }, "revision-a");
   assert.deepEqual(Object.keys(tapped), ["schemaVersion", "success", "deviceId", "match", "total"]);
   assert.equal(tapped.total, 2);
+  assert.deepEqual(tapped.match.element.frame, {
+    x: 10, y: 20, width: 40, height: 60, centerX: 30, centerY: 50,
+  });
   assert.equal(calls.length, 1);
   assert.match(calls[0].path, /\/ui\/system-elements\/actions\/tap$/);
   assert.deepEqual(JSON.parse(calls[0].options.body), {

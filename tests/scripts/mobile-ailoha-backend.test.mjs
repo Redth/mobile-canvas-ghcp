@@ -282,14 +282,19 @@ test("shared source-approved System UI projects exact legacy shapes through acti
   const dump = await state.backend.invokeAction("ui_dump", { deviceId: "one", includeRaw: true });
   assert.deepEqual(Object.keys(dump), ["schemaVersion", "deviceId", "platform", "root", "elementCount", "raw"]);
   assert.equal(dump.root.frame, null);
+  assert.deepEqual(dump.root.children[0].frame, {
+    x: 10, y: 20, width: 40, height: 20, centerX: 30, centerY: 30,
+  });
   assert.equal(dump.raw, "raw");
   const found = await state.backend.invokeAction("ui_find", { deviceId: "one", text: "Save", limit: 1 });
   assert.deepEqual(Object.keys(found), ["schemaVersion", "deviceId", "matches", "total"]);
   assert.equal(found.total, 2);
   assert.equal(found.matches[0].path, "0");
+  assert.equal(found.matches[0].element.frame.centerY, 30);
   const tapped = await state.backend.invokeAction("ui_tap", { deviceId: "one", role: "AXButton" });
   assert.deepEqual(Object.keys(tapped), ["schemaVersion", "success", "deviceId", "match", "total"]);
   assert.equal(tapped.match.centerX, 30);
+  assert.equal(tapped.match.element.frame.centerX, 30);
   const raw = await state.backend.request("/api/v1/devices/one/ui?raw=true");
   assert.equal((await raw.json()).raw, "raw");
   const find = await state.backend.request("/api/v1/devices/one/ui/find", {

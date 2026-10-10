@@ -457,7 +457,8 @@ supplies `surface.ui` operations `getSystemUiSnapshot`, `querySystemUi`, and
 `tapSystemUiMatch`; no compatible public runtime/pin is available yet. The
 shared projection uses only `/ui/system-snapshot`, `/ui/system-elements`, and
 `/ui/system-elements/actions/tap`, never the App semantic lens or generic
-`/ui/tree`. It preserves nullable frames, raw role/hint, explicit bounded
+`/ui/tree`. It preserves nullable frames with legacy computed `centerX` and
+`centerY` on non-null frames, raw role/hint, explicit bounded
 UTF-8 raw payload, full count before limit, and native `UiTree` paths (`0`,
 `1`, `1/0`). Null-frame find centers remain zero as in the legacy projection;
 tap sends a fresh UI revision with captured geometry and the original query,
