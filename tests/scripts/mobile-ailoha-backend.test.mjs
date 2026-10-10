@@ -732,16 +732,28 @@ async function stagedFixture(t, overrides = {}) {
   const sourcePath = join(directory, "local app.apk");
   await writeFile(sourcePath, "controlled fixture");
   const steps = [];
+  const approvalSignal = new AbortController().signal;
+  let stageSignal;
   const stagedApps = {
-    async stage(invocation, path) {
+    async stage(invocation, path, options) {
+      assert.equal(options.timeoutMs, 11 * 60_000);
+      assert.ok(options.signal instanceof AbortSignal);
+      stageSignal = options.signal;
       steps.push(["stage", path, invocation.executionContext?.revision]);
       return { artifactId: "private-artifact", proof: { packageName: "local app.apk", receiptHash: "private-hash" } };
     },
-    async install(invocation) {
+    async install(invocation, staged, options) {
+      assert.ok(options.signal instanceof AbortSignal);
+      if (!fixtureOverrides.beginDestructiveApproval) assert.equal(options.signal, approvalSignal);
+      assert.equal(options.timeoutMs, 30_000);
       steps.push(["install", invocation.executionContext?.revision]);
       return { operationId: "install-operation" };
     },
-    async cleanup(invocation) {
+    async cleanup(invocation, staged, options) {
+      assert.ok(options.signal instanceof AbortSignal);
+      if (stageSignal) assert.equal(options.signal, stageSignal);
+      assert.notEqual(options.signal, approvalSignal);
+      assert.equal(options.timeoutMs, 30_000);
       steps.push(["cleanup", invocation.executionContext?.revision]);
       return { operationId: "cleanup-operation" };
     },
@@ -754,6 +766,9 @@ async function stagedFixture(t, overrides = {}) {
       assert.equal(JSON.stringify(invocation).includes("connectionRef"), false);
       steps.push(["approval", action, proof.artifactId, invocation.executionContext.revision]);
       return {
+        approved: Promise.resolve(),
+        signal: approvalSignal,
+        remainingTimeoutMs(ceiling) { return ceiling; },
         async run(work) { return work(); },
         requireCurrent() {},
         consume(owned, receipt) {
@@ -773,7 +788,7 @@ async function stagedFixture(t, overrides = {}) {
       status: "succeeded", destructive: true };
   };
   t.after(() => state.backend.dispose());
-  return { ...state, sourcePath, steps };
+  return { ...state, sourcePath, steps, approvalSignal };
 }
 
 test("source-conditional install stages on host, waits for accepted install and owned deletion, never exposes path", async (t) => {
@@ -786,6 +801,49 @@ test("source-conditional install stages on host, waits for accepted install and 
   assert.deepEqual(state.steps.map(([name]) => name),
     ["stage", "approval", "consumed", "install", "wait", "cleanup", "wait"]);
   assert.equal(JSON.stringify(result).includes(state.sourcePath), false);
+});
+
+test("install cannot submit while a genuine scoped approval decision is pending or rejected", async (t) => {
+  const requested = deferred();
+  const decision = deferred();
+  let state;
+  state = await stagedFixture(t, { beginDestructiveApproval(action, invocation, { stagedArtifact }) {
+    assert.equal(action, "install");
+    assert.equal(stagedArtifact.artifactId, "private-artifact");
+    state.steps.push(["approval"]);
+    requested.resolve();
+    return {
+      approved: decision.promise, signal: new AbortController().signal,
+      remainingTimeoutMs(ceiling) { return ceiling; },
+      async run(work) { return work(); },
+      requireCurrent() {},
+      consume(owned, staged) {
+        assert.equal(owned, invocation);
+        assert.equal(staged, stagedArtifact);
+        state.steps.push(["consumed"]);
+      },
+      dispose() {},
+    };
+  } });
+  const pending = state.backend.installApp("one", state.sourcePath);
+  await requested.promise;
+  assert.deepEqual(state.steps.map(([name]) => name), ["stage", "approval"]);
+  decision.resolve();
+  assert.equal((await pending).success, true);
+  assert.deepEqual(state.steps.map(([name]) => name),
+    ["stage", "approval", "consumed", "install", "wait", "cleanup", "wait"]);
+
+  const expired = await stagedFixture(t, { beginDestructiveApproval() {
+    return {
+      approved: Promise.reject(new MobileAilohaError("consent_expired", "Approval expired.", 409)),
+      signal: new AbortController().signal,
+      remainingTimeoutMs(ceiling) { return ceiling; },
+      async run() { throw Error("must not run"); },
+      requireCurrent() {}, consume() { throw Error("must not consume"); }, dispose() {},
+    };
+  } });
+  await assert.rejects(expired.backend.installApp("one", expired.sourcePath), { code: "consent_expired" });
+  assert.deepEqual(expired.steps.map(([name]) => name), ["stage", "cleanup", "wait"]);
 });
 
 test("a timed-out accepted staged install resumes only the original operation read", async (t) => {
@@ -833,7 +891,9 @@ test("host-rejected staged install and denied approval never submit a second ins
   assert.deepEqual(rejected.steps.map(([name]) => name),
     ["stage", "approval", "consumed", "install", "cleanup", "wait"]);
   const denied = await stagedFixture(t, { beginDestructiveApproval() {
-    return { async run() { throw new MobileAilohaError("consent_denied", "Approval declined.", 403); },
+    return { approved: Promise.reject(new MobileAilohaError("consent_denied", "Approval declined.", 403)),
+      remainingTimeoutMs(ceiling) { return ceiling; },
+      async run() { throw Error("must not run"); },
       requireCurrent() {}, consume() { throw Error("must not consume"); }, dispose() {} };
   } });
   await assert.rejects(denied.backend.installApp("one", denied.sourcePath), { code: "consent_denied" });
@@ -861,6 +921,65 @@ test("stage uncertainty and accepted install errors cannot replay on retry or re
   });
   await assert.rejects(replacement.backend.installApp("one", original.sourcePath), { code: "runtime_incarnation_changed" });
   assert.equal(replacement.steps.length, 0);
+});
+
+test("cancelled approval transport cannot dispatch or replay install after consumption", async (t) => {
+  const caller = new AbortController();
+  let state;
+  state = await stagedFixture(t, {
+    beginDestructiveApproval(action, invocation, { stagedArtifact }) {
+      return {
+        approved: Promise.resolve(),
+        signal: caller.signal,
+        remainingTimeoutMs(ceiling) { return ceiling; },
+        async run(work) { return work(); },
+        requireCurrent() {},
+        consume(owned, staged) {
+          assert.equal(owned, invocation);
+          assert.equal(staged, stagedArtifact);
+          caller.abort();
+          state.steps.push(["consumed"]);
+        },
+        dispose() {},
+      };
+    },
+    stagedApps: {
+      async install(invocation, staged, options) {
+        assert.equal(options.signal, caller.signal);
+        options.signal.throwIfAborted();
+        state.steps.push(["install"]);
+      },
+    },
+  });
+  await assert.rejects(state.backend.installApp("one", state.sourcePath), { code: "ailoha_operation_failed" });
+  await assert.rejects(state.backend.installApp("one", state.sourcePath), { code: "app_install_outcome_uncertain" });
+  assert.deepEqual(state.steps.map(([name]) => name), ["stage", "consumed"]);
+});
+
+test("spent submission budget blocks pre-wire install without borrowing a fresh deadline", async (t) => {
+  let state;
+  state = await stagedFixture(t, {
+    beginDestructiveApproval(action, invocation, { stagedArtifact }) {
+      return {
+        approved: Promise.resolve(), signal: new AbortController().signal,
+        async run(work) { return work(); },
+        requireCurrent() {},
+        consume(owned, staged) {
+          assert.equal(owned, invocation);
+          assert.equal(staged, stagedArtifact);
+          state.steps.push(["consumed"]);
+        },
+        remainingTimeoutMs(ceiling) {
+          assert.equal(ceiling, 30_000);
+          throw new MobileAilohaError("consent_expired", "Original attempt budget expired.", 409);
+        },
+        dispose() {},
+      };
+    },
+  });
+  await assert.rejects(state.backend.installApp("one", state.sourcePath), { code: "consent_expired" });
+  await assert.rejects(state.backend.installApp("one", state.sourcePath), { code: "app_install_outcome_uncertain" });
+  assert.deepEqual(state.steps.map(([name]) => name), ["stage", "consumed"]);
 });
 
 test("cleanup failure reports the secondary error without erasing the successful install receipt", async (t) => {

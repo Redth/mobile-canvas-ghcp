@@ -112,9 +112,14 @@ an accepted operation against its exact captured ref/epoch/revision and
 `stage-cleanup` requests deletion of the original owned artifact. The native
 artifact stream is capped at 512 MiB and its upload deadline is ten minutes;
 the verified CLI stage process has an eleven-minute ceiling for local bundle
-archiving plus that bounded upload, rather than the 30-second control deadline.
-The native
-host checks the expected process incarnation and stamped provider/target
+archiving plus that bounded upload; the verified install and cleanup controls
+retain a 30-second ceiling. The stage deadline is bounded per command; the
+original scoped approval signal and remaining monotonic budget also bound the
+install submission attempt after consumption, including verified CLI launch
+acquisition, without restarting that budget. Owned cleanup has its own
+original-resource lifetime. Approval must actually resolve before revalidation
+and consumption, never merely be requested. The native host checks the expected
+process incarnation and stamped provider/target
 identity before accepting the staged install. Mobile Canvas retains the
 full private stage proof and original lease `connectionRef`, waits for terminal
 install and artifact-delete operations, and never uploads package bytes or

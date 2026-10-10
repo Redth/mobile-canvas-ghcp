@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { mkdtemp, mkdir, rm, symlink, writeFile } from "node:fs/promises";
+import { access, mkdtemp, mkdir, rm, symlink, writeFile } from "node:fs/promises";
 import { createHash } from "node:crypto";
 import { basename, join } from "node:path";
 import { productModule } from "../ailoha-test-module.mjs";
@@ -42,21 +42,26 @@ function accepted(kind, targetId = "target") {
 test("native staged CLI uses literal host path and original named authority; no package buffering", async () => {
   const sourcePath = "/host/a space \u2603.apk";
   const calls = [];
-  const cli = createStagedAppCli({ async runCli(args) {
-    calls.push(args);
+  const signal = new AbortController().signal;
+  const cli = createStagedAppCli({ async runCli(args, options) {
+    calls.push({ args, options });
     return JSON.stringify(calls.length === 1 ? stage(sourcePath)
       : calls.length === 2 ? accepted("installTargetApp") : accepted("deleteArtifact"));
   } });
-  const receipt = await cli.stage(invocation, sourcePath);
-  assert.deepEqual(calls[0], ["target", "app", "stage", "target", "--package", sourcePath,
+  const options = { signal, timeoutMs: 31_000 };
+  const receipt = await cli.stage(invocation, sourcePath, options);
+  assert.deepEqual(calls[0].args, ["target", "app", "stage", "target", "--package", sourcePath,
     "--target-host", "host", "--context", "ctx-owned", "--context-epoch", "epoch",
     "--context-revision", "7", "--json"]);
-  assert.equal((await cli.install(invocation, receipt)).operationId, "operation-installTargetApp");
-  assert.deepEqual(calls[1], ["target", "app", "install-staged", "--staged", JSON.stringify(receipt),
+  assert.equal(calls[0].options, options);
+  assert.equal((await cli.install(invocation, receipt, options)).operationId, "operation-installTargetApp");
+  assert.deepEqual(calls[1].args, ["target", "app", "install-staged", "--staged", JSON.stringify(receipt),
     "--context", "ctx-owned", "--context-epoch", "epoch", "--context-revision", "7", "--confirm", "--json"]);
-  assert.equal((await cli.cleanup(invocation, receipt)).operationId, "operation-deleteArtifact");
-  assert.deepEqual(calls[2], ["target", "app", "stage-cleanup", "--staged", JSON.stringify(receipt),
+  assert.equal(calls[1].options, options);
+  assert.equal((await cli.cleanup(invocation, receipt, options)).operationId, "operation-deleteArtifact");
+  assert.deepEqual(calls[2].args, ["target", "app", "stage-cleanup", "--staged", JSON.stringify(receipt),
     "--context", "ctx-owned", "--context-epoch", "epoch", "--confirm", "--json"]);
+  assert.equal(calls[2].options, options);
 });
 
 test("staged receipt and accepted operation cannot substitute host, provider, native target or revision", async () => {
@@ -113,6 +118,53 @@ test("verified native CLI maps definitive rejection without leaking private path
       assert.equal(error.code, code);
       assert.equal(error.message.includes("/secret/"), false);
       return true;
+    });
+
+    test("verified CLI honors a bounded stage upload deadline without changing control command deadlines", async () => {
+      const pin = { version: "reviewed-source", sourceSha: "c8caabd589d8c008adac33107846bc322632977a" };
+      const sdk = { async getVerifiedCliLaunch() {
+        return { ...pin, file: process.execPath, args: ["-e", "setTimeout(() => process.stdout.write('done'), 250)"] };
+      } };
+      const run = createVerifiedAilohaCli({ sdk, pin });
+      const stageCommand = ["target", "app", "stage", "--json"];
+      const installCommand = ["target", "app", "install-staged", "--json"];
+      for (const timeoutMs of [0, -1, 660_001, Infinity, NaN, "31000"]) {
+        await assert.rejects(run(stageCommand, { timeoutMs }), { code: "invalid_request" });
+      }
+      await assert.rejects(run(installCommand, { timeoutMs: 30_001 }), { code: "invalid_request" });
+      await assert.rejects(run(stageCommand, { timeoutMs: 10 }), { code: "ailoha_cli_timeout" });
+      assert.equal(await run(stageCommand, { timeoutMs: 31_000 }), "done");
+      const controller = new AbortController();
+      const running = run(stageCommand, { signal: controller.signal });
+      setTimeout(() => controller.abort(), 50);
+      await assert.rejects(running, { code: "ailoha_cli_cancelled" });
+    });
+
+    test("the staged submission budget includes verified launch acquisition and cannot spawn after it expires", async (t) => {
+      const directory = await mkdtemp(join(process.cwd(), ".mobile-cli-deadline-"));
+      t.after(() => rm(directory, { recursive: true, force: true }));
+      const marker = join(directory, "native-post-started");
+      const pin = { version: "reviewed-source", sourceSha: "c8caabd589d8c008adac33107846bc322632977a" };
+      const sdk = { async getVerifiedCliLaunch() {
+        await new Promise((resolve) => setTimeout(resolve, 80));
+        return { ...pin, file: process.execPath,
+          args: ["-e", `require('node:fs').writeFileSync(${JSON.stringify(marker)}, 'started')`] };
+      } };
+      const run = createVerifiedAilohaCli({ sdk, pin });
+      await assert.rejects(run(["target", "app", "install-staged", "--json"], { timeoutMs: 20 }), {
+        code: "ailoha_cli_timeout",
+      });
+      await assert.rejects(access(marker), { code: "ENOENT" });
+      const stalled = createVerifiedAilohaCli({
+        sdk: { getVerifiedCliLaunch() { return new Promise(() => {}); } }, pin,
+      });
+      await assert.rejects(stalled(["target", "app", "stage", "--json"], { timeoutMs: 15 }), {
+        code: "ailoha_cli_timeout",
+      });
+      const cancelled = new AbortController();
+      const pending = stalled(["target", "app", "install-staged", "--json"], { signal: cancelled.signal });
+      cancelled.abort();
+      await assert.rejects(pending, { code: "ailoha_cli_cancelled" });
     });
   }
 });
