@@ -1,18 +1,25 @@
 #!/usr/bin/env node
 
 import { cpSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
-import { dirname, join } from "node:path";
+import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import {
   assertDarwinHelperEntries,
   remoteRuntimeManifest,
 } from "../lib/runtime-assets.mjs";
+import { prepareAilohaGraph } from "./prepare-ailoha-graph.mjs";
 
 const root = join(dirname(fileURLToPath(import.meta.url)), "..");
 const extensionRoot = join(root, "vscode");
 const output = join(extensionRoot, "dist");
+const runtimeDirectoryIndex = process.argv.indexOf("--runtime-dir");
+const runtimeDirectory = runtimeDirectoryIndex < 0 ? join(root, "runtimes")
+  : resolve(process.argv[runtimeDirectoryIndex + 1] ?? "");
+if (runtimeDirectoryIndex >= 0 && !process.argv[runtimeDirectoryIndex + 1]) {
+  throw new Error("--runtime-dir requires a directory.");
+}
 const extensionPackage = JSON.parse(readFileSync(join(extensionRoot, "package.json"), "utf8"));
-const runtimeManifest = JSON.parse(readFileSync(join(root, "runtimes", "manifest.json"), "utf8"));
+const runtimeManifest = JSON.parse(readFileSync(join(runtimeDirectory, "manifest.json"), "utf8"));
 const targetIndex = process.argv.indexOf("--target");
 const target = targetIndex >= 0 ? process.argv[targetIndex + 1] : null;
 const thin = process.argv.includes("--thin");
@@ -21,6 +28,9 @@ assertDarwinHelperEntries(runtimeManifest, { context: "VS Code runtime manifest"
 
 if (target && thin) {
   throw new Error("--target and --thin cannot be combined");
+}
+if (runtimeDirectoryIndex >= 0 && thin) {
+  throw new Error("--runtime-dir requires bundled (not thin) packaging.");
 }
 
 if (extensionPackage.version !== runtimeManifest.version) {
@@ -66,10 +76,10 @@ if (thin) {
     }
     const destination = join(output, "runtimes", file.archive);
     mkdirSync(dirname(destination), { recursive: true });
-    cpSync(join(root, "runtimes", file.archive), destination);
+    cpSync(join(runtimeDirectory, file.archive), destination);
   }
 } else {
-  cpSync(join(root, "runtimes"), join(output, "runtimes"), { recursive: true });
+  cpSync(runtimeDirectory, join(output, "runtimes"), { recursive: true });
 }
 
 for (const relative of [
@@ -77,6 +87,7 @@ for (const relative of [
   "lib/runtime-assets.mjs",
   "lib/mcp-vscode-proxy.mjs",
   "lib/ailoha",
+  "lib/backend.mjs",
   "scripts/mcp-vscode.mjs",
   "LICENSE",
 ]) {
@@ -84,6 +95,7 @@ for (const relative of [
   mkdirSync(dirname(destination), { recursive: true });
   cpSync(join(root, relative), destination, { recursive: true });
 }
+prepareAilohaGraph(output);
 
 mkdirSync(join(root, ".build"), { recursive: true });
 const flavor = thin ? " (thin)" : target ? ` for ${target}` : "";

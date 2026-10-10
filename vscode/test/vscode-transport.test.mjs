@@ -39,6 +39,8 @@ test("bridges bootstrap, API responses, and socket frames", async () => {
     Blob,
     Uint8Array,
     console,
+    setTimeout,
+    clearTimeout,
   };
   const script = readFileSync(
     join(dirname(fileURLToPath(import.meta.url)), "..", "media", "vscode-transport.js"),
@@ -144,4 +146,29 @@ test("bridges bootstrap, API responses, and socket frames", async () => {
 
   socket.close();
   assert.equal(outbound.shift().type, "socket-close");
+
+  const video = transport.createSocket("video", "deviceId=opaque");
+  const videoRequest = outbound.shift();
+  await assert.rejects(video.send('{"type":"hello"}'), /not open/);
+  receive({ type: "socket-opened", id: videoRequest.id, protocol: "ailoha.video.v1" });
+  assert.equal(video.protocol, "ailoha.video.v1");
+  const sending = video.send('{"type":"ack","sequence":1}');
+  const sendRequest = outbound.shift();
+  assert.equal(sendRequest.type, "socket-send");
+  assert.equal(sendRequest.id, videoRequest.id);
+  assert.notEqual(sendRequest.requestId, sendRequest.id);
+  receive({ type: "operation-result", id: sendRequest.requestId });
+  await sending;
+
+  const outstanding = Array.from({ length: 32 }, () => video.send('{"type":"pause"}'));
+  const retired = outstanding.map((operation) => assert.rejects(operation, /closed/));
+  outbound.splice(0);
+  await assert.rejects(video.send('{"type":"resume"}'), /queue is full/);
+  const closing = video.close();
+  assert.equal(outbound.shift().type, "socket-close");
+  await Promise.all(retired);
+  receive({ type: "socket-closed", id: videoRequest.id, code: 1000, reason: "" });
+  await closing;
+  assert.equal(video.readyState, WebSocket.CLOSED);
+  assert.equal(video.close(), closing);
 });

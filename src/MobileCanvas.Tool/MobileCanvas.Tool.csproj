@@ -31,6 +31,10 @@
   <ItemGroup>
     <EmbeddedResource Include="..\..\web\index.html" LogicalName="MobileCanvas.Web.index.html" />
     <EmbeddedResource Include="..\..\web\canvas-state.js" LogicalName="MobileCanvas.Web.canvas-state.js" />
+    <EmbeddedResource Include="..\..\web\ailoha-canvas-state.js" LogicalName="MobileCanvas.Web.ailoha-canvas-state.js" />
+    <EmbeddedResource Include="..\..\web\ailoha-video-protocol.js" LogicalName="MobileCanvas.Web.ailoha-video-protocol.js" />
+    <EmbeddedResource Include="..\..\web\ailoha-video-receiver.js" LogicalName="MobileCanvas.Web.ailoha-video-receiver.js" />
+    <EmbeddedResource Include="..\..\web\ailoha-video-player.js" LogicalName="MobileCanvas.Web.ailoha-video-player.js" />
     <EmbeddedResource Include="..\..\web\create-device-options.js" LogicalName="MobileCanvas.Web.create-device-options.js" />
     <EmbeddedResource Include="..\..\web\device-canvas.js" LogicalName="MobileCanvas.Web.device-canvas.js" />
     <EmbeddedResource Include="..\..\web\device-canvas.css" LogicalName="MobileCanvas.Web.device-canvas.css" />

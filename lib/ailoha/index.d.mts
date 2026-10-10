@@ -119,11 +119,14 @@ export interface LifecycleRequest {
 
 export interface LifecycleOptions extends RequestOptions {
   request?: LifecycleRequest;
+  /** Optional total request budget, no greater than the configured client ceiling. */
+  timeoutMs?: number;
 }
 
 /** A caller-side gate, not evidence that user consent has been obtained. */
 export interface ConfirmationOptions extends RequestOptions {
   confirmed: true;
+  timeoutMs?: number;
 }
 
 export interface ConfirmedLifecycleOptions extends LifecycleOptions, ConfirmationOptions {}
@@ -192,6 +195,7 @@ export interface ProtocolErrorResult {
   problem?: ProblemDetails;
   operationId?: string;
   operation?: Operation;
+  transportCode?: string;
 }
 
 export class AilohaProtocolError extends Error {
@@ -202,6 +206,7 @@ export class AilohaProtocolError extends Error {
   readonly problem?: ProblemDetails;
   readonly operationId?: string;
   readonly operation?: Operation;
+  readonly transportCode?: string;
   toJSON(): ProtocolErrorResult;
 }
 
@@ -231,3 +236,30 @@ export function connectTargetHost(
   connection: TargetHostConnection,
   options?: ClientOptions,
 ): Promise<TargetHostClient>;
+
+export interface OwnerTransportResponse<T = unknown> {
+  readonly status: number;
+  readonly location: string | null;
+  readonly retryAfterMs: number | null;
+  readonly contentType: string | null;
+  readonly body: T;
+}
+
+export interface OwnerTargetHostTransport {
+  response<T = unknown>(path: string, options?: {
+    method?: "GET" | "POST" | "DELETE";
+    body?: string | Uint8Array;
+    signal?: AbortSignal;
+    timeoutMs?: number;
+  }): Promise<OwnerTransportResponse<T>>;
+}
+
+export interface OwnerTransportClient extends Omit<TargetHostClient, "connection" | "toJSON"> {
+  readonly connection: Readonly<{ hostId: string; profile: typeof TARGET_HOST_PROFILE }>;
+  toJSON(): Readonly<{ hostId: string; profile: typeof TARGET_HOST_PROFILE }>;
+}
+
+export function connectTargetHostTransport(
+  transport: OwnerTargetHostTransport,
+  options: ClientOptions & { hostId: string; profile?: typeof TARGET_HOST_PROFILE },
+): Promise<OwnerTransportClient>;

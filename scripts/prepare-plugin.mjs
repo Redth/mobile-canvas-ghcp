@@ -2,15 +2,22 @@
 
 import { execFileSync } from "node:child_process";
 import { cpSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
-import { dirname, join } from "node:path";
+import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import {
   assertDarwinHelperEntries,
   remoteRuntimeManifest,
 } from "../lib/runtime-assets.mjs";
+import { prepareAilohaGraph } from "./prepare-ailoha-graph.mjs";
 
 const root = join(dirname(fileURLToPath(import.meta.url)), "..");
 const thin = process.argv.includes("--thin");
+const runtimeDirectoryIndex = process.argv.indexOf("--runtime-dir");
+const runtimeDirectory = runtimeDirectoryIndex < 0 ? join(root, "runtimes")
+  : resolve(process.argv[runtimeDirectoryIndex + 1] ?? "");
+if (runtimeDirectoryIndex >= 0 && (!process.argv[runtimeDirectoryIndex + 1] || thin)) {
+  throw new Error("--runtime-dir requires a directory and bundled (not thin) packaging.");
+}
 const packageDirectory = thin ? "copilot-plugin-thin" : "copilot-plugin";
 const output = join(root, ".build", packageDirectory, "mobile-canvas");
 const version = JSON.parse(readFileSync(join(root, "package.json"), "utf8")).version;
@@ -19,7 +26,7 @@ const archive = join(
   ".build",
   `mobile-canvas-copilot-plugin${thin ? "-thin" : ""}-v${version}.tar.gz`,
 );
-const runtimeManifest = JSON.parse(readFileSync(join(root, "runtimes", "manifest.json"), "utf8"));
+const runtimeManifest = JSON.parse(readFileSync(join(runtimeDirectory, "manifest.json"), "utf8"));
 
 assertDarwinHelperEntries(runtimeManifest, { context: "Copilot plugin runtime manifest" });
 
@@ -40,12 +47,16 @@ for (const relative of [
   "lib/runtime.mjs",
   "lib/runtime-assets.mjs",
   "lib/ailoha",
+  "lib/backend.mjs",
   "scripts/mcp.mjs",
 ]) {
   const destination = join(output, relative);
   mkdirSync(dirname(destination), { recursive: true });
   cpSync(join(root, relative), destination, { recursive: true });
 }
+const wsRoot = join(root, "node_modules", "ws");
+cpSync(wsRoot, join(output, "node_modules", "ws"), { recursive: true });
+prepareAilohaGraph(output);
 
 if (thin) {
   const remoteManifest = remoteRuntimeManifest(runtimeManifest);
@@ -55,7 +66,7 @@ if (thin) {
     `${JSON.stringify(remoteManifest, null, 2)}\n`,
   );
 } else {
-  cpSync(join(root, "runtimes"), join(output, "runtimes"), { recursive: true });
+  cpSync(runtimeDirectory, join(output, "runtimes"), { recursive: true });
 }
 
 rmSync(archive, { force: true });

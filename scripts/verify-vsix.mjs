@@ -4,7 +4,8 @@ import { existsSync, readFileSync, statSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { assertDarwinHelperEntries } from "../lib/runtime-assets.mjs";
-import { listFiles, verifyPublishableImages, withVsix } from "./vsix.mjs";
+import { verifyPreparedAilohaGraph } from "./prepare-ailoha-graph.mjs";
+import { listFiles, verifyDevelopmentFiles, verifyPublishableImages, withVsix } from "./vsix.mjs";
 
 const root = join(dirname(fileURLToPath(import.meta.url)), "..");
 const vsix = resolve(process.argv[2] ?? join(root, ".build", "mobile-canvas-vscode.vsix"));
@@ -26,12 +27,14 @@ function verifyExtracted(directory) {
     context: "VSIX runtime manifest",
     requireAll: Object.keys(runtimeManifest.runtimes ?? {}).length > 1,
   });
+  const verifiedAilohaGraph = verifyPreparedAilohaGraph(join(directory, "extension", "dist"));
 
   for (const path of [
     "extension/readme.md",
     "extension/LICENSE.txt",
     "extension/package.json",
     "extension/out/extension.js",
+    "extension/out/destructiveConsent.js",
     "extension/media/activitybar.svg",
     "extension/media/icon.png",
     "extension/media/vscode-theme.css",
@@ -40,6 +43,8 @@ function verifyExtracted(directory) {
     "extension/dist/web/index.html",
     "extension/dist/web/ailoha-video-protocol.js",
     "extension/dist/web/ailoha-video-receiver.js",
+    "extension/dist/web/ailoha-video-player.js",
+    "extension/dist/web/ailoha-canvas-state.js",
     "extension/dist/web/canvas-state.js",
     "extension/dist/web/create-device-options.js",
     "extension/dist/web/device-canvas.css",
@@ -50,11 +55,26 @@ function verifyExtracted(directory) {
     "extension/dist/lib/ailoha/index.d.mts",
     "extension/dist/lib/ailoha/errors.mjs",
     "extension/dist/lib/ailoha/protocol.mjs",
+    "extension/dist/lib/ailoha/mobile-backend.mjs",
+    "extension/dist/lib/ailoha/destructive-consent.mjs",
+    "extension/dist/lib/ailoha/mobile-projection.mjs",
+    "extension/dist/lib/ailoha/media-adapter.mjs",
+    "extension/dist/lib/ailoha/runtime-sdk.mjs",
+    "extension/dist/lib/ailoha/runtime-backend.mjs",
+    "extension/dist/lib/ailoha/context-adapter.mjs",
+    "extension/dist/lib/ailoha/canvas-host.mjs",
+    "extension/dist/lib/ailoha/github-adapter.mjs",
+    "extension/dist/lib/ailoha/mcp-host.mjs",
+    "extension/dist/lib/ailoha/mcp-catalog.json",
+    "extension/dist/lib/backend.mjs",
     "extension/dist/scripts/mcp-vscode.mjs",
     "extension/dist/runtimes/manifest.json",
   ]) {
     if (!entries.has(path)) {
       throw new Error(`VSIX is missing ${path}`);
+    }
+    if (extensionPackage.contributes?.configuration?.properties?.["mobileCanvas.backend"]?.default !== "legacy") {
+      throw new Error("VSIX must preserve the explicit legacy-default backend setting.");
     }
   }
 
@@ -71,16 +91,7 @@ function verifyExtracted(directory) {
     }
   }
 
-  for (const path of entries) {
-    if (
-      path.startsWith("extension/src/")
-      || path.startsWith("extension/test/")
-      || path.startsWith("extension/.vscode-test/")
-      || path.endsWith(".map")
-    ) {
-      throw new Error(`VSIX contains development-only file ${path}`);
-    }
-  }
+  verifyDevelopmentFiles(entries, { verifiedAilohaGraph });
 
   if (extensionPackage.version !== runtimeManifest.version) {
     throw new Error(

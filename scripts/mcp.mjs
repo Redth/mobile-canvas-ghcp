@@ -8,6 +8,17 @@
 
 import { spawn } from "node:child_process";
 import { resolveCommand } from "../lib/runtime.mjs";
+import { mobileCanvasBackend } from "../lib/backend.mjs";
+import { runAilohaMcp } from "../lib/ailoha/mcp-host.mjs";
+import { mobileErrorResult } from "../lib/ailoha/mobile-backend.mjs";
+
+if (mobileCanvasBackend() === "ailoha") {
+  try { await runAilohaMcp(); }
+  catch (error) {
+    process.stderr.write(`mobile-canvas: ${JSON.stringify(mobileErrorResult(error))}\n`);
+    process.exitCode = 1;
+  }
+} else {
 
 let command;
 try {
@@ -35,3 +46,4 @@ child.on("exit", (code, signal) => {
   if (signal) process.kill(process.pid, signal);
   else process.exit(code ?? 0);
 });
+}

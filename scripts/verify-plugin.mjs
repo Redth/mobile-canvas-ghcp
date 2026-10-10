@@ -8,6 +8,7 @@ import {
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { assertDarwinHelperEntries } from "../lib/runtime-assets.mjs";
+import { verifyPreparedAilohaGraph } from "./prepare-ailoha-graph.mjs";
 
 const scriptRoot = join(dirname(fileURLToPath(import.meta.url)), "..");
 const root = resolve(process.argv[2] ?? scriptRoot);
@@ -32,6 +33,7 @@ const fail = (message) => {
 
 try {
   assertDarwinHelperEntries(runtimeManifest, { context: "Copilot plugin runtime manifest" });
+  if (root !== scriptRoot) verifyPreparedAilohaGraph(root);
 } catch (error) {
   fail(error.message);
 }
@@ -41,11 +43,28 @@ for (const relative of [
   "lib/ailoha/index.d.mts",
   "lib/ailoha/errors.mjs",
   "lib/ailoha/protocol.mjs",
+  "lib/ailoha/mobile-backend.mjs",
+  "lib/ailoha/destructive-consent.mjs",
+  "lib/ailoha/mobile-projection.mjs",
+  "lib/ailoha/media-adapter.mjs",
+  "lib/ailoha/runtime-sdk.mjs",
+  "lib/ailoha/runtime-backend.mjs",
+  "lib/ailoha/context-adapter.mjs",
+  "lib/ailoha/canvas-host.mjs",
+  "lib/ailoha/github-adapter.mjs",
+  "lib/ailoha/mcp-host.mjs",
+  "lib/ailoha/mcp-catalog.json",
+  "lib/backend.mjs",
+  "web/ailoha-canvas-state.js",
   "web/ailoha-video-protocol.js",
   "web/ailoha-video-receiver.js",
+  "web/ailoha-video-player.js",
 ]) {
   if (!existsSync(join(root, relative))) {
     fail(`plugin is missing shared foundation ${relative}`);
+  }
+  if (root !== scriptRoot && !existsSync(join(root, "node_modules/ws/package.json"))) {
+    fail("prepared plugin is missing its local panel WebSocket dependency");
   }
 }
 
