@@ -69,7 +69,10 @@ export async function getRuntimePin({ expectedVersion }) {
 export async function getVerifiedCliLaunch({ expectedVersion }) {
   return {
     file: process.execPath,
-    args: [fileURLToPath(new URL("./ailoha-context-double.mjs", import.meta.url))],
+    args: [
+      fileURLToPath(new URL("./ailoha-context-double.mjs", import.meta.url)),
+      ...(scenario.combinedInspection ? ["--fixture-state", process.env.AILOHA_TEST_CONTEXT_STATE] : []),
+    ],
     version: expectedVersion, sourceSha,
   };
 }

@@ -2,6 +2,14 @@ import { randomUUID } from "node:crypto";
 import { readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
 
 const args = process.argv.slice(2);
+if (args[0] === "--fixture-state") {
+  if (!args[1]) throw new Error("Combined inspection requires an explicitly owned synthetic state file.");
+  process.env.AILOHA_TEST_CONTEXT_STATE = args[1];
+  args.splice(0, 2);
+}
+if (args[0] === "mcp-serve") {
+  await import("./semantic-mcp-server.mjs");
+} else {
 if (args[0] === "workspace") {
   const { runWorkspaceDouble } = await import("./ailoha-workspace-double.mjs");
   process.exitCode = await runWorkspaceDouble(args);
@@ -56,3 +64,4 @@ if (["open", "select", "detach"].includes(args[1])) {
   }
 }
 process.stdout.write(JSON.stringify({ ok: true, context, error: null }));
+}
