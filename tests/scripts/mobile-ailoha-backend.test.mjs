@@ -863,6 +863,39 @@ test("a timed-out accepted staged install resumes only the original operation re
     ["stage", "approval", "consumed", "install", "wait", "cleanup", "wait"]);
 });
 
+test("approval expiry after an accepted install keeps the original operation ID for GET-only recovery", async (t) => {
+  let state;
+  state = await stagedFixture(t, {
+    beginDestructiveApproval(action, invocation, { stagedArtifact }) {
+      state.steps.push(["approval"]);
+      return {
+        approved: Promise.resolve(), signal: new AbortController().signal,
+        remainingTimeoutMs(ceiling) { return ceiling; },
+        async run(work) {
+          await work();
+          throw new MobileAilohaError("consent_expired", "Original approval deadline elapsed.", 409);
+        },
+        requireCurrent() {},
+        consume(owned, staged) {
+          assert.equal(owned, invocation);
+          assert.equal(staged, stagedArtifact);
+          state.steps.push(["consumed"]);
+        },
+        dispose() {},
+      };
+    },
+  });
+  await assert.rejects(state.backend.installApp("one", state.sourcePath), (error) => {
+    assert.equal(error.code, "consent_expired");
+    assert.equal(error.operationId, "install-operation");
+    return true;
+  });
+  assert.deepEqual(state.steps.map(([name]) => name), ["stage", "approval", "consumed", "install"]);
+  assert.equal((await state.backend.installApp("one", state.sourcePath)).success, true);
+  assert.deepEqual(state.steps.map(([name]) => name),
+    ["stage", "approval", "consumed", "install", "wait", "cleanup", "wait"]);
+});
+
 test("view revision changed during staged upload blocks install but permits owned artifact cleanup", async (t) => {
   let state;
   state = await stagedFixture(t, { stagedApps: {
