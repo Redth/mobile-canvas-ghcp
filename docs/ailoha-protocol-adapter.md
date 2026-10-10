@@ -326,6 +326,69 @@ the captured signal before releasing a held native read: a client-side abort and
 immediate fixture release cannot prove when a remote TCP disconnect was received.
 No event-loop delay, grace period or atomic remote-cancellation claim is added.
 
+### Device feature compatibility (source-gated)
+
+The shared `device-features.mjs` adapter serves both installed hosts through the
+official Target Host owner transport; it never starts a second provider, runs a
+native shell, or invokes the legacy engine in the opt-in. Every enabled feature
+requires an advertised target **and provider** operation, a running virtual mobile
+target with a native identity, and the captured view's original context and
+connection incarnation. Reads reject malformed or cross-target result context.
+Canonical feature responses may carry only `targetId` (their `providerId` is
+optional), so a target-only response is followed by an authoritative target
+read to confirm the original provider and native deployment before projection
+or mutation dispatch. A supplied but mismatched provider is rejected.
+Mutations retain captured receipts across accepted-operation polling or failed
+settings readback; an unknown submission cannot be replayed as a new mutation.
+The shared typed HTTP rejection policy evicts only proven pre-admission 403
+responses; 408 and responses carrying accepted operation evidence retain the
+original receipt without replay.
+Terminal feature completion must retain the accepted operation ID, kind,
+non-destructive effect, target, and provider before releasing its receipt;
+conflicting completion is rejected while the original ID remains recoverable.
+Caller cancellation before feature admission blocks a new submission after app
+lookup or target verification; it does not discard already submitted work.
+The MCP names, request fields, and legacy output envelopes remain unchanged.
+
+| Existing identity | Opt-in delivery | Canonical contract / gate |
+| --- | --- | --- |
+| `mobile_device_battery_set` | Gated; source-conditional | `target.battery` PUT `/battery` takes legacy integer percentage as ratio, then `target.hardware` readback. Reviewed runtime PUT source exists; compatible public SDK and native acceptance are pending. |
+| `mobile_device_hardware_get` | Enabled with `target.hardware` | `GET /hardware`; nullable battery/network values and `unreadable` are retained; battery ratio maps to legacy integer percentage. |
+| `mobile_device_network_set` | Gated; source-conditional | Reviewed-source `target.network` PUT `/network` updates Android `latencyMs` with `target.hardware` readback. Reviewed-source native `applyTargetNativeNetworkProfile` POST preserves raw/shared profiles on both platforms and combined Android latency; its accepted result and indicator must agree with hardware readback, without POST replay after failed confirmation. Public SDK and native acceptance are pending. |
+| `mobile_device_location_set` | Gated; source-conditional | `target.location` PUT `/location` verifies a 200 simulated fix but preserves the legacy success-only result; no unreadable location is fabricated. Public SDK and native acceptance are pending. |
+| `mobile_device_location_clear` | Enabled with `target.location` | `DELETE /location` requires a completed 204; no simulated fix is fabricated. |
+| `mobile_device_clipboard_get` | Enabled with `target.clipboard` | `GET /clipboard` only when the content is `text/plain` with a reported `text`. |
+| `mobile_device_clipboard_set` | Gated; source-conditional | `target.clipboard` PUT `/clipboard` sends `text/plain`, verifies returned text, then reads `target.clipboard` again. Public SDK and native acceptance are pending. |
+| `mobile_device_biometric` | iOS match/nomatch enabled with `target.biometrics`; Android gated | `POST /biometrics/results` confirms completion; `confirmed` remains false on iOS, which cannot confirm the scan listener. Reviewed native draft source supplies Android `confirmed` evidence and optional `fingerId` forwarding; Android remains gated until public SDK and native acceptance. |
+| `mobile_device_call` | Gated; source-conditional | Reviewed native draft `controlTargetCall` accepts place/accept/hold/cancel and completes with full `TelephonyState`; source confirms the operation before projecting the unmodified Android call list. Missing readback does not replay accepted work. Public SDK and native acceptance are pending. |
+| `mobile_device_calls` | Gated; source-conditional | Reviewed native draft `getTargetTelephony` supplies the full Android call list, native platform and raw states. The source requires every field and checks original target ownership; an absent native list is unsupported. |
+| `mobile_device_sms_send` | Enabled with `target.telephony` | `POST /telephony/sms`, confirmed by the matching terminal operation. |
+| `mobile_device_notification_push` | Enabled on iOS with `target.push` and `target.apps` | Resolve exactly one installed app by `packageId` through `GET /apps?includeSystem=true`; use the returned `appId` for `POST /push/notifications` and confirm the matching terminal operation. Workspace IDs are never substituted for native package IDs. |
+| `mobile_device_permission_list` | Gated; source-conditional | Resolve one installed native package to its canonical app ID; reviewed native draft permission state supplies each `platformName`, with unknown reported as nullable `granted`, never denied. Public SDK and native acceptance are pending. |
+| `mobile_device_permission_set` | Gated; source-conditional | Resolve the installed app ID, send reviewed-source PUT `/permissions/{name}` with grant/revoke/reset mapped to granted/denied/unknown, and require native `affectedPermissions` readback of all touched grants. Missing fanout retains the uncertain receipt, never replays PUT. Public SDK and native acceptance are pending. |
+| `mobile_device_settings_get` | Enabled with `target.settings` | `GET /settings/device` projects the nullable appearance/accessibility fields. |
+| `mobile_device_settings_set` | Enabled with `target.settings` | `PATCH /settings/device` requires the device namespace and reads back the resulting settings. |
+
+These source-level gates do not indicate that the current public Ailoha package
+can run the opt-in: no compatible public runtime pin has been approved. Enabling
+PUT-dependent features needs exact official runtime support, not a fixture-only
+verb; reviewed runtime PR 67 source at `5abe074c7a91bb64aaf2691300e4bd39e9807079`
+includes the fixed PUT method/type/private guard and is merged at
+`1c82c6b65b9ef099f49f42386bd0e875c91b3339`. Reviewed native PR 76 source
+at `00c8eda7e9e01145e0493d2ed45d2a455042d71d` includes the fidelity
+fields; its current draft head is `75b165e2c51bb194980d5a88c0acc47de8d05eef`
+after a normal merge of main. Native PR 76 is not merged, and neither source
+head is an approved public SDK pin. Internal
+source-only fixtures explicitly enable these contracts and exercise 21 API plus
+21 MCP feature cases in **each** thin-installed GitHub and VS Code host (84
+positive invocations total), along with missing-generic-evidence negatives.
+Production flags stay off; these synthetic checks are not native device acceptance.
+Network `profile` is also gated independently of PUT until its separate,
+new native-profile contract is published: the current canonical update accepts
+latency but no profile, and the existing generic profile endpoint supports
+Android predefined names only. Returning a latency-only result for a profile
+request would change the legacy meaning.
+
 ### Selection, input and cleanup
 
 Opaque host/target/surface IDs are separate from `nativeIdentity.nativeId` and

@@ -28,6 +28,8 @@ for (const [host, product] of [
     assert.equal(evidence.retiredDirectTargetReadRejected, true);
     assert.equal(evidence.connectionRefCapturedInternally, true);
     assert.equal(evidence.connectionRefNotSerialized, true);
+    assert.equal(evidence.deviceFeaturesValidated, true);
+    assert.equal(evidence.sourceFeatureResults, 42);
     assert.equal(evidence.videoResourcesAfterClose, 0);
     assert.equal(evidence.leaseCountAfterClose, 0);
     assert.equal(evidence.noHostStop, true);
@@ -37,6 +39,7 @@ for (const [host, product] of [
     assert.equal(evidence.creationRecords[1].platform, "android");
     assert.equal(evidence.creationRecords.every((record) => record.state === "booted" && record.nativeId !== record.id), true);
     assert.equal(evidence.creationRecords[2].selectionApplied, false);
-    assert.deepEqual(evidence.logs, host === "vscode" ? ["capability_not_supported"] : []);
+    assert.deepEqual(evidence.logs, host === "vscode"
+      ? Array(10).fill("capability_not_supported") : []);
   });
 }
