@@ -7,6 +7,7 @@ import {
 import type { WebviewMessage } from "./messages";
 import { resolveAilohaCanvasHost, resolveMobileCanvas } from "./runtime";
 import { createWebviewHtml } from "./webviewHtml";
+import { createWorkspaceRootAdapter } from "./workspaceRoots";
 
 export const VIEW_ID = "mobileCanvas.deviceView";
 export const VIEW_INSTANCE_ID = "mobile-canvas-vscode-view";
@@ -61,10 +62,12 @@ export class MobileCanvasViewProvider implements vscode.WebviewViewProvider {
       ],
     };
     const runtime = this.backend === "legacy" ? await resolveMobileCanvas(this.context) : undefined;
+    const workspaceRoots = this.backend === "ailoha" ? createWorkspaceRootAdapter() : undefined;
     const ailohaHost = this.backend === "ailoha" ? await resolveAilohaCanvasHost(
       this.context,
       { sessionId: this.sessionId, viewId: VIEW_INSTANCE_ID },
       (error) => this.output.appendLine(`Mobile Canvas Ailoha: ${error.code}: ${error.message}`),
+      workspaceRoots?.validate,
     ) : undefined;
     if (!this.lifecycle.isCurrent(generation)) {
       return;
@@ -80,6 +83,7 @@ export class MobileCanvasViewProvider implements vscode.WebviewViewProvider {
       this.refreshSignal,
       ailohaHost,
       () => this.contextOpened.fire(),
+      workspaceRoots,
     );
     this.lifecycle.setActive(bridge);
     const messageSubscription = webviewView.webview.onDidReceiveMessage(

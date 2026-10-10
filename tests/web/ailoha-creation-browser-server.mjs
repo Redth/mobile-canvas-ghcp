@@ -1,4 +1,4 @@
-import { readFileSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { createServer } from "node:http";
 import { createRequire } from "node:module";
 import { randomUUID } from "node:crypto";
@@ -11,6 +11,10 @@ const root = resolve(dirname(fileURLToPath(import.meta.url)), "../..");
 const product = resolve(process.argv[2]);
 const hostKind = process.argv[3];
 const contextPath = resolve(process.argv[4]);
+const combined = process.argv.includes("--combined");
+const fixtureRoot = `${contextPath}.workspace`;
+const secondRoot = `${contextPath}.workspace-second`;
+const workspaceLog = `${contextPath}.workspace.jsonl`;
 if (!["github", "vscode"].includes(hostKind)) throw new Error("Choose an owned github/vscode fixture.");
 const pinPath = join(product, "lib/ailoha/runtime-package.json");
 let previousPin;
@@ -18,11 +22,37 @@ try { previousPin = readFileSync(pinPath); }
 catch (error) { if (error.code !== "ENOENT") throw error; }
 writeFileSync(pinPath, JSON.stringify({ schema: "mobile-canvas.ailoha-runtime/v1", version: "synthetic-only", sourceSha }));
 process.env.AILOHA_TEST_CONTEXT_STATE = contextPath;
+if (combined) {
+  scenario.combinedInspection = true;
+  mkdirSync(fixtureRoot, { recursive: true });
+  mkdirSync(secondRoot, { recursive: true });
+  process.env.AILOHA_TEST_INSPECTION_LOG = workspaceLog;
+  process.env.AILOHA_TEST_INSPECTION_MODE = "complete";
+}
 enableCatalogCreation();
 const { createRuntimeCanvasHost } = await import(pathToFileURL(join(product, "lib/ailoha/runtime-backend.mjs")).href);
 const scope = { sessionId: randomUUID(), viewId: `${hostKind}-creation-browser` };
 const errors = [];
-const host = createRuntimeCanvasHost({ scope, onError: (error) => errors.push(error) });
+let workspaceChoice = "first";
+let workspacePicks = 0;
+let workspaceRoots;
+if (combined && hostKind === "vscode") {
+  const require = createRequire(import.meta.url);
+  const vscode = require("vscode");
+  const { createWorkspaceRootAdapter } = require(join(root, "vscode/out/workspaceRoots.js"));
+  vscode.workspace.workspaceFolders = [fixtureRoot, secondRoot].map((path, index) => ({
+    name: index ? "Owned second root" : "Owned first root", index, uri: vscode.Uri.file(path),
+  }));
+  vscode.window.showQuickPick = async (items) => {
+    workspacePicks += 1;
+    const chosen = workspaceChoice === "first" ? fixtureRoot : secondRoot;
+    return items.find((item) => item.folderUri === vscode.Uri.file(chosen).toString());
+  };
+  workspaceRoots = createWorkspaceRootAdapter();
+}
+const host = createRuntimeCanvasHost({
+  scope, onError: (error) => errors.push(error), validateWorkspaceRoot: workspaceRoots?.validate,
+});
 const opened = await host.openCanvas();
 await host.invokeAction("select_device", { deviceId: "opaque/target" });
 let bridge;
@@ -33,6 +63,7 @@ const queuedMessages = [];
 const sharedAssets = new Set([
   "index.html", "device-canvas.css", "device-canvas.js", "canvas-state.js", "create-device-options.js",
   "ailoha-canvas-state.js", "ailoha-video-protocol.js", "ailoha-video-receiver.js", "ailoha-video-player.js",
+  "ailoha-workspace-view.js", "ailoha-semantic-view.js",
 ]);
 const hostAssets = new Set(["vscode-theme.css", "vscode-theme.js", "vscode-transport.js"]);
 const shim = `
@@ -79,6 +110,25 @@ function sendMessage(message) {
   } else for (const response of eventClients) response.write(`data: ${text}\n\n`);
   return true;
 }
+function logEntries(path) {
+  try { return readFileSync(path, "utf8").trim().split("\n").filter(Boolean).map((line) => JSON.parse(line)); }
+  catch (error) { if (error.code === "ENOENT") return []; throw error; }
+}
+function updateSyntheticContext(nativeInstance) {
+  const contexts = JSON.parse(readFileSync(contextPath, "utf8"));
+  const context = contexts.find((entry) => entry.scope.sessionId === scope.sessionId && entry.scope.viewId === scope.viewId);
+  if (!context || !context.selection) throw new Error("No complete owned synthetic target selection");
+  context.selection = {
+    ...context.selection, agentId: nativeInstance ? "owned-agent" : null,
+    runtimeInstanceId: nativeInstance ? "owned-runtime" : null,
+  };
+  context.observed = nativeInstance ? { runtimeInstanceEvidence: "verified-native-instance" } : null;
+  context.revision = String(BigInt(context.revision) + 1n);
+  const temporary = `${contextPath}.binding-pending`;
+  writeFileSync(temporary, JSON.stringify(contexts), { flag: "wx" });
+  renameSync(temporary, contextPath);
+  host.semanticInspection.invalidate();
+}
 const controls = createServer(async (request, response) => {
   const url = new URL(request.url, origin);
   response.setHeader("Cache-Control", "no-store");
@@ -89,6 +139,12 @@ const controls = createServer(async (request, response) => {
         synthetic: true, host: hostKind, errors, calls: scenario.calls,
         leases: scenario.leases.size, videoResources: scenario.videos.size,
         created: [...scenario.createdTargets.values()], scope,
+        combined, fixtureRoot, secondRoot, workspacePicks,
+        ...(combined ? {
+          workspace: host.workspaceInspection.snapshot(), semantic: host.semanticInspection.snapshot(),
+          workspaceCalls: logEntries(workspaceLog), semanticCalls: logEntries(`${contextPath}.semantic.jsonl`),
+          context: JSON.parse(readFileSync(contextPath, "utf8")),
+        } : {}),
       }));
       return;
     }
@@ -114,6 +170,30 @@ const controls = createServer(async (request, response) => {
       const input = await readJson(request);
       if (!bridge || typeof input.visible !== "boolean") throw new Error("Owned VS Code visibility is required");
       await bridge.setVisible(input.visible);
+      response.writeHead(204).end();
+      return;
+    }
+    if (combined && request.method === "POST" && url.pathname === "/test/workspace-control") {
+      const input = await readJson(request);
+      if (input.root !== undefined) {
+        if (!["first", "second"].includes(input.root)) throw new Error("Invalid owned workspace choice");
+        if (hostKind === "github") host.workspaceInspection.bindRoot(input.root === "first" ? fixtureRoot : secondRoot, ["explicit-exclusion/**"]);
+        else workspaceChoice = input.root;
+      }
+      if (input.mode !== undefined) {
+        if (!["complete", "incomplete", "unknown-schema", "empty", "xss"].includes(input.mode)) throw new Error("Invalid owned workspace fixture mode");
+        process.env.AILOHA_TEST_INSPECTION_MODE = input.mode;
+      }
+      const delay = input.delayMs ?? 0;
+      if (!Number.isInteger(delay) || delay < 0 || delay > 5000) throw new Error("Invalid owned workspace delay");
+      process.env.AILOHA_TEST_INSPECTION_DELAY_MS = String(delay);
+      response.writeHead(204).end();
+      return;
+    }
+    if (combined && request.method === "POST" && url.pathname === "/test/instance-control") {
+      const input = await readJson(request);
+      if (typeof input.nativeInstance !== "boolean") throw new Error("Explicit owned native-instance choice required");
+      updateSyntheticContext(input.nativeInstance);
       response.writeHead(204).end();
       return;
     }
@@ -161,7 +241,7 @@ if (hostKind === "vscode") {
   const { HostBridge } = require(join(root, "vscode/out/hostBridge.js"));
   const { createWebviewHtml } = require(join(root, "vscode/out/webviewHtml.js"));
   bridge = new HostBridge(undefined, scope.sessionId, scope.viewId, { postMessage: async (message) => sendMessage(message) },
-    { appendLine: (line) => errors.push({ bridgeError: line }) }, undefined, host);
+    { appendLine: (line) => errors.push({ bridgeError: line }) }, undefined, host, undefined, workspaceRoots);
   const extensionRoot = join(root, "vscode");
   html = createWebviewHtml({
     extensionUri: { fsPath: extensionRoot }, asAbsolutePath: (path) => join(extensionRoot, path),
@@ -177,6 +257,7 @@ if (hostKind === "vscode") {
 console.log(JSON.stringify({
   synthetic: true, host: hostKind, url: hostKind === "github" ? opened.url : `${origin}/`,
   evidenceUrl: `${origin}/test/evidence`, controlOrigin: origin,
+  combined, fixtureRoot, secondRoot,
 }));
 let closing;
 async function close() {
@@ -189,6 +270,12 @@ async function close() {
     if (previousPin) writeFileSync(pinPath, previousPin);
     else rmSync(pinPath, { force: true });
     rmSync(contextPath, { force: true });
+    if (combined) {
+      rmSync(workspaceLog, { force: true });
+      rmSync(`${contextPath}.semantic.jsonl`, { force: true });
+      rmSync(fixtureRoot, { recursive: true, force: true });
+      rmSync(secondRoot, { recursive: true, force: true });
+    }
   })();
 }
 for (const signal of ["SIGINT", "SIGTERM"]) process.once(signal, () => {

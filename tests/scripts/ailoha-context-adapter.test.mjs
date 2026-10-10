@@ -63,11 +63,28 @@ function fixture(options = {}) {
         selection: { targetHostId: "host", targetId, surfaceId: "surface" } };
     },
     applicationSelection() { current.selection = { applicationId: "app:src/App.csproj" }; },
+    nativeSelection() {
+      current = { ...current, revision: String(BigInt(current.revision) + 1n),
+        selection: { applicationId: null, targetHostId: "host", targetId: "native-target",
+          surfaceId: "surface", agentId: "agent-1", runtimeInstanceId: "runtime-1" },
+        observed: { runtimeInstanceEvidence: "verified-native-instance" } };
+    },
     externalRetirement() {
       current = { ...current, state: "detached", revision: String(BigInt(current.revision) + 1n), selection: null, observed: null };
     },
   };
 }
+
+test("exact native-instance context is adopted with its owner process and verified evidence", async () => {
+  const { store, nativeSelection } = fixture();
+  await store.binding();
+  nativeSelection();
+  const captured = await store.readSnapshot();
+  assert.equal(captured.selection.runtimeInstanceId, "runtime-1");
+  assert.equal(captured.selection.agentId, "agent-1");
+  assert.equal(captured.contextProjection.processStartedAt, document.owner.processStartedAt);
+  assert.equal(captured.contextProjection.runtimeInstanceEvidence, "verified-native-instance");
+});
 
 test("real serialized open/get shape is cached as one named trusted view authority", async () => {
   const { store, calls } = fixture();
@@ -77,6 +94,7 @@ test("real serialized open/get shape is cached as one named trusted view authori
   assert.equal(binding.ownerProcessId, 81027);
   assert.deepEqual(store.contextProjection, {
     contextRef: document.contextRef, scopeEpoch: document.scopeEpoch, revision: "0", ownerProcessId: 81027,
+    processStartedAt: document.owner.processStartedAt, runtimeInstanceEvidence: "unsupported",
   });
   assert.equal(await store.read(), null);
   assert.equal(calls.filter((args) => args[1] === "open").length, 1);

@@ -51,6 +51,12 @@ test("bridges bootstrap, API responses, and socket frames", async () => {
   const receive = (data) => {
     for (const listener of listeners.get("message") ?? []) listener({ data });
   };
+  const inspection = { schema: "mobile-canvas.workspace-view/v1", root: "/explicit-root", status: "ready" };
+  receive({ type: "workspace-inspection", state: inspection });
+  let inspectionState;
+  transport.onWorkspaceInspectionChanged((state) => { inspectionState = state; });
+  assert.equal(inspectionState.root, "/explicit-root");
+  assert.equal(outbound.length, 0);
 
   const bootstrap = transport.bootstrap();
   assert.equal(outbound.shift().type, "ready");
