@@ -58,6 +58,10 @@ function fixture(options = {}) {
   return {
     store, calls,
     concurrentChange() { current.revision = "9"; },
+    externalSelection(targetId) {
+      current = { ...current, revision: String(BigInt(current.revision) + 1n),
+        selection: { targetHostId: "host", targetId, surfaceId: "surface" } };
+    },
     applicationSelection() { current.selection = { applicationId: "app:src/App.csproj" }; },
     externalRetirement() {
       current = { ...current, state: "detached", revision: String(BigInt(current.revision) + 1n), selection: null, observed: null };
@@ -80,6 +84,35 @@ test("real serialized open/get shape is cached as one named trusted view authori
   assert.equal(calls[1].includes(document.contextRef), true);
 });
 
+test("one immutable read snapshot binds selection, canonical projection, identity and state", async () => {
+  const state = fixture();
+  await state.store.binding();
+  await state.store.set({ targetHostId: "host", targetId: "one", surfaceId: "surface" });
+  const first = await state.store.readSnapshot();
+  assert.deepEqual(first.selection, { targetHostId: "host", targetId: "one", surfaceId: "surface" });
+  assert.deepEqual(first.identity, { scopeEpoch: document.scopeEpoch, revision: "1" });
+  assert.equal(first.contextProjection.revision, "1");
+  assert.equal(first.state, "open");
+  for (const value of [first, first.selection, first.identity, first.contextProjection]) assert.equal(Object.isFrozen(value), true);
+  assert.equal(state.store.isCurrentSnapshot(first), true);
+  state.externalSelection("two");
+  assert.equal((await state.store.read()).targetId, "two");
+  assert.equal(state.store.isCurrentSnapshot(first), false);
+  assert.equal(first.selection.targetId, "one");
+  assert.equal(first.contextProjection.revision, "1");
+  state.externalRetirement();
+  const retired = await state.store.readSnapshot();
+  assert.equal(retired.state, "detached");
+  assert.equal(retired.selection, null);
+  assert.equal(retired.contextProjection, undefined);
+  assert.equal(state.store.isCurrentSnapshot(retired), false);
+  await state.store.binding();
+  const reopened = await state.store.readSnapshot();
+  assert.equal(reopened.identity.scopeEpoch, "new-epoch");
+  assert.equal(state.store.isCurrentSnapshot(first), false);
+  assert.equal(state.store.isCurrentSnapshot(reopened), true);
+});
+
 test("selection is complete-tuple CAS with string revisions and no stale intent retries", async () => {
   const state = fixture();
   await state.store.binding();
@@ -99,6 +132,41 @@ test("selection is complete-tuple CAS with string revisions and no stale intent 
     return true;
   });
   assert.equal(state.calls.filter((args) => args[1] === "select").length, 2);
+});
+
+test("a delayed accepted selection result cannot roll back a newer observed canonical snapshot", async () => {
+  let releaseWrite;
+  let writeStarted;
+  const entered = new Promise((resolve) => { writeStarted = resolve; });
+  let current = structuredClone(document);
+  const calls = [];
+  const store = createAilohaContextStore({
+    scope, ownerProcessId: 81027,
+    async runCli(args) {
+      calls.push(args);
+      if (args[1] === "select") {
+        const input = JSON.parse(args[args.indexOf("--request-json") + 1]);
+        current = { ...current, revision: "1", selection: input.selection };
+        const accepted = JSON.stringify({ ok: true, context: current, error: null });
+        writeStarted();
+        await new Promise((resolve) => { releaseWrite = resolve; });
+        return accepted;
+      }
+      return JSON.stringify({ ok: true, context: current, error: null });
+    },
+  });
+  await store.binding();
+  const pending = store.set({ targetHostId: "host", targetId: "one" }, store.identity);
+  const rejected = assert.rejects(pending, { code: "context_write_superseded" });
+  await entered;
+  current = { ...current, revision: "2", selection: { targetHostId: "host", targetId: "two" } };
+  const latest = await store.readSnapshot();
+  releaseWrite();
+  await rejected;
+  assert.equal(store.isCurrentSnapshot(latest), true);
+  assert.equal(store.contextProjection.revision, "2");
+  assert.equal((await store.read()).targetId, "two");
+  assert.equal(calls.filter((args) => args[1] === "select").length, 1);
 });
 
 test("explicit detach tombstones selection; reopen uses exact prior identity and a new epoch", async () => {

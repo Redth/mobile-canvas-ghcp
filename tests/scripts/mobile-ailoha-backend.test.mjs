@@ -5,6 +5,8 @@ const { AilohaMobileBackend } = await import(productModule("lib/ailoha/mobile-ba
 const { mobileCanvasBackend } = await import(productModule("lib/backend.mjs"));
 const { createAilohaMediaAdapter } = await import(productModule("lib/ailoha/media-adapter.mjs"));
 const { AilohaProtocolError } = await import(productModule("lib/ailoha/errors.mjs"));
+const { publicSnapshot, MobileAilohaError } = await import(productModule("lib/ailoha/mobile-projection.mjs"));
+const { createAilohaContextStore } = await import(productModule("lib/ailoha/context-adapter.mjs"));
 
 function deferred() {
   let resolve;
@@ -76,9 +78,24 @@ function fixture(options = {}) {
     async deleteVideo(invocation) { calls.push(["video-delete", invocation.targetId]); },
     ...options.media,
   };
-  const selectionStore = {
+  const selectionStore = options.selectionStore ?? {
     get state() { return contextState; },
-    async read() { return selection; },
+    async readSnapshot() {
+      const projection = this.contextProjection;
+      return publicSnapshot({
+        selection, state: contextState,
+        ...(projection ? {
+          contextProjection: projection,
+          identity: { scopeEpoch: projection.scopeEpoch, revision: projection.revision },
+        } : {}),
+      });
+    },
+    isCurrentSnapshot(snapshot) {
+      const projection = this.contextProjection;
+      return contextState === "open" && (!snapshot.contextProjection || (projection
+        && snapshot.contextProjection.contextRef === projection.contextRef
+        && snapshot.identity.scopeEpoch === projection.scopeEpoch && snapshot.identity.revision === projection.revision));
+    },
     async set(value) { selection = value; },
     async clear() { selection = null; },
   };
@@ -103,6 +120,52 @@ function fixture(options = {}) {
     retireContext() { contextState = "detached"; },
     geometryChanged() { revision += 1; },
     selectHost(hostId) { selection = { targetHostId: hostId, targetId: "one" }; },
+  };
+}
+
+function canonicalFixture(options = {}) {
+  const scope = { sessionId: "unique-session", viewId: "unique-view" };
+  const contextCalls = [];
+  let canonical = {
+    schema: "ailoha.execution-context/v1", version: 1,
+    contextRef: "ctx-canonical-snapshot", scope, scopeEpoch: "original-epoch", revision: "1", state: "open",
+    owner: { processId: 1234, processStartedAt: "2026-10-10T00:00:00Z" },
+    selection: { targetHostId: "host", targetId: "one", surfaceId: "surface/opaque" },
+    observed: null,
+  };
+  const store = createAilohaContextStore({
+    scope, ownerProcessId: 1234, contextRef: canonical.contextRef, scopeEpoch: canonical.scopeEpoch,
+    async runCli(args) {
+      contextCalls.push(args);
+      const requestIndex = args.indexOf("--request-json");
+      const input = requestIndex < 0 ? null : JSON.parse(args[requestIndex + 1]);
+      if (args[1] === "open") {
+        assert.equal(canonical.state, "detached");
+        assert.deepEqual(input.expected, { scopeEpoch: canonical.scopeEpoch, revision: canonical.revision });
+        canonical = { ...canonical, state: "open", scopeEpoch: "reopened-epoch", revision: "0", selection: null };
+      } else if (args[1] === "select") {
+        assert.deepEqual(input.expected, { scopeEpoch: canonical.scopeEpoch, revision: canonical.revision });
+        canonical = { ...canonical, revision: String(BigInt(canonical.revision) + 1n), selection: input.selection };
+      }
+      return JSON.stringify({ ok: true, context: canonical, error: null });
+    },
+  });
+  return {
+    ...fixture({ ...options, selectionStore: store }),
+    store, contextCalls,
+    async advanceSelection() {
+      canonical = { ...canonical, revision: String(BigInt(canonical.revision) + 1n),
+        selection: { targetHostId: "host", targetId: "two", surfaceId: "surface/opaque" } };
+      return store.read();
+    },
+    async retireAuthority() {
+      canonical = { ...canonical, state: "detached", revision: String(BigInt(canonical.revision) + 1n), selection: null };
+      return store.readSnapshot();
+    },
+    async reopenAuthority() {
+      await store.binding();
+      await store.set({ targetHostId: "host", targetId: "two", surfaceId: "surface/opaque" });
+    },
   };
 }
 
@@ -163,10 +226,13 @@ test("selection reads that observe retirement cannot project an empty or populat
     Object.defineProperty(state.selectionStore, "contextProjection", {
       value: { contextRef: "ctx-old", scopeEpoch: "old-epoch", revision: "0", ownerProcessId: 1234 },
     });
-    state.selectionStore.read = async () => {
+    state.selectionStore.readSnapshot = async () => {
       reading.resolve();
       await result.promise;
-      return selection;
+      return publicSnapshot({
+        selection, state: "open", contextProjection: state.selectionStore.contextProjection,
+        identity: { scopeEpoch: "old-epoch", revision: "0" },
+      });
     };
     const pending = state.backend.getSelected();
     const rejected = assert.rejects(pending, { code: "view_closed" });
@@ -196,6 +262,99 @@ test("retirement during selected target confirmation cannot return a stale usabl
   state.retireContext();
   result.resolve();
   await rejected;
+});
+
+for (const action of ["lifecycle", "getSelected", "display", "input", "select", "inventory"]) {
+  test(`canonical revision advance during ${action} rejects the old snapshot without relabeling or dispatch`, async (t) => {
+    const state = canonicalFixture();
+    t.after(() => state.backend.dispose());
+    if (action === "input") await state.backend.display("one");
+    const entered = deferred();
+    const release = deferred();
+    const get = action === "inventory" ? state.client.listTargets : state.client.getTarget;
+    const method = action === "inventory" ? "listTargets" : "getTarget";
+    state.client[method] = async (...args) => {
+      entered.resolve();
+      await release.promise;
+      return get(...args);
+    };
+    const work = action === "lifecycle" ? state.backend.lifecycle("restart", "one")
+      : action === "getSelected" ? state.backend.getSelected()
+      : action === "display" ? state.backend.display("one")
+      : action === "select" ? state.backend.select("one")
+      : action === "inventory" ? state.backend.listDevices()
+      : state.backend.input("tap", "one", { x: 10, y: 30 });
+    const rejected = assert.rejects(work, { code: "context_snapshot_superseded" });
+    await entered.promise;
+    assert.equal((await state.advanceSelection()).targetId, "two");
+    assert.equal(state.store.contextProjection.revision, "2");
+    release.resolve();
+    await rejected;
+    assert.equal(state.calls.some(([kind]) => ["reboot", "tap"].includes(kind)), false);
+    assert.equal(state.contextCalls.some((args) => args[1] === "select"), false);
+  });
+}
+
+for (const reopen of [false, true]) {
+  test(`canonical ${reopen ? "epoch replacement" : "retirement"} during input cannot reuse the captured authority`, async (t) => {
+    const state = canonicalFixture();
+    t.after(() => state.backend.dispose());
+    await state.backend.display("one");
+    const entered = deferred();
+    const release = deferred();
+    const get = state.client.getTarget;
+    state.client.getTarget = async (...args) => {
+      entered.resolve();
+      await release.promise;
+      return get(...args);
+    };
+    const work = state.backend.input("tap", "one", { x: 10, y: 30 });
+    const rejected = assert.rejects(work, { code: reopen ? "context_snapshot_superseded" : "view_closed" });
+    await entered.promise;
+    await state.retireAuthority();
+    if (reopen) await state.reopenAuthority();
+    release.resolve();
+    await rejected;
+    assert.equal(state.calls.some(([kind]) => kind === "tap"), false);
+  });
+}
+
+for (const reopen of [false, true]) {
+  test(`accepted lifecycle retains original canonical revision and epoch across ${reopen ? "authority reopen" : "a newer read"}`, async (t) => {
+    const completion = deferred();
+    const entered = deferred();
+    const state = canonicalFixture({ wait: completion });
+    t.after(() => state.backend.dispose());
+    const wait = state.client.waitForOperation;
+    state.client.waitForOperation = async (...args) => {
+      entered.resolve();
+      return wait(...args);
+    };
+    const work = state.backend.lifecycle("restart", "one");
+    await entered.promise;
+    assert.deepEqual(state.calls.filter(([kind]) => kind === "reboot"), [["reboot", "one"]]);
+    if (reopen) {
+      await state.retireAuthority();
+      await state.reopenAuthority();
+    } else await state.advanceSelection();
+    completion.resolve();
+    const result = await work;
+    assert.equal(result.invocation.targetId, "one");
+    assert.equal(result.invocation.executionContext.revision, "1");
+    assert.equal(result.invocation.executionContext.scopeEpoch, "original-epoch");
+    assert.equal(result.invocation.executionContext.contextRef, "ctx-canonical-snapshot");
+    assert.equal((await state.backend.getSelected()).device.id, "two");
+    assert.equal(state.calls.filter(([kind]) => kind === "reboot").length, 1);
+  });
+}
+
+test("display observations keep the original canonical identity instead of borrowing a later read", async (t) => {
+  const state = canonicalFixture();
+  t.after(() => state.backend.dispose());
+  await state.backend.display("one");
+  await state.advanceSelection();
+  await assert.rejects(state.backend.input("tap", "one", { x: 10, y: 30 }), { code: "stale_selection" });
+  assert.equal(state.calls.some(([kind]) => kind === "tap"), false);
 });
 
 test("lifecycle awaits authoritative completion and selection cannot retarget accepted work", async (t) => {

@@ -275,6 +275,13 @@ error, not an empty usable binding; adapters without a canonical projection keep
 the original `{ hasSelection: false }` output. Invocation results retain the same
 captured `executionContext` separately from local selection generation.
 
+The canonical adapter returns selection, context projection, identity and state
+as one immutable read snapshot. Target/provider probes cannot borrow a later
+read's revision or epoch. Known superseded snapshots reject undispatched work;
+display observations retain the same captured identity. Already accepted
+lifecycle receipts keep their original target and context metadata through later
+reads or a trusted authority reopen, without resubmission or relabeling.
+
 Input captures one view/host/target/surface tuple and observed logical bounds,
 coordinate space and geometry revision. Additive `surfaceId`, `coordinate` and
 `geometryRevision` inputs preserve that observation. Encoded frame size is never
