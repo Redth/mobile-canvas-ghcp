@@ -64,9 +64,10 @@ not evidence of human consent. App-op PUT returns a descriptor rather than an
 operation. Native package IDs are resolved through canonical app inventory,
 not assumed to equal `appId`.
 The reviewed 599 owner SDK **source** transport allows GET, POST, PATCH and
-DELETE, not PUT; this source is not yet a pinned public package. Although the
-canonical app-op endpoint is PUT, the owner transport cannot currently forward
-it. App-op mutation remains gated pending a compatible reviewed SDK contract.
+DELETE, not PUT; this source is not yet a pinned public package. The ordinary
+app-op endpoint is PUT and ordinary uninstall DELETE cannot fence the captured
+named context through final native dispatch. Neither route is used for the
+source-conditional destructive app actions described below.
 `listTargets` accepts only optional `providerId`, `status`, and `signal`;
 other reads accept only `signal`. No arbitrary API paths or caller headers exist.
 
@@ -100,7 +101,24 @@ to the backend and sorted as in the legacy service. Empty supported inventory
 is returned as empty, not inferred from a failed read. Optional `AppOp.uidScoped`
 allows Android app-op results only when every operation reports effective UID
 scope and a legacy-compatible mode; otherwise the result is explicitly
-unsupported. App-op mutation still requires scoped consent and readback.
+unsupported. Source-conditional uninstall and Android app-op mutation use
+distinct positively advertised fenced capabilities plus the verified CLI.
+Before a host approval prompt, `target app action-capture` must return one
+versioned private receipt matching the original named ref/epoch/revision,
+literal process owner, host incarnation, provider/native target, installed
+app ID/package/version/build and authoritative installation evidence. Setter
+capture also binds operation, current/requested mode and UID scope; unavailable
+native installation or UID evidence is unsupported, not guessed. The prompt
+shows the captured package, and for the setter the current-to-requested mode
+and whole-UID effects. Approval expires within the original 60-second budget;
+submission uses only `uninstall-fenced` or `set-app-op-fenced` with the captured
+receipt. It never uses ordinary DELETE/PUT, trusts `confirm=true` as human
+approval, or sends private evidence to a renderer. The original accepted
+Operation ID remains available for GET-only recovery on uncertain delivery,
+including late acceptance; neither mutation is replayed. Android setter
+success additionally requires terminal effective mode and UID-scope readback.
+These command names and receipt fields are a **local source integration
+target**, not evidence of a reviewed or published native implementation.
 The reviewed native adapter optionally preserves launch result process ID and
 detail in the completed operation, which are returned when present and valid;
 unknown optional values remain null rather than invented.
@@ -139,10 +157,11 @@ approval for reset/delete; the source-only install flow reuses that authority,
 but no boolean `confirm` argument alone enables staging or installation. The
 existing combined install CLI/MCP commands lack this original-view fence;
 neither renderer buffering nor a direct native process fallback is used.
-Uninstall additionally requires real scoped host consent; `confirm=true` by
-itself never authorizes it. App-specific uninstall approval and readback are not
-implemented even where reset/delete prompts are available. All these
-limitations fail explicitly without fallback.
+The local fenced app-action source and synthetic two-host checks do not
+activate those capabilities in the absence of the reviewed compatible public
+CLI/Host graph, authoritative native evidence, and refreshed complete native
+assets. All these limitations fail explicitly without fallback; this is not
+real-device mutation proof or a release-ready package.
 
 All reads use `/api/v1` and bearer authentication, including status and inventory.
 Collections are bare arrays. Status includes `profile`, `hostId`, `version`,

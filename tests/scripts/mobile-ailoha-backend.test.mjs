@@ -790,7 +790,7 @@ function fencedFixture(t, { answer = async () => true, capture, submit, readback
         events.push(["wait", operationId]);
         if (wait) return wait(operationId);
         return {
-          operationId, kind: operationId === "fenced-uninstall" ? "uninstallTargetApp" : "updateFencedTargetAppOp",
+          operationId, kind: operationId === "fenced-uninstall" ? "uninstallFencedTargetApp" : "updateFencedTargetAppOp",
           targetId: "one", providerId: "provider", status: "succeeded", destructive: true,
           createdAt: "2026-10-09T23:00:00Z", completedAt: "2026-10-09T23:00:02Z",
         };

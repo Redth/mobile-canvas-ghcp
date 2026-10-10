@@ -90,7 +90,10 @@ canonical app inventory, launch, terminate, cold relaunch and Android app-op
 reads use native target identities. Source-conditional staged installation
 remains unsupported in installed hosts until a compatible approved public
 runtime and host artifact capability are available; uninstall and app-op
-mutation remain gated on app-specific consent and readback.
+mutation use source-conditional fenced CLI actions with captured native app
+evidence, scoped human approval and effective readback. They remain unsupported
+in installed hosts until the compatible reviewed public CLI and native host
+capabilities are packaged; ordinary uninstall/app-op routes cannot substitute.
 The App lens requires an explicitly selected verified native runtime instance
 in the canonical named context. Workspace application evidence cannot bind an
 agent. Recording, keyboard/buttons and broader controls remain unsupported.

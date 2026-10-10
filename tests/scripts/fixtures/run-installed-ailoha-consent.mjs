@@ -54,10 +54,35 @@ async function open(name) {
   if (kind === "github") {
     const context = { sessionId: scope.sessionId, instanceId: scope.viewId };
     const opened = await canvas.open(context);
+    const url = new URL(opened.url);
+    const fragment = new URLSearchParams(url.hash.slice(1));
+    const bootstrap = await fetch(new URL("/api/v1/auth/bootstrap", url), {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        secret: fragment.get("bootstrap"), sessionId: scope.sessionId, instanceId: scope.viewId,
+      }),
+    });
+    assert.equal(bootstrap.status, 204);
+    const cookie = bootstrap.headers.get("set-cookie").split(";", 1)[0];
     return {
       scope, opened,
       action(name, input = {}) {
-        return canvas.actions.find((action) => action.name === name).handler({ ...context, input });
+        const action = canvas.actions.find((entry) => entry.name === name);
+        if (action) return action.handler({ ...context, input });
+        const paths = {
+          uninstall_app: [`/api/v1/devices/${encodeURIComponent(input.deviceId)}/apps/${encodeURIComponent(input.bundleId)}/uninstall?confirm=${input.confirm === true}`, "POST"],
+          set_app_op: [`/api/v1/devices/${encodeURIComponent(input.deviceId)}/app-ops`, "POST"],
+        };
+        const route = paths[name];
+        assert.ok(route, `Unknown canvas action: ${name}`);
+        return fetch(new URL(route[0], url), {
+          method: route[1], headers: { "Content-Type": "application/json", Cookie: cookie },
+          body: JSON.stringify(input),
+        }).then(async (response) => {
+          const value = await response.json();
+          if (!response.ok) throw Object.assign(new Error(value.message), value);
+          return value;
+        });
       },
       close: () => canvas.onClose(context),
     };
@@ -80,10 +105,13 @@ async function open(name) {
         erase_device: [`/api/v1/devices/${encodeURIComponent(input.deviceId)}/erase`, "POST"],
         delete_device: [`/api/v1/devices/${encodeURIComponent(input.deviceId)}`, "DELETE"],
         select_device: ["/api/v1/selection", "POST"],
+        uninstall_app: [`/api/v1/devices/${encodeURIComponent(input.deviceId)}/apps/${encodeURIComponent(input.bundleId)}/uninstall?confirm=${input.confirm === true}`, "POST"],
+        set_app_op: [`/api/v1/devices/${encodeURIComponent(input.deviceId)}/app-ops`, "POST"],
       };
       const [path, method] = paths[name];
       await bridge.handleMessage({ type: "api", id, path, method, body: JSON.stringify(input) });
       const result = messages.find((message) => message.id === id);
+      if (!result) throw new Error("The retired VS Code bridge did not return an API result.");
       assert.equal(result.type, "api-result");
       const value = JSON.parse(new TextDecoder().decode(result.body));
       if (result.status >= 400) throw Object.assign(new Error(value.message), value);
@@ -369,6 +397,134 @@ try {
     await assert.rejects(current.action("erase_device", { deviceId: "explicit-target-0", confirm: true }), { status: 503 });
     assert.equal(mutationCount(), before + 64);
     evidence.cases.push("admission-and-resume");
+    await close();
+  }
+  scenario.appResponses = true;
+  scenario.fencedAppResponses = true;
+  scenario.platform = "ios";
+  process.env.AILOHA_TEST_APP_PLATFORM = "ios";
+  current = await open("fenced-uninstall-denial");
+  {
+    await current.action("select_device", { deviceId: "opaque/target" });
+    const work = current.action("uninstall_app", {
+      deviceId: "opaque/target", bundleId: "com.example.native", confirm: true,
+    });
+    const rejected = assert.rejects(work, { code: "consent_denied" });
+    const prompt = await promptFor();
+    const message = kind === "github" ? prompt.request.message : prompt.request.items[1].detail;
+    assert.match(message, /Native package: com\.example\.native/);
+    prompt.answer("deny");
+    await rejected;
+    assert.equal(existsSync(`${process.env.AILOHA_TEST_CONTEXT_STATE}.fenced`), false);
+    evidence.cases.push("fenced-uninstall-denial");
+    await close();
+  }
+  for (const interruption of ["deadline", "owner"]) {
+    current = await open(`fenced-uninstall-${interruption}`);
+    const timeout = globalThis.setTimeout;
+    let expire;
+    globalThis.setTimeout = (callback, delay, ...args) => {
+      if (delay === 60_000) expire = () => callback(...args);
+      return timeout(callback, delay, ...args);
+    };
+    try {
+      await current.action("select_device", { deviceId: "opaque/target" });
+      const work = current.action("uninstall_app", {
+        deviceId: "opaque/target", bundleId: "com.example.native", confirm: true,
+      });
+      const rejected = interruption === "deadline"
+        ? assert.rejects(work, { code: "consent_timeout" }) : assert.rejects(work);
+      const prompt = await promptFor();
+      if (interruption === "deadline") { assert.ok(expire); expire(); }
+      else await current.close();
+      await rejected;
+      assert.equal(prompt.answer("approve"), false);
+      assert.equal(existsSync(`${process.env.AILOHA_TEST_CONTEXT_STATE}.fenced`), false);
+      evidence.cases.push(`fenced-uninstall-${interruption}`);
+    } finally {
+      globalThis.setTimeout = timeout;
+      await close();
+    }
+  }
+  current = await open("fenced-uninstall-approved");
+  {
+    await current.action("select_device", { deviceId: "opaque/target" });
+    const work = current.action("uninstall_app", {
+      deviceId: "opaque/target", bundleId: "com.example.native", confirm: true,
+    });
+    const prompt = await promptFor();
+    prompt.answer("approve");
+    const result = await work;
+    assert.equal(result.operation, "uninstall");
+    assert.equal(result.bundleId, "com.example.native");
+    assert.equal(JSON.stringify(result).includes("installationEvidence"), false);
+    const native = JSON.parse(readFileSync(`${process.env.AILOHA_TEST_CONTEXT_STATE}.fenced`, "utf8"));
+    assert.equal(native.length, 1);
+    assert.equal(native[0].kind, "uninstallFencedTargetApp");
+    assert.equal(scenario.calls.some((entry) => entry.method === "DELETE"
+      && entry.path?.includes("/apps/")), false);
+    evidence.cases.push("fenced-uninstall-approved");
+    await close();
+  }
+  current = await open("fenced-uninstall-accepted-nonzero");
+  {
+    await current.action("select_device", { deviceId: "opaque/target" });
+    process.env.AILOHA_TEST_FENCED_ACCEPTED_NONZERO = "1";
+    try {
+      const work = current.action("uninstall_app", {
+        deviceId: "opaque/target", bundleId: "com.example.native", confirm: true,
+      });
+      const prompt = await promptFor();
+      prompt.answer("approve");
+      const result = await work;
+      assert.equal(result.operation, "uninstall");
+      const native = JSON.parse(readFileSync(`${process.env.AILOHA_TEST_CONTEXT_STATE}.fenced`, "utf8"));
+      assert.equal(native.length, 2);
+      assert.equal(new Set(native.map((entry) => entry.operationId)).size, 2);
+      evidence.cases.push("fenced-uninstall-accepted-nonzero");
+    } finally {
+      delete process.env.AILOHA_TEST_FENCED_ACCEPTED_NONZERO;
+      await close();
+    }
+  }
+  scenario.platform = "android";
+  process.env.AILOHA_TEST_APP_PLATFORM = "android";
+  current = await open("fenced-android-app-op");
+  {
+    await current.action("select_device", { deviceId: "opaque/target" });
+    const work = current.action("set_app_op", {
+      deviceId: "opaque/target", bundleId: "com.example.native",
+      operation: "SYSTEM_ALERT_WINDOW", mode: "ignore",
+    });
+    const prompt = await promptFor();
+    const message = kind === "github" ? prompt.request.message : prompt.request.items[1].detail;
+    assert.match(message, /whole UID scope/);
+    assert.match(message, /Requested package mode: ignored/);
+    prompt.answer("approve");
+    const result = await work;
+    assert.equal(result.mode, "ignore");
+    assert.equal(result.operation, "SYSTEM_ALERT_WINDOW");
+    const native = JSON.parse(readFileSync(`${process.env.AILOHA_TEST_CONTEXT_STATE}.fenced`, "utf8"));
+    assert.equal(native.length, 3);
+    assert.equal(native[2].result.uidScoped, true);
+    assert.equal(scenario.calls.some((entry) => entry.method === "PUT"
+      && entry.path?.includes("/app-ops/")), false);
+    evidence.cases.push("fenced-android-app-op");
+    await close();
+  }
+  current = await open("fenced-android-app-op-denial");
+  {
+    await current.action("select_device", { deviceId: "opaque/target" });
+    const work = current.action("set_app_op", {
+      deviceId: "opaque/target", bundleId: "com.example.native",
+      operation: "SYSTEM_ALERT_WINDOW", mode: "ignore",
+    });
+    const rejected = assert.rejects(work, { code: "consent_denied" });
+    const prompt = await promptFor();
+    prompt.answer("deny");
+    await rejected;
+    assert.equal(JSON.parse(readFileSync(`${process.env.AILOHA_TEST_CONTEXT_STATE}.fenced`, "utf8")).length, 3);
+    evidence.cases.push("fenced-android-app-op-denial");
     await close();
   }
   evidence.leaseCountAfterClose = scenario.leases.size;
