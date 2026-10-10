@@ -374,7 +374,7 @@ test("verified one-shot process accepts only structured exit-2 scans and preserv
   const before = launches;
   const cancelled = new AbortController();
   cancelled.abort();
-  await assert.rejects(runCli(args, { signal: cancelled.signal }), { name: "AbortError" });
+  await assert.rejects(runCli(args, { signal: cancelled.signal }), { code: "ailoha_cli_cancelled" });
   assert.equal(launches, before);
   process.env.AILOHA_TEST_INSPECTION_MODE = "complete";
   process.env.AILOHA_TEST_INSPECTION_DELAY_MS = "1000";
@@ -394,4 +394,28 @@ test("verified one-shot process accepts only structured exit-2 scans and preserv
   await rejected;
   assert.throws(() => process.kill(pid, 0), { code: "ESRCH" });
   assert.throws(() => readFileSync(process.env.AILOHA_TEST_CONTEXT_STATE), { code: "ENOENT" });
+});
+
+test("verified inspection launch preserves the total SDK budget and cannot dispatch after timeout or cancellation", async () => {
+  const pin = { version: "original-consumer-fixture", sourceSha: "0".repeat(40) };
+  const args = ["workspace", "inspect", "--path", root, "--json"];
+  for (const cancelled of [false, true]) {
+    const pending = deferred();
+    let launchArgumentsRead = false;
+    const runCli = createVerifiedAilohaCli({
+      pin, sdk: { getVerifiedCliLaunch: () => pending.promise },
+    });
+    const caller = new AbortController();
+    const result = runCli(args, { signal: caller.signal, timeoutMs: cancelled ? 1000 : 15 });
+    const rejected = assert.rejects(result, { code: cancelled ? "ailoha_cli_cancelled" : "ailoha_cli_timeout" });
+    await Promise.resolve();
+    if (cancelled) caller.abort();
+    await rejected;
+    pending.resolve({
+      ...pin, file: process.execPath,
+      get args() { launchArgumentsRead = true; throw new Error("Retired launch must not dispatch a process."); },
+    });
+    await new Promise((resolve) => setImmediate(resolve));
+    assert.equal(launchArgumentsRead, false);
+  }
 });

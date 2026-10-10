@@ -35,9 +35,11 @@ export interface AilohaConnectionRef {
 
 export interface AilohaCanvasHost {
   readonly connectionRef?: AilohaConnectionRef;
+  cancelPendingApprovals?(): void;
   openCanvas(input?: { deviceId?: string }): Promise<CanvasOpenResult>;
   closeCanvas(): Promise<void>;
-  invokeAction(name: string, input: Record<string, unknown>): Promise<unknown>;
+  invokeAction(name: string, input: Record<string, unknown>, options?: { signal?: AbortSignal }): Promise<unknown>;
+  request(path: string, options: { method: string; body?: string; signal?: AbortSignal }): Promise<Response>;
   workspaceInspection?: {
     snapshot(): WorkspaceInspectionState;
     subscribe(listener: (state: WorkspaceInspectionState) => void): () => void;
@@ -81,6 +83,7 @@ export class HostBridge implements vscode.Disposable {
   private readonly sockets = new Map<string, WebSocket>();
   private readonly openingSockets = new Set<string>();
   private readonly cancelledSockets = new Set<string>();
+  private readonly apiRequests = new Map<string, AbortController>();
   // Sockets we tore down on purpose. `ws` aborts a still-connecting handshake by emitting
   // `error` before `close`, and switching devices closes the previous video socket while it
   // is usually still connecting. Without this set our own teardown is indistinguishable from
@@ -163,6 +166,9 @@ export class HostBridge implements vscode.Disposable {
         case "api":
           await this.forwardApi(message);
           break;
+        case "api-cancel":
+          this.apiRequests.get(message.id)?.abort();
+          break;
         case "socket-open":
           await this.openSocket(message.id, message.channel, message.query);
           break;
@@ -197,6 +203,7 @@ export class HostBridge implements vscode.Disposable {
   }
 
   async setVisible(visible: boolean): Promise<void> {
+    if (!visible) this.cancelApiRequests();
     this.visible = visible;
     this.ailohaHost?.workspaceInspection?.setVisible(visible);
     this.ailohaHost?.semanticInspection?.setVisible(visible);
@@ -217,6 +224,7 @@ export class HostBridge implements vscode.Disposable {
       this.visibilityNeedsCleanup = false;
     }
     if (!visible) {
+      this.ailohaHost?.cancelPendingApprovals?.();
       this.closeSockets();
       if (this.ailohaHost) {
         this.visibilityNeedsCleanup = true;
@@ -230,8 +238,10 @@ export class HostBridge implements vscode.Disposable {
   }
 
   async restart(): Promise<void> {
+    this.cancelApiRequests();
     this.ailohaHost?.workspaceInspection?.invalidate();
     this.ailohaHost?.semanticInspection?.invalidate();
+    this.ailohaHost?.cancelPendingApprovals?.();
     this.selectionToRestore = await this.readSelectedDeviceId();
     await this.closeCanvas();
     this.invalidateConnection();
@@ -288,6 +298,7 @@ export class HostBridge implements vscode.Disposable {
   }
 
   dispose(): void {
+    this.cancelApiRequests();
     if (this.disposed) {
       return;
     }
@@ -407,6 +418,28 @@ export class HostBridge implements vscode.Disposable {
   private async forwardApi(
     message: Extract<WebviewMessage, { type: "api" }>,
   ): Promise<void> {
+    if (this.apiRequests.has(message.id) || this.apiRequests.size >= 64) {
+      throw new Error("The bounded API request pool is full or this request ID is already pending.");
+    }
+    const controller = new AbortController();
+    const signal = AbortSignal.any([controller.signal, AbortSignal.timeout(API_REQUEST_TIMEOUT_MS)]);
+    this.apiRequests.set(message.id, controller);
+    try {
+      if (signal.aborted) throw new DOMException("The captured Mobile Canvas request was aborted.", "AbortError");
+      await this.forwardApiRequest(message, signal);
+    } finally {
+      if (this.apiRequests.get(message.id) === controller) this.apiRequests.delete(message.id);
+    }
+  }
+
+  private cancelApiRequests(): void {
+    for (const controller of this.apiRequests.values()) controller.abort();
+  }
+
+  private async forwardApiRequest(
+    message: Extract<WebviewMessage, { type: "api" }>,
+    signal: AbortSignal,
+  ): Promise<void> {
     if (this.ailohaHost?.workspaceInspection && message.path.startsWith("/api/v1/workspace/")) {
       await this.forwardWorkspace(message);
       return;
@@ -422,6 +455,7 @@ export class HostBridge implements vscode.Disposable {
 
     for (let attempt = 0; attempt < (this.ailohaHost ? 1 : 2); attempt += 1) {
       const connection = await this.connect();
+      if (signal.aborted) throw new DOMException("The captured Mobile Canvas request was aborted.", "AbortError");
       const url = this.apiUrl(message.path, connection);
       const headers: Record<string, string> = { Cookie: connection.cookie };
       if (message.body !== undefined) {
@@ -429,12 +463,9 @@ export class HostBridge implements vscode.Disposable {
       }
 
       try {
-        const response = await fetch(url, {
-          method,
-          headers,
-          body: message.body,
-          signal: AbortSignal.timeout(API_REQUEST_TIMEOUT_MS),
-        });
+        const response = this.ailohaHost
+          ? await this.ailohaHost.request(message.path, { method, body: message.body, signal })
+          : await fetch(url, { method, headers, body: message.body, signal });
         if (!this.ailohaHost && response.status === 401 && attempt === 0) {
           this.invalidateConnection(connection);
           continue;
@@ -442,6 +473,7 @@ export class HostBridge implements vscode.Disposable {
         const body = response.status === 204 || response.status === 205 || response.status === 304
           ? null
           : await response.arrayBuffer();
+        if (signal.aborted) throw new DOMException("The captured Mobile Canvas request was aborted.", "AbortError");
         const responseHeaders = Object.fromEntries(response.headers.entries());
         delete responseHeaders["set-cookie"];
         delete responseHeaders["set-cookie2"];
@@ -455,8 +487,8 @@ export class HostBridge implements vscode.Disposable {
         });
         return;
       } catch (error) {
-        this.invalidateConnection(connection);
-        if (!this.ailohaHost && method === "GET" && attempt === 0 && isConnectionFailure(error)) {
+        if (!signal.aborted) this.invalidateConnection(connection);
+        if (!signal.aborted && !this.ailohaHost && method === "GET" && attempt === 0 && isConnectionFailure(error)) {
           continue;
         }
         await this.post({

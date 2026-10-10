@@ -180,6 +180,67 @@ function canonicalFixture(options = {}) {
   };
 }
 
+for (const status of [408, 499]) {
+  test(`destructive HTTP ${status} uncertainty retains the original receipt without another mutation or approval`, async (t) => {
+    let submissions = 0;
+    let prompts = 0;
+    const operationState = new Map();
+    const state = canonicalFixture({
+      operationState,
+      confirmDestructive: async () => { prompts += 1; return true; },
+      client: {
+        async resetTarget() { submissions += 1; throw new AilohaProtocolError("http_error", { status }); },
+      },
+    });
+    t.after(() => state.backend.dispose());
+    await assert.rejects(state.backend.lifecycle("erase", "one", { confirm: true }));
+    const original = [...operationState.values()][0];
+    await assert.rejects(state.backend.lifecycle("erase", "one", { confirm: true }), { code: "lifecycle_outcome_uncertain" });
+    assert.equal([...operationState.values()][0], original);
+    assert.equal(original.invocation.targetId, "one");
+    assert.equal(submissions, 1);
+    assert.equal(prompts, 1);
+  });
+}
+
+test("a disposed client with an unknown destructive outcome cannot erase the original receipt", async (t) => {
+  let submissions = 0;
+  const state = canonicalFixture({
+    confirmDestructive: async () => true,
+    client: {
+      async resetTarget() { submissions += 1; throw new AilohaProtocolError("client_disposed"); },
+    },
+  });
+  t.after(() => state.backend.dispose());
+  await assert.rejects(state.backend.lifecycle("erase", "one", { confirm: true }));
+  await assert.rejects(state.backend.lifecycle("erase", "one", { confirm: true }), { code: "lifecycle_outcome_uncertain" });
+  assert.equal(submissions, 1);
+});
+
+test("late authoritative acceptance remains recoverable by GET despite outward approval expiry", async (t) => {
+  let clock = 0;
+  t.mock.method(performance, "now", () => clock);
+  const operationState = new Map();
+  let submissions = 0;
+  let prompts = 0;
+  const state = canonicalFixture({
+    operationState,
+    confirmDestructive: async () => { prompts += 1; return true; },
+    client: {
+      async resetTarget() { submissions += 1; clock = 60_001; return { operationId: "reset-one" }; },
+    },
+  });
+  t.after(() => state.backend.dispose());
+  await assert.rejects(state.backend.lifecycle("erase", "one", { confirm: true }), { code: "submission_outcome_unknown" });
+  const original = [...operationState.values()][0];
+  assert.equal(original.operationId, "reset-one");
+  assert.equal(original.invocation.executionContext.revision, "1");
+  const recovered = await state.backend.lifecycle("erase", "one", { confirm: true });
+  assert.equal(recovered.id, "one");
+  assert.equal(recovered.invocation.executionContext.revision, "1");
+  assert.equal(submissions, 1);
+  assert.equal(prompts, 1);
+});
 test("legacy remains the default and invalid opt-in never becomes a fallback", () => {
   assert.equal(mobileCanvasBackend(), "legacy");
   assert.equal(mobileCanvasBackend("legacy"), "legacy");
@@ -339,6 +400,21 @@ test("native System UI tap never posts after a changed context, geometry or proc
   t.after(() => native.backend.dispose());
   await assert.rejects(native.backend.uiTap("one", { text: "Save" }), { code: "system_ui_owner_changed" });
   assert.equal(native.calls.filter(([kind, path]) => kind === "system-ui" && path.includes("/actions/tap")).length, 0);
+});
+
+test("cancelled System UI caller cannot submit a tap after the captured snapshot", async (t) => {
+  const controller = new AbortController();
+  const state = systemUiFixture((path) => {
+    if (path.includes("system-snapshot")) controller.abort();
+    return systemUiResponse(path.includes("system-snapshot") ? "snapshot" : "tap");
+  });
+  t.after(() => state.backend.dispose());
+  await assert.rejects(
+    state.backend.invokeAction("ui_tap", { deviceId: "one", text: "Save" }, { signal: controller.signal }),
+    { code: "cancelled" },
+  );
+  assert.equal(state.calls.filter(([kind, path]) =>
+    kind === "system-ui" && path.includes("/actions/tap")).length, 0);
 });
 
 test("App UI or absent System UI capability never enables native System compatibility", async (t) => {
@@ -525,6 +601,26 @@ test("completed reveal survives a failed authority read without another POST", a
   assert.equal(receipt.completed.targetId, "one");
   assert.equal(receipt.invocation.executionContext.scopeEpoch, "original-epoch");
   assert.equal(receipt.invocation.connectionRef, state.backend.connectionRef);
+  const result = await state.backend.reveal("one", { selectRevealed: true });
+  assert.equal(result.id, "one");
+  assert.equal((await state.backend.getSelected()).device.id, "one");
+  assert.equal(state.calls.filter(([kind]) => kind === "reveal").length, 1);
+});
+
+test("cancelled reveal caller cannot select an accepted completion; explicit recovery does not POST again", async (t) => {
+  const controller = new AbortController();
+  const state = fixture({ reveal: {
+    async reveal(invocation) {
+      state.calls.push(["reveal", invocation]);
+      controller.abort();
+      return state.targets.get(invocation.targetId);
+    },
+  } });
+  t.after(() => state.backend.dispose());
+  await assert.rejects(state.backend.reveal("one", {
+    selectRevealed: true, signal: controller.signal,
+  }), { code: "cancelled" });
+  assert.equal((await state.backend.getSelected()).hasSelection, false);
   const result = await state.backend.reveal("one", { selectRevealed: true });
   assert.equal(result.id, "one");
   assert.equal((await state.backend.getSelected()).device.id, "one");
@@ -916,16 +1012,109 @@ test("missing real scoped destructive consent is unsupported even when confirm i
 test("real consent is captured to the original target and is separate from the literal gate", async (t) => {
   const consent = deferred();
   let captured;
-  const state = fixture({ confirmDestructive: (context) => { captured = context; return consent.promise; } });
+  const state = canonicalFixture({ confirmDestructive: (context) => { captured = context; return consent.promise; } });
   t.after(() => state.backend.dispose());
-  await state.backend.select("one");
   const resetting = state.backend.lifecycle("erase", "one", { confirm: true });
+  const rejected = assert.rejects(resetting, { code: "context_snapshot_superseded" });
   await new Promise((resolve) => setImmediate(resolve));
   await state.backend.select("two");
   assert.equal(captured.invocation.targetId, "one");
+  assert.equal(captured.invocation.executionContext.revision, "1");
+  assert.equal(captured.invocation.connectionRef, state.backend.connectionRef);
+  assert.equal(Object.isFrozen(captured.invocation), true);
+  assert.equal(captured.invocation.executionContext.processStartedAt, "2026-10-10T00:00:00Z");
+  assert.equal(JSON.stringify(captured).includes("connectionRef"), false);
+  assert.equal(JSON.stringify(captured).includes(state.backend.connectionRef.serviceId), false);
+  assert.equal(JSON.stringify(captured).includes(state.backend.connectionRef.processStartedAt), false);
   consent.resolve(false);
-  await assert.rejects(resetting, { code: "consent_denied" });
+  await rejected;
   assert.equal(state.calls.some(([kind]) => kind === "reset"), false);
+});
+
+test("known revision replacement during post-approval target revalidation cancels before any DELETE", async (t) => {
+  const state = canonicalFixture({ confirmDestructive: async () => true });
+  t.after(() => state.backend.dispose());
+  const entered = deferred();
+  const release = deferred();
+  const getTarget = state.client.getTarget;
+  let reads = 0;
+  state.client.getTarget = async (id) => {
+    if (++reads === 2) { entered.resolve(); await release.promise; }
+    return getTarget(id);
+  };
+  const pending = state.backend.lifecycle("delete", "one", { confirm: true });
+  const rejected = assert.rejects(pending, { code: "context_snapshot_superseded" });
+  await entered.promise;
+  await state.advanceSelection();
+  await rejected;
+  release.resolve();
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(state.calls.some(([kind]) => kind === "delete"), false);
+});
+
+for (const cancellation of ["caller", "owner", "deadline"]) {
+  test(`captured ${cancellation} cancellation after consume prevents a queued destructive POST and retains its uncertain owner`, async (t) => {
+    if (cancellation === "deadline") t.mock.timers.enable({ apis: ["setTimeout"] });
+    const caller = new AbortController();
+    const queued = deferred();
+    const entered = deferred();
+    const operationState = new Map();
+    let prompts = 0;
+    let wirePosts = 0;
+    const state = canonicalFixture({
+      operationState,
+      confirmDestructive: async () => { prompts += 1; return true; },
+      client: {
+        async resetTarget(id, options) {
+          entered.resolve(options);
+          await queued.promise;
+          if (options.signal.aborted) throw new AilohaProtocolError("cancelled");
+          wirePosts += 1;
+          return { operationId: `reset-${id}` };
+        },
+      },
+    });
+    t.after(() => state.backend.dispose());
+    const work = state.backend.lifecycle("erase", "one", { confirm: true }, { signal: caller.signal });
+    const rejected = assert.rejects(work, { code: {
+      caller: "consent_cancelled", owner: "view_closed", deadline: "submission_outcome_unknown",
+    }[cancellation] });
+    const options = await entered.promise;
+    assert.ok(options.timeoutMs > 0 && options.timeoutMs <= 15_000);
+    if (cancellation === "caller") caller.abort();
+    else if (cancellation === "owner") await state.backend.dispose();
+    else t.mock.timers.tick(60_000);
+    assert.equal(options.signal.aborted, true);
+    queued.resolve();
+    await rejected;
+    assert.equal(wirePosts, 0);
+    assert.equal(prompts, 1);
+    const receipt = [...operationState.values()][0];
+    assert.equal(receipt.invocation.targetId, "one");
+    assert.equal(receipt.invocation.executionContext.revision, "1");
+    assert.equal(receipt.uncertain, true);
+    if (cancellation !== "owner") {
+      await assert.rejects(state.backend.lifecycle("erase", "one", { confirm: true }), { code: "lifecycle_outcome_uncertain" });
+      assert.equal(prompts, 1);
+      assert.equal(wirePosts, 0);
+    }
+  });
+}
+
+test("a consumed approval with no whole millisecond remaining fails before client dispatch and does not create an uncertain receipt", async (t) => {
+  let clock = 0;
+  t.mock.method(performance, "now", () => clock);
+  const operationState = new Map();
+  let prompts = 0;
+  const state = canonicalFixture({
+    operationState,
+    confirmDestructive: async () => { prompts += 1; clock = 59_999.5; return true; },
+  });
+  t.after(() => state.backend.dispose());
+  await assert.rejects(state.backend.lifecycle("erase", "one", { confirm: true }), { code: "consent_timeout" });
+  assert.equal(state.calls.some(([kind]) => kind === "reset"), false);
+  assert.equal(operationState.size, 0);
+  assert.equal(prompts, 1);
 });
 
 test("geometry-observed input uses logical bounds and rejects later revisions before dispatch", async (t) => {
@@ -1043,6 +1232,21 @@ test("lost create result remains explicit and cannot trigger a second create or 
   const response = await state.backend.request("/api/v1/devices/one/input/rotate", { method: "POST" });
   assert.equal(response.status, 501);
 });
+
+for (const status of [408, 499]) {
+  test(`video creation HTTP ${status} uncertainty cannot submit another create`, async (t) => {
+    let creates = 0;
+    const state = fixture({
+      media: {
+        async createVideo() { creates += 1; throw new AilohaProtocolError("http_error", { status }); },
+      },
+    });
+    t.after(() => state.backend.dispose());
+    await assert.rejects(state.backend.openVideo("one", () => {}, () => {}));
+    await assert.rejects(state.backend.openVideo("one", () => {}, () => {}), { code: "video_create_uncertain" });
+    assert.equal(creates, 1);
+  });
+}
 
 test("unknown SDK failures are explicitly reported without serializing private diagnostic data", async (t) => {
   const state = fixture({ client: { async listTargets() { throw new Error("Bearer private-secret http://private-origin"); } } });
@@ -1299,6 +1503,52 @@ test("unknown lifecycle outcomes cannot be replayed and mismatched completion ne
   await assert.rejects(mismatch.backend.lifecycle("boot", "one"), { code: "operation_owner_mismatch" });
 });
 
+for (const [name, code, status] of [
+  ["HTTP 408", "http_error", 408],
+  ["HTTP 499", "http_error", 499],
+  ["disposed client", "client_disposed", undefined],
+]) {
+  test(`direct boot retains the original ${name} receipt without replacement reads or replay`, async (t) => {
+    const operationState = new Map();
+    const state = fixture({ operationState });
+    t.after(() => state.backend.dispose());
+    const start = state.client.startTarget;
+    let submissions = 0;
+    state.client.startTarget = async () => {
+      submissions += 1;
+      throw new AilohaProtocolError(code, { status });
+    };
+    await assert.rejects(state.backend.lifecycle("boot", "one"), { code });
+    const receipt = [...operationState.values()][0];
+    assert.ok(receipt);
+    assert.equal(receipt.uncertain, true);
+    state.client.startTarget = async (...args) => { submissions += 1; return start(...args); };
+    const reads = state.calls.length;
+    await assert.rejects(state.backend.lifecycle("boot", "one"), { code: "lifecycle_outcome_uncertain" });
+    assert.equal([...operationState.values()][0], receipt);
+    assert.equal(submissions, 1);
+    assert.equal(state.calls.length, reads);
+  });
+}
+
+test("a definitive direct boot HTTP403 rejection evicts only its receipt and allows a new submission", async (t) => {
+  const operationState = new Map();
+  const state = fixture({ operationState });
+  t.after(() => state.backend.dispose());
+  const start = state.client.startTarget;
+  let submissions = 0;
+  state.client.startTarget = async () => {
+    submissions += 1;
+    throw new AilohaProtocolError("http_error", { status: 403 });
+  };
+  await assert.rejects(state.backend.lifecycle("boot", "one"), { code: "http_error", status: 403 });
+  assert.equal(operationState.size, 0);
+  state.client.startTarget = async (...args) => { submissions += 1; return start(...args); };
+  assert.equal((await state.backend.lifecycle("boot", "one")).id, "one");
+  assert.equal(submissions, 2);
+  assert.equal(operationState.size, 0);
+});
+
 test("succeeded reboot receipt survives target-read failure and selection/reopen without another POST", async (t) => {
   const operationState = new Map();
   let posts = 0;
@@ -1367,7 +1617,7 @@ test("receipt admission remains exactly64 after concurrent asynchronous destruct
   const approval = deferred();
   const operationState = new Map();
   let approvals = 0;
-  const state = fixture({
+  const state = canonicalFixture({
     operationState,
     async confirmDestructive() { approvals += 1; await approval.promise; return true; },
     client: {
@@ -1377,7 +1627,9 @@ test("receipt admission remains exactly64 after concurrent asynchronous destruct
   t.after(() => state.backend.dispose());
   for (let index = 0; index < 65; index += 1) {
     const id = `target-${index}`;
-    state.targets.set(id, { ...structuredClone(state.targets.get("one")), targetId: id });
+    const target = { ...structuredClone(state.targets.get("one")), targetId: id };
+    target.nativeIdentity.nativeId = `native-target-${index}`;
+    state.targets.set(id, target);
   }
   const work = Array.from({ length: 65 }, (_, index) =>
     state.backend.lifecycle("erase", `target-${index}`, { confirm: true }));

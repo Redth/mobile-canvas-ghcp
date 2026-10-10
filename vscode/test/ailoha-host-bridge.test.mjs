@@ -28,6 +28,7 @@ function fixture(options = {}) {
       async request(path, request) {
         if (path === "/api/v1/devices/opaque%2Ftarget/reveal") {
           calls.push(["reveal-api", path]);
+          if (options.revealResponse) return options.revealResponse(path, request);
           return new Response(JSON.stringify({ id: "opaque/target", nativeId: "native-target" }),
             { headers: { "content-type": "application/json" } });
         }
@@ -59,6 +60,7 @@ function fixture(options = {}) {
   const adapter = {
     openCanvas: (input) => host.openCanvas(input),
     invokeAction: (name, input) => host.invokeAction(name, input),
+    request: (path, options) => host.request(path, options),
     async closeCanvas() {
       calls.push(["close-canvas"]);
       if (++closes <= (options.closeFailures ?? 0)) throw new Error("synthetic cleanup failure");
@@ -134,6 +136,35 @@ test("compiled VS Code bridge carries source-approved System UI dump/find/tap sh
   assert.equal(result("find").total, 0);
   assert.equal(result("tap").match.path, "1/0");
   assert.deepEqual(calls.map(([path]) => path.split("/").at(-1)), ["ui", "find", "tap"]);
+});
+
+test("compiled VS Code cancel routes preserve each original reveal and System UI request signal", async (t) => {
+  const pending = new Map();
+  const forwarded = [];
+  const respond = (path, request) => new Promise((resolve) => {
+    forwarded.push([path, request.signal]);
+    pending.set(path, resolve);
+  });
+  const state = fixture({ revealResponse: respond, uiResponse: respond });
+  t.after(async () => { state.bridge.dispose(); await state.bridge.closed(); });
+  await state.bridge.handleMessage({ type: "ready" });
+  for (const [id, path] of [
+    ["reveal-cancel", "/api/v1/devices/opaque%2Ftarget/reveal"],
+    ["ui-tap-cancel", "/api/v1/devices/opaque%2Ftarget/ui/tap"],
+  ]) {
+    const request = state.bridge.handleMessage({ type: "api", id, path, method: "POST", body: "{}" });
+    await waitFor(() => pending.has(path));
+    assert.equal(forwarded.at(-1)[1].aborted, false);
+    await state.bridge.handleMessage({ type: "api-cancel", id });
+    assert.equal(forwarded.at(-1)[1].aborted, true);
+    pending.get(path)(new Response("{}", { headers: { "content-type": "application/json" } }));
+    await request;
+    assert.equal(state.messages.some((message) => message.id === id && message.type === "api-result"), false);
+    assert.equal(state.messages.some((message) => message.id === id && message.type === "api-error"), true);
+  }
+  assert.deepEqual(forwarded.map(([path]) => path), [
+    "/api/v1/devices/opaque%2Ftarget/reveal", "/api/v1/devices/opaque%2Ftarget/ui/tap",
+  ]);
 });
 
 for (const kind of ["false", "throw", "reject"]) {
