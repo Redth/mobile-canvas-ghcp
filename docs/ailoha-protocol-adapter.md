@@ -349,12 +349,22 @@ renders canonical element text literally. Changing a lens or operation retires
 the previous read without clearing typed query filters. Canonical MCP errors
 expose only a finite public capability code/message or a fixed failure message;
 native stderr, paths and error details are not forwarded to the renderer.
+The official JS MCP SDK's full tool-list validator rejects some native C#
+`outputSchema` metadata; discovery validates only bounded advertised tool names
+through that SDK, then validates the actual composed result against captured
+route and provenance. The stdio child receives only named context/broker
+configuration from the host environment, never ambient target/agent selectors.
 The legacy .NET canvas serves the shared semantic module as a public embedded
 bootstrap asset, while its inspection API remains authenticated. This
 source-only slice has no
 workspace-application-to-native-agent mapping, binding control, or legacy
 `ui_*` compatibility claim. Both hosts bundle the exact-pinned MCP client
 graph, while the official Ailoha runtime pin remains a separate release gate.
+Controlled native development CLI proof exercised System and explicitly bound
+App tree/query/status through both prepared host clients against the real
+canonical broker and mock Target Host/Core-MAUI agents, including stale-context
+and missing-Agent failures. This does not qualify a public package, normal
+installation, native platform matrix or real-device acceptance.
 Unsupported: compatibility creation/catalog, reveal/rotation/keyboard/buttons,
 reset/delete without scoped consent, app deployment,
 recording and broader settings/diagnostics/file/hardware operations. No claim of

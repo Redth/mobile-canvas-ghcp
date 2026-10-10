@@ -2,9 +2,9 @@ import assert from "node:assert/strict";
 import { join } from "node:path";
 import { test } from "node:test";
 import { fileURLToPath } from "node:url";
-import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { productModule } from "../ailoha-test-module.mjs";
 
+const { Client } = await import(productModule("node_modules/@modelcontextprotocol/sdk/dist/esm/client/index.js"));
 const { createSemanticInspectionController } = await import(productModule("lib/ailoha/semantic-inspection.mjs"));
 const { callSemanticTool } = await import(productModule("lib/ailoha/semantic-mcp.mjs"));
 const { createAilohaCanvasHost } = await import(productModule("lib/ailoha/canvas-host.mjs"));
@@ -60,9 +60,13 @@ test("App requires a selected native instance and never falls back after a canon
   assert.equal(failure.result, null);
   assert.equal(failure.error.code, "CanonicalCapabilityUnsupported");
   assert.equal(failure.error.message, "The selected owner does not support this canonical inspection capability.");
-  for (const text of ["private", "known-private"]) {
+  for (const text of ["private", "known-private", "native-private"]) {
     const privateFailure = await view.request("POST", JSON.stringify({ lens: "app", operation: "query", text }));
-    assert.equal(privateFailure.error.code, text === "private" ? "semantic_operation_failed" : "CanonicalCapabilityUnsupported");
+    assert.equal(privateFailure.error.code, {
+      private: "semantic_operation_failed",
+      "known-private": "CanonicalCapabilityUnsupported",
+      "native-private": "ContextRevisionConflict",
+    }[text]);
     assert.doesNotMatch(JSON.stringify(privateFailure.error), /private-secret|internal\.invalid|\/private\/owner/);
   }
   const transportFailure = await view.request("POST", JSON.stringify({
@@ -106,6 +110,25 @@ test("cleanup failure preserves a canonical primary error and hides private clos
     assert.doesNotMatch(JSON.stringify(cleanup.error), /private-cleanup-secret/);
   } finally {
     Client.prototype.close = originalClose;
+  }
+});
+
+test("native MCP child inherits only explicit context/broker configuration", async () => {
+  const previous = Object.fromEntries(["AILOHA_CONFIG_DIR", "AILOHA_BROKER_PORT",
+    "AILOHA_NO_UPDATE_CHECK", "AILOHA_TARGET_ID"].map((name) => [name, process.env[name]]));
+  Object.assign(process.env, { AILOHA_CONFIG_DIR: "/synthetic-config", AILOHA_BROKER_PORT: "4242",
+    AILOHA_NO_UPDATE_CHECK: "1", AILOHA_TARGET_ID: "must-not-route-by-environment" });
+  try {
+    current = selection;
+    const result = await controller().request("POST", JSON.stringify({
+      lens: "system", operation: "query", text: "environment",
+    }));
+    assert.equal(result.status, "complete");
+  } finally {
+    for (const [name, value] of Object.entries(previous)) {
+      if (value === undefined) delete process.env[name];
+      else process.env[name] = value;
+    }
   }
 });
 

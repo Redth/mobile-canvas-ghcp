@@ -10,6 +10,7 @@ const server = new Server({ name: "canonical-stdio-fixture", version: "1.0.0" },
 server.setRequestHandler(ListToolsRequestSchema, async () => ({
   tools: ["app_tree", "app_query", "app_status"].map((name) => ({
     name, description: name, inputSchema: { type: "object", properties: {} },
+    outputSchema: { type: "object", properties: { result: { type: "invalid-native-schema-kind" } } },
   })),
 }));
 server.setRequestHandler(CallToolRequestSchema, async ({ params }) => {
@@ -19,10 +20,19 @@ server.setRequestHandler(CallToolRequestSchema, async ({ params }) => {
     text: "PrivateTokenError: token=private-secret at file:///private/owner/workspace and https://internal.invalid/api?key=private-secret" }] };
   if (params.arguments?.text === "known-private") return { isError: true, content: [{ type: "text",
     text: "CanonicalCapabilityUnsupported: token=private-secret at /private/owner/workspace" }] };
+  if (params.arguments?.text === "native-private") return { isError: true, content: [{ type: "text",
+    text: "An error occurred invoking 'app_query': ContextRevisionConflict: token=private-secret at /private/owner/workspace" }] };
   if (params.arguments?.text === "stderr-flood") process.stderr.write("x".repeat(2 * 1024 * 1024));
   if (params.arguments?.text === "transport-private") {
     process.stderr.write("token=private-secret at file:///private/owner/workspace");
     process.exit(2);
+  }
+  if (params.arguments?.text === "environment"
+    && (process.env.AILOHA_CONFIG_DIR !== "/synthetic-config"
+      || process.env.AILOHA_BROKER_PORT !== "4242"
+      || process.env.AILOHA_NO_UPDATE_CHECK !== "1"
+      || process.env.AILOHA_TARGET_ID !== undefined)) {
+    return { isError: true, content: [{ type: "text", text: "Invalid allowlisted native environment." }] };
   }
   const args = params.arguments;
   const route = {
