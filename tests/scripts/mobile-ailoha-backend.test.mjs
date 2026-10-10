@@ -585,9 +585,9 @@ test("agentless controls use captured canonical view and explicit capability evi
   assert.equal(state.calls.at(-1)[1].selectionGeneration, 0);
 });
 
-test("plain text remains unsupported even when fill is available", async (t) => {
+test("plain text never reaches fill even if a control adapter misreports support", async (t) => {
   const state = canonicalFixture({ controls: {
-    supported() { return { text: false }; },
+    supported() { return { text: true }; },
     async fillElement() { state.calls.push(["fill"]); },
   } });
   t.after(() => state.backend.dispose());
