@@ -489,6 +489,22 @@ test("unknown native tap retains a single original receipt, definitive 403 relea
   }
 });
 
+test("typed 403 carrying accepted operation evidence cannot evict a native tap receipt", async (t) => {
+  const error = Object.assign(new Error("accepted native tap"), {
+    name: "TargetHostTransportError", code: "HttpError", status: 403,
+    response: { status: 403 }, operationId: "accepted-tap",
+  });
+  const state = systemUiFixture((path) => {
+    if (path.includes("/actions/tap")) throw error;
+    return systemUiResponse("snapshot");
+  });
+  t.after(() => state.backend.dispose());
+  await assert.rejects(state.backend.uiTap("one", { text: "Save" }), (actual) => actual === error);
+  await assert.rejects(state.backend.uiTap("one", { text: "Save" }), { code: "ui_tap_outcome_uncertain" });
+  assert.equal(state.calls.filter(([kind, path]) =>
+    kind === "system-ui" && path.includes("/actions/tap")).length, 1);
+});
+
 test("completed native UI tap survives a failed authority read without another POST", async (t) => {
   const state = systemUiFixture((path) => {
     if (path.includes("/actions/tap")) {
@@ -531,6 +547,39 @@ test("accepted native UI tap canceled during authority read retains its complete
   release.resolve();
   await assert.rejects(pending, { code: "cancelled" });
   assert.equal((await state.backend.uiTap("one", { text: "Save" })).success, true);
+  assert.equal(state.calls.filter(([kind, path]) =>
+    kind === "system-ui" && path.includes("/actions/tap")).length, 1);
+});
+
+test("one cancelled native UI tap caller cannot poison a peer sharing its completed receipt", async (t) => {
+  const controller = new AbortController();
+  const entered = deferred();
+  const release = deferred();
+  let accepted = false;
+  let reads = 0;
+  const state = systemUiFixture((path) => {
+    if (path.includes("/actions/tap")) accepted = true;
+    return systemUiResponse(path.includes("system-snapshot") ? "snapshot" : "tap");
+  });
+  t.after(() => { release.resolve(); return state.backend.dispose(); });
+  const read = state.selectionStore.readSnapshot.bind(state.selectionStore);
+  state.selectionStore.readSnapshot = async (...args) => {
+    if (accepted) {
+      accepted = false;
+      reads += 1;
+      entered.resolve();
+      await release.promise;
+    }
+    return read(...args);
+  };
+  const first = state.backend.uiTap("one", { text: "Save" }, { signal: controller.signal });
+  await entered.promise;
+  const peer = state.backend.uiTap("one", { text: "Save" });
+  controller.abort();
+  await assert.rejects(first, { code: "cancelled" });
+  assert.equal(reads, 1);
+  release.resolve();
+  assert.equal((await peer).success, true);
   assert.equal(state.calls.filter(([kind, path]) =>
     kind === "system-ui" && path.includes("/actions/tap")).length, 1);
 });
@@ -698,6 +747,39 @@ test("reveal canceled during authority read retains completion without selecting
   assert.equal(state.calls.filter(([kind]) => kind === "reveal").length, 1);
 });
 
+test("one cancelled reveal caller cannot prevent a live peer from confirming the same native result", async (t) => {
+  const controller = new AbortController();
+  const entered = deferred();
+  const release = deferred();
+  let accepted = false;
+  const state = fixture({ reveal: {
+    async reveal(invocation) {
+      state.calls.push(["reveal", invocation]);
+      accepted = true;
+      return state.targets.get(invocation.targetId);
+    },
+  } });
+  t.after(() => { release.resolve(); return state.backend.dispose(); });
+  const read = state.selectionStore.readSnapshot.bind(state.selectionStore);
+  state.selectionStore.readSnapshot = async (...args) => {
+    if (accepted) {
+      accepted = false;
+      entered.resolve();
+      await release.promise;
+    }
+    return read(...args);
+  };
+  const first = state.backend.reveal("one", { selectRevealed: true, signal: controller.signal });
+  await entered.promise;
+  const peer = state.backend.reveal("one", { selectRevealed: true });
+  controller.abort();
+  await assert.rejects(first, { code: "cancelled" });
+  release.resolve();
+  assert.equal((await peer).id, "one");
+  assert.equal((await state.backend.getSelected()).device.id, "one");
+  assert.equal(state.calls.filter(([kind]) => kind === "reveal").length, 1);
+});
+
 test("a definitive reveal rejection does not become permanent unknown acceptance", async (t) => {
   const revealState = new Map();
   let posts = 0;
@@ -713,6 +795,21 @@ test("a definitive reveal rejection does not become permanent unknown acceptance
   assert.equal(revealState.size, 0);
   assert.equal((await state.backend.reveal("one")).id, "one");
   assert.equal(posts, 2);
+});
+
+test("typed reveal refusal with accepted operation evidence keeps the original receipt", async (t) => {
+  const error = Object.assign(new Error("accepted reveal with refusal metadata"), {
+    name: "TargetHostTransportError", status: 403, code: "HttpError",
+    response: { status: 403 }, operationId: "accepted-reveal",
+  });
+  let posts = 0;
+  const state = fixture({ reveal: createAilohaRevealAdapter({ transport: {
+    async response() { posts += 1; throw error; },
+  } }) });
+  t.after(() => state.backend.dispose());
+  await assert.rejects(state.backend.reveal("one"), (actual) => actual === error);
+  await assert.rejects(state.backend.reveal("one"), { code: "reveal_outcome_uncertain" });
+  assert.equal(posts, 1);
 });
 
 test("timeout with HTTP metadata never clears an uncertain reveal receipt", async (t) => {

@@ -593,6 +593,9 @@ source hierarchy is bounded to 8 MiB before search, and raw payloads to 1 MiB.
 The consumer also rejects a System UI response body over 16 MiB rather than
 silently truncating it; a larger result requires a reviewed native transport
 contract, not client-side invented pagination.
+Native tap keeps its completed original-owner receipt if its caller cancels
+during authority read-back; a live peer may confirm the same result without
+another tap, while a canceled peer cannot release that receipt.
 This source-only consumer mapping is **not** proof of released SDK/native
 compatibility, other-platform CI, or device validation.
 
@@ -604,6 +607,9 @@ remain captured; a changed view cannot turn the result into a different
 selection. A validated successful reply is retained privately through
 read-back/selection errors and can be reconciled against the original authority
 without another POST. A proven pre-acceptance refusal releases its receipt;
+typed transport errors carrying accepted operation evidence are not rewritten
+as definitive HTTP refusals, even if their status is 403. A canceled reveal
+caller cannot select or discard a live peer's original completion;
 HTTP 408, timeout, abort and other uncertain POSTs remain retained and are never
 replayed, including
 across same-ID process replacement. Stale authority and different process
