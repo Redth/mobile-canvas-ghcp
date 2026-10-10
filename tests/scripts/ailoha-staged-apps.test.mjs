@@ -99,6 +99,7 @@ test("host package topology rejects links, directories and unreadable/missing fi
   await assert.rejects(localAppPackage(link), { code: "invalid_package" });
   await assert.rejects(localAppPackage(directory), { code: "invalid_package" });
   await assert.rejects(localAppPackage(join(directory, "missing.apk")), { code: "package_unreadable" });
+  await assert.rejects(localAppPackage(join(directory, `${"x".repeat(300)}.apk`)), { code: "package_unreadable" });
   await assert.rejects(localAppPackage(unsupported), { code: "invalid_package" });
   await assert.rejects(localAppPackage(""), { code: "invalid_request" });
 });
