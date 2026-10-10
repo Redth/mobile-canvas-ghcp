@@ -7,6 +7,8 @@ export const scenario = {
   calls: [], leases: new Map(), videos: new Map(), operations: new Map(), status: "running", geometryRevision: 13,
   catalog: null, createdTargets: new Map(), creationGate: null,
   featureAppearance: "light",
+  sourceFeatureContracts: false, featureStates: new Map(),
+  omitSourceEvidence: null,
   connectionRef: {
     schema: "ailoha.target-host.connection/v1", serviceId: "synthetic-service", pid: 12345,
     startedAt: "2026-10-09T23:00:00Z", processStartedAt: "2026-10-09T22:59:59Z",
@@ -55,10 +57,15 @@ function mergedCapabilities(values) {
   return [...groups.values()];
 }
 function providerRecords() {
+  const featureCapabilities = scenario.sourceFeatureContracts
+    ? mergedCapabilities([...captures,
+      { id: "target.permissions", version: 1, features: ["listTargetPermissions", "updateTargetPermission"] },
+      { id: "target.telephony", version: 1, features: ["getTargetTelephony", "controlTargetCall"] }])
+    : captures;
   return [{
-    providerId: "synthetic-provider", name: "Synthetic provider", version: "synthetic", state: "ready", capabilities: captures,
+    providerId: "synthetic-provider", name: "Synthetic provider", version: "synthetic", state: "ready", capabilities: featureCapabilities,
   }, ...(scenario.catalog?.providers ?? []).map((provider) => ({
-    ...provider, capabilities: mergedCapabilities([...provider.capabilities, ...captures]),
+    ...provider, capabilities: mergedCapabilities([...provider.capabilities, ...featureCapabilities]),
   }))];
 }
 function target() {
@@ -77,6 +84,18 @@ function createdTarget(id) {
 const reply = (body, status = 200, location = null) => ({
   status, contentType: "application/json", body, location, retryAfterMs: status === 202 ? 1000 : null,
 });
+function acceptedFeature(kind, id, device, result) {
+  const operationId = `feature-operation-${scenario.operations.size}`;
+  const operation = {
+    operationId, kind, status: "queued", destructive: false, targetId: id,
+    providerId: device.providerId, createdAt: "2026-10-10T03:00:00Z",
+  };
+  scenario.operations.set(operationId, {
+    ...operation, status: "succeeded", completedAt: "2026-10-10T03:00:01Z",
+    ...(result === undefined ? {} : { result }),
+  });
+  return reply(operation, 202, `/api/v1/operations/${operationId}`);
+}
 
 export async function getRuntimePin({ expectedVersion }) {
   return Object.freeze({ version: expectedVersion, rid: "synthetic", sourceSha, manifestSha512: "synthetic-only" });
@@ -131,7 +150,8 @@ export async function openTargetHostTransport(leaseId) {
       scenario.calls.push({ path, method: options.method ?? "GET", body });
       if (closed) throw new Error("closed double");
       if (options.signal?.aborted) throw new Error("aborted double");
-      if (!["GET", "POST", "PATCH", "DELETE"].includes(options.method ?? "GET")) {
+      if (!["GET", "POST", "PATCH", "DELETE", ...(scenario.sourceFeatureContracts ? ["PUT"] : [])]
+        .includes(options.method ?? "GET")) {
         throw new Error("Official-shaped fixture does not support this HTTP verb");
       }
       if (path === "/api/v1/host/status") return reply({
@@ -214,17 +234,34 @@ export async function openTargetHostTransport(leaseId) {
         const device = id === targetId ? target() : createdTarget(id);
         if (!device) throw new Error("Unknown feature target");
         const provenance = { "x-ailoha-target-host": { targetId: id } };
+        const feature = scenario.featureStates.get(id) ?? {
+          batteryLevel: 0.8, latencyMs: null, clipboard: "synthetic clipboard",
+          networkIsIndicatorOnly: false,
+        };
+        scenario.featureStates.set(id, feature);
         if (featureRoute[2] === "hardware" && options.method === "GET") return reply({
           ...provenance, targetId: id, platform: device.nativeIdentity.platform,
-          batteryLevel: 0.8, batteryState: "charging", downloadBitsPerSecond: null,
-          uploadBitsPerSecond: null, latencyMs: null, networkIsIndicatorOnly: false,
+          batteryLevel: feature.batteryLevel, batteryState: "charging", downloadBitsPerSecond: null,
+          uploadBitsPerSecond: null, latencyMs: feature.latencyMs,
+          networkIsIndicatorOnly: feature.networkIsIndicatorOnly,
           unreadable: ["location"],
         });
         if (featureRoute[2] === "clipboard" && options.method === "GET") return reply({
-          ...provenance, contentType: "text/plain", text: "synthetic clipboard",
+          ...provenance, contentType: "text/plain", text: feature.clipboard,
         });
+        if (scenario.sourceFeatureContracts && options.method === "PUT") {
+          const input = JSON.parse(body);
+          if (featureRoute[2] === "clipboard") {
+            feature.clipboard = input.text;
+            return reply({ ...provenance, contentType: "text/plain", text: feature.clipboard });
+          }
+          if (featureRoute[2] === "location") return reply({
+            ...provenance, simulated: true, latitude: input.latitude, longitude: input.longitude,
+          });
+        }
         if (featureRoute[2] === "apps?includeSystem=true" && options.method === "GET") return reply([{
-          appId: "com.example.synthetic", packageId: "com.example.synthetic",
+          appId: scenario.sourceFeatureContracts ? "canonical/resolved-app" : "com.example.synthetic",
+          packageId: "com.example.synthetic",
           state: "installed", ...provenance,
         }]);
         if (featureRoute[2] === "settings/device") {
@@ -238,18 +275,76 @@ export async function openTargetHostTransport(leaseId) {
         }
         if (["biometrics/results", "push/notifications", "telephony/sms"].includes(featureRoute[2])
           && options.method === "POST") {
-          const operationId = `feature-scan-${scenario.operations.size}`;
           const kind = featureRoute[2] === "biometrics/results"
             ? "simulateTargetBiometricResult" : featureRoute[2] === "telephony/sms"
               ? "simulateTargetSms" : "sendTargetPushNotification";
-          const operation = {
-            operationId, kind, status: "queued", destructive: false,
-            targetId: id, providerId: device.providerId, createdAt: "2026-10-10T03:00:00Z",
-          };
-          scenario.operations.set(operationId, { ...operation, status: "succeeded", completedAt: "2026-10-10T03:00:01Z" });
-          return reply(operation, 202, `/api/v1/operations/${operationId}`);
+          return acceptedFeature(kind, id, device, scenario.sourceFeatureContracts && kind === "simulateTargetBiometricResult"
+            ? { action: JSON.parse(body).result === "success" ? "match" : "nomatch",
+              ...(scenario.omitSourceEvidence === "biometricConfirmed" ? {}
+                : { confirmed: device.nativeIdentity.platform === "android" ? true : null }) } : undefined);
         }
         throw new Error("Unsupported feature verb");
+      }
+      if (scenario.sourceFeatureContracts) {
+        const sourceRoute = /^\/api\/v1\/targets\/([^/]+)\/(battery|network|network\/profiles\/native|telephony|telephony\/calls\/actions|permissions(?:\?appId=[^/]+|\/[^/]+)?)$/.exec(path);
+        if (sourceRoute) {
+          const id = decodeURIComponent(sourceRoute[1]);
+          const device = id === targetId ? target() : createdTarget(id);
+          if (!device) throw new Error("Unknown source feature target");
+          const platform = device.nativeIdentity.platform;
+          const provenance = { "x-ailoha-target-host": { targetId: id } };
+          const feature = scenario.featureStates.get(id) ?? {
+            batteryLevel: 0.8, latencyMs: null, clipboard: "synthetic clipboard",
+            networkIsIndicatorOnly: false,
+          };
+          scenario.featureStates.set(id, feature);
+          const suffix = sourceRoute[2];
+          if (suffix === "battery" && options.method === "PUT") {
+            feature.batteryLevel = JSON.parse(body).level;
+            return reply({ ...provenance, simulated: true, level: feature.batteryLevel });
+          }
+          if (suffix === "network" && options.method === "PUT") {
+            feature.latencyMs = JSON.parse(body).latencyMs;
+            return reply({ ...provenance, connectionProfiles: ["cellular"] });
+          }
+          if (suffix === "network/profiles/native" && options.method === "POST") {
+            const input = JSON.parse(body);
+            if (platform === "ios" && input.latencyMs !== undefined) throw new Error("iOS native latency unsupported");
+            feature.networkIsIndicatorOnly = platform === "ios";
+            if (input.latencyMs !== undefined) feature.latencyMs = input.latencyMs;
+            return acceptedFeature("applyTargetNativeNetworkProfile", id, device, {
+              ...provenance,
+              ...(scenario.omitSourceEvidence === "profileIndicator" ? {}
+                : { networkIsIndicatorOnly: feature.networkIsIndicatorOnly }),
+            });
+          }
+          const calls = { ...provenance, supported: true, platform,
+            callState: "ringing",
+            ...(scenario.omitSourceEvidence === "calls" ? {}
+              : { calls: [{ number: "+123", state: "RINGING" }] }) };
+          if (suffix === "telephony" && options.method === "GET") return reply(calls);
+          if (suffix === "telephony/calls/actions" && options.method === "POST") {
+            return acceptedFeature("controlTargetCall", id, device, calls);
+          }
+          if (suffix.startsWith("permissions")) {
+            const appId = suffix.includes("?") ? decodeURIComponent(suffix.split("appId=")[1])
+              : JSON.parse(body).appId;
+            const nativeName = platform === "ios" ? "camera" : "android.permission.CAMERA";
+            if (suffix.startsWith("permissions?") && options.method === "GET") return reply([{
+              ...provenance, name: "camera", status: "unknown", appId,
+              ...(scenario.omitSourceEvidence === "permissionName" ? {} : { platformName: nativeName }),
+            }]);
+            if (suffix.startsWith("permissions/") && options.method === "PUT") return reply({
+              ...provenance, name: decodeURIComponent(suffix.slice("permissions/".length)),
+              appId, status: JSON.parse(body).status,
+              ...(scenario.omitSourceEvidence === "permissionFanout" ? {} : { affectedPermissions: [
+                { name: "camera", platformName: nativeName, granted: null },
+                { name: "camera", platformName: `${nativeName}.extra`, granted: true },
+              ] }),
+            });
+          }
+          throw new Error("Unsupported source feature verb");
+        }
       }
       const surfaceRoute = /^\/api\/v1\/targets\/([^/]+)\/surfaces\/([^/]+)\/(.+)$/.exec(path);
       const mediaTargetId = surfaceRoute ? decodeURIComponent(surfaceRoute[1]) : targetId;

@@ -439,7 +439,8 @@ test("draft native call and permission fidelity maps exact readback, fanout and 
   const binding = { contextRef: "ctx", scopeEpoch: "epoch", ownerProcessId: 1234,
     scope: { sessionId: "unique-session", viewId: "unique-view" } };
   const mcp = await createAilohaMcpDispatcher({
-    version: "source-only", binding, allowNativeFidelity: true, createBackend: async () => state.backend,
+    version: "source-only", binding, allowPut: true, allowNativeFidelity: true,
+    createBackend: async () => state.backend,
   });
   const call = async (name, input) => {
     const reply = await mcp.handle({ jsonrpc: "2.0", id: 1, method: "tools/call",

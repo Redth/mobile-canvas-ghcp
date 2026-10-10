@@ -22,7 +22,8 @@ process.env.MOBILE_CANVAS_BACKEND = "ailoha";
 const scope = { sessionId: `live-test-session-${process.pid}`, viewId: `${host}-view` };
 const { createAilohaVideoReceiver } = await import(pathToFileURL(join(root, "web", "ailoha-video-receiver.js")).href);
 const { createAilohaMcpDispatcher } = await import(pathToFileURL(join(root, "lib", "ailoha", "mcp-host.mjs")).href);
-const { createRuntimeCanvasHost, getRuntimeContextBinding } = await import(pathToFileURL(join(root, "lib", "ailoha", "runtime-backend.mjs")).href);
+const { createRuntimeCanvasHost, createRuntimeMobileBackend, getRuntimeContextBinding } =
+  await import(pathToFileURL(join(root, "lib", "ailoha", "runtime-backend.mjs")).href);
 let release;
 let receiver;
 let dispatcher;
@@ -123,6 +124,136 @@ async function checkDeviceFeatures(api, selected) {
     }
   } finally { await direct.dispose(); }
   assert.equal(scenario.calls.some((call) => call.method === "PUT"), false);
+}
+
+async function checkSourceConditionalFeatures(selected, androidId) {
+  scenario.sourceFeatureContracts = true;
+  const binding = returnedBinding(selected);
+  const options = {
+    scope, contextRef: binding.contextRef, scopeEpoch: binding.scopeEpoch,
+    ownerProcessId: binding.ownerProcessId, allowContextReopen: false,
+    featureOptions: { allowPut: true, allowNativeFidelity: true },
+  };
+  const apiBackend = await createRuntimeMobileBackend(options);
+  const sourceMcp = await createAilohaMcpDispatcher({
+    binding, version: "source-contract-only", allowPut: true, allowNativeFidelity: true,
+    createBackend: () => createRuntimeMobileBackend(options),
+  });
+  const ios = "opaque/target";
+  const nativePackage = "com.example.synthetic";
+  const cases = [
+    ["hardware_get", ios, "hardware", "GET", {}, "batteryLevel", 80],
+    ["battery_set", ios, "hardware/battery", "POST", { level: 75 }, "batteryLevel", 75],
+    ["network_set", ios, "hardware/network", "POST", { profile: "wifi" }, "networkIsIndicatorOnly", true],
+    ["location_set", ios, "hardware/location", "POST", { latitude: 2, longitude: -3 }, "operation", "location-set"],
+    ["location_clear", ios, "hardware/location", "DELETE", {}, "operation", "location-clear"],
+    ["clipboard_get", ios, "clipboard", "GET", {}, "text", "synthetic clipboard"],
+    ["clipboard_set", ios, "clipboard", "POST", { text: "source clipboard" }, "text", "source clipboard"],
+    ["settings_get", ios, "settings", "GET", {}, "appearance", "dark"],
+    ["settings_set", ios, "settings", "POST", { appearance: "dark" }, "appearance", "dark"],
+    ["biometric", ios, "biometric", "POST", { action: "nomatch" }, "confirmed", false],
+    ["sms_send", ios, "sms", "POST", { from: "+123", body: "incoming" }, "operation", "sms-send"],
+    ["notification_push", ios, "notifications", "POST",
+      { bundleId: nativePackage, payload: '{"aps":{"alert":"source"}}' }, "operation", "notification-push"],
+    ["permission_list", ios, `permissions?bundleId=${nativePackage}`, "GET",
+      { bundleId: nativePackage }, "total", 1],
+    ["permission_set", ios, "permissions", "POST",
+      { bundleId: nativePackage, permission: "camera", action: "reset" }, "action", "reset"],
+    ["calls", androidId, "calls", "GET", {}, "platform", "android"],
+    ["call", androidId, "calls", "POST", { action: "place", number: "+123" }, "platform", "android"],
+    ["network_set", androidId, "hardware/network", "POST",
+      { profile: "lte", latencyMs: 175 }, "latencyMs", 175],
+    ["network_set", androidId, "hardware/network", "POST", { latencyMs: 125 }, "latencyMs", 125],
+    ["biometric", androidId, "biometric", "POST",
+      { action: "match", fingerId: 7 }, "confirmed", true],
+    ["permission_list", androidId, `permissions?bundleId=${nativePackage}`, "GET",
+      { bundleId: nativePackage }, "total", 1],
+    ["permission_set", androidId, "permissions", "POST",
+      { bundleId: nativePackage, permission: "camera", action: "grant" }, "action", "grant"],
+  ];
+  try {
+    for (const [name, id, path, method, input, field, value] of cases) {
+      const route = `/api/v1/devices/${encodeURIComponent(id)}/${path}`;
+      const response = await apiBackend.request(route, {
+        method, ...(method === "GET" || method === "DELETE" ? {} : { body: JSON.stringify(input) }),
+      });
+      assert.equal(response.status, 200, `${host} source API ${name}: ${await response.clone().text()}`);
+      const apiResult = await response.json();
+      assert.equal(apiResult[field], value, `${host} source API ${name}`);
+      const mcp = await sourceMcp.handle(mcpCall(`mobile_device_${name}`, { deviceId: id, ...input }));
+      assert.notEqual(mcp.result.isError, true, `${host} source MCP ${name}: ${JSON.stringify(mcp.result)}`);
+      assert.equal(mcp.result.structuredContent[field], value, `${host} source MCP ${name}`);
+      for (const result of [apiResult, mcp.result.structuredContent]) {
+        if (name === "calls" || name === "call") {
+          assert.deepEqual(result.calls, [{ number: "+123", state: "RINGING" }]);
+        }
+        if (name === "permission_list") {
+          assert.deepEqual(result.permissions, [{
+            name: "camera", platformName: id === ios ? "camera" : "android.permission.CAMERA",
+            granted: null,
+          }]);
+          assert.equal(result.bundleId, nativePackage);
+        }
+        if (name === "permission_set") {
+          assert.equal(result.permissions.length, 2);
+          assert.equal(result.permissions[0].granted, null);
+          assert.equal(result.permissions[1].granted, true);
+          assert.equal(result.bundleId, nativePackage);
+        }
+        if (name === "biometric") assert.equal(result.platform, id === ios ? "ios" : "android");
+      }
+    }
+    const wire = scenario.calls;
+    assert.equal(wire.some((call) => call.method === "PUT" && call.path?.endsWith("/battery")), true);
+    assert.equal(wire.some((call) => call.method === "PUT" && call.path?.endsWith("/permissions/camera")
+      && JSON.parse(call.body).appId === "canonical/resolved-app"), true);
+    assert.equal(wire.some((call) => call.path?.endsWith("/push/notifications")
+      && JSON.parse(call.body).appId === "canonical/resolved-app"), true);
+    assert.equal(wire.some((call) => call.path?.endsWith("/biometrics/results")
+      && call.path.includes(encodeURIComponent(androidId)) && JSON.parse(call.body).fingerId === 7), true);
+    const missingEvidence = [
+      ["calls", "calls", androidId, "GET", {}, "GET"],
+      ["permissionName", "permission_list", ios, "GET", { bundleId: nativePackage }, "GET"],
+      ["permissionFanout", "permission_set", androidId, "POST",
+        { bundleId: nativePackage, permission: "contacts", action: "revoke" }, "PUT"],
+      ["biometricConfirmed", "biometric", androidId, "POST",
+        { action: "nomatch", fingerId: 11 }, "POST"],
+      ["profileIndicator", "network_set", ios, "POST", { profile: "edge" }, "POST"],
+    ];
+    for (const [missing, name, id, method, input, wireMethod] of missingEvidence) {
+      scenario.omitSourceEvidence = missing;
+      const path = name === "permission_list" ? `permissions?bundleId=${nativePackage}`
+        : name === "permission_set" ? "permissions"
+        : name === "network_set" ? "hardware/network" : name;
+      const route = `/api/v1/devices/${encodeURIComponent(id)}/${path}`;
+      const before = wire.filter((call) => call.method === wireMethod).length;
+      const request = () => apiBackend.request(route, {
+        method, ...(method === "GET" ? {} : { body: JSON.stringify(input) }),
+      });
+      const response = await request();
+      assert.equal(response.status, 501, `${host} missing ${missing}: ${await response.clone().text()}`);
+      assert.equal((await response.json()).code, "capability_not_supported");
+      if (method === "POST") {
+        const repeated = await request();
+        assert.equal(repeated.status, missing === "permissionFanout" ? 502 : 501,
+          `${host} repeated ${missing}`);
+        assert.equal((await repeated.json()).code,
+          missing === "permissionFanout" ? "feature_outcome_uncertain" : "capability_not_supported");
+        assert.equal(wire.filter((call) => call.method === wireMethod).length, before + 1,
+          `${host} missing ${missing} must not replay`);
+      }
+      const mcp = await sourceMcp.handle(mcpCall(`mobile_device_${name}`, { deviceId: id, ...input }));
+      assert.equal(mcp.result.isError, true);
+      assert.equal(JSON.parse(mcp.result.content[0].text).code, "capability_not_supported");
+    }
+    scenario.omitSourceEvidence = null;
+    return cases.length * 2;
+  } finally {
+    scenario.omitSourceEvidence = null;
+    await sourceMcp.dispose();
+    await apiBackend.dispose();
+    scenario.sourceFeatureContracts = false;
+  }
 }
 
 async function checkEmptyContext(selection) {
@@ -459,6 +590,9 @@ try {
     return input.runtimeId === catalogIds.runtime && input.targetTypeId === catalogIds.type
       && [catalogIds.iosProvider, catalogIds.androidProvider].includes(input.providerId);
   }), true);
+  const sourceFeatureResults = await checkSourceConditionalFeatures(
+    selectedContext, creationRecords.find((record) => record.platform === "android").id,
+  );
   await release();
   release = null;
   assert.deepEqual(units, [0, 1, 2, 3, 4, 5]);
@@ -518,6 +652,7 @@ try {
     createPosts: creationCalls.length, noSeparateBootPost: true,
     connectionRefCapturedInternally: true, connectionRefNotSerialized: true,
     deviceFeaturesValidated: true,
+    sourceFeatureResults,
   }));
 } finally {
   await dispatcher?.dispose();

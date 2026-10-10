@@ -29,6 +29,7 @@ for (const [host, product] of [
     assert.equal(evidence.connectionRefCapturedInternally, true);
     assert.equal(evidence.connectionRefNotSerialized, true);
     assert.equal(evidence.deviceFeaturesValidated, true);
+    assert.equal(evidence.sourceFeatureResults, 42);
     assert.equal(evidence.videoResourcesAfterClose, 0);
     assert.equal(evidence.leaseCountAfterClose, 0);
     assert.equal(evidence.noHostStop, true);
