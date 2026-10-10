@@ -382,7 +382,8 @@ test("compatibility ID decoding rejects coercible kinds and alternate encodings,
     assert.throws(() => readCatalogChoiceId(value), { code: "invalid_catalog_choice" });
   }
   const id = catalogChoiceId("runtime", { targetHostId: catalogIds.host, providerId: catalogIds.iosProvider, runtimeId: catalogIds.runtime });
-  assert.throws(() => readCatalogChoiceId(id.replace("%5B", "%5b")), { code: "invalid_catalog_choice" });
+  assert.equal(id.match(/%5B/g)?.length, 1);
+  assert.throws(() => readCatalogChoiceId(id.replaceAll("%5B", "%5b")), { code: "invalid_catalog_choice" });
 });
 
 test("advertised provider reads retain strict response/owner/schema validation and never quietly return empty catalogs", async (t) => {
