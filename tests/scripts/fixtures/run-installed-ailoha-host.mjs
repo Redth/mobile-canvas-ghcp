@@ -143,7 +143,7 @@ try {
     const geometry = await action("get_display_geometry", { deviceId: "opaque/target" });
     await action("tap_device", { deviceId: "opaque/target", x: 12, y: 10, geometryRevision: geometry.geometryRevision });
     assert.equal((await action("press_key", { deviceId: "opaque/target", keyCode: 40 })).operation, "press-key");
-    assert.equal((await action("press_button", { deviceId: "opaque/target", button: "home" })).operation, "press-button");
+    assert.equal((await action("press_button", { deviceId: "opaque/target", button: "SIDE" })).operation, "press-button");
     await assert.rejects(action("type_text", { deviceId: "opaque/target", text: "literal \u2603" }), { status: 501 });
     assert.equal((await action("rotate_device", { deviceId: "opaque/target", orientation: "portrait" })).operation, "rotate");
     const screenshot = await action("take_screenshot", { deviceId: "opaque/target", output: join(scratch, "screen.png") });
@@ -261,7 +261,7 @@ try {
     const display = await (await api("/api/v1/devices/opaque%2Ftarget/display")).json();
     await api("/api/v1/devices/opaque%2Ftarget/input/tap", "POST", { x: 12, y: 10, geometryRevision: display.geometryRevision });
     for (const [kind, input] of [
-      ["key", { keyCode: 40 }], ["button", { button: "home" }],
+      ["key", { keyCode: 40 }], ["button", { button: "SIDE" }],
       ["rotate", { orientation: "portrait" }],
     ]) {
       assert.equal((await api(`/api/v1/devices/opaque%2Ftarget/input/${kind}`, "POST", input)).status, 200);
@@ -314,7 +314,7 @@ try {
   const rawMcp = await createAilohaMcpDispatcher({ version: "synthetic-only", binding: returnedBinding(selectedContext) });
   try {
     const button = await rawMcp.handle(mcpCall("mobile_device_press_button",
-      { deviceId: selectedContext.device.id, button: "home" }));
+      { deviceId: selectedContext.device.id, button: "VolumeUp" }));
     assert.equal(button.result.structuredContent.operation, "press-button");
     const unsafeText = await rawMcp.handle(mcpCall("mobile_device_type_text",
       { deviceId: selectedContext.device.id, text: "literal \u2603" }));
@@ -365,6 +365,10 @@ try {
   const body = scenario.calls.find((call) => call.path?.endsWith("/input/actions/tap")).body;
   assert.equal(JSON.parse(body).geometryRevision, 13);
   assert.equal(scenario.calls.filter((call) => call.path?.endsWith("/input/actions/key")).length >= 3, true);
+  assert.equal(scenario.calls.some((call) => call.path?.endsWith("/input/actions/key")
+    && JSON.parse(call.body).key === "side"), true);
+  assert.equal(scenario.calls.some((call) => call.path?.endsWith("/input/actions/key")
+    && JSON.parse(call.body).key === "volumeup"), true);
   assert.equal(scenario.calls.some((call) => call.path?.endsWith("/input/actions/fill")), false);
   assert.equal(scenario.calls.some((call) => call.method === "PATCH" && call.path?.endsWith("/presentation")), true);
   assert.equal(scenario.calls.some((call) => call.method === "PATCH" && call.path?.endsWith("/settings/status-bar")), true);

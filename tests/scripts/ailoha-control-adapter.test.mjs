@@ -61,14 +61,25 @@ test("advertises only target and surface operations actually available", () => {
 test("key and button use structured canonical key requests, not host commands", async () => {
   const { adapter, calls } = fixture();
   await adapter.key(invocation, 40);
-  await adapter.button(invocation, "home");
+  await adapter.button(invocation, "HOME");
+  await adapter.button(invocation, "SIDE");
   assert.deepEqual(calls.map(({ path, options }) => [path, options.method, JSON.parse(options.body)]), [
     [`${surface}/input/actions/key`, "POST", { key: "40" }],
     [`${surface}/input/actions/key`, "POST", { key: "home" }],
+    [`${surface}/input/actions/key`, "POST", { key: "side" }],
   ]);
+  const android = fixture();
+  for (const alias of ["APP-SWITCH", "Recents", "VolumeUp", "VOLUMEDOWN"]) {
+    await android.adapter.button({ ...invocation, nativeIdentity: { platform: "android" } }, alias);
+  }
+  assert.deepEqual(android.calls.map(({ options }) => JSON.parse(options.body).key),
+    ["app-switch", "recents", "volumeup", "volumedown"]);
+  await assert.rejects(adapter.button(invocation, "recents"), { code: "invalid_request" });
+  await assert.rejects(android.adapter.button(
+    { ...invocation, nativeIdentity: { platform: "android" } }, "siri"), { code: "invalid_request" });
   await assert.rejects(adapter.key(invocation, -1), { code: "invalid_request" });
   await assert.rejects(adapter.button(invocation, "home; echo unsafe"), { code: "invalid_request" });
-  assert.equal(calls.length, 2);
+  assert.equal(calls.length, 3);
 });
 
 test("fill is restricted to an explicitly named owned editable element and bounded literal JSON", async () => {

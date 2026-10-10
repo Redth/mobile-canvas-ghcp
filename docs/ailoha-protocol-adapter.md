@@ -428,8 +428,11 @@ All provider mutations are original synthetic fixtures, not native-device accept
 Agentless controls in the opt-in use the captured Target Host selection and
 per-target/per-surface capability evidence, without an app agent: `pressTargetKey`
 for numeric USB HID keys and physical button names, and
-`updateTargetPresentation` for portrait/landscape rotation. The legacy
-`/presentation` API and MCP identity mean **status-bar overrides**, not
+`updateTargetPresentation` for portrait/landscape rotation. Legacy button
+aliases and case variants remain accepted (including iOS `side` and
+Android `recents`, `app-switch`, `volumeup`, and `volumedown`); only recognized
+names are sent as normalized canonical JSON.
+The legacy `/presentation` API and MCP identity mean **status-bar overrides**, not
 Target Host display presentation: they map to `getTargetSettings` and
 `updateTargetSettings` in the `status-bar` namespace, preserving
 `enabled`/`readable`/`overrides` semantics. Missing focus, capability, or
