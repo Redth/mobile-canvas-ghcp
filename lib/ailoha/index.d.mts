@@ -286,6 +286,50 @@ export class AilohaProtocolError extends Error {
   toJSON(): ProtocolErrorResult;
 }
 
+export interface TargetArtifactContext {
+  targetId: string;
+  providerId?: string;
+}
+
+export interface TargetFileListing {
+  path: string;
+  nativePath?: string;
+  total: number;
+  files: Array<{
+    name: string;
+    type: "file" | "directory";
+    path?: string;
+    nativePath?: string;
+    nativeModified?: string;
+    size?: number;
+    "x-ailoha-target-host"?: TargetArtifactContext;
+  }>;
+}
+
+export interface TargetLogListing {
+  total?: number;
+  entries: Array<{
+    nativeTimestamp?: string;
+    nativeLevel?: string;
+    nativeSource?: string;
+    source: string;
+    message: string;
+    processId?: number | null;
+    subsystem?: string | null;
+    "x-ailoha-target-host"?: TargetArtifactContext;
+  }>;
+}
+
+export interface TargetCrashReport {
+  crashId: string;
+  nativeName?: string;
+  nativeTimestamp?: string;
+  nativeKind?: string | null;
+  appId?: string | null;
+  content?: string;
+  "x-ailoha-target-host"?: TargetArtifactContext;
+}
+
 export interface TargetHostClient {
   readonly connection: PublicConnection;
   getHostStatus(options?: RequestOptions): Promise<HostStatus>;
@@ -299,12 +343,24 @@ export interface TargetHostClient {
   getTarget(targetId: string, options?: RequestOptions): Promise<Target>;
   getTargetCapabilities(targetId: string, options?: RequestOptions): Promise<Capability[]>;
   listTargetApps(targetId: string, options?: RequestOptions & { includeSystem?: boolean }): Promise<InstalledTargetApp[]>;
+  listTargetAppReferences(targetId: string, options?: RequestOptions): Promise<Array<{
+    appId: string; packageId?: string | null; "x-ailoha-target-host"?: TargetArtifactContext;
+  }>>;
   getTargetApp(targetId: string, appId: string, options?: RequestOptions): Promise<InstalledTargetApp>;
   launchTargetApp(targetId: string, appId: string, request?: AppLaunchRequest, options?: RequestOptions): Promise<Operation>;
   terminateTargetApp(targetId: string, appId: string, options?: RequestOptions): Promise<Operation>;
   uninstallTargetApp(targetId: string, appId: string, options: ConfirmationOptions): Promise<Operation>;
   listTargetAppOps(targetId: string, appId: string, options?: RequestOptions): Promise<TargetAppOp[]>;
   updateTargetAppOp(targetId: string, appId: string, appOpId: string, mode: TargetAppOp["mode"], options?: RequestOptions): Promise<TargetAppOp>;
+  queryTargetFiles(targetId: string, path: string, options?: RequestOptions): Promise<TargetFileListing>;
+  queryTargetLogs(targetId: string, query: {
+    appId?: string; text?: string; level?: string; limit?: string; since?: string; until?: string;
+  }, options?: RequestOptions): Promise<TargetLogListing>;
+  queryTargetCrashes(targetId: string, query: {
+    appId?: string; text?: string; limit?: string;
+  }, options?: RequestOptions):
+    Promise<{ total?: number; crashes: TargetCrashReport[] }>;
+  getTargetCrashDetail(targetId: string, crashId: string, options?: RequestOptions): Promise<TargetCrashReport>;
   listTargetSurfaces(targetId: string, options?: RequestOptions): Promise<Surface[]>;
   createTarget(request: TargetCreateRequest, options?: RequestOptions): Promise<Operation>;
   startTarget(targetId: string, options?: LifecycleOptions): Promise<Operation>;

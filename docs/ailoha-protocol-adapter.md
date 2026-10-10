@@ -737,6 +737,76 @@ tooling is not a ready-shaped empty inventory.
 
 ### Scope and verification
 
+The nine legacy file/media/diagnostics identities remain registered with their
+original MCP input/output schemas. Four read-only identities (`file_list`,
+`log`, `crashes`, `crash_report`) now have shared, capability-checked source
+adapters for the reviewed native read-result subset. File push and media add
+now have source-compatible staging, conditional on the
+verified native-stage CLI, target capabilities and original-owner receipts.
+File push requires captured human overwrite approval; unsupported MCP clients
+cannot substitute `confirm=true`. File pull, delete and mkdir still return
+`artifact_contract_unavailable` (501) without dispatch because their direct
+native routes lack a server-owned original-view admission and recovery fence.
+Unadvertised read capabilities return `capability_not_supported` (501).
+Ordinary installs still use the legacy backend unless explicitly opted in.
+This is **not** nine-tool file/media/diagnostics parity.
+
+The read adapter requires the captured target/provider/native identity and
+original context revision before each new native read and again before
+projecting a completed result. It refreshes the named view and native target
+after an in-flight read, so retirement, revision changes and native identity
+replacement cannot produce usable stale output. App selectors resolve
+through the installed-app inventory to its package ID, not a workspace ID.
+It rejects incomplete listings/totals, foreign entry ownership, unsupported
+native query bounds and ambiguous app selectors rather than fabricating
+results. File sizes include legitimate zero-byte files; native modification
+and platform path spelling are retained. Native log query results preserve
+the backend's chronological retained window and pre-limit total; blank text
+retains the native no-filter semantics. Inline
+crash detail is bounded to 1 MiB UTF-8; larger reports are not silently
+truncated or marked successful. A streamed export/readback path remains a
+delivery gate.
+
+The read adapters target the coordinator-reviewed **source** subset frozen at
+`microsoft/ailoha` native draft `2618b6c`. The staged push/media adapters use
+the separately source-cleared typed stage, confirm, continue and cleanup
+receipts at native draft `e003ea7`; incomplete artifact readback confirms
+by original-host GET only, uncertain device acceptance never triggers another
+device POST, and original-host cleanup is receipt-conditional. A completed
+zero-byte push is distinguished from a failed copy; media output requires the
+native accepted artifact IDs in stage order. Relative host source paths resolve
+to absolute paths in push/media output, matching the legacy service. Media
+batches beyond 16 paths
+fail explicitly instead of silently truncating. These are **source-only**
+compatibility paths, not a public SDK/runtime pin. The normal Ailoha opt-in
+remains unavailable until an approved public runtime graph is prepared; no
+public binary, real-device parity or default migration is claimed.
+
+For comparison, at the earlier canonical `microsoft/ailoha` source
+`f5eadd9f7a31b6da9322bf74e7549286d8844668`, the root Target Host feature
+API and provider adapter did not yet supply the legacy guarantees below.
+The conditional read subset above now uses newer reviewed draft source; this
+historical table does not describe the currently mapped read routes:
+
+| Legacy surface | Missing native compatibility semantics |
+| --- | --- |
+| File list | A resolved listing path, complete total and reusable per-entry paths. The provider limits results to 5,000; an array length cannot stand in for an uncapped total. |
+| File pull/push | Completed host destination/overwrite and verified transferred byte count, including successful zero-byte copies. The root API exports/imports artifacts and returns operation receipts, not completed transfer results. Push must not be replayed after uncertain acceptance. |
+| File delete/mkdir | Nonrecursive directory-delete refusal and scoped human deletion consent; the current provider forces recursive deletion. The reviewed root file-service contract does not expose a compatible mkdir and resolved-path result. |
+| Media add | A host-path list with accepted-path result and iOS vCard handling; root import takes a single staged photo/video/audio artifact. |
+| Log | Device-side text filter, complete match total, guaranteed newest-first ordering and process/subsystem fields. Root log query has app/level/time/limit but no text or total. |
+| Crash list/report | Process-name text filter, complete match total, guaranteed newest-first ordering, and full detail content. Root detail is a summary; full content is a separate artifact export. |
+
+The root Target Host supports `app://<bundleId>/<relative-path>` and absolute
+device paths in its file adapter, but that address mapping alone cannot repair
+missing result fields or policy. The `imports/mobile-canvas` subtree contains
+the historical API and contracts; calling its standalone service instead of
+the root Target Host would reintroduce a second native engine. The required
+native work is to expose exact result/filter/ordering evidence and a
+lease-owned, server-fenced staging and artifact flow before enabling any of
+these identities. Neither a bounded JSON body nor a successful operation
+receipt can prove a completed copy or justify invented output metadata.
+
 Implemented: authoritative advertised catalogs and compatible create+boot,
 inventory/select, advertised start/stop/reboot and provider-owned window reveal,
 PNG screenshot,

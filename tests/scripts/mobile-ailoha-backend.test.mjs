@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
 import test from "node:test";
 import { access, mkdtemp, rm, writeFile } from "node:fs/promises";
-import { join } from "node:path";
+import { basename, join, relative, resolve } from "node:path";
 import { productModule } from "../ailoha-test-module.mjs";
 const { AilohaMobileBackend } = await import(productModule("lib/ailoha/mobile-backend.mjs"));
 const { mobileCanvasBackend } = await import(productModule("lib/backend.mjs"));
@@ -14,6 +14,7 @@ const { AilohaProtocolError } = await import(productModule("lib/ailoha/errors.mj
 const { publicSnapshot, MobileAilohaError } = await import(productModule("lib/ailoha/mobile-projection.mjs"));
 const { createAilohaContextStore } = await import(productModule("lib/ailoha/context-adapter.mjs"));
 const { createAilohaMcpDispatcher } = await import(productModule("lib/ailoha/mcp-host.mjs"));
+const { ARTIFACT_FEATURE_GATES } = await import(productModule("lib/ailoha/artifact-features.mjs"));
 const { createVerifiedAilohaCli } = await import(productModule("lib/ailoha/runtime-sdk.mjs"));
 
 function deferred() {
@@ -71,6 +72,9 @@ function fixture(options = {}) {
         appId: "opaque-app", packageId: "com.example.native", state: "installed",
         name: "Fixture", version: "1", buildNumber: "2",
       }];
+    },
+    async listTargetAppReferences(id, query) {
+      return this.listTargetApps(id, { ...query, includeSystem: true });
     },
     async getTargetApp(id, appId) {
       calls.push(["app-get", id, appId]);
@@ -171,6 +175,8 @@ function fixture(options = {}) {
     saveScreenshot: options.saveScreenshot,
     operationState: options.operationState,
     videoState: options.videoState,
+    artifactState: options.artifactState,
+    runCli: options.runCli,
   });
   return {
     backend, calls, targets, providers, client, media, cleanups, selectionStore, owner,
@@ -4014,4 +4020,753 @@ test("an old terminal failure cannot remove a new same-key pending lifecycle rec
   assert.equal(posts, 2);
   newCompletion.resolve();
   await Promise.all([newA, newB]);
+});
+
+const stageHash = (text) => createHash("sha256").update(text).digest("hex");
+
+function stagedArtifactFixture(sourcePaths, kind, destination, owner, contents = []) {
+  const date = "2026-10-10T00:00:00Z";
+  const ticks = (value) => (BigInt(Date.parse(value)) + 62135596800000n) * 10000n;
+  const connection = owner.connectionRef;
+  const hostInstanceId = `host-${stageHash(`${connection.serviceId}\0${connection.pid}\0${ticks(connection.startedAt)}\0${ticks(connection.processStartedAt)}`)}`;
+  return {
+    kind, destination, expectedArtifactCount: sourcePaths.length,
+    artifacts: sourcePaths.map((source, slot) => {
+      const content = Buffer.from(contents[slot] ?? "");
+      const proof = {
+        targetHostId: "host", targetId: "one", providerId: "provider",
+        nativeTargetId: "real-native-one", nativeTargetPlatform: "ios",
+        hostInstanceId, sourcePathHash: stageHash(resolve(source)), destination,
+        contextRef: "ctx-canonical-snapshot", scopeEpoch: "original-epoch", revision: "1",
+        ownerProcessId: 1234, ownerStartedAt: date,
+        stageId: "0123456789abcdef0123456789abcdef",
+        expectedArtifactCount: sourcePaths.length, stageSlot: slot,
+      };
+      return {
+        artifact: {
+          artifactId: `stage-artifact-${slot}`, kind, status: "ready",
+          contentType: "application/octet-stream", createdAt: date,
+          fileName: basename(source), size: content.length, sha256: stageHash(content), targetId: "one",
+          metadata: { ...proof },
+        },
+        proof,
+      };
+    }),
+  };
+}
+
+function stagedOperation(kind, artifactIds, status = "queued") {
+  return {
+    operationId: kind === "deleteArtifact" ? "cleanup-operation" : "import-operation",
+    kind, status, destructive: true, targetId: "one", providerId: "provider",
+    createdAt: "2026-10-10T00:00:00Z", artifactIds,
+  };
+}
+
+function stagedCleanup(receipt) {
+  const cleanupArtifacts = receipt.artifacts.map((entry, index) => {
+    const operation = {
+      ...stagedOperation("deleteArtifact", [entry.artifact.artifactId], "succeeded"),
+      operationId: `cleanup-operation-${index}`,
+    };
+    return {
+      artifactId: entry.artifact.artifactId, status: "cleaned",
+      attemptId: `abcdef0123456789abcdef012345678${index}`,
+      operationId: operation.operationId, operation,
+    };
+  });
+  const last = cleanupArtifacts.at(-1);
+  return JSON.stringify({
+    status: "cleaned", receipt, attemptId: last.attemptId,
+    operation: last.operation, cleanupArtifacts,
+  });
+}
+
+test("parent: file staging keeps the original destination across asynchronous capture", async (t) => {
+  const input = {
+    deviceId: "one", input: "/owned/original.bin", path: "/Documents/original.bin",
+  };
+  const commands = [];
+  const state = canonicalFixture({
+    client: {
+      async getTargetCapabilities() {
+        input.path = "/Documents/replacement.bin";
+        return [{ id: "target.files", version: 1, features: ["importStagedTargetFile"] }];
+      },
+    },
+    async runCli(args) {
+      commands.push(args);
+      throw Object.assign(new Error("Stop the owned probe before native upload"), { code: "probe_stopped" });
+    },
+  });
+  t.after(() => state.backend.dispose());
+  await assert.rejects(state.backend.stageArtifact("mobile_device_file_push", input), { code: "probe_stopped" });
+  assert.equal(commands.length, 1);
+  assert.equal(commands[0][commands[0].indexOf("--destination") + 1], "/Documents/original.bin");
+});
+
+test("parent: media staging retains original source identity after capture and unknown upload", async (t) => {
+  const input = { deviceId: "one", paths: ["/owned/original.png"] };
+  const commands = [];
+  const state = canonicalFixture({
+    client: {
+      async getTargetCapabilities() {
+        input.paths[0] = "/owned/replacement.png";
+        return [{ id: "target.media", version: 1, features: ["importStagedTargetMediaBatch"] }];
+      },
+    },
+    async runCli(args) {
+      commands.push(args);
+      throw Object.assign(new Error("The owned fixture lost the upload response"), { code: "probe_upload_unknown" });
+    },
+  });
+  t.after(() => state.backend.dispose());
+  await assert.rejects(state.backend.stageArtifact("mobile_device_media_add", input), { code: "probe_upload_unknown" });
+  await assert.rejects(state.backend.stageArtifact("mobile_device_media_add", {
+    deviceId: "one", paths: ["/owned/original.png"],
+  }), { code: "artifact_acceptance_unknown" });
+  assert.equal(commands.length, 1);
+  assert.deepEqual(JSON.parse(commands[0][commands[0].indexOf("--sources") + 1]), ["/owned/original.png"]);
+});
+
+test("parent: staged completion preserves its accepted destructive operation identity without replay", async (t) => {
+  const source = "/owned/original.bin";
+  const commands = [];
+  let receipt;
+  let polls = 0;
+  const state = canonicalFixture({
+    confirmDestructive: async () => true,
+    client: {
+      async getTargetCapabilities() {
+        return [{ id: "target.files", version: 1, features: ["importStagedTargetFile"] }];
+      },
+      async waitForOperation() {
+        return {
+          ...stagedOperation("importStagedTargetFile", ["stage-artifact-0"], "succeeded"),
+          destructive: ++polls !== 1,
+        };
+      },
+    },
+    async runCli(args) {
+      const action = args[args.indexOf("native-stage") + 1];
+      commands.push(action);
+      if (action === "stage") {
+        receipt = stagedArtifactFixture([source], "file", "/Documents/original.bin", state.owner);
+        return JSON.stringify({ status: "ready", receipt });
+      }
+      if (action === "continue") return JSON.stringify({
+        status: "accepted", receipt, attemptId: "0123456789abcdef0123456789abcdef",
+        operation: stagedOperation("importStagedTargetFile", ["stage-artifact-0"]),
+      });
+      return stagedCleanup(receipt);
+    },
+  });
+  t.after(() => state.backend.dispose());
+  const input = { deviceId: "one", input: source, path: "/Documents/original.bin" };
+  await assert.rejects(state.backend.stageArtifact("mobile_device_file_push", input), {
+    code: "artifact_operation_mismatch",
+  });
+  assert.equal(commands.filter((action) => action === "continue").length, 1);
+  const resumed = await state.backend.stageArtifact("mobile_device_file_push", input);
+  assert.equal(resumed.success, true);
+  assert.equal(commands.filter((action) => action === "continue").length, 1);
+});
+
+test("owned zero-byte file push uses exact native receipt, captured approval and GET-only completion", async (t) => {
+  const dir = await mkdtemp(join(process.cwd(), "tests/scripts/fixtures/staged-owned-"));
+  t.after(() => rm(dir, { recursive: true, force: true }));
+  const source = join(dir, "empty.txt");
+  await writeFile(source, "");
+  const artifactState = new Map();
+  const commands = [];
+  let prompts = 0;
+  let receipt;
+  const state = canonicalFixture({
+    artifactState,
+    confirmDestructive: async (request) => {
+      prompts += 1;
+      assert.equal(request.action, "file_push");
+      assert.match(request.message, /Documents\/empty\.txt/);
+      return true;
+    },
+    client: {
+      async getTargetCapabilities() {
+        return [{ id: "target.files", version: 1, features: ["importStagedTargetFile"] }];
+      },
+      async waitForOperation(id) {
+        assert.equal(id, "import-operation");
+        return { ...stagedOperation("importStagedTargetFile", ["stage-artifact-0"], "succeeded"),
+          result: { size: 0 } };
+      },
+    },
+    async runCli(args) {
+      commands.push(args);
+      assert.equal(args[0], "target");
+      assert.ok(args.includes("--context-revision") && args.includes("original-epoch"));
+      const action = args[args.indexOf("native-stage") + 1];
+      if (action === "stage") {
+        assert.deepEqual(JSON.parse(args[args.indexOf("--sources") + 1]), [source]);
+        receipt = stagedArtifactFixture([source], "file", "/Documents/empty.txt", state.owner);
+        return JSON.stringify({ status: "ready", receipt });
+      }
+      assert.equal(args[args.indexOf("--staged") + 1], JSON.stringify(receipt));
+      if (action === "continue") {
+        assert.ok(args.includes("--overwrite") && args.includes("--confirm"));
+        return JSON.stringify({
+          status: "accepted", receipt, attemptId: "0123456789abcdef0123456789abcdef",
+          operation: stagedOperation("importStagedTargetFile", ["stage-artifact-0"]),
+        });
+      }
+      assert.equal(action, "cleanup");
+      return stagedCleanup(receipt);
+    },
+  });
+  t.after(() => state.backend.dispose());
+  const response = await state.backend.request("/api/v1/devices/one/files/push", {
+    method: "POST", body: JSON.stringify({ hostPath: source, devicePath: "/Documents/empty.txt" }),
+  });
+  assert.equal(response.status, 200);
+  const result = await response.json();
+  assert.deepEqual(result, {
+    schemaVersion: "1.0", success: true, deviceId: "one",
+    devicePath: "/Documents/empty.txt", hostPath: source, size: 0, operation: "push",
+  });
+  assert.equal(prompts, 1);
+  assert.deepEqual(commands.map((args) => args[args.indexOf("native-stage") + 1]),
+    ["stage", "continue", "cleanup"]);
+  assert.equal(artifactState.size, 0);
+});
+
+test("installed app selector uses its package and preserves a nonempty legacy push envelope", async (t) => {
+  const dir = await mkdtemp(join(process.cwd(), "tests/scripts/fixtures/app-push-owned-"));
+  t.after(() => rm(dir, { recursive: true, force: true }));
+  const source = join(dir, "seed.db");
+  await writeFile(source, "abc");
+  const requestedSource = relative(process.cwd(), source);
+  const destination = "app://com.example.package/Documents/seed.db";
+  let receipt;
+  const actions = [];
+  const state = canonicalFixture({
+    confirmDestructive: async ({ message }) => {
+      assert.match(message, /app:\/\/com\.example\.package\/Documents\/seed\.db/);
+      return true;
+    },
+    client: {
+      async getTargetCapabilities() {
+        return [
+          { id: "target.files", version: 1, features: ["importStagedTargetFile"] },
+          { id: "target.apps", version: 1, features: ["listTargetApps"] },
+        ];
+      },
+      async listTargetApps() {
+        return [{
+          appId: "workspace-app", packageId: "com.example.package",
+          "x-ailoha-target-host": { targetId: "one", providerId: "provider" },
+        }];
+      },
+      async waitForOperation() {
+        return stagedOperation("importStagedTargetFile", ["stage-artifact-0"], "succeeded");
+      },
+    },
+    async runCli(args) {
+      const action = args[args.indexOf("native-stage") + 1];
+      actions.push(action);
+      if (action === "stage") {
+        assert.equal(args[args.indexOf("--destination") + 1], destination);
+        receipt = stagedArtifactFixture([source], "file", destination, state.owner, ["abc"]);
+        return JSON.stringify({ status: "ready", receipt });
+      }
+      if (action === "continue") return JSON.stringify({
+        status: "accepted", receipt, attemptId: "0123456789abcdef0123456789abcdef",
+        operation: stagedOperation("importStagedTargetFile", ["stage-artifact-0"]),
+      });
+      return stagedCleanup(receipt);
+    },
+  });
+  t.after(() => state.backend.dispose());
+  const response = await state.backend.request("/api/v1/devices/one/files/push", {
+    method: "POST",
+    body: JSON.stringify({ hostPath: requestedSource, devicePath: "Documents/seed.db", bundleId: "com.example.package" }),
+  });
+  assert.equal(response.status, 200);
+  assert.deepEqual(await response.json(), {
+    schemaVersion: "1.0", success: true, deviceId: "one",
+    devicePath: "Documents/seed.db", hostPath: source, size: 3, operation: "push",
+  });
+  assert.deepEqual(actions, ["stage", "continue", "cleanup"]);
+});
+
+test("owned media paths use one native staged batch and project every accepted host path", async (t) => {
+  const dir = await mkdtemp(join(process.cwd(), "tests/scripts/fixtures/media-owned-"));
+  t.after(() => rm(dir, { recursive: true, force: true }));
+  const paths = [join(dir, "contact.vcf"), join(dir, "image.png")];
+  const requestedPaths = [relative(process.cwd(), paths[0]), paths[1]];
+  await Promise.all(paths.map((path) => writeFile(path, "")));
+  const actions = [];
+  let receipt;
+  const state = canonicalFixture({
+    client: {
+      async getTargetCapabilities() {
+        return [{ id: "target.media", version: 1, features: ["importStagedTargetMediaBatch"] }];
+      },
+      async waitForOperation(id) {
+        assert.equal(id, "import-operation");
+        return { ...stagedOperation("importStagedTargetMediaBatch",
+          ["stage-artifact-0", "stage-artifact-1"], "succeeded"),
+        result: { addedArtifactIds: ["stage-artifact-0", "stage-artifact-1"] } };
+      },
+    },
+    async runCli(args) {
+      const action = args[args.indexOf("native-stage") + 1];
+      actions.push(action);
+      if (action === "stage") {
+        assert.deepEqual(JSON.parse(args[args.indexOf("--sources") + 1]), paths);
+        assert.equal(args[args.indexOf("--destination") + 1], "batch");
+        receipt = stagedArtifactFixture(paths, "media", "batch", state.owner);
+        return JSON.stringify({ status: "ready", receipt });
+      }
+      assert.equal(args[args.indexOf("--staged") + 1], JSON.stringify(receipt));
+      if (action === "continue") {
+        assert.ok(!args.includes("--overwrite"));
+        return JSON.stringify({
+          status: "accepted", receipt, attemptId: "0123456789abcdef0123456789abcdef",
+          operation: stagedOperation("importStagedTargetMediaBatch",
+            ["stage-artifact-0", "stage-artifact-1"]),
+        });
+      }
+      return stagedCleanup(receipt);
+    },
+  });
+  t.after(() => state.backend.dispose());
+  const response = await state.backend.request("/api/v1/devices/one/media", {
+    method: "POST", body: JSON.stringify({ hostPaths: requestedPaths }),
+  });
+  assert.equal(response.status, 200);
+  assert.deepEqual(await response.json(), {
+    schemaVersion: "1.0", deviceId: "one", platform: "ios", added: paths,
+  });
+  assert.deepEqual(actions, ["stage", "continue", "cleanup"]);
+});
+
+test("unrepresentable media batch never stages a truncated subset", async (t) => {
+  let cliCalls = 0;
+  const state = canonicalFixture({
+    async runCli() { cliCalls += 1; assert.fail("oversized batch cannot reach staging"); },
+  });
+  t.after(() => state.backend.dispose());
+  await assert.rejects(state.backend.stageArtifact("mobile_device_media_add", {
+    deviceId: "one", paths: Array.from({ length: 17 }, (_, index) => `/owned/image-${index}.png`),
+  }), { code: "artifact_media_batch_limit", status: 501 });
+  assert.equal(cliCalls, 0);
+});
+
+test("concurrent same-destination calls cannot race a second native stage or device POST", async (t) => {
+  const dir = await mkdtemp(join(process.cwd(), "tests/scripts/fixtures/concurrent-owned-"));
+  t.after(() => rm(dir, { recursive: true, force: true }));
+  const source = join(dir, "concurrent.png");
+  await writeFile(source, "");
+  const stalled = deferred();
+  const actions = [];
+  let receipt;
+  const state = canonicalFixture({
+    client: {
+      async getTargetCapabilities() {
+        return [{ id: "target.media", version: 1, features: ["importStagedTargetMediaBatch"] }];
+      },
+      async waitForOperation() {
+        return { ...stagedOperation("importStagedTargetMediaBatch", ["stage-artifact-0"], "succeeded"),
+          result: { addedArtifactIds: ["stage-artifact-0"] } };
+      },
+    },
+    async runCli(args) {
+      const action = args[args.indexOf("native-stage") + 1];
+      actions.push(action);
+      if (action === "stage") {
+        receipt = stagedArtifactFixture([source], "media", "batch", state.owner);
+        await stalled.promise;
+        return JSON.stringify({ status: "ready", receipt });
+      }
+      if (action === "continue") return JSON.stringify({
+        status: "accepted", receipt, attemptId: "0123456789abcdef0123456789abcdef",
+        operation: stagedOperation("importStagedTargetMediaBatch", ["stage-artifact-0"]),
+      });
+      return stagedCleanup(receipt);
+    },
+  });
+  t.after(() => state.backend.dispose());
+  const input = { deviceId: "one", paths: [source] };
+  const first = state.backend.stageArtifact("mobile_device_media_add", input);
+  await assert.rejects(state.backend.stageArtifact("mobile_device_media_add", input),
+    { code: "artifact_operation_in_progress" });
+  stalled.resolve();
+  assert.deepEqual((await first).added, [source]);
+  assert.deepEqual(actions, ["stage", "continue", "cleanup"]);
+});
+
+test("uncertain native device acceptance retains the original attempt without a second POST", async (t) => {
+  const dir = await mkdtemp(join(process.cwd(), "tests/scripts/fixtures/unknown-owned-"));
+  t.after(() => rm(dir, { recursive: true, force: true }));
+  const source = join(dir, "unknown.txt");
+  await writeFile(source, "");
+  let receipt;
+  const actions = [];
+  let prompts = 0;
+  const state = canonicalFixture({
+    confirmDestructive: async () => { prompts += 1; return true; },
+    client: {
+      async getTargetCapabilities() {
+        return [{ id: "target.files", version: 1, features: ["importStagedTargetFile"] }];
+      },
+    },
+    async runCli(args) {
+      const action = args[args.indexOf("native-stage") + 1];
+      actions.push(action);
+      if (action === "stage") {
+        receipt = stagedArtifactFixture([source], "file", "/Documents/unknown.txt", state.owner);
+        return JSON.stringify({ status: "ready", receipt });
+      }
+      assert.equal(action, "continue");
+      return JSON.stringify({
+        status: "acceptanceUnknown", receipt, attemptId: "0123456789abcdef0123456789abcdef",
+        errorCode: "DeviceAcceptanceUnknown",
+      });
+    },
+  });
+  t.after(() => state.backend.dispose());
+  const input = { deviceId: "one", input: source, path: "/Documents/unknown.txt" };
+  await assert.rejects(state.backend.stageArtifact("mobile_device_file_push", input));
+  await assert.rejects(state.backend.stageArtifact("mobile_device_file_push", input));
+  assert.deepEqual(actions, ["stage", "continue"]);
+  assert.equal(prompts, 1);
+});
+
+test("stalled native stage cannot continue after the original context is retired", async (t) => {
+  const dir = await mkdtemp(join(process.cwd(), "tests/scripts/fixtures/stale-owned-"));
+  t.after(() => rm(dir, { recursive: true, force: true }));
+  const source = join(dir, "stale.txt");
+  await writeFile(source, "");
+  let receipt;
+  const actions = [];
+  const state = canonicalFixture({
+    confirmDestructive: async () => { assert.fail("stale stage cannot request consent"); },
+    client: {
+      async getTargetCapabilities() {
+        return [{ id: "target.files", version: 1, features: ["importStagedTargetFile"] }];
+      },
+    },
+    async runCli(args) {
+      const action = args[args.indexOf("native-stage") + 1];
+      actions.push(action);
+      receipt = stagedArtifactFixture([source], "file", "/Documents/stale.txt", state.owner);
+      if (action === "cleanup") return stagedCleanup(receipt);
+      if (action !== "stage") assert.fail("retired original cannot continue device work");
+      await state.retireAuthority();
+      return JSON.stringify({ status: "ready", receipt });
+    },
+  });
+  t.after(() => state.backend.dispose());
+  await assert.rejects(state.backend.stageArtifact("mobile_device_file_push", {
+    deviceId: "one", input: source, path: "/Documents/stale.txt",
+  }));
+  assert.deepEqual(actions, ["stage", "cleanup"]);
+});
+
+test("a restarted same-key target host cannot inherit staged file authority", async (t) => {
+  const dir = await mkdtemp(join(process.cwd(), "tests/scripts/fixtures/restart-owned-"));
+  t.after(() => rm(dir, { recursive: true, force: true }));
+  const source = join(dir, "restart.txt");
+  await writeFile(source, "");
+  const actions = [];
+  const artifactState = new Map();
+  const state = canonicalFixture({
+    artifactState,
+    confirmDestructive: async () => { assert.fail("retired context cannot request consent"); },
+    client: {
+      async getTargetCapabilities() {
+        return [{ id: "target.files", version: 1, features: ["importStagedTargetFile"] }];
+      },
+    },
+    async runCli(args) {
+      const action = args[args.indexOf("native-stage") + 1];
+      actions.push(action);
+      const receipt = stagedArtifactFixture([source], "file", "/Documents/restart.txt", state.owner);
+      if (action === "cleanup") return stagedCleanup(receipt);
+      if (action !== "stage") assert.fail("replacement cannot continue original stage");
+      await state.retireAuthority();
+      return JSON.stringify({ status: "ready", receipt });
+    },
+  });
+  t.after(() => state.backend.dispose());
+  const input = { deviceId: "one", input: source, path: "/Documents/restart.txt" };
+  await assert.rejects(state.backend.stageArtifact("mobile_device_file_push", input),
+    { code: "view_closed" });
+  const replacement = canonicalFixture({
+    artifactState,
+    connectionRef: { ...state.owner.connectionRef, pid: 54321 },
+    async runCli() { assert.fail("replacement cannot restage original source"); },
+  });
+  t.after(() => replacement.backend.dispose());
+  await assert.rejects(replacement.backend.stageArtifact("mobile_device_file_push", input),
+    { code: "runtime_incarnation_changed" });
+  assert.deepEqual(actions, ["stage", "cleanup"]);
+});
+
+test("accepted file import recovers from failed completion GET without restaging or resubmitting", async (t) => {
+  const dir = await mkdtemp(join(process.cwd(), "tests/scripts/fixtures/recover-owned-"));
+  t.after(() => rm(dir, { recursive: true, force: true }));
+  const source = join(dir, "recover.txt");
+  await writeFile(source, "");
+  const actions = [];
+  let reads = 0;
+  let receipt;
+  const state = canonicalFixture({
+    confirmDestructive: async () => true,
+    client: {
+      async getTargetCapabilities() {
+        return [{ id: "target.files", version: 1, features: ["importStagedTargetFile"] }];
+      },
+      async waitForOperation(id) {
+        assert.equal(id, "import-operation");
+        if (++reads === 1) throw new Error("original operation GET temporarily failed");
+        return stagedOperation("importStagedTargetFile", ["stage-artifact-0"], "succeeded");
+      },
+    },
+    async runCli(args) {
+      const action = args[args.indexOf("native-stage") + 1];
+      actions.push(action);
+      if (action === "stage") {
+        receipt = stagedArtifactFixture([source], "file", "/Documents/recover.txt", state.owner);
+        return JSON.stringify({ status: "ready", receipt });
+      }
+      if (action === "continue") return JSON.stringify({
+        status: "accepted", receipt, attemptId: "0123456789abcdef0123456789abcdef",
+        operation: stagedOperation("importStagedTargetFile", ["stage-artifact-0"]),
+      });
+      assert.equal(action, "cleanup");
+      return stagedCleanup(receipt);
+    },
+  });
+  t.after(() => state.backend.dispose());
+  const input = { deviceId: "one", input: source, path: "/Documents/recover.txt" };
+  await assert.rejects(state.backend.stageArtifact("mobile_device_file_push", input),
+    /original operation GET temporarily failed/);
+  const result = await state.backend.stageArtifact("mobile_device_file_push", input);
+  assert.equal(result.size, 0);
+  assert.equal(reads, 2);
+  assert.deepEqual(actions, ["stage", "continue", "cleanup"]);
+});
+
+test("late accepted staged import retains its receipt and recovers without a second approval", async (t) => {
+  let clock = 0;
+  t.mock.method(performance, "now", () => clock);
+  const dir = await mkdtemp(join(process.cwd(), "tests/scripts/fixtures/late-owned-"));
+  t.after(() => rm(dir, { recursive: true, force: true }));
+  const source = join(dir, "late.txt");
+  await writeFile(source, "");
+  let prompts = 0;
+  let receipt;
+  const actions = [];
+  const state = canonicalFixture({
+    confirmDestructive: async () => { prompts += 1; return true; },
+    client: {
+      async getTargetCapabilities() {
+        return [{ id: "target.files", version: 1, features: ["importStagedTargetFile"] }];
+      },
+      async waitForOperation() {
+        return stagedOperation("importStagedTargetFile", ["stage-artifact-0"], "succeeded");
+      },
+    },
+    async runCli(args) {
+      const action = args[args.indexOf("native-stage") + 1];
+      actions.push(action);
+      if (action === "stage") {
+        receipt = stagedArtifactFixture([source], "file", "/Documents/late.txt", state.owner);
+        return JSON.stringify({ status: "ready", receipt });
+      }
+      if (action === "continue") {
+        clock = 60_001;
+        return JSON.stringify({
+          status: "accepted", receipt, attemptId: "0123456789abcdef0123456789abcdef",
+          operation: stagedOperation("importStagedTargetFile", ["stage-artifact-0"]),
+        });
+      }
+      return stagedCleanup(receipt);
+    },
+  });
+  t.after(() => state.backend.dispose());
+  const input = { deviceId: "one", input: source, path: "/Documents/late.txt" };
+  await assert.rejects(state.backend.stageArtifact("mobile_device_file_push", input),
+    { code: "submission_outcome_unknown" });
+  assert.equal((await state.backend.stageArtifact("mobile_device_file_push", input)).success, true);
+  assert.equal(prompts, 1);
+  assert.deepEqual(actions, ["stage", "continue", "cleanup"]);
+});
+
+test("staged readback uncertainty retries only original-host confirm GET before one continuation", async (t) => {
+  const dir = await mkdtemp(join(process.cwd(), "tests/scripts/fixtures/confirm-owned-"));
+  t.after(() => rm(dir, { recursive: true, force: true }));
+  const source = join(dir, "confirm.txt");
+  await writeFile(source, "");
+  let receipt;
+  const actions = [];
+  let confirms = 0;
+  const state = canonicalFixture({
+    confirmDestructive: async () => true,
+    client: {
+      async getTargetCapabilities() {
+        return [{ id: "target.files", version: 1, features: ["importStagedTargetFile"] }];
+      },
+      async waitForOperation(id) {
+        assert.equal(id, "import-operation");
+        return stagedOperation("importStagedTargetFile", ["stage-artifact-0"], "succeeded");
+      },
+    },
+    async runCli(args) {
+      const action = args[args.indexOf("native-stage") + 1];
+      actions.push(action);
+      if (action === "stage") {
+        receipt = stagedArtifactFixture([source], "file", "/Documents/confirm.txt", state.owner);
+        return JSON.stringify({ status: "readbackUnconfirmed", receipt,
+          errorCode: "ArtifactReadbackUnconfirmed" });
+      }
+      if (action === "confirm") {
+        assert.equal(args[args.indexOf("--staged") + 1], JSON.stringify(receipt));
+        if (++confirms === 1) throw new Error("original artifact GET interrupted");
+        return JSON.stringify({ status: "ready", receipt });
+      }
+      if (action === "continue") return JSON.stringify({
+        status: "accepted", receipt, attemptId: "0123456789abcdef0123456789abcdef",
+        operation: stagedOperation("importStagedTargetFile", ["stage-artifact-0"]),
+      });
+      return stagedCleanup(receipt);
+    },
+  });
+  t.after(() => state.backend.dispose());
+  const input = { deviceId: "one", input: source, path: "/Documents/confirm.txt" };
+  await assert.rejects(state.backend.stageArtifact("mobile_device_file_push", input),
+    /original artifact GET interrupted/);
+  assert.equal((await state.backend.stageArtifact("mobile_device_file_push", input)).size, 0);
+  assert.deepEqual(actions, ["stage", "confirm", "confirm", "continue", "cleanup"]);
+});
+
+test("uncertain original-host cleanup preserves accepted import and never repeats device continuation", async (t) => {
+  const dir = await mkdtemp(join(process.cwd(), "tests/scripts/fixtures/cleanup-owned-"));
+  t.after(() => rm(dir, { recursive: true, force: true }));
+  const source = join(dir, "cleanup.txt");
+  await writeFile(source, "");
+  const actions = [];
+  let receipt;
+  let cleanupCalls = 0;
+  const state = canonicalFixture({
+    confirmDestructive: async () => true,
+    client: {
+      async getTargetCapabilities() {
+        return [{ id: "target.files", version: 1, features: ["importStagedTargetFile"] }];
+      },
+      async waitForOperation() {
+        return stagedOperation("importStagedTargetFile", ["stage-artifact-0"], "succeeded");
+      },
+    },
+    async runCli(args) {
+      const action = args[args.indexOf("native-stage") + 1];
+      actions.push(action);
+      if (action === "stage") {
+        receipt = stagedArtifactFixture([source], "file", "/Documents/cleanup.txt", state.owner);
+        return JSON.stringify({ status: "ready", receipt });
+      }
+      if (action === "continue") return JSON.stringify({
+        status: "accepted", receipt, attemptId: "0123456789abcdef0123456789abcdef",
+        operation: stagedOperation("importStagedTargetFile", ["stage-artifact-0"]),
+      });
+      assert.equal(action, "cleanup");
+      if (++cleanupCalls === 1) return JSON.stringify({
+        status: "cleanupAcceptanceUnknown", receipt, attemptId: "abcdef0123456789abcdef0123456780",
+        cleanupArtifacts: [{
+          artifactId: "stage-artifact-0", status: "acceptanceUnknown",
+          attemptId: "abcdef0123456789abcdef0123456780",
+        }],
+      });
+      return stagedCleanup(receipt);
+    },
+  });
+  t.after(() => state.backend.dispose());
+  const input = { deviceId: "one", input: source, path: "/Documents/cleanup.txt" };
+  await assert.rejects(state.backend.stageArtifact("mobile_device_file_push", input),
+    { code: "artifact_cleanup_unconfirmed" });
+  assert.equal((await state.backend.stageArtifact("mobile_device_file_push", input)).success, true);
+  assert.deepEqual(actions, ["stage", "continue", "cleanup", "cleanup"]);
+});
+
+test("denied file replacement cleans only original staged artifact without device continuation", async (t) => {
+  const dir = await mkdtemp(join(process.cwd(), "tests/scripts/fixtures/denied-owned-"));
+  t.after(() => rm(dir, { recursive: true, force: true }));
+  const source = join(dir, "denied.txt");
+  await writeFile(source, "");
+  let receipt;
+  const actions = [];
+  const artifactState = new Map();
+  const state = canonicalFixture({
+    artifactState, confirmDestructive: async () => false,
+    client: {
+      async getTargetCapabilities() {
+        return [{ id: "target.files", version: 1, features: ["importStagedTargetFile"] }];
+      },
+    },
+    async runCli(args) {
+      const action = args[args.indexOf("native-stage") + 1];
+      actions.push(action);
+      if (action === "stage") {
+        receipt = stagedArtifactFixture([source], "file", "/Documents/denied.txt", state.owner);
+        return JSON.stringify({ status: "ready", receipt });
+      }
+      assert.equal(action, "cleanup");
+      return stagedCleanup(receipt);
+    },
+  });
+  t.after(() => state.backend.dispose());
+  await assert.rejects(state.backend.stageArtifact("mobile_device_file_push", {
+    deviceId: "one", input: source, path: "/Documents/denied.txt",
+  }), { code: "consent_denied" });
+  assert.deepEqual(actions, ["stage", "cleanup"]);
+  assert.equal(artifactState.size, 0);
+});
+
+test("native failed copy is never a successful zero-byte transfer and still cleans original staging", async (t) => {
+  const dir = await mkdtemp(join(process.cwd(), "tests/scripts/fixtures/failed-owned-"));
+  t.after(() => rm(dir, { recursive: true, force: true }));
+  const source = join(dir, "failed.txt");
+  await writeFile(source, "");
+  let receipt;
+  const actions = [];
+  const state = canonicalFixture({
+    confirmDestructive: async () => true,
+    client: {
+      async getTargetCapabilities() {
+        return [{ id: "target.files", version: 1, features: ["importStagedTargetFile"] }];
+      },
+      async waitForOperation() {
+        return stagedOperation("importStagedTargetFile", ["stage-artifact-0"], "failed");
+      },
+    },
+    async runCli(args) {
+      const action = args[args.indexOf("native-stage") + 1];
+      actions.push(action);
+      if (action === "stage") {
+        receipt = stagedArtifactFixture([source], "file", "/Documents/failed.txt", state.owner);
+        return JSON.stringify({ status: "ready", receipt });
+      }
+      if (action === "continue") return JSON.stringify({
+        status: "accepted", receipt, attemptId: "0123456789abcdef0123456789abcdef",
+        operation: stagedOperation("importStagedTargetFile", ["stage-artifact-0"]),
+      });
+      return stagedCleanup(receipt);
+    },
+  });
+  t.after(() => state.backend.dispose());
+  const input = { deviceId: "one", input: source, path: "/Documents/failed.txt" };
+  await assert.rejects(state.backend.stageArtifact("mobile_device_file_push", input),
+    { code: "artifact_operation_failed" });
+  await assert.rejects(state.backend.stageArtifact("mobile_device_file_push", input),
+    { code: "artifact_operation_failed" });
+  assert.deepEqual(actions, ["stage", "continue", "cleanup"]);
 });
