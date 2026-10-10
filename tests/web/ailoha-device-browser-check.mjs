@@ -1,5 +1,5 @@
 async (page) => {
-  const { url, evidenceUrl } = await page.evaluate(() => window.ailohaBrowserTestOptions);
+  const { url, evidenceUrl, workspaceCards = false } = await page.evaluate(() => window.ailohaBrowserTestOptions);
   const verify = (condition, message) => {
     if (!condition) throw new Error(message);
   };
@@ -25,6 +25,21 @@ async (page) => {
 
   await page.goto(url);
   await page.waitForFunction(() => document.querySelector("#stream-mode")?.textContent === "ALHV H.264");
+  if (workspaceCards) {
+    await page.waitForFunction(() => document.querySelector("#workspace-inspection")?.dataset.status === "ready");
+    await page.getByRole("button", { name: "Inspect", exact: true }).click();
+    await page.waitForFunction(() => document.querySelector("#workspace-inspection")?.dataset.status === "complete");
+    verify(await page.locator(".workspace-app-card").count() === 8, "The resized media check did not include actual workspace cards.");
+    const application = (await evidence()).workspace.inspection.applications.find((entry) => entry.missingSteps.length);
+    verify(Boolean(application), "The canonical fixture has no concrete missing-step evidence.");
+    const card = page.locator(".workspace-app-card").filter({ hasText: application.primaryManifest });
+    await card.locator("summary").click();
+    const text = await card.locator(".workspace-app-details").textContent();
+    verify(application.missingSteps.every((step) => text.includes(step.description))
+      && application.recommendedSkillIds.every((id) => text.includes(id))
+      && text.includes("Approval and workspace mutation required") && text.includes("Informational IDs only"),
+    "The media check did not include actual read-only scanner guidance.");
+  }
   for (const width of [1200, 700, 1000, 900]) {
     await page.setViewportSize({ width, height: 700 });
     await page.waitForTimeout(500);
@@ -86,7 +101,7 @@ async (page) => {
   verify(!settled.calls.some((call) => call.path === "/api/v1/host/stop"),
     "View cleanup stopped a shared host.");
   return {
-    synthetic: true, realWebCodecs: true, resizeEvents: 4,
+    synthetic: true, realWebCodecs: true, resizeEvents: 4, workspaceCards, readOnlyGuidance: workspaceCards,
     initialVideoPosts: 1, initialVideoDeletes: 0,
     view, tap, gesture,
     hidden: { leases: hidden.leases, videoResources: hidden.videoResources },

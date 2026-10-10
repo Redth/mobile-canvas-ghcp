@@ -139,7 +139,10 @@ try {
     const registration = globalThis.ailohaTestCanvasRegistration;
     const canvas = registration.canvases[0];
     assert.equal(canvas.id, "mobile-device");
-    assert.equal(canvas.actions.length, 24);
+    assert.equal(canvas.actions.length, 25);
+    assert.equal(canvas.actions.at(-1).name, "workspace_inspect");
+    const baseline = JSON.parse(readFileSync(join(source, "tests/scripts/ailoha-compatibility-baseline.json"), "utf8"));
+    assert.deepEqual(canvas.actions.slice(0, 24).map((entry) => entry.name).sort(), baseline.canvasActions);
     const context = { sessionId: scope.sessionId, instanceId: scope.viewId };
     const action = (name, input = {}) => canvas.actions.find((entry) => entry.name === name).handler({ ...context, input });
     const opened = await canvas.open(context);

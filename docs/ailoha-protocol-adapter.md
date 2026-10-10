@@ -448,7 +448,8 @@ tooling is not a ready-shaped empty inventory.
 
 Implemented: inventory/select, advertised start/stop/reboot, PNG screenshot,
 basic geometry-bound pointer gestures, shared ALHV WebCodecs display, and
-advertised reset/delete when the host can obtain genuine captured approval.
+advertised reset/delete when the host can obtain genuine captured approval,
+plus [read-only explicit-root workspace/application evidence](ailoha-workspace-inspection.md).
 Unsupported: compatibility creation/catalog, reveal/rotation/keyboard/buttons,
 reset/delete without scoped consent, app/system semantic trees, app deployment,
 recording and broader settings/diagnostics/file/hardware operations. No claim of

@@ -58,7 +58,7 @@
           "enum": ["legacy", "ailoha"],
           "default": "legacy",
           "scope": "application",
-          "markdownDescription": "Use the production legacy engine (default) or explicitly opt into the pinned official Ailoha Target Host. Reload the VS Code window after changing. Ailoha does not fall back after errors; app inspection, recording and broader controls remain unsupported."
+          "markdownDescription": "Use the production legacy engine (default) or explicitly opt into the pinned official Ailoha Target Host. Reload the VS Code window after changing. Read-only workspace evidence requires an explicitly chosen trusted local folder; it does not verify a running agent. Ailoha does not fall back after errors; semantic app/system inspection, recording and broader controls remain unsupported."
         }
       }
     },

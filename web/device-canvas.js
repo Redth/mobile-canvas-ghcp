@@ -31,6 +31,7 @@ import {
   pointInLogicalBounds,
 } from "./ailoha-canvas-state.js";
 import { createAilohaVideoPlayer } from "./ailoha-video-player.js";
+import { createWorkspaceInspectionView } from "./ailoha-workspace-view.js";
 
 const elements = {
   list: document.querySelector("#device-list"),
@@ -107,6 +108,26 @@ const elements = {
 };
 
 const transport = window.mobileCanvasTransport || null;
+const workspaceInspection = createWorkspaceInspectionView({
+  element: document.querySelector("#workspace-inspection"),
+  chooseRoot: Boolean(transport?.onWorkspaceInspectionChanged),
+  async request(path, options) {
+    const response = await sendApiRequest(path, options);
+    let value = await response.json();
+    if (value.code === "workspace_view_changed") {
+      const current = await (await sendApiRequest("/api/v1/workspace/inspection")).json();
+      value = { ...current, status: "error", inspection: null, error: { code: value.code, message: value.message } };
+    }
+    if (value.schema !== "mobile-canvas.workspace-view/v1") {
+      throw new Error(formatUserFacingMessage(value.message || "Invalid workspace inspection response."));
+    }
+    return value;
+  },
+});
+transport?.onWorkspaceInspectionChanged?.((snapshot) => {
+  try { workspaceInspection.acceptState(snapshot); }
+  catch (error) { showError(error); }
+});
 let bootstrapExchange = null;
 let panelVisibilityVersion = 0;
 let panelOwnerTransition = Promise.resolve();
@@ -1685,6 +1706,13 @@ function connectAutomationEvents() {
     }
     // Events reach every canvas on the host, so a panel first works out whether it is the audience.
     const addressed = addressedToThisCanvas(activity);
+    if (activity.kind === "workspace-inspection") {
+      if (addressed) {
+        try { workspaceInspection.acceptState(activity.state); }
+        catch (error) { showError(error); }
+      }
+      return;
+    }
     if (transport && !addressed) return;
     if (addressed) {
       if (activity.kind === "selection") {
@@ -2538,6 +2566,7 @@ async function toggleRecording() {
 }
 
 async function detach() {
+  workspaceInspection.setVisible(false);
   state.selectionVersion += 1;
   state.selectionTarget = null;
   stopStream();
@@ -2732,6 +2761,7 @@ function setPanelVisible(visible) {
   if (state.panelVisible === visible) return;
   const visibilityVersion = ++panelVisibilityVersion;
   state.panelVisible = visible;
+  workspaceInspection.setVisible(visible);
   if (!visible) {
     stopStream();
     clearTimeout(automation.retryTimer);
@@ -2764,6 +2794,7 @@ function setPanelVisible(visible) {
       refresh,
       resume: () => {
         connectAutomationEvents();
+        if (state.catalog?.backend === "ailoha" && !transport) void workspaceInspection.load();
       },
     }).catch((error) => {
       if (isActive()) showCanvasError(error);
@@ -2815,5 +2846,8 @@ showLoadingSelection();
 
 bootstrap()
   .then(refresh)
+  .then(async () => {
+    if (state.catalog?.backend === "ailoha" && !transport) await workspaceInspection.load();
+  })
   .then(connectAutomationEvents)
   .catch(showCanvasError);

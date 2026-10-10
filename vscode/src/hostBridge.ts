@@ -9,7 +9,9 @@ import type {
   ExtensionMessage,
   SocketChannel,
   WebviewMessage,
+  WorkspaceInspectionState,
 } from "./messages";
+import type { WorkspaceRootAdapter, WorkspaceRootError } from "./workspaceRoots";
 
 const execFileAsync = promisify(execFile);
 const REQUEST_TIMEOUT_MS = 120_000;
@@ -36,6 +38,17 @@ export interface AilohaCanvasHost {
   openCanvas(input?: { deviceId?: string }): Promise<CanvasOpenResult>;
   closeCanvas(): Promise<void>;
   invokeAction(name: string, input: Record<string, unknown>): Promise<unknown>;
+  workspaceInspection?: {
+    snapshot(): WorkspaceInspectionState;
+    subscribe(listener: (state: WorkspaceInspectionState) => void): () => void;
+    bindRoot(path: string, exclusions?: string[]): WorkspaceInspectionState;
+    clearRoot(error?: WorkspaceRootError): WorkspaceInspectionState;
+    inspect(): Promise<WorkspaceInspectionState>;
+    request(method: string, body?: string): Promise<WorkspaceInspectionState>;
+    cancel(): WorkspaceInspectionState;
+    invalidate(): WorkspaceInspectionState;
+    setVisible(visible: boolean): WorkspaceInspectionState;
+  };
 }
 
 interface HostConnection {
@@ -74,6 +87,9 @@ export class HostBridge implements vscode.Disposable {
   private selectionToRestore: string | undefined;
   private visibilityTask: Promise<void> = Promise.resolve();
   private visibilityNeedsCleanup = false;
+  private visible = true;
+  private readonly inspectionSubscription?: () => void;
+  private readonly workspaceSubscription?: vscode.Disposable;
 
   constructor(
     private readonly command: string | undefined,
@@ -84,7 +100,19 @@ export class HostBridge implements vscode.Disposable {
     private readonly refreshSignal?: string,
     private readonly ailohaHost?: AilohaCanvasHost,
     private readonly onContextReady?: () => void,
+    private readonly workspaceRoots?: WorkspaceRootAdapter,
   ) {
+    const inspection = ailohaHost?.workspaceInspection;
+    if (inspection) {
+      this.inspectionSubscription = inspection.subscribe((state) => {
+        void Promise.resolve(this.post({ type: "workspace-inspection", state })).then((delivered) => {
+          if (!delivered && !this.disposed) this.output.appendLine("Mobile Canvas workspace evidence was declined by its view.");
+        }).catch(() => {
+          this.output.appendLine("Mobile Canvas workspace evidence could not be delivered to its view.");
+        });
+      });
+      this.workspaceSubscription = workspaceRoots?.onDidChange(() => inspection.clearRoot());
+    }
     if (refreshSignal) {
       this.signalOffset = readFileSync(refreshSignal, "utf8").length;
       watchFile(refreshSignal, { interval: 250 }, this.onRefreshSignal);
@@ -103,6 +131,9 @@ export class HostBridge implements vscode.Disposable {
     try {
       switch (message.type) {
         case "ready":
+          if (this.ailohaHost?.workspaceInspection) {
+            await this.post({ type: "workspace-inspection", state: this.ailohaHost.workspaceInspection.snapshot() });
+          }
           await this.connect();
           if (this.ailohaHost) this.onContextReady?.();
           await this.post({
@@ -148,6 +179,8 @@ export class HostBridge implements vscode.Disposable {
   }
 
   async setVisible(visible: boolean): Promise<void> {
+    this.visible = visible;
+    this.ailohaHost?.workspaceInspection?.setVisible(visible);
     const previous = this.visibilityTask;
     const task = previous.then(
       () => this.applyVisibility(visible),
@@ -179,6 +212,7 @@ export class HostBridge implements vscode.Disposable {
   }
 
   async restart(): Promise<void> {
+    this.ailohaHost?.workspaceInspection?.invalidate();
     this.ailohaHost?.cancelPendingApprovals?.();
     this.selectionToRestore = await this.readSelectedDeviceId();
     await this.closeCanvas();
@@ -240,6 +274,9 @@ export class HostBridge implements vscode.Disposable {
       return;
     }
     this.disposed = true;
+    this.ailohaHost?.workspaceInspection?.setVisible(false);
+    this.inspectionSubscription?.();
+    this.workspaceSubscription?.dispose();
     if (this.refreshSignal) {
       unwatchFile(this.refreshSignal, this.onRefreshSignal);
     }
@@ -351,6 +388,10 @@ export class HostBridge implements vscode.Disposable {
   private async forwardApi(
     message: Extract<WebviewMessage, { type: "api" }>,
   ): Promise<void> {
+    if (this.ailohaHost?.workspaceInspection && message.path.startsWith("/api/v1/workspace/")) {
+      await this.forwardWorkspace(message);
+      return;
+    }
     const method = (message.method ?? "GET").toUpperCase();
     if (!ALLOWED_METHODS.has(method)) {
       throw new Error(`Unsupported Mobile Canvas HTTP method: ${method}`);
@@ -403,6 +444,45 @@ export class HostBridge implements vscode.Disposable {
         return;
       }
     }
+  }
+
+  private async forwardWorkspace(message: Extract<WebviewMessage, { type: "api" }>): Promise<void> {
+    const inspection = this.ailohaHost?.workspaceInspection;
+    if (!inspection) throw new Error("Workspace inspection is not available in this host.");
+    const method = (message.method ?? "GET").toUpperCase();
+    let result: WorkspaceInspectionState | WorkspaceRootError;
+    if (message.path === "/api/v1/workspace/inspection" && ["GET", "POST", "DELETE"].includes(method)) {
+      try {
+        result = await inspection.request(method, message.body);
+      } catch (error) {
+        result = {
+          code: isRecord(error) && typeof error.code === "string" ? error.code : "workspace_request_failed",
+          message: ailohaErrorMessage(error),
+          status: isRecord(error) && typeof error.status === "number" ? error.status : 500,
+        };
+      }
+    } else if (message.body?.trim() && message.body.trim() !== "{}") {
+      result = { code: "workspace_root_authority_required", message: "Renderer requests cannot supply or enlarge the trusted workspace root.", status: 403 };
+    } else if (message.path === "/api/v1/workspace/root" && method === "POST") {
+      const generation = inspection.snapshot().generation;
+      const choice = await this.workspaceRoots?.choose();
+      if (this.disposed) return;
+      result = !this.visible || generation !== inspection.snapshot().generation ? inspection.snapshot()
+        : choice && "path" in choice ? inspection.bindRoot(choice.path)
+          : choice && "error" in choice ? inspection.clearRoot(choice.error)
+            : this.workspaceRoots ? inspection.snapshot() : inspection.clearRoot({
+              code: "workspace_root_unsupported", message: "This host has no trusted workspace-folder adapter.",
+            });
+    } else {
+      result = { code: "workspace_request_unsupported", message: "Use the named read-only workspace inspection routes.", status: 400 };
+    }
+    const status = "schema" in result ? result.error?.status ?? 200 : result.status ?? 400;
+    if (!("schema" in result)) this.output.appendLine(`Mobile Canvas workspace: ${result.code}: ${result.message}`);
+    const response = new Response(JSON.stringify(result), { status, headers: { "Content-Type": "application/json" } });
+    await this.post({
+      type: "api-result", id: message.id, status, statusText: response.statusText,
+      headers: Object.fromEntries(response.headers), body: await response.arrayBuffer(),
+    });
   }
 
   private async get(path: string): Promise<Response> {
