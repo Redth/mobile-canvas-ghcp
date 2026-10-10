@@ -27,10 +27,20 @@ function fixture(options = {}) {
         }),
         async ready() { return { backend: "ailoha" }; },
         async select(deviceId) { calls.push(["select", id, deviceId]); },
-        async request(path, input) {
-          calls.push(["request", id, path, input]);
-          return options.request ? options.request(path, input)
-            : new Response(JSON.stringify({ path, backend: "ailoha" }), { headers: { "content-type": "application/json" } });
+        async request(path, requestOptions) {
+          calls.push(["request", id, path, requestOptions]);
+          if (/\/ui(?:\/|$|\?)/.test(path) && options.uiResponse) {
+            return options.uiResponse(path, requestOptions);
+          }
+          if (options.request) return options.request(path, requestOptions);
+          return new Response(JSON.stringify(
+            path.endsWith("/ui") || path.endsWith("/ui/find") || path.endsWith("/ui/tap")
+              ? { code: "ui_contract_unavailable" }
+              : { path, backend: "ailoha" },
+          ), {
+            status: /\/ui(?:\/|$)/.test(path) ? 501 : 200,
+            headers: { "content-type": "application/json" },
+          });
         },
         async invokeAction(name) { calls.push(["action", id, name]); return { name, generation: id }; },
         async closeVideos() { calls.push(["video-retire", id]); },
@@ -78,6 +88,63 @@ test("the real loopback panel serves the shared renderer but gates API by unique
   const response = await fetch(new URL("/api/v1/catalog", url), { headers: { Cookie: cookie } });
   assert.equal((await response.json()).backend, "ailoha");
   assert.equal((await fetch(new URL("/api/v1/catalog", url), { headers: { Cookie: cookie, Origin: "http://127.0.0.1:1" } })).status, 403);
+});
+
+test("registered GitHub canvas forwards reveal and gates legacy System UI paths in its owned API", async (t) => {
+  const { host } = fixture();
+  t.after(() => host.closeCanvas());
+  const { url, cookie } = await bootstrap(host);
+  for (const [path, method] of [
+    ["/api/v1/devices/one/reveal", "POST"],
+    ["/api/v1/devices/one/ui", "GET"],
+    ["/api/v1/devices/one/ui/find", "POST"],
+    ["/api/v1/devices/one/ui/tap", "POST"],
+  ]) {
+    const response = await fetch(new URL(path, url), {
+      method, headers: { Cookie: cookie, ...(method === "POST" ? { "content-type": "application/json" } : {}) },
+      ...(method === "POST" ? { body: "{}" } : {}),
+    });
+    assert.equal(response.status, path.endsWith("/reveal") ? 200 : 501);
+    const body = await response.json();
+    assert.equal(path.endsWith("/reveal") ? body.path : body.code,
+      path.endsWith("/reveal") ? path : "ui_contract_unavailable");
+  }
+});
+
+test("registered GitHub canvas passes source-approved System UI result shapes through its authenticated API", async (t) => {
+  const calls = [];
+  const { host } = fixture({
+    uiResponse(path, request) {
+      calls.push([path, request]);
+      const body = path.endsWith("/ui?raw=true")
+        ? { schemaVersion: "1.0", deviceId: "one", platform: "ios", root: null, elementCount: 0, raw: "native" }
+        : path.endsWith("/ui/find")
+          ? { schemaVersion: "1.0", deviceId: "one", matches: [], total: 0 }
+          : { schemaVersion: "1.0", success: true, deviceId: "one", match: {
+            element: { label: "Save", frame: { x: 1, y: 2, width: 4, height: 6 } },
+            path: "1/0", centerX: 3, centerY: 5,
+          }, total: 2 };
+      return new Response(JSON.stringify(body), { headers: { "content-type": "application/json" } });
+    },
+  });
+  t.after(() => host.closeCanvas());
+  const { url, cookie } = await bootstrap(host);
+  for (const [path, method, expected] of [
+    ["/api/v1/devices/one/ui?raw=true", "GET", "native"],
+    ["/api/v1/devices/one/ui/find", "POST", 0],
+    ["/api/v1/devices/one/ui/tap", "POST", "1/0"],
+  ]) {
+    const response = await fetch(new URL(path, url), {
+      method, headers: { Cookie: cookie, ...(method === "POST" ? { "content-type": "application/json" } : {}) },
+      ...(method === "POST" ? { body: '{"text":"Save"}' } : {}),
+    });
+    assert.equal(response.status, 200);
+    const body = await response.json();
+    assert.equal(path.endsWith("/ui?raw=true") ? body.raw
+      : path.endsWith("/ui/find") ? body.total : body.match.path, expected);
+  }
+  assert.equal(calls.length, 3);
+  assert.equal(calls[2][1].method, "POST");
 });
 
 test("early official socket messages are delivered only after the non-secret owned descriptor", async (t) => {

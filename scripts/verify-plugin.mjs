@@ -49,6 +49,8 @@ for (const relative of [
   "lib/ailoha/destructive-consent.mjs",
   "lib/ailoha/mobile-projection.mjs",
   "lib/ailoha/media-adapter.mjs",
+  "lib/ailoha/reveal-adapter.mjs",
+  "lib/ailoha/system-ui-adapter.mjs",
   "lib/ailoha/runtime-sdk.mjs",
   "lib/ailoha/runtime-backend.mjs",
   "lib/ailoha/context-adapter.mjs",

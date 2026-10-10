@@ -17,6 +17,10 @@ test("MCP preserves all61 installed identities and advertises broader opt-in lim
   assert.deepEqual(catalog.map((tool) => tool.name).sort(), baseline.mcpTools);
   assert.equal(catalog.length, 61);
   assert.equal(catalog.find((tool) => tool.name === "mobile_device_app_launch").description.includes("positively unsupported"), true);
+  assert.match(catalog.find((tool) => tool.name === "mobile_device_reveal").description, /capability evidence is required/);
+  for (const name of ["mobile_device_ui_dump", "mobile_device_ui_find", "mobile_device_ui_tap"]) {
+    assert.match(catalog.find((tool) => tool.name === name).description, /compatible published runtime/);
+  }
   assert.equal(catalog.every((tool) => tool.execution.taskSupport === "forbidden"), true);
   assert.equal(catalog.find((tool) => tool.name === "mobile_device_tap").inputSchema.properties.geometryRevision.maximum, 0xffffffff);
   const selected = catalog.find((tool) => tool.name === "mobile_device_get_selected");
@@ -37,6 +41,10 @@ test("actual dispatch uses the bound context with original tool meanings and cap
       assert.deepEqual(options.scope, binding.scope);
       assert.equal(options.ownerProcessId, binding.ownerProcessId);
       return {
+        async reveal(deviceId, options) {
+          calls.push({ name: "reveal", deviceId, options });
+          return { id: deviceId, platform: "ios", nativeId: "owned-native-id" };
+        },
         async invokeAction(name, input) {
           calls.push({ name, input });
           return { success: true, operation: name, deviceId: input.deviceId };
@@ -60,6 +68,10 @@ test("actual dispatch uses the bound context with original tool meanings and cap
   const screenshot = await dispatcher.handle(call("mobile_device_screenshot", { deviceId: "opaque-target" }));
   assert.equal(screenshot.result.content[1].type, "image");
   assert.equal(screenshot.result.content[1].mimeType, "image/png");
+  const revealed = await dispatcher.handle(call("mobile_device_reveal", { deviceId: "opaque-target" }));
+  assert.equal(revealed.result.structuredContent.id, "opaque-target");
+  assert.equal(calls.at(-1).name, "reveal");
+  assert.deepEqual(calls.at(-1).options, { selectRevealed: false });
 });
 
 test("unsupported/invalid/cross-scope calls are positive failures before any runtime resolution", async (t) => {
@@ -77,6 +89,52 @@ test("unsupported/invalid/cross-scope calls are positive failures before any run
     assert.equal(result.result.isError, true);
   }
   assert.equal(backendCalls, 0);
+});
+
+test("actual bound MCP dispatch preserves all three native System UI identities and legacy outputs", async (t) => {
+  const calls = [];
+  const dispatcher = await createAilohaMcpDispatcher({
+    binding, version: "test",
+    async createBackend() {
+      return {
+        async invokeAction(name, input) {
+          calls.push([name, input]);
+          if (name === "ui_dump") return { schemaVersion: "1.0", deviceId: input.deviceId,
+            platform: "ios", root: null, elementCount: 0, raw: "native" };
+          if (name === "ui_find") return { schemaVersion: "1.0", deviceId: input.deviceId,
+            matches: [], total: 0 };
+          return { schemaVersion: "1.0", deviceId: input.deviceId, success: true, match: null, total: 1 };
+        },
+        async dispose() {},
+      };
+    },
+  });
+  t.after(() => dispatcher.dispose());
+  const dump = await dispatcher.handle(call("mobile_device_ui_dump", { deviceId: "target", includeRaw: true }));
+  const find = await dispatcher.handle(call("mobile_device_ui_find", { deviceId: "target", text: "Save", limit: 2 }));
+  const tap = await dispatcher.handle(call("mobile_device_ui_tap", { deviceId: "target", text: "Save" }));
+  assert.equal(dump.result.structuredContent.raw, "native");
+  assert.equal(find.result.structuredContent.total, 0);
+  assert.equal(tap.result.structuredContent.success, true);
+  assert.deepEqual(calls.map(([name]) => name), ["ui_dump", "ui_find", "ui_tap"]);
+});
+
+test("VS Code's bound MCP reveal follows the selected target while raw GitHub MCP does not", async (t) => {
+  const calls = [];
+  const dispatcher = await createAilohaMcpDispatcher({
+    binding, version: "test", selectCreated: true,
+    createBackend: async () => ({
+      async reveal(deviceId, options) {
+        calls.push([deviceId, options]);
+        return { id: deviceId, platform: "ios", nativeId: "native" };
+      },
+      async dispose() {},
+    }),
+  });
+  t.after(() => dispatcher.dispose());
+  const reply = await dispatcher.handle(call("mobile_device_reveal", { deviceId: "opaque-target" }));
+  assert.equal(reply.result.structuredContent.id, "opaque-target");
+  assert.deepEqual(calls, [["opaque-target", { selectRevealed: true }]]);
 });
 
 test("bound empty-context inventory retains the installed MCP list output envelope", async (t) => {

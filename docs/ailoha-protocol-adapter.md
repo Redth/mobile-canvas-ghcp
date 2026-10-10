@@ -539,7 +539,8 @@ tooling is not a ready-shaped empty inventory.
 ### Scope and verification
 
 Implemented: authoritative advertised catalogs and compatible create+boot,
-inventory/select, advertised start/stop/reboot, PNG screenshot,
+inventory/select, advertised start/stop/reboot and provider-owned window reveal,
+PNG screenshot,
 basic geometry-bound pointer gestures, shared ALHV WebCodecs display, and
 advertised reset/delete when the host can obtain genuine captured approval,
 plus [read-only explicit-root workspace/application evidence](ailoha-workspace-inspection.md)
@@ -564,15 +565,64 @@ configuration from the host environment, never ambient target/agent selectors.
 The legacy .NET canvas serves the shared semantic module as a public embedded
 bootstrap asset, while its inspection API remains authenticated. This
 source-only slice has no
-workspace-application-to-native-agent mapping, binding control, or legacy
-`ui_*` compatibility claim. Both hosts bundle the exact-pinned MCP client
+workspace-application-to-native-agent mapping or binding control. The three
+legacy `mobile_device_ui_dump/find/tap` identities remain installed. The
+source-only `microsoft/ailoha@5a99822fbbaa4780aa6cc196c9442496c89a06f6`
+contract qualifies the consumer mapping for review; it is not a shipping
+allowlist for that exact Git SHA. A coordinator-approved published SDK/native
+version and source pin must first pass the official runtime verification.
+Targets and surfaces must then positively advertise `surface.ui` operations
+`getSystemUiSnapshot`, `querySystemUi`, and `tapSystemUiMatch`, and responses
+must pass typed owner and bounded-shape validation. Without a public pin the
+opt-in returns `ailoha_runtime_unavailable`; an incompatible native UI
+capability returns `capability_not_supported`, not App inspection results. The
+shared projection uses only `/ui/system-snapshot`, `/ui/system-elements`, and
+`/ui/system-elements/actions/tap`, never the App semantic lens or generic
+`/ui/tree`. It preserves nullable frames with legacy computed `centerX` and
+`centerY` on non-null frames, raw role/hint, explicit bounded
+UTF-8 raw payload, full count before limit, and native `UiTree` paths (`0`,
+`1`, `1/0`). Null-frame find centers remain zero as in the legacy projection;
+tap sends a fresh UI revision with captured geometry and the original query,
+defaulting `interactableOnly` to false so the first legacy match is not
+substituted. The native owner performs the query and input under one lease;
+Mobile Canvas never follows find with a coordinate POST. Changed view/native
+identity/surface/process and uncertain tap outcomes do not authorize replay.
+Native queries accept the legacy signed-int32 `limit` and return at most
+`Math.Max(1, limit)` matches while reporting the honest full total; the native
+source hierarchy is bounded to 8 MiB before search, and raw payloads to 1 MiB.
+The consumer also rejects a System UI response body over 16 MiB rather than
+silently truncating it; a larger result requires a reviewed native transport
+contract, not client-side invented pagination.
+Native tap keeps its completed original-owner receipt if its caller cancels
+during authority read-back; a live peer may confirm the same result without
+another tap, while a canceled peer cannot release that receipt.
+This source-only consumer mapping is **not** proof of released SDK/native
+compatibility, other-platform CI, or device validation.
+
+Reveal requires advertised `target.lifecycle/revealTarget` and a running
+provider-owned target, then calls only the canonical Target Host
+`POST /api/v1/targets/{targetId}/actions/reveal`. The original named context,
+provider, native deployment and private full process-incarnation reference
+remain captured; a changed view cannot turn the result into a different
+selection. A validated successful reply is retained privately through
+read-back/selection errors and can be reconciled against the original authority
+without another POST. A proven pre-acceptance refusal releases its receipt;
+typed transport errors carrying accepted operation evidence are not rewritten
+as definitive HTTP refusals, even if their status is 403. A canceled reveal
+caller cannot select or discard a live peer's original completion;
+HTTP 408, timeout, abort and other uncertain POSTs remain retained and are never
+replayed, including
+across same-ID process replacement. Stale authority and different process
+incarnations cannot claim the retained completion. This is a source-only
+compatibility path and depends on a matching released native runtime; it does
+not perform local window-manager automation. Both hosts bundle the exact-pinned MCP client
 graph, while the official Ailoha runtime pin remains a separate release gate.
 Controlled native development CLI proof exercised System and explicitly bound
 App tree/query/status through both prepared host clients against the real
 canonical broker and mock Target Host/Core-MAUI agents, including stale-context
 and missing-Agent failures. This does not qualify a public package, normal
 installation, native platform matrix or real-device acceptance.
-Unsupported: configuration-dependent creation, reveal/rotation/keyboard/buttons,
+Unsupported: configuration-dependent creation, rotation/keyboard/buttons,
 reset/delete without scoped consent, app deployment,
 recording and broader settings/diagnostics/file/hardware operations. No claim of
 device or full feature parity is made.

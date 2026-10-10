@@ -4,6 +4,8 @@ import { productModule } from "../ailoha-test-module.mjs";
 const { AilohaMobileBackend } = await import(productModule("lib/ailoha/mobile-backend.mjs"));
 const { mobileCanvasBackend } = await import(productModule("lib/backend.mjs"));
 const { createAilohaMediaAdapter } = await import(productModule("lib/ailoha/media-adapter.mjs"));
+const { createAilohaRevealAdapter } = await import(productModule("lib/ailoha/reveal-adapter.mjs"));
+const { createAilohaSystemUiAdapter } = await import(productModule("lib/ailoha/system-ui-adapter.mjs"));
 const { AilohaProtocolError } = await import(productModule("lib/ailoha/errors.mjs"));
 const { publicSnapshot, MobileAilohaError } = await import(productModule("lib/ailoha/mobile-projection.mjs"));
 const { createAilohaContextStore } = await import(productModule("lib/ailoha/context-adapter.mjs"));
@@ -23,14 +25,17 @@ function fixture(options = {}) {
   const surface = () => ({
     surfaceId: "surface/opaque", kind: "display",
     bounds: { x: -10, y: 20, width: 390, height: 844 },
-    geometryRevision: revision, capabilities: [],
+    geometryRevision: revision, capabilities: options.systemUi
+      ? [{ id: "surface.ui", version: 1, features: ["getSystemUiSnapshot", "querySystemUi", "tapSystemUiMatch"] }]
+      : [],
   });
   const targets = new Map(["one", "two"].map((id) => [id, {
     targetId: id, providerId: "provider", targetTypeId: "type", status: "running", surfaces: [surface()],
     nativeIdentity: { platform: "ios", nativeId: `real-native-${id}`, isVirtual: true },
   }]));
   const providers = [{ providerId: "provider", name: "Provider", version: "1", state: "ready", capabilities: [] }];
-  const capabilities = [{ id: "target.lifecycle", version: 1, features: ["startTarget", "stopTarget", "rebootTarget", "resetTarget", "deleteTarget"] }];
+  const capabilities = [{ id: "target.lifecycle", version: 1, features: ["startTarget", "stopTarget", "rebootTarget", "resetTarget", "deleteTarget", ...(options.reveal ? ["revealTarget"] : [])] },
+    ...(options.systemUi ? [{ id: "surface.ui", version: 1, features: ["getSystemUiSnapshot", "querySystemUi", "tapSystemUiMatch"] }] : [])];
   const client = {
     async getHostStatus() { return { hostId: "host", profile: "ailoha.target-host/v1", version: "test", state: "ready", capabilities: [] }; },
     async listProviders() { return providers; },
@@ -114,7 +119,8 @@ function fixture(options = {}) {
   };
   const backend = new AilohaMobileBackend({
     scope: { sessionId: "unique-session", viewId: "unique-view" },
-    client, media, owner, selectionStore,
+    client, media, owner, selectionStore, reveal: options.reveal, revealState: options.revealState,
+    systemUi: options.systemUi, systemUiState: options.systemUiState,
     confirmDestructive: options.confirmDestructive,
     saveScreenshot: options.saveScreenshot,
     operationState: options.operationState,
@@ -278,7 +284,685 @@ test("real compatibility action paths project inventory/selection/native identit
   await assert.rejects(state.backend.invokeAction("start_recording", { deviceId: "one" }), { status: 501, code: "capability_not_supported" });
   const unsupported = await state.backend.request("/api/v1/devices/one/ui");
   assert.equal(unsupported.status, 501);
-  assert.equal((await unsupported.json()).code, "capability_not_supported");
+  assert.equal((await unsupported.json()).code, "ui_contract_unavailable");
+});
+
+test("System UI identities fail explicitly without a canonical lossless tree or selector", async (t) => {
+  const state = fixture();
+  t.after(() => state.backend.dispose());
+  for (const [action, path] of [
+    ["ui_dump", "/api/v1/devices/one/ui"],
+    ["ui_find", "/api/v1/devices/one/ui/find"],
+    ["ui_tap", "/api/v1/devices/one/ui/tap"],
+  ]) {
+    await assert.rejects(state.backend.invokeAction(action, { deviceId: "one" }), { code: "ui_contract_unavailable", status: 501 });
+    const response = await state.backend.request(path, { method: path.endsWith("/ui") ? "GET" : "POST", body: "{}" });
+    assert.equal(response.status, 501);
+    assert.equal((await response.json()).code, "ui_contract_unavailable");
+  }
+  const raw = await state.backend.request("/api/v1/devices/one/ui?raw=true");
+  assert.equal(raw.status, 501);
+  assert.equal((await raw.json()).code, "ui_contract_unavailable");
+  assert.equal(state.calls.some(([kind]) => kind === "tap"), false);
+});
+
+function systemUiFixture(respond, options = {}) {
+  let state;
+  const systemUi = createAilohaSystemUiAdapter({
+    signal: new AbortController().signal,
+    transport: {
+      async response(path, request) {
+        state.calls.push(["system-ui", path, request]);
+        return respond(path, request, state);
+      },
+    },
+  });
+  state = fixture({ ...options, systemUi });
+  return state;
+}
+
+function systemUiResponse(kind, overrides = {}) {
+  const targetHost = { targetId: "one", providerId: "provider", surfaceId: "surface/opaque", geometryRevision: 7 };
+  const element = { role: "button", rawRole: "AXButton", label: "Save", value: null, identifier: "save",
+    hint: "Stores changes", frame: { x: 10, y: 20, width: 40, height: 20 },
+    enabled: true, focused: false, interactable: true, children: [] };
+  const base = { targetId: "one", targetHost, uiRevision: "ui-r1" };
+  const body = kind === "snapshot"
+    ? { ...base, platform: "ios", root: { ...element, frame: null, children: [element] }, elementCount: 2 }
+    : kind === "find"
+      ? { ...base, matches: [{ element, path: "0", centerX: 30, centerY: 30 }], total: 2 }
+      : { ...base, match: { element, path: "0", centerX: 30, centerY: 30 }, total: 2 };
+  return { status: 200, contentType: "application/json", body: { ...body, ...overrides } };
+}
+
+test("shared source-approved System UI projects exact legacy shapes through actions and actual compatibility HTTP", async (t) => {
+  const state = systemUiFixture((path) => systemUiResponse(
+    path.includes("system-snapshot") ? "snapshot" : path.includes("/actions/tap") ? "tap" : "find",
+    path.includes("includeRaw=true") ? { raw: "raw" } : {}));
+  t.after(() => state.backend.dispose());
+  const dump = await state.backend.invokeAction("ui_dump", { deviceId: "one", includeRaw: true });
+  assert.deepEqual(Object.keys(dump), ["schemaVersion", "deviceId", "platform", "root", "elementCount", "raw"]);
+  assert.equal(dump.root.frame, null);
+  assert.deepEqual(dump.root.children[0].frame, {
+    x: 10, y: 20, width: 40, height: 20, centerX: 30, centerY: 30,
+  });
+  assert.equal(dump.raw, "raw");
+  const found = await state.backend.invokeAction("ui_find", { deviceId: "one", text: "Save", limit: 1 });
+  assert.deepEqual(Object.keys(found), ["schemaVersion", "deviceId", "matches", "total"]);
+  assert.equal(found.total, 2);
+  assert.equal(found.matches[0].path, "0");
+  assert.equal(found.matches[0].element.frame.centerY, 30);
+  const tapped = await state.backend.invokeAction("ui_tap", { deviceId: "one", role: "AXButton" });
+  assert.deepEqual(Object.keys(tapped), ["schemaVersion", "success", "deviceId", "match", "total"]);
+  assert.equal(tapped.match.centerX, 30);
+  assert.equal(tapped.match.element.frame.centerX, 30);
+  const raw = await state.backend.request("/api/v1/devices/one/ui?raw=true");
+  assert.equal((await raw.json()).raw, "raw");
+  const find = await state.backend.request("/api/v1/devices/one/ui/find", {
+    method: "POST", body: JSON.stringify({ text: "Save", limit: 1 }),
+  });
+  assert.equal((await find.json()).total, 2);
+  assert.equal(state.calls.filter(([kind]) => kind === "system-ui").length, 6);
+  assert.equal(state.calls.some(([kind]) => kind === "tap"), false);
+  const nativeTap = state.calls.find(([kind, path]) => kind === "system-ui" && path.includes("/actions/tap"));
+  assert.equal(JSON.parse(nativeTap[2].body).interactableOnly, false);
+  assert.equal(JSON.parse(nativeTap[2].body).uiRevision, "ui-r1");
+});
+
+test("native System UI tap never posts after a changed context, geometry or process owner", async (t) => {
+  const waiting = deferred();
+  const state = systemUiFixture(async (path) => {
+    if (path.includes("system-snapshot")) await waiting.promise;
+    return systemUiResponse(path.includes("system-snapshot") ? "snapshot" : "tap");
+  });
+  t.after(() => state.backend.dispose());
+  const pending = state.backend.uiTap("one", { text: "Save" });
+  while (!state.calls.some(([kind]) => kind === "system-ui")) await new Promise((resolve) => setImmediate(resolve));
+  state.selectHost("other");
+  waiting.resolve();
+  await assert.rejects(pending, { code: "selection_superseded" });
+  assert.equal(state.calls.filter(([kind, path]) => kind === "system-ui" && path.includes("/actions/tap")).length, 0);
+  const geometry = systemUiFixture((path) => {
+    if (path.includes("system-snapshot")) geometry.geometryChanged();
+    return systemUiResponse(path.includes("system-snapshot") ? "snapshot" : "tap");
+  });
+  t.after(() => geometry.backend.dispose());
+  await assert.rejects(geometry.backend.uiTap("one", { text: "Save" }), { code: "system_ui_owner_changed" });
+  assert.equal(geometry.calls.filter(([kind, path]) => kind === "system-ui" && path.includes("/actions/tap")).length, 0);
+  const native = systemUiFixture((path, _request, state) => {
+    if (path.includes("system-snapshot")) {
+      state.targets.get("one").nativeIdentity = {
+        ...state.targets.get("one").nativeIdentity, nativeId: "replacement-native",
+      };
+    }
+    return systemUiResponse(path.includes("system-snapshot") ? "snapshot" : "tap");
+  });
+  t.after(() => native.backend.dispose());
+  await assert.rejects(native.backend.uiTap("one", { text: "Save" }), { code: "system_ui_owner_changed" });
+  assert.equal(native.calls.filter(([kind, path]) => kind === "system-ui" && path.includes("/actions/tap")).length, 0);
+});
+
+test("cancelled System UI caller cannot submit a tap after the captured snapshot", async (t) => {
+  for (const channel of ["action", "http"]) {
+    const controller = new AbortController();
+    const state = systemUiFixture((path) => {
+      if (path.includes("system-snapshot")) controller.abort();
+      return systemUiResponse(path.includes("system-snapshot") ? "snapshot" : "tap");
+    });
+    t.after(() => state.backend.dispose());
+    if (channel === "action") {
+      await assert.rejects(
+        state.backend.invokeAction("ui_tap", { deviceId: "one", text: "Save" }, { signal: controller.signal }),
+        { code: "cancelled" },
+      );
+    } else {
+      const response = await state.backend.request("/api/v1/devices/one/ui/tap", {
+        method: "POST", body: '{"text":"Save"}', signal: controller.signal,
+      });
+      assert.equal((await response.json()).code, "cancelled");
+    }
+    assert.equal(state.calls.filter(([kind, path]) =>
+      kind === "system-ui" && path.includes("/actions/tap")).length, 0);
+  }
+});
+
+test("App UI or absent System UI capability never enables native System compatibility", async (t) => {
+  const state = systemUiFixture(() => { throw new Error("System UI transport must not be used"); }, {
+    client: { async getTargetCapabilities() {
+      return [{ id: "surface.ui", version: 1, features: ["getTargetUiTree", "queryTargetElements", "tapTargetElement"] }];
+    } },
+  });
+  t.after(() => state.backend.dispose());
+  await assert.rejects(state.backend.uiDump("one"), { code: "capability_not_supported" });
+  await assert.rejects(state.backend.uiFind("one", { text: "Save" }), { code: "capability_not_supported" });
+  await assert.rejects(state.backend.uiTap("one", { text: "Save" }), { code: "capability_not_supported" });
+  assert.equal(state.calls.some(([kind]) => kind === "system-ui"), false);
+});
+
+test("large legacy find limit is forwarded without truncation while caller-int32 overflow fails before native reads", async (t) => {
+  const state = systemUiFixture((path) => path.includes("system-elements")
+    ? systemUiResponse("find", {
+      matches: Array.from({ length: 300 }, (_, index) => ({
+        element: systemUiResponse("find").body.matches[0].element,
+        path: `1/${index}`, centerX: 30, centerY: 30,
+      })),
+      total: 321,
+    })
+    : systemUiResponse("snapshot"));
+  t.after(() => state.backend.dispose());
+  const found = await state.backend.uiFind("one", { text: "Save", limit: 300 });
+  assert.equal(found.total, 321);
+  assert.equal(found.matches.length, 300);
+  assert.equal(found.matches.at(-1).path, "1/299");
+  assert.equal(state.calls.filter(([kind, path]) => kind === "system-ui"
+    && path.includes("system-elements") && path.includes("limit=300")).length, 1);
+  await assert.rejects(state.backend.uiFind("one", { text: "Save", limit: 2147483648 }),
+    { code: "invalid_request" });
+  assert.equal(state.calls.filter(([kind]) => kind === "system-ui").length, 1);
+});
+
+test("unknown native tap retains a single original receipt, definitive 403 releases, HTTP 408 never replays", async (t) => {
+  for (const status of [403, 408, 502]) {
+    const state = systemUiFixture((path) => {
+      if (!path.includes("/actions/tap")) return systemUiResponse("snapshot");
+      if (status < 500) {
+        const error = new Error("typed native rejection");
+        error.name = "TargetHostTransportError";
+        error.code = "HttpError";
+        error.status = status;
+        error.response = { status };
+        throw error;
+      }
+      return { status, contentType: "application/json", body: { error: "rejected" } };
+    });
+    t.after(() => state.backend.dispose());
+    await assert.rejects(state.backend.uiTap("one", { text: "Save" }));
+    const original = state.calls.filter(([kind, path]) => kind === "system-ui" && path.includes("/actions/tap")).length;
+    assert.equal(original, 1);
+    if (status !== 403) {
+      await assert.rejects(state.backend.uiTap("one", { text: "Save" }), { code: "ui_tap_outcome_uncertain" });
+      assert.equal(state.calls.filter(([kind, path]) => kind === "system-ui" && path.includes("/actions/tap")).length, 1);
+    } else {
+      await assert.rejects(state.backend.uiTap("one", { text: "Save" }));
+      assert.equal(state.calls.filter(([kind, path]) => kind === "system-ui" && path.includes("/actions/tap")).length, 2);
+    }
+  }
+});
+
+test("typed 403 carrying accepted operation evidence cannot evict a native tap receipt", async (t) => {
+  const error = Object.assign(new Error("accepted native tap"), {
+    name: "TargetHostTransportError", code: "HttpError", status: 403,
+    response: { status: 403 }, operationId: "accepted-tap",
+  });
+  const state = systemUiFixture((path) => {
+    if (path.includes("/actions/tap")) throw error;
+    return systemUiResponse("snapshot");
+  });
+  t.after(() => state.backend.dispose());
+  await assert.rejects(state.backend.uiTap("one", { text: "Save" }), (actual) => actual === error);
+  await assert.rejects(state.backend.uiTap("one", { text: "Save" }), { code: "ui_tap_outcome_uncertain" });
+  assert.equal(state.calls.filter(([kind, path]) =>
+    kind === "system-ui" && path.includes("/actions/tap")).length, 1);
+});
+
+test("completed native UI tap survives a failed authority read without another POST", async (t) => {
+  const state = systemUiFixture((path) => {
+    if (path.includes("/actions/tap")) {
+      state.selectionStore.readSnapshot = async () => { throw new Error("authority read failed"); };
+    }
+    return systemUiResponse(path.includes("system-snapshot") ? "snapshot" : "tap");
+  });
+  t.after(() => state.backend.dispose());
+  const originalRead = state.selectionStore.readSnapshot.bind(state.selectionStore);
+  await assert.rejects(state.backend.uiTap("one", { text: "Save" }), /authority read failed/);
+  assert.equal(state.calls.filter(([kind, path]) => kind === "system-ui" && path.includes("/actions/tap")).length, 1);
+  state.selectionStore.readSnapshot = originalRead;
+  const result = await state.backend.uiTap("one", { text: "Save" });
+  assert.equal(result.success, true);
+  assert.equal(state.calls.filter(([kind, path]) => kind === "system-ui" && path.includes("/actions/tap")).length, 1);
+});
+
+test("accepted native UI tap canceled during authority read retains its completed receipt", async (t) => {
+  const controller = new AbortController();
+  const entered = deferred();
+  const release = deferred();
+  let accepted = false;
+  const state = systemUiFixture((path) => {
+    if (path.includes("/actions/tap")) accepted = true;
+    return systemUiResponse(path.includes("system-snapshot") ? "snapshot" : "tap");
+  });
+  t.after(() => { release.resolve(); return state.backend.dispose(); });
+  const read = state.selectionStore.readSnapshot.bind(state.selectionStore);
+  state.selectionStore.readSnapshot = async (...args) => {
+    if (accepted) {
+      accepted = false;
+      entered.resolve();
+      await release.promise;
+    }
+    return read(...args);
+  };
+  const pending = state.backend.uiTap("one", { text: "Save" }, { signal: controller.signal });
+  await entered.promise;
+  controller.abort();
+  release.resolve();
+  await assert.rejects(pending, { code: "cancelled" });
+  assert.equal((await state.backend.uiTap("one", { text: "Save" })).success, true);
+  assert.equal(state.calls.filter(([kind, path]) =>
+    kind === "system-ui" && path.includes("/actions/tap")).length, 1);
+});
+
+test("one cancelled native UI tap caller cannot poison a peer sharing its completed receipt", async (t) => {
+  const controller = new AbortController();
+  const entered = deferred();
+  const release = deferred();
+  let accepted = false;
+  let reads = 0;
+  const state = systemUiFixture((path) => {
+    if (path.includes("/actions/tap")) accepted = true;
+    return systemUiResponse(path.includes("system-snapshot") ? "snapshot" : "tap");
+  });
+  t.after(() => { release.resolve(); return state.backend.dispose(); });
+  const read = state.selectionStore.readSnapshot.bind(state.selectionStore);
+  state.selectionStore.readSnapshot = async (...args) => {
+    if (accepted) {
+      accepted = false;
+      reads += 1;
+      entered.resolve();
+      await release.promise;
+    }
+    return read(...args);
+  };
+  const first = state.backend.uiTap("one", { text: "Save" }, { signal: controller.signal });
+  await entered.promise;
+  const peer = state.backend.uiTap("one", { text: "Save" });
+  controller.abort();
+  await assert.rejects(first, { code: "cancelled" });
+  assert.equal(reads, 1);
+  release.resolve();
+  assert.equal((await peer).success, true);
+  assert.equal(state.calls.filter(([kind, path]) =>
+    kind === "system-ui" && path.includes("/actions/tap")).length, 1);
+});
+
+test("unknown native UI tap cannot move to a new process incarnation with the same host ID", async (t) => {
+  const stateByIntent = new Map();
+  const first = systemUiFixture((path) => path.includes("/actions/tap")
+    ? { status: 408, contentType: "application/json", body: {} }
+    : systemUiResponse("snapshot"), { systemUiState: stateByIntent });
+  t.after(() => first.backend.dispose());
+  await assert.rejects(first.backend.uiTap("one", { text: "Save" }));
+  const second = systemUiFixture(() => { throw new Error("replacement transport must not be used"); }, {
+    systemUiState: stateByIntent,
+    connectionRef: { ...first.owner.connectionRef, processStartedAt: "2026-10-10T01:00:00Z" },
+  });
+  t.after(() => second.backend.dispose());
+  await assert.rejects(second.backend.uiTap("one", { text: "Save" }), { code: "runtime_incarnation_changed" });
+  assert.equal(second.calls.filter(([kind]) => kind === "system-ui").length, 0);
+});
+
+test("reveal projects the native target only when the selected provider advertises it", async (t) => {
+  const state = fixture({ reveal: {
+    async reveal(invocation) {
+      state.calls.push(["reveal", invocation]);
+      return state.targets.get(invocation.targetId);
+    },
+  } });
+  t.after(() => state.backend.dispose());
+  assert.equal((await state.backend.getDevice("one")).capabilities.reveal, true);
+  const result = await state.backend.reveal("one");
+  assert.equal(result.id, "one");
+  assert.equal(result.nativeId, "real-native-one");
+  assert.equal((await state.backend.getSelected()).hasSelection, false);
+  assert.equal(state.calls.find(([kind]) => kind === "reveal")[1].connectionRef, state.backend.connectionRef);
+  assert.equal(JSON.stringify(result).includes("connectionRef"), false);
+  const response = await state.backend.request("/api/v1/devices/one/reveal", { method: "POST", body: "{}" });
+  assert.equal(response.status, 200);
+  assert.equal((await state.backend.getSelected()).device.id, "one");
+  assert.equal((await response.json()).capabilities.reveal, true);
+});
+
+test("reveal requires a running capable provider and never invokes a native action otherwise", async (t) => {
+  const state = fixture({ reveal: { async reveal() { throw new Error("unexpected POST"); } } });
+  t.after(() => state.backend.dispose());
+  state.targets.get("one").status = "stopped";
+  await assert.rejects(state.backend.reveal("one"), { code: "capability_not_supported" });
+  state.targets.get("one").status = "running";
+  state.providers[0].state = "unavailable";
+  await assert.rejects(state.backend.reveal("one"), { code: "capability_not_supported" });
+  assert.equal(state.calls.some(([kind]) => kind === "reveal"), false);
+  const missing = fixture();
+  t.after(() => missing.backend.dispose());
+  assert.equal((await missing.backend.getDevice("one")).capabilities.reveal, false);
+  await assert.rejects(missing.backend.reveal("one"), { code: "capability_not_supported" });
+});
+
+test("reveal rejects stale context before POST and retains uncertain mutation under its original owner", async (t) => {
+  const entered = deferred();
+  const release = deferred();
+  const state = canonicalFixture({ reveal: {
+    async reveal(invocation) {
+      state.calls.push(["reveal", invocation]);
+      entered.resolve();
+      await release.promise;
+      throw new Error("transport outcome unknown");
+    },
+  } });
+  t.after(() => state.backend.dispose());
+  const pending = state.backend.reveal("one");
+  const failed = assert.rejects(pending, /transport outcome unknown/);
+  await entered.promise;
+  await state.retireAuthority();
+  await state.reopenAuthority();
+  release.resolve();
+  await failed;
+  await assert.rejects(state.backend.reveal("one"), { code: "reveal_outcome_uncertain" });
+  assert.equal(state.calls.filter(([kind]) => kind === "reveal").length, 1);
+  assert.equal(state.calls.find(([kind]) => kind === "reveal")[1].executionContext.scopeEpoch, "original-epoch");
+  assert.equal(state.calls.find(([kind]) => kind === "reveal")[1].connectionRef, state.backend.connectionRef);
+});
+
+test("completed reveal survives a failed authority read without another POST", async (t) => {
+  const revealState = new Map();
+  const state = fixture({ revealState, reveal: {
+    async reveal(invocation) {
+      state.calls.push(["reveal", invocation]);
+      rejectNextRead = true;
+      return state.targets.get(invocation.targetId);
+    },
+  } });
+  t.after(() => state.backend.dispose());
+  Object.defineProperty(state.selectionStore, "contextProjection", {
+    value: { contextRef: "ctx-reveal", scopeEpoch: "original-epoch", revision: "7", ownerProcessId: 1234 },
+  });
+  const read = state.selectionStore.readSnapshot.bind(state.selectionStore);
+  let rejectNextRead = false;
+  state.selectionStore.readSnapshot = async () => {
+    if (rejectNextRead) {
+      rejectNextRead = false;
+      throw new Error("authority read temporarily unavailable");
+    }
+    return read();
+  };
+  await assert.rejects(state.backend.reveal("one", { selectRevealed: true }), /authority read temporarily unavailable/);
+  const receipt = [...revealState.values()][0];
+  assert.equal(receipt.completed.targetId, "one");
+  assert.equal(receipt.invocation.executionContext.scopeEpoch, "original-epoch");
+  assert.equal(receipt.invocation.connectionRef, state.backend.connectionRef);
+  const result = await state.backend.reveal("one", { selectRevealed: true });
+  assert.equal(result.id, "one");
+  assert.equal((await state.backend.getSelected()).device.id, "one");
+  assert.equal(state.calls.filter(([kind]) => kind === "reveal").length, 1);
+});
+
+test("cancelled reveal caller cannot select an accepted completion; explicit recovery does not POST again", async (t) => {
+  const controller = new AbortController();
+  const state = fixture({ reveal: {
+    async reveal(invocation) {
+      state.calls.push(["reveal", invocation]);
+      controller.abort();
+      return state.targets.get(invocation.targetId);
+    },
+  } });
+  t.after(() => state.backend.dispose());
+  await assert.rejects(state.backend.reveal("one", {
+    selectRevealed: true, signal: controller.signal,
+  }), { code: "cancelled" });
+  assert.equal((await state.backend.getSelected()).hasSelection, false);
+  const result = await state.backend.reveal("one", { selectRevealed: true });
+  assert.equal(result.id, "one");
+  assert.equal((await state.backend.getSelected()).device.id, "one");
+  assert.equal(state.calls.filter(([kind]) => kind === "reveal").length, 1);
+});
+
+test("reveal canceled during authority read retains completion without selecting or resubmitting", async (t) => {
+  const controller = new AbortController();
+  const entered = deferred();
+  const release = deferred();
+  let accepted = false;
+  const state = fixture({ reveal: {
+    async reveal(invocation) {
+      state.calls.push(["reveal", invocation]);
+      accepted = true;
+      return state.targets.get(invocation.targetId);
+    },
+  } });
+  t.after(() => { release.resolve(); return state.backend.dispose(); });
+  const read = state.selectionStore.readSnapshot.bind(state.selectionStore);
+  state.selectionStore.readSnapshot = async (...args) => {
+    if (accepted) {
+      accepted = false;
+      entered.resolve();
+      await release.promise;
+    }
+    return read(...args);
+  };
+  const pending = state.backend.reveal("one", { selectRevealed: true, signal: controller.signal });
+  await entered.promise;
+  controller.abort();
+  release.resolve();
+  await assert.rejects(pending, { code: "cancelled" });
+  assert.equal((await state.backend.getSelected()).hasSelection, false);
+  assert.equal((await state.backend.reveal("one", { selectRevealed: true })).id, "one");
+  assert.equal((await state.backend.getSelected()).device.id, "one");
+  assert.equal(state.calls.filter(([kind]) => kind === "reveal").length, 1);
+});
+
+test("one cancelled reveal caller cannot prevent a live peer from confirming the same native result", async (t) => {
+  const controller = new AbortController();
+  const entered = deferred();
+  const release = deferred();
+  let accepted = false;
+  const state = fixture({ reveal: {
+    async reveal(invocation) {
+      state.calls.push(["reveal", invocation]);
+      accepted = true;
+      return state.targets.get(invocation.targetId);
+    },
+  } });
+  t.after(() => { release.resolve(); return state.backend.dispose(); });
+  const read = state.selectionStore.readSnapshot.bind(state.selectionStore);
+  state.selectionStore.readSnapshot = async (...args) => {
+    if (accepted) {
+      accepted = false;
+      entered.resolve();
+      await release.promise;
+    }
+    return read(...args);
+  };
+  const first = state.backend.reveal("one", { selectRevealed: true, signal: controller.signal });
+  await entered.promise;
+  const peer = state.backend.reveal("one", { selectRevealed: true });
+  controller.abort();
+  await assert.rejects(first, { code: "cancelled" });
+  release.resolve();
+  assert.equal((await peer).id, "one");
+  assert.equal((await state.backend.getSelected()).device.id, "one");
+  assert.equal(state.calls.filter(([kind]) => kind === "reveal").length, 1);
+});
+
+test("a definitive reveal rejection does not become permanent unknown acceptance", async (t) => {
+  const revealState = new Map();
+  let posts = 0;
+  const state = fixture({ revealState, reveal: {
+    async reveal(invocation) {
+      posts += 1;
+      if (posts === 1) throw new AilohaProtocolError("http_error", { status: 403 });
+      return state.targets.get(invocation.targetId);
+    },
+  } });
+  t.after(() => state.backend.dispose());
+  await assert.rejects(state.backend.reveal("one"), { code: "http_error", status: 403 });
+  assert.equal(revealState.size, 0);
+  assert.equal((await state.backend.reveal("one")).id, "one");
+  assert.equal(posts, 2);
+});
+
+test("typed reveal refusal with accepted operation evidence keeps the original receipt", async (t) => {
+  const error = Object.assign(new Error("accepted reveal with refusal metadata"), {
+    name: "TargetHostTransportError", status: 403, code: "HttpError",
+    response: { status: 403 }, operationId: "accepted-reveal",
+  });
+  let posts = 0;
+  const state = fixture({ reveal: createAilohaRevealAdapter({ transport: {
+    async response() { posts += 1; throw error; },
+  } }) });
+  t.after(() => state.backend.dispose());
+  await assert.rejects(state.backend.reveal("one"), (actual) => actual === error);
+  await assert.rejects(state.backend.reveal("one"), { code: "reveal_outcome_uncertain" });
+  assert.equal(posts, 1);
+});
+
+test("timeout with HTTP metadata never clears an uncertain reveal receipt", async (t) => {
+  const revealState = new Map();
+  let posts = 0;
+  const state = fixture({ revealState, reveal: {
+    async reveal() {
+      posts += 1;
+      throw new AilohaProtocolError("timeout", { status: 403 });
+    },
+  } });
+  t.after(() => state.backend.dispose());
+  await assert.rejects(state.backend.reveal("one"), { code: "timeout" });
+  await assert.rejects(state.backend.reveal("one"), { code: "reveal_outcome_uncertain" });
+  assert.equal(posts, 1);
+  assert.equal(revealState.size, 1);
+});
+
+test("server HTTP 408 with response metadata never authorizes a second reveal POST", async (t) => {
+  const revealState = new Map();
+  let posts = 0;
+  const reveal = createAilohaRevealAdapter({ transport: {
+    async response() {
+      posts += 1;
+      const error = new Error("server timed out after receiving the POST");
+      Object.assign(error, {
+        name: "TargetHostTransportError", status: 408, code: "HttpError",
+        response: { status: 408, contentType: "application/problem+json" },
+      });
+      throw error;
+    },
+  } });
+  const state = fixture({ revealState, reveal });
+  t.after(() => state.backend.dispose());
+  await assert.rejects(state.backend.reveal("one"), { code: "http_error", status: 408 });
+  await assert.rejects(state.backend.reveal("one"), { code: "reveal_outcome_uncertain" });
+  assert.equal(posts, 1);
+  assert.equal(revealState.size, 1);
+});
+
+test("a completed reveal cannot be confirmed from a replacement process incarnation", async (t) => {
+  const revealState = new Map();
+  const first = fixture({ revealState, reveal: {
+    async reveal(invocation) {
+      failRead = true;
+      return first.targets.get(invocation.targetId);
+    },
+  } });
+  t.after(() => first.backend.dispose());
+  let failRead = false;
+  const read = first.selectionStore.readSnapshot.bind(first.selectionStore);
+  first.selectionStore.readSnapshot = async () => {
+    if (failRead) { failRead = false; throw new Error("read unavailable"); }
+    return read();
+  };
+  await assert.rejects(first.backend.reveal("one"), /read unavailable/);
+  assert.equal(revealState.size, 1);
+  const second = fixture({ revealState, connectionRef: { ...first.backend.connectionRef, pid: 99 },
+    reveal: { async reveal() { throw new Error("unexpected POST"); } } });
+  t.after(() => second.backend.dispose());
+  await assert.rejects(second.backend.reveal("one"), { code: "runtime_incarnation_changed" });
+  assert.equal(revealState.size, 1);
+});
+
+test("a late completed reveal cannot evict a newer same-key receipt", async (t) => {
+  const revealState = new Map();
+  const enteredRead = deferred();
+  const releaseRead = deferred();
+  const state = fixture({ revealState, reveal: {
+    async reveal(invocation) {
+      blockConfirmation = true;
+      return state.targets.get(invocation.targetId);
+    },
+  } });
+  t.after(() => state.backend.dispose());
+  const read = state.selectionStore.readSnapshot.bind(state.selectionStore);
+  let blockConfirmation = false;
+  state.selectionStore.readSnapshot = async () => {
+    if (blockConfirmation) {
+      enteredRead.resolve();
+      await releaseRead.promise;
+      blockConfirmation = false;
+    }
+    return read();
+  };
+  const original = state.backend.reveal("one");
+  await enteredRead.promise;
+  const [key, receipt] = [...revealState][0];
+  const replacement = { invocation: receipt.invocation, completed: null };
+  revealState.set(key, replacement);
+  releaseRead.resolve();
+  await original;
+  assert.equal(revealState.get(key), replacement);
+});
+
+for (const [field, replacement] of [
+  ["serviceId", "another-service"], ["pid", 9876],
+  ["startedAt", "2026-10-09T23:01:00Z"], ["processStartedAt", "2026-10-09T23:01:00Z"],
+]) {
+  test(`reveal refuses a changed ${field} even for the same persistent host ID`, async (t) => {
+    const retained = new Map();
+    const one = fixture({ revealState: retained, reveal: { async reveal() { throw new Error("unknown"); } } });
+    t.after(() => one.backend.dispose());
+    await assert.rejects(one.backend.reveal("one"), /unknown/);
+    const two = fixture({ revealState: retained, connectionRef: {
+      ...one.backend.connectionRef, [field]: replacement,
+    }, reveal: { async reveal() { throw new Error("must not submit"); } } });
+    t.after(() => two.backend.dispose());
+    await assert.rejects(two.backend.reveal("one"), { code: "runtime_incarnation_changed" });
+  });
+}
+
+test("concurrent reveal requests dispatch once and never borrow a later selection", async (t) => {
+  const entered = deferred();
+  const release = deferred();
+  const state = canonicalFixture({ reveal: {
+    async reveal(invocation) {
+      state.calls.push(["reveal", invocation]);
+      entered.resolve();
+      await release.promise;
+      return state.targets.get(invocation.targetId);
+    },
+  } });
+  t.after(() => state.backend.dispose());
+  const first = state.backend.reveal("one", { selectRevealed: true });
+  await entered.promise;
+  await assert.rejects(state.backend.reveal("one"), { code: "reveal_outcome_uncertain" });
+  await state.advanceSelection();
+  release.resolve();
+  await assert.rejects(first, { code: "context_snapshot_superseded" });
+  assert.equal((await state.backend.getSelected()).device.id, "two");
+  assert.equal(state.calls.filter(([kind]) => kind === "reveal").length, 1);
+  await assert.rejects(state.backend.reveal("one"), { code: "context_snapshot_superseded" });
+});
+
+test("reveal refuses authority changes during inventory before native dispatch", async (t) => {
+  const state = canonicalFixture({ reveal: { async reveal() { throw new Error("unexpected POST"); } } });
+  t.after(() => state.backend.dispose());
+  const entered = deferred();
+  const release = deferred();
+  const get = state.client.getTarget;
+  state.client.getTarget = async (...args) => {
+    entered.resolve();
+    await release.promise;
+    return get(...args);
+  };
+  const pending = state.backend.reveal("one");
+  const rejected = assert.rejects(pending, { code: "context_snapshot_superseded" });
+  await entered.promise;
+  await state.advanceSelection();
+  release.resolve();
+  await rejected;
+  assert.equal(state.calls.some(([kind]) => kind === "reveal"), false);
 });
 
 test("an open empty canonical view projects its verified binding without inferring a target", async (t) => {

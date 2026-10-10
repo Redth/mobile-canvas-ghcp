@@ -12,7 +12,8 @@ const products = process.argv.length > 2
   ];
 const modules = [
   "lib/ailoha/mobile-backend.mjs", "lib/ailoha/mobile-projection.mjs", "lib/ailoha/context-adapter.mjs",
-  "lib/ailoha/media-adapter.mjs", "lib/ailoha/canvas-host.mjs", "lib/ailoha/mcp-host.mjs",
+  "lib/ailoha/media-adapter.mjs", "lib/ailoha/reveal-adapter.mjs", "lib/ailoha/system-ui-adapter.mjs",
+  "lib/ailoha/canvas-host.mjs", "lib/ailoha/mcp-host.mjs",
   "lib/ailoha/runtime-sdk.mjs", "lib/ailoha/runtime-backend.mjs", "lib/ailoha/github-adapter.mjs",
   "lib/ailoha/destructive-consent.mjs",
   "lib/ailoha/index.mjs", "web/ailoha-canvas-state.js", "web/ailoha-video-player.js", "web/ailoha-video-receiver.js",
@@ -29,6 +30,8 @@ const tests = [
   "tests/scripts/parent-operation-receipts.test.mjs",
   "tests/scripts/ailoha-owner-transport.test.mjs",
   "tests/scripts/ailoha-media-adapter.test.mjs",
+  "tests/scripts/ailoha-reveal-adapter.test.mjs",
+  "tests/scripts/ailoha-system-ui-adapter.test.mjs",
   "tests/scripts/ailoha-canvas-host.test.mjs",
   "tests/scripts/ailoha-context-adapter.test.mjs",
   "tests/scripts/ailoha-workspace-inspection.test.mjs",
