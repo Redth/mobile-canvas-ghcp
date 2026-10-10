@@ -325,20 +325,21 @@ The MCP names, request fields, and legacy output envelopes remain unchanged.
 | `mobile_device_location_clear` | Enabled with `target.location` | `DELETE /location` requires a completed 204; no simulated fix is fabricated. |
 | `mobile_device_clipboard_get` | Enabled with `target.clipboard` | `GET /clipboard` only when the content is `text/plain` with a reported `text`. |
 | `mobile_device_clipboard_set` | Gated; source-conditional | `target.clipboard` PUT `/clipboard` sends `text/plain`, verifies returned text, then reads `target.clipboard` again. Official runtime PUT and installed acceptance are pending. |
-| `mobile_device_biometric` | iOS match/nomatch enabled with `target.biometrics`; Android gated | `POST /biometrics/results` confirms completion; `confirmed` remains false on iOS, which cannot confirm the scan listener. Android canonical completion discards the legacy `confirmed` signal, and `fingerId` has no canonical representation. |
-| `mobile_device_call` | Gated | Canonical telephony has no accept/hold/cancel actions; its incoming-call primitive cannot preserve all legacy actions. |
-| `mobile_device_calls` | Gated | Canonical telephony exposes only a single normalized call state/number, not the full list and platform-native state. |
+| `mobile_device_biometric` | iOS match/nomatch enabled with `target.biometrics`; Android gated | `POST /biometrics/results` confirms completion; `confirmed` remains false on iOS, which cannot confirm the scan listener. A *draft, unreviewed* native result contract proposes Android `confirmed` evidence and optional `fingerId` forwarding; Android remains gated until reviewed exact-source and installed-host verification. |
+| `mobile_device_call` | Gated; source-conditional | Draft, unreviewed `controlTargetCall` accepts place/accept/hold/cancel and completes with full `TelephonyState`; source confirms the operation before projecting the unmodified Android call list. Missing readback does not replay accepted work. Native review and installed acceptance remain pending. |
+| `mobile_device_calls` | Gated; source-conditional | Draft, unreviewed `getTargetTelephony` can supply the full Android call list, native platform and raw states. The source requires every field and checks original target ownership; an absent native list is unsupported. |
 | `mobile_device_sms_send` | Enabled with `target.telephony` | `POST /telephony/sms`, confirmed by the matching terminal operation. |
 | `mobile_device_notification_push` | Enabled on iOS with `target.push` and `target.apps` | Resolve exactly one installed app by `packageId` through `GET /apps?includeSystem=true`; use the returned `appId` for `POST /push/notifications` and confirm the matching terminal operation. Workspace IDs are never substituted for native package IDs. |
-| `mobile_device_permission_list` | Gated | Canonical permission state omits the legacy `platformName` for each permission. The setter also collapses a multi-permission fan-out to one record. |
-| `mobile_device_permission_set` | Gated | Requires official PUT `/permissions/{name}` plus exact native `platformName` and multi-permission fan-out/readback fidelity. |
+| `mobile_device_permission_list` | Gated; source-conditional | Resolve one installed native package to its canonical app ID; draft, unreviewed permission state supplies each `platformName`, with unknown reported as nullable `granted`, never denied. Native review and installed acceptance remain pending. |
+| `mobile_device_permission_set` | Gated; source-conditional | Resolve the installed app ID, send official PUT `/permissions/{name}` with grant/revoke/reset mapped to granted/denied/unknown, and require draft native `affectedPermissions` readback of all touched grants. Missing fanout retains the uncertain receipt, never replays PUT. Official PUT and native review/installed acceptance remain pending. |
 | `mobile_device_settings_get` | Enabled with `target.settings` | `GET /settings/device` projects the nullable appearance/accessibility fields. |
 | `mobile_device_settings_set` | Enabled with `target.settings` | `PATCH /settings/device` requires the device namespace and reads back the resulting settings. |
 
 These source-level gates do not indicate that the current public Ailoha package
 can run the opt-in: no compatible public runtime pin has been approved. Enabling
 PUT-dependent features needs exact official runtime support, not a fixture-only
-verb; native contract fields omitted above require separate upstream changes.
+verb; the unreviewed runtime source now proposes PUT, and the draft native source
+proposes the fidelity fields above. Neither is an approved public SDK pin.
 Network `profile` is also gated independently of PUT until its separate,
 new native-profile contract is reviewed: the current canonical update accepts
 latency but no profile, and the existing generic profile endpoint supports

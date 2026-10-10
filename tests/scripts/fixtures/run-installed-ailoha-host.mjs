@@ -80,6 +80,11 @@ async function checkDeviceFeatures(api, selected) {
   ]) {
     assert.equal((await api(`${base}/${path}`, "POST", input)).status, 501);
   }
+  for (const [path, method, input] of [
+    ["calls", "GET"], ["calls", "POST", { action: "place", number: "+123" }],
+    ["permissions?bundleId=com.example.synthetic", "GET"],
+    ["permissions", "POST", { bundleId: "com.example.synthetic", permission: "camera" }],
+  ]) assert.equal((await api(`${base}/${path}`, method, input)).status, 501);
   const direct = await createAilohaMcpDispatcher({ version: "synthetic-only", binding: returnedBinding(selected) });
   try {
     for (const [name, expected] of [
@@ -107,6 +112,15 @@ async function checkDeviceFeatures(api, selected) {
     const gated = await direct.handle(mcpCall("mobile_device_battery_set",
       { deviceId: "opaque/target", level: 80 }));
     assert.equal(JSON.parse(gated.result.content[0].text).code, "capability_not_supported");
+    for (const [name, input] of [
+      ["mobile_device_calls", {}],
+      ["mobile_device_call", { action: "place", number: "+123" }],
+      ["mobile_device_permission_list", { bundleId: "com.example.synthetic" }],
+      ["mobile_device_permission_set", { bundleId: "com.example.synthetic", permission: "camera" }],
+    ]) {
+      const reply = await direct.handle(mcpCall(name, { deviceId: "opaque/target", ...input }));
+      assert.equal(JSON.parse(reply.result.content[0].text).code, "capability_not_supported");
+    }
   } finally { await direct.dispose(); }
   assert.equal(scenario.calls.some((call) => call.method === "PUT"), false);
 }
@@ -402,6 +416,12 @@ try {
     });
     assert.equal(scenario.calls.some((call) => call.path?.endsWith("/telephony/sms")
       && JSON.parse(call.body).phoneNumber === "+123"), true);
+    const unsupportedScan = await androidMcp.handle(mcpCall("mobile_device_biometric", {
+      deviceId: selectedContext.device.id, action: "match", fingerId: 7,
+    }));
+    assert.equal(JSON.parse(unsupportedScan.result.content[0].text).code, "capability_not_supported");
+    assert.equal(scenario.calls.some((call) => call.path?.endsWith("/biometrics/results")
+      && call.path.includes(encodeURIComponent(selectedContext.device.id))), false);
   } finally { await androidMcp.dispose(); }
   const rawMcp = await createAilohaMcpDispatcher({ version: "synthetic-only", binding: returnedBinding(selectedContext) });
   try {
