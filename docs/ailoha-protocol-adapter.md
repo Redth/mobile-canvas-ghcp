@@ -281,6 +281,32 @@ trusted view opens it reports `context_not_bound`, and a retired view reports
 `context_retired`. The first slice is target-only; app/agent/runtime-instance
 selectors are not adopted as native package identity.
 
+### Internal host incarnation evidence
+
+`targetHostId` is a persistent discovery identity, not a process incarnation.
+The trusted backend captures the official lease's full `connectionRef`
+(`serviceId`, `pid`, `startedAt`, `processStartedAt`, and `schema` when supplied)
+as a frozen value before opening its transport. Trusted backend/canvas/VS Code
+bridge adapters expose `connectionRef`; `captureInvocation` retains the same
+frozen value in a non-enumerable host-only property after public capture.
+`captureConnectionRef` and `sameConnectionRef` are the shared capture/comparison
+helpers; no derived `hostInstanceId` or private metadata lookup is used.
+
+Spreading, structured-cloning or publicly projecting an invocation deliberately
+drops that internal property. Trusted adapters that extend an invocation must
+retain its `connectionRef` separately with their private receipt/progress, not
+recover it from renderer/MCP output. A changed tuple rejects same-key lifecycle
+recovery or unknown video-create replay as `runtime_incarnation_changed`; it
+does not discard the old receipt or attach cleanup to the replacement transport.
+New unrelated explicit actions remain independent.
+
+This evidence is not an atomic request-time process fence. The official SDK
+validates owner/process/pin/metadata when a transport is opened; its HTTP socket
+and credential remain captured afterward. Managed credential rotation can close
+or reject that old transport, while reused external credentials leave a
+request-time race. Mobile Canvas neither refreshes/replays mutations across
+changed evidence nor claims that comparing a precheck eliminates that race.
+
 `get_selected_device`/`mobile_device_get_selected` include a non-secret
 `contextBinding` projection when backed by the canonical authority:
 `contextRef`, `scopeEpoch`, string `revision` and the actual product

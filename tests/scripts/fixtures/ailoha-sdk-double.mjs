@@ -4,6 +4,10 @@ import { fileURLToPath } from "node:url";
 
 export const scenario = {
   calls: [], leases: new Map(), videos: new Map(), operations: new Map(), status: "running", geometryRevision: 13,
+  connectionRef: {
+    schema: "ailoha.target-host.connection/v1", serviceId: "synthetic-service", pid: 12345,
+    startedAt: "2026-10-09T23:00:00Z", processStartedAt: "2026-10-09T22:59:59Z",
+  },
 };
 export const sourceSha = "0000000000000000000000000000000000000000";
 const targetId = "opaque/target";
@@ -54,6 +58,7 @@ export async function ensureTargetHost(options) {
   return {
     leaseId,
     targetHost: { targetHostId: "synthetic-host", profile: "ailoha.target-host/v1", protocolVersion: "1" },
+    connectionRef: scenario.connectionRef,
   };
 }
 export function registerRuntimeCleanup(leaseId, callback) {
