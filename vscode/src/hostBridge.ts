@@ -24,7 +24,16 @@ interface CanvasOpenResult {
   cookieName?: string;
 }
 
+export interface AilohaConnectionRef {
+  readonly schema?: string;
+  readonly serviceId: string;
+  readonly pid: number;
+  readonly startedAt: string;
+  readonly processStartedAt: string;
+}
+
 export interface AilohaCanvasHost {
+  readonly connectionRef?: AilohaConnectionRef;
   openCanvas(input?: { deviceId?: string }): Promise<CanvasOpenResult>;
   closeCanvas(): Promise<void>;
   invokeAction(name: string, input: Record<string, unknown>): Promise<unknown>;
@@ -107,6 +116,10 @@ export class HostBridge implements vscode.Disposable {
       this.signalOffset = readFileSync(refreshSignal, "utf8").length;
       watchFile(refreshSignal, { interval: 250 }, this.onRefreshSignal);
     }
+  }
+
+  get connectionRef(): AilohaConnectionRef | undefined {
+    return this.ailohaHost?.connectionRef;
   }
 
   async handleMessage(message: WebviewMessage): Promise<void> {

@@ -105,6 +105,33 @@ try {
     scenario.ensureFailureCode = undefined;
     await locked.closeCanvas();
   }
+  const officialEvidence = scenario.connectionRef;
+  const missingEvidence = createRuntimeCanvasHost({ scope });
+  scenario.connectionRef = undefined;
+  const beforeInvalidEvidence = scenario.calls.length;
+  try {
+    await assert.rejects(missingEvidence.openCanvas(), { code: "runtime_connection_ref_invalid", status: 503 });
+    assert.equal(scenario.leases.size, 0);
+    assert.equal(scenario.calls.slice(beforeInvalidEvidence).some((call) => call.path || call.websocket), false);
+  } finally {
+    scenario.connectionRef = officialEvidence;
+    await missingEvidence.closeCanvas();
+  }
+  const trustedHost = createRuntimeCanvasHost({ scope });
+  try {
+    await trustedHost.openCanvas();
+    const captured = trustedHost.connectionRef;
+    assert.deepEqual(captured, officialEvidence);
+    assert.equal(Object.isFrozen(captured), true);
+    officialEvidence.pid += 1;
+    assert.notEqual(trustedHost.connectionRef.pid, officialEvidence.pid);
+    officialEvidence.pid -= 1;
+    assert.equal(JSON.stringify(trustedHost).includes("connectionRef"), false);
+    const selected = await trustedHost.invokeAction("get_selected_device", {});
+    assert.equal(JSON.stringify(selected).includes("processStartedAt"), false);
+  } finally {
+    await trustedHost.closeCanvas();
+  }
   if (host === "github") {
     process.env.EXTENSION_PATH = join(scratch, "installed-plugins", "mobile-canvas", "extension.mjs");
     await import(pathToFileURL(join(root, "extensions", "mobile-canvas", "extension.mjs")).href);
@@ -130,6 +157,7 @@ try {
     const selected = await action("get_selected_device");
     selectedContext = selected;
     assert.equal(selected.device.id, "opaque/target");
+    assert.equal(JSON.stringify(selected).includes("connectionRef"), false);
     returnedBinding(selected);
     assert.equal((await action("shutdown_device", { deviceId: "opaque/target" })).state, "shutdown");
     assert.equal((await action("boot_device", { deviceId: "opaque/target" })).state, "booted");
@@ -212,6 +240,9 @@ try {
     bridge = new HostBridge(undefined, scope.sessionId, scope.viewId, sink, { appendLine: (line) => logs.push(line) }, undefined, hostAdapter);
     release = async () => { bridge.dispose(); await bridge.closed(); };
     await bridge.handleMessage({ type: "ready" });
+    assert.deepEqual(bridge.connectionRef, officialEvidence);
+    assert.equal(bridge.connectionRef, hostAdapter.connectionRef);
+    assert.equal(Object.isFrozen(bridge.connectionRef), true);
     async function api(path, method = "GET", body) {
       const id = randomUUID();
       await bridge.handleMessage({ type: "api", id, path, method, body: body === undefined ? undefined : JSON.stringify(body) });
@@ -244,6 +275,7 @@ try {
     await api("/api/v1/catalog");
     assert.equal((await bridge.getSelectedDeviceContext()).deviceId, "opaque/target");
     assert.equal(messages.some((message) => JSON.stringify(message).includes("controlCredential")), false);
+    assert.equal(messages.some((message) => JSON.stringify(message).includes("processStartedAt")), false);
   } else throw new Error("Unknown installed host test.");
   await release();
   release = null;
@@ -297,6 +329,7 @@ try {
     nativeIdentityPreserved: true, returnedBindingConsumed: true, emptyContextInventory: true,
     externalRetirementRejected: true, readOnlyDiscovery: true, missingPublicPinRejected: true,
     runtimeLockFailureRejected: true, retiredDirectTargetReadRejected: true, noHostStop: true, logs,
+    connectionRefCapturedInternally: true, connectionRefNotSerialized: true,
   }));
 } finally {
   await dispatcher?.dispose();

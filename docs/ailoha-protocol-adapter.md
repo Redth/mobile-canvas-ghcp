@@ -165,8 +165,11 @@ idle delays: by default the client's request timeout, configurable from 1 to
 60,000 ms; each poll also honors the client's shorter request timeout. Poll
 intervals are bounded from 1 to 60,000 ms. Timeout, caller abort, and disposal
 stop local reads/timers only; they never cancel the external operation.
-The explicit/default polling interval remains the wait policy; server
-`Retry-After` hints cannot override or extend the caller's total deadline.
+The explicit/default polling interval remains the wait policy. A subsequent
+poll is scheduled only when its full interval leaves time before the absolute
+deadline; otherwise the existing deadline timer ends the wait. Intervals are not
+shortened into deadline-boundary reads, and server `Retry-After` hints cannot
+override or extend the caller's total deadline.
 
 Operation errors retain `operationId`, the latest validated `operation` when
 available, and sanitized primary Problem Details. HTTP errors remain `http_error`
@@ -277,6 +280,32 @@ open. Binding discovery itself cannot create or reopen an authority: before a
 trusted view opens it reports `context_not_bound`, and a retired view reports
 `context_retired`. The first slice is target-only; app/agent/runtime-instance
 selectors are not adopted as native package identity.
+
+### Internal host incarnation evidence
+
+`targetHostId` is a persistent discovery identity, not a process incarnation.
+The trusted backend captures the official lease's full `connectionRef`
+(`serviceId`, `pid`, `startedAt`, `processStartedAt`, and `schema` when supplied)
+as a frozen value before opening its transport. Trusted backend/canvas/VS Code
+bridge adapters expose `connectionRef`; `captureInvocation` retains the same
+frozen value in a non-enumerable host-only property after public capture.
+`captureConnectionRef` and `sameConnectionRef` are the shared capture/comparison
+helpers; no derived `hostInstanceId` or private metadata lookup is used.
+
+Spreading, structured-cloning or publicly projecting an invocation deliberately
+drops that internal property. Trusted adapters that extend an invocation must
+retain its `connectionRef` separately with their private receipt/progress, not
+recover it from renderer/MCP output. A changed tuple rejects same-key lifecycle
+recovery or unknown video-create replay as `runtime_incarnation_changed`; it
+does not discard the old receipt or attach cleanup to the replacement transport.
+New unrelated explicit actions remain independent.
+
+This evidence is not an atomic request-time process fence. The official SDK
+validates owner/process/pin/metadata when a transport is opened; its HTTP socket
+and credential remain captured afterward. Managed credential rotation can close
+or reject that old transport, while reused external credentials leave a
+request-time race. Mobile Canvas neither refreshes/replays mutations across
+changed evidence nor claims that comparing a precheck eliminates that race.
 
 `get_selected_device`/`mobile_device_get_selected` include a non-secret
 `contextBinding` projection when backed by the canonical authority:
