@@ -9,10 +9,13 @@ import { scenario, sourceSha } from "../scripts/fixtures/ailoha-sdk-double.mjs";
 const product = resolve(process.argv[2]);
 const contextPath = resolve(process.argv[3]);
 const recording = process.argv.includes("--recording");
+const recordingLostStart = process.argv.includes("--lost-start");
+if (recordingLostStart && !recording) throw new Error("Lost-start proof requires --recording.");
 if (recording) {
   mkdirSync(dirname(contextPath), { recursive: true });
   process.env.HOME = dirname(contextPath);
   scenario.recordingEnabled = true;
+  if (recordingLostStart) process.env.AILOHA_TEST_RECORDING_LOST_ACK = "1";
 }
 const pinPath = join(product, "lib/ailoha/runtime-package.json");
 let previous;
@@ -42,7 +45,10 @@ const evidence = createServer((_request, response) => {
   }));
 });
 await new Promise((resolve) => evidence.listen(0, "127.0.0.1", resolve));
-console.log(JSON.stringify({ url: opened.url, evidenceUrl: `http://127.0.0.1:${evidence.address().port}`, recording }));
+console.log(JSON.stringify({
+  url: opened.url, evidenceUrl: `http://127.0.0.1:${evidence.address().port}`,
+  recording, recordingLostStart,
+}));
 let closing;
 async function close() {
   if (closing) return closing;
@@ -54,6 +60,7 @@ async function close() {
     rmSync(contextPath, { force: true });
     if (recording) {
       rmSync(`${contextPath}.recording-calls`, { force: true });
+      rmSync(`${contextPath}.lost-start`, { force: true });
       rmSync(join(dirname(contextPath), ".mobile-canvas"), { recursive: true, force: true });
     }
   })();

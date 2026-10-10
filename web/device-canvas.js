@@ -132,6 +132,7 @@ const state = {
   inputQueue: Promise.resolve(),
   recording: false,
   recordingPending: false,
+  recordingUncertain: false,
   detached: false,
   activeScale: null,
   scaleTimer: null,
@@ -2509,11 +2510,13 @@ async function updateRecordingStatus(
   setRecordingState(status.isRecording, state.selected?.backend === "ailoha" && Boolean(status.outputPath));
 }
 
-function setRecordingState(isRecording, pending = false) {
+function setRecordingState(isRecording, pending = false, uncertain = false) {
   state.recording = isRecording;
   state.recordingPending = pending;
+  state.recordingUncertain = uncertain;
   elements.record.classList.toggle("recording", isRecording);
-  const label = isRecording ? "Stop recording" : pending ? "Save recording" : "Start recording";
+  const label = isRecording ? "Stop recording" : uncertain ? "Resolve recording"
+    : pending ? "Save recording" : "Start recording";
   elements.record.setAttribute("aria-label", label);
   elements.record.title = label;
 }
@@ -2522,13 +2525,19 @@ async function toggleRecording() {
   const deviceId = state.selected.id;
   const selectionVersion = state.selectionVersion;
   const operation = state.recording || state.recordingPending ? "stop" : "start";
-  const response = await api(
-    `/api/v1/devices/${encodeURIComponent(deviceId)}/recording/${operation}`,
-    {
+  let response;
+  try {
+    response = await api(`/api/v1/devices/${encodeURIComponent(deviceId)}/recording/${operation}`, {
       method: "POST",
       ...(operation === "stop" ? {} : { body: JSON.stringify({ timeoutSeconds: 180 }) }),
-    },
-  );
+    });
+  } catch (error) {
+    if (selectionVersion === state.selectionVersion
+      && state.selected?.id === deviceId && state.selected.backend === "ailoha") {
+      setRecordingState(false, true, true);
+    }
+    throw error;
+  }
   const status = await response.json();
   if (selectionVersion !== state.selectionVersion || state.selected?.id !== deviceId) return;
   setRecordingState(status.isRecording, operation === "start" && state.selected?.backend === "ailoha");

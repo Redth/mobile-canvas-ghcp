@@ -1,5 +1,5 @@
 async (page) => {
-  const { url, evidenceUrl, recording } = await page.evaluate(() => window.ailohaBrowserTestOptions);
+  const { url, evidenceUrl, recording, recordingLostStart } = await page.evaluate(() => window.ailohaBrowserTestOptions);
   const verify = (condition, message) => {
     if (!condition) throw new Error(message);
   };
@@ -70,7 +70,15 @@ async (page) => {
   if (recording) {
     const recordButton = page.locator("#record-button");
     await recordButton.click();
-    await page.waitForFunction(() => document.querySelector("#record-button")?.getAttribute("aria-label") === "Stop recording");
+    await page.waitForFunction((lost) =>
+      document.querySelector("#record-button")?.getAttribute("aria-label") === (lost ? "Resolve recording" : "Stop recording"),
+    recordingLostStart);
+    if (recordingLostStart) {
+      const lost = await evidence();
+      verify(lost.recordingCommands.filter((action) => action === "start").length === 1
+        && !lost.recordingCommands.includes("stop"),
+      "A lost start response was replayed or did not remain pending for captured cleanup.");
+    }
     await recordButton.click();
     await page.waitForFunction(() => document.querySelector("#record-button")?.getAttribute("aria-label") === "Start recording");
     const finalized = await evidence();
@@ -86,7 +94,9 @@ async (page) => {
     document.dispatchEvent(new Event("visibilitychange"));
   });
   const hidden = await waitFor((result) => result.leases === 0 && result.videoResources === 0);
-  verify(videoPosts(hidden) === 1 && videoDeletes(hidden) === 1 && hidden.errors.length === 0,
+  verify(videoPosts(hidden) === 1 && videoDeletes(hidden) === 1
+    && hidden.errors.length === (recordingLostStart ? 1 : 0)
+    && (!recordingLostStart || hidden.errors[0].code === "ailoha_cli_failed"),
     "Hiding the real shared renderer did not retire exactly its owned video/lease.");
   if (recording) verify(hidden.recordingCommands.filter((action) => action === "stop").length === 2
     && hidden.recordingFiles === 2,
@@ -98,7 +108,8 @@ async (page) => {
   const resumed = await waitFor((result) => videoPosts(result) === 2 && result.leases === 1 && result.videoResources === 1);
   await page.waitForTimeout(1000);
   const settled = await evidence();
-  verify(videoPosts(settled) === 2 && videoDeletes(settled) === 1 && settled.errors.length === 0,
+  verify(videoPosts(settled) === 2 && videoDeletes(settled) === 1
+    && settled.errors.length === (recordingLostStart ? 1 : 0),
     "Explicit resume triggered an automatic video creation loop.");
   verify(!settled.calls.some((call) => call.path === "/api/v1/host/stop"),
     "View cleanup stopped a shared host.");
@@ -109,6 +120,6 @@ async (page) => {
     hidden: { leases: hidden.leases, videoResources: hidden.videoResources },
     resumed: { leases: resumed.leases, videoResources: resumed.videoResources, videoPosts: videoPosts(settled), videoDeletes: videoDeletes(settled) },
     errors: settled.errors,
-    ...(recording ? { recordingStarts: 2, recordingStops: 2 } : {}),
+    ...(recording ? { recordingStarts: 2, recordingStops: 2, recordingLostStart: Boolean(recordingLostStart) } : {}),
   };
 }

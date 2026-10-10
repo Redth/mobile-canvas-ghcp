@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import { appendFileSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
+import { appendFileSync, existsSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { isAbsolute } from "node:path";
 
 const args = process.argv.slice(2);
@@ -38,6 +38,11 @@ if (args[0] === "recording") {
       state: "recording", outputFile, startedAt: new Date().toISOString(),
     };
     writeFileSync(recordingPath, JSON.stringify({ contextRef, scopeEpoch, output }), { flag: "wx" });
+    const lostStart = `${path}.lost-start`;
+    if (process.env.AILOHA_TEST_RECORDING_LOST_ACK && !existsSync(lostStart)) {
+      writeFileSync(lostStart, "accepted");
+      throw new Error("Synthetic accepted start response was lost.");
+    }
     process.stdout.write(JSON.stringify(output));
   } else if (args[1] === "stop") {
     if (!tracked) throw new Error("The synthetic recording has no accepted owner.");

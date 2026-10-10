@@ -441,7 +441,9 @@ also checks the prepared shared renderer's start/stop button and hide-time
 finalization against its captured view, with recording output isolated under
 the fixture's context directory. Run it against both prepared plugin and VSIX
 roots; the compiled VS Code HostBridge is exercised by the separate installed
-entrypoint fixture.
+entrypoint fixture. Combine `--recording --lost-start` to lose the first
+accepted start response: the renderer must offer captured resolution rather
+than replay start, then finalize one recording and land its MP4.
 Prepared VS Code shared renderer checks use the same host adapter; the separately
 tested compiled extension/webview bridge is not replaced by a browser-only proxy
 claim.
