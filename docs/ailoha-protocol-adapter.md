@@ -586,8 +586,9 @@ public binary, real-device parity or default migration is claimed.
 The locally implemented guarded pull, delete and mkdir adapters prepare
 against the original named view and native owner and recover accepted
 operations by original-operation GET without resubmission, even if the view
-retires after admission. New admission remains bound to the open original
-view; cancelled readback retains the accepted receipt for later recovery.
+retires after admission while the owning backend remains active. New admission
+remains bound to the open original view; cancelled readback retains the accepted
+receipt for later recovery, but disposal cannot launch new CLI work.
 Pull projects only the backend-confirmed export `devicePath` associated with the original
 operation's artifact, actual verified byte count (including zero), and native
 resolved absolute host destination. The canonical CLI owns bounded streaming,

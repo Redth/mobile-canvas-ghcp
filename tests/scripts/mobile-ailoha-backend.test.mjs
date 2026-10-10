@@ -614,6 +614,40 @@ test("cancelled guarded readback retains the original receipt for GET-only recov
   assert.deepEqual(actions, ["prepare", "continue", "recover", "recover"]);
 });
 
+test("disposed guarded owner cannot initiate a later original-receipt recovery", async (t) => {
+  let receipt;
+  const actions = [];
+  const state = canonicalFixture({
+    client: {
+      async getTargetCapabilities() {
+        return [{ id: "target.files", version: 1, features: ["createTargetDirectory"] }];
+      },
+    },
+    async runCli(args) {
+      const action = args[args.indexOf("native-file") + 1];
+      actions.push(action);
+      if (action === "prepare") {
+        receipt = guardedFixture("mkdir", "/Documents/original", state.owner);
+        return JSON.stringify({ status: "prepared", receipt });
+      }
+      if (action === "recover") {
+        throw Object.assign(new Error("Owned GET did not complete"), { code: "owned_get_failed" });
+      }
+      const operation = guardedOperation("mkdir", receipt);
+      return JSON.stringify({ status: "accepted", receipt,
+        operationId: operation.operationId, operation });
+    },
+  });
+  t.after(() => state.backend.dispose());
+  const input = { deviceId: "one", path: "/Documents/original" };
+  await assert.rejects(state.backend.guardedFile("mobile_device_file_mkdir", input),
+    { code: "owned_get_failed" });
+  await state.backend.dispose();
+  await assert.rejects(state.backend.guardedFile("mobile_device_file_mkdir", input),
+    { code: "cancelled" });
+  assert.deepEqual(actions, ["prepare", "continue", "recover"]);
+});
+
 test("a replacement host incarnation cannot inherit an accepted guarded mutation", async (t) => {
   const artifactState = new Map();
   let receipt;
