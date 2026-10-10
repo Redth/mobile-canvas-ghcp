@@ -349,8 +349,10 @@ renders canonical element text literally. Changing a lens or operation retires
 the previous read without clearing typed query filters. Canonical MCP errors
 expose only a finite public capability code/message or a fixed failure message;
 native stderr, paths and error details are not forwarded to the renderer.
-The official JS MCP SDK's full tool-list validator rejects some native C#
-`outputSchema` metadata; discovery validates only bounded advertised tool names
+The official JS MCP SDK's full tool-list validator rejects native C# tool
+metadata such as a valid boolean JSON Schema `true` at
+`outputSchema.properties.result` (for example `target_file_mkdir`);
+discovery validates only bounded advertised tool names
 through that SDK, then validates the actual composed result against captured
 route and provenance. The stdio child receives only named context/broker
 configuration from the host environment, never ambient target/agent selectors.
