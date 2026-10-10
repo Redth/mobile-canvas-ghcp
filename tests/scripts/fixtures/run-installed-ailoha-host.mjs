@@ -42,6 +42,7 @@ async function waitFor(condition) {
 function returnedBinding(selection) {
   assert.deepEqual(selection.scope, scope);
   assert.equal(selection.contextBinding.ownerProcessId, process.pid);
+  assert.equal(typeof selection.contextBinding.processStartedAt, "string");
   assert.equal(typeof selection.contextBinding.contextRef, "string");
   assert.equal(typeof selection.contextBinding.scopeEpoch, "string");
   assert.match(selection.contextBinding.revision, /^(0|[1-9][0-9]*)$/);
@@ -112,6 +113,12 @@ try {
     await locked.closeCanvas();
   }
   const officialEvidence = scenario.connectionRef;
+  function assertPrivateConnectionRefAbsent(value) {
+    const serialized = JSON.stringify(value);
+    assert.equal(serialized.includes("connectionRef"), false);
+    assert.equal(serialized.includes(officialEvidence.serviceId), false);
+    assert.equal(serialized.includes(officialEvidence.processStartedAt), false);
+  }
   const missingEvidence = createRuntimeCanvasHost({ scope });
   scenario.connectionRef = undefined;
   const beforeInvalidEvidence = scenario.calls.length;
@@ -134,9 +141,7 @@ try {
     officialEvidence.pid -= 1;
     assert.equal(JSON.stringify(trustedHost).includes("connectionRef"), false);
     const selected = await trustedHost.invokeAction("get_selected_device", {});
-    assert.equal(JSON.stringify(selected).includes("connectionRef"), false);
-    assert.equal(JSON.stringify(selected).includes(officialEvidence.serviceId), false);
-    assert.equal(JSON.stringify(selected).includes(officialEvidence.processStartedAt), false);
+    assertPrivateConnectionRefAbsent(selected);
   } finally {
     await trustedHost.closeCanvas();
   }
@@ -169,7 +174,7 @@ try {
     const selected = await action("get_selected_device");
     selectedContext = selected;
     assert.equal(selected.device.id, "opaque/target");
-    assert.equal(JSON.stringify(selected).includes("connectionRef"), false);
+    assertPrivateConnectionRefAbsent(selected);
     returnedBinding(selected);
     assert.equal((await action("shutdown_device", { deviceId: "opaque/target" })).state, "shutdown");
     assert.equal((await action("boot_device", { deviceId: "opaque/target" })).state, "booted");
@@ -294,9 +299,7 @@ try {
     await api("/api/v1/catalog");
     assert.equal((await bridge.getSelectedDeviceContext()).deviceId, "opaque/target");
     assert.equal(messages.some((message) => JSON.stringify(message).includes("controlCredential")), false);
-    assert.equal(messages.some((message) => JSON.stringify(message).includes("connectionRef")
-      || JSON.stringify(message).includes(officialEvidence.serviceId)
-      || JSON.stringify(message).includes(officialEvidence.processStartedAt)), false);
+    assertPrivateConnectionRefAbsent(messages);
   } else throw new Error("Unknown installed host test.");
   enableCatalogCreation();
   const creationCatalog = await readCatalog();
