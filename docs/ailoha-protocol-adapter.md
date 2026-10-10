@@ -382,10 +382,12 @@ CLI's scoped recording coordinator owns cross-process acceptance markers,
 operation reconciliation, stop and bounded artifact download; Mobile Canvas
 does not implement provider recording or forward a credential to the renderer.
 Start captures the context ref/epoch/revision and host/target/surface; a lost
-start response is not submitted twice. Stop uses the original bound owner even
-after selecting another target; failed finalization/download remains visible
-and prevents the canvas lease from releasing. The canonical CLI exposes generic
-errors for both indeterminate/failed stops and retryable downloads, and its
+start response is not submitted twice. The view retains that captured owner
+across runtime lease replacement and selection changes. Stop uses the original
+bound owner even after selecting another target; failed finalization/download
+remains visible and prevents the canvas lease from releasing. The canonical
+CLI exposes generic errors for both indeterminate/failed stops and retryable
+downloads, and its
 retry can issue a new Target Host stop after a terminal failure. Mobile Canvas
 therefore never issues another CLI stop after an attempted stop; it can reconcile
 an externally landed file, but safe poll/download-only recovery of a failed or

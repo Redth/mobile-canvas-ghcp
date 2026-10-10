@@ -251,6 +251,39 @@ test("recording finalization failure prevents lease release and retry stays on o
   assert.equal(state.calls.filter((call) => call[0] === "release-begin").length, 1);
 });
 
+test("retired contexts reject new recording work but finalize the captured owner", async () => {
+  let owner;
+  let tracked = false;
+  const finalized = [];
+  const state = fixture({
+    recording: {
+      get tracked() { return tracked; },
+      async start(invocation) {
+        owner = invocation;
+        tracked = true;
+        return { deviceId: invocation.targetId, isRecording: true, outputPath: "/host/record.mp4" };
+      },
+      async finalize() {
+        finalized.push(owner);
+        tracked = false;
+      },
+    },
+    finalizeRecordings: true,
+  });
+  state.capabilities.push({ id: "surface.capture", version: 1,
+    features: ["startTargetRecording", "getTargetRecording", "stopTargetRecording"] });
+  await state.backend.recordingStart("one");
+  state.retireContext();
+  await assert.rejects(state.backend.recordingStart("two"), { code: "view_closed" });
+  await state.backend.dispose();
+  assert.equal(finalized.length, 1);
+  assert.equal(finalized[0].targetHostId, "host");
+  assert.equal(finalized[0].targetId, "one");
+  assert.equal(finalized[0].surfaceId, "surface/opaque");
+  assert.equal(state.calls.filter((call) => call[0] === "release-end").length, 1);
+  assert.equal(state.calls.some((call) => call[0] === "stop"), false);
+});
+
 test("remote and non-virtual targets advertise no recording even when capture methods exist", async (t) => {
   const state = fixture({ recording: { async start() { throw new Error("must not reach"); } } });
   t.after(() => state.backend.dispose());
