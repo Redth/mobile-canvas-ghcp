@@ -871,6 +871,22 @@ test("fenced denial, definitive rejection and uncertain delivery never turn into
   const state = fencedFixture(t, {
     submit: () => { throw new AilohaProtocolError("http_error", { status: rejection }); },
   });
+
+  test("native typed app rejection evicts only its receipt while delivery unknown retains it", async (t) => {
+    let code = "app_action_rejected";
+    const state = fencedFixture(t, {
+      submit: () => { throw new MobileAilohaError(code, "Sanitized native action outcome.", code === "app_action_rejected" ? 409 : 502); },
+    });
+    await assert.rejects(state.backend.uninstallApp("one", "com.example.native", true),
+      { code: "app_action_rejected" });
+    code = "app_action_delivery_unknown";
+    await assert.rejects(state.backend.uninstallApp("one", "com.example.native", true),
+      { code: "app_action_delivery_unknown" });
+    await assert.rejects(state.backend.uninstallApp("one", "com.example.native", true),
+      { code: "app_action_outcome_uncertain" });
+    assert.equal(state.events.filter(([event]) => event === "uninstall").length, 2);
+    assert.equal(state.events.filter(([event]) => event === "prompt").length, 2);
+  });
   await assert.rejects(state.backend.uninstallApp("one", "com.example.native", true), { code: "http_error" });
   rejection = 408;
   await assert.rejects(state.backend.uninstallApp("one", "com.example.native", true), { code: "http_error" });

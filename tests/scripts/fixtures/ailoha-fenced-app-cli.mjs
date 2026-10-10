@@ -16,7 +16,9 @@ export function runFencedAppCli(args) {
   if (!context || context.state !== "open"
     || context.scopeEpoch !== required(args, "--context-epoch")
     || context.revision !== required(args, "--context-revision")) {
-    process.stderr.write(JSON.stringify({ type: "ContextRevisionConflict" }));
+    process.stderr.write(JSON.stringify({
+      error: "The named authority changed.", type: "ContextRevisionConflict", retryable: false,
+    }));
     return 1;
   }
   const targetId = "opaque/target";
@@ -35,7 +37,9 @@ export function runFencedAppCli(args) {
     if (args[3] !== targetId || required(args, "--app-id") !== appId
       || required(args, "--package-id") !== packageId
       || context.selection?.targetHostId !== "synthetic-host" || context.selection.targetId !== targetId) {
-      process.stderr.write(JSON.stringify({ type: "ContextSelectionMismatch" }));
+      process.stderr.write(JSON.stringify({
+        error: "The named selection changed.", type: "ContextRevisionConflict", retryable: false,
+      }));
       return 1;
     }
     const appOpId = args.includes("--app-op") ? required(args, "--app-op") : undefined;
@@ -62,7 +66,9 @@ export function runFencedAppCli(args) {
     || receipt.targetHostId !== "synthetic-host" || receipt.appId !== appId || receipt.packageId !== packageId
     || receipt.installationEvidence !== installationEvidence
     || JSON.stringify(receipt.stamp) !== JSON.stringify(stamp)) {
-    process.stderr.write(JSON.stringify({ type: "FencedAppActionRejected" }));
+    process.stderr.write(JSON.stringify({
+      error: "The captured native action is stale.", type: "AppActionStale", retryable: false,
+    }));
     return 1;
   }
   const operationId = `synthetic-fenced-${randomUUID()}`;

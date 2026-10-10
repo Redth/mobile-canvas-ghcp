@@ -30,7 +30,11 @@ function captured(invocation, action = "app-op") {
     stamp: {
       hostInstanceId: "native-host-incarnation", targetId: "target", providerId: "provider",
       registrationEpoch: "registration-epoch", receipt: "captured-host-stamp",
-      nativeIdentity: { platform: invocation.nativeIdentity.platform, nativeId: "native-target" },
+      nativeIdentity: {
+        platform: invocation.nativeIdentity.platform, nativeId: "native-target",
+        serial: "native-serial", provider: "canonical-provider", modelIdentifier: "native-model",
+        osVersion: "26.0", isVirtual: true,
+      },
     },
     appId: "native-app", packageId: "com.example.native", version: "1", buildNumber: "2",
     installationEvidence: "a".repeat(64),
@@ -148,6 +152,46 @@ test("verified CLI retains accepted native operation metadata even when its chil
     pin, sdk: { async getVerifiedCliLaunch() {
       return { file: process.execPath, args: ["-e", script], ...pin };
     } },
+  });
+
+  test("typed native CLI rejections are definitive while delivery-unknown errors remain non-replayable", async () => {
+    const pin = { version: "synthetic", sourceSha: "a".repeat(40) };
+    for (const [type, code, status] of [
+      ["AppActionRejected", "app_action_rejected", 409],
+      ["AppActionStale", "app_action_stale", 409],
+      ["ContextRevisionConflict", "context_snapshot_superseded", 409],
+      ["ContextBindingMismatch", "context_snapshot_superseded", 409],
+      ["unsupported-capability", "capability_not_supported", 501],
+      ["AppActionDeliveryUnknown", "app_action_delivery_unknown", 502],
+    ]) {
+      const script = `process.stderr.write(${JSON.stringify(JSON.stringify({
+        error: "private native path and credential", type, retryable: false,
+      }))}); process.exitCode = 1;`;
+      const runCli = createVerifiedAilohaCli({
+        pin, sdk: { async getVerifiedCliLaunch() {
+          return { file: process.execPath, args: ["-e", script], ...pin };
+        } },
+      });
+      await assert.rejects(runCli(["target", "app", "uninstall-fenced"], { timeoutMs: 10_000 }), (error) => {
+        assert.equal(error.code, code);
+        assert.equal(error.status, status);
+        assert.equal(JSON.stringify(error).includes("private native path"), false);
+        return true;
+      });
+    }
+    const runCli = createVerifiedAilohaCli({
+      pin, sdk: { async getVerifiedCliLaunch() {
+        const script = `process.stderr.write(JSON.stringify({
+          error: "private path", type: "AppActionRejected", retryable: true,
+        })); process.exitCode = 1;`;
+        return {
+          file: process.execPath, args: ["-e", script], ...pin,
+        };
+      } },
+    });
+    await assert.rejects(runCli(["target", "app", "uninstall-fenced"], { timeoutMs: 10_000 }), {
+      code: "ailoha_cli_failed",
+    });
   });
 
   test("accepted CLI metadata cannot assign another target or provider to the captured action", async () => {

@@ -117,6 +117,12 @@ approval, or sends private evidence to a renderer. The original accepted
 Operation ID remains available for GET-only recovery on uncertain delivery,
 including late acceptance; neither mutation is replayed. Android setter
 success additionally requires terminal effective mode and UID-scope readback.
+The local CLI contract emits exit-1 JSON on stderr without an HTTP status:
+`AppActionRejected` and stale-context/binding types are definitive
+non-admissions, whereas `AppActionDeliveryUnknown` retains an uncertain
+same-key receipt without another submission. Its `retryable:false` field is
+not evidence of failed delivery. Missing native installation evidence reports
+`unsupported-capability` rather than manufacturing a native identity.
 These command names and receipt fields are a **local source integration
 target**, not evidence of a reviewed or published native implementation.
 The reviewed native adapter optionally preserves launch result process ID and

@@ -524,6 +524,18 @@ try {
       await close();
     }
   }
+  current = await open("fenced-ios-app-op-unsupported");
+  {
+    await current.action("select_device", { deviceId: "opaque/target" });
+    await assert.rejects(current.action("set_app_op", {
+      deviceId: "opaque/target", bundleId: "com.example.native",
+      operation: "SYSTEM_ALERT_WINDOW", mode: "ignore",
+    }), { code: "capability_not_supported" });
+    assert.equal(JSON.parse(readFileSync(`${process.env.AILOHA_TEST_CONTEXT_STATE}.fenced`, "utf8")).length, 2);
+    assert.equal(kind === "github" ? copilotUi.pending.size : vscode.testUi.pickers.filter((picker) => picker.visible).length, 0);
+    evidence.cases.push("fenced-ios-app-op-unsupported");
+    await close();
+  }
   scenario.platform = "android";
   process.env.AILOHA_TEST_APP_PLATFORM = "android";
   current = await open("fenced-android-app-op");
