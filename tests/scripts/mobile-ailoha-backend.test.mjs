@@ -5,6 +5,7 @@ const { AilohaMobileBackend } = await import(productModule("lib/ailoha/mobile-ba
 const { mobileCanvasBackend } = await import(productModule("lib/backend.mjs"));
 const { createAilohaMediaAdapter } = await import(productModule("lib/ailoha/media-adapter.mjs"));
 const { createAilohaRevealAdapter } = await import(productModule("lib/ailoha/reveal-adapter.mjs"));
+const { createAilohaSystemUiAdapter } = await import(productModule("lib/ailoha/system-ui-adapter.mjs"));
 const { AilohaProtocolError } = await import(productModule("lib/ailoha/errors.mjs"));
 const { publicSnapshot, MobileAilohaError } = await import(productModule("lib/ailoha/mobile-projection.mjs"));
 const { createAilohaContextStore } = await import(productModule("lib/ailoha/context-adapter.mjs"));
@@ -24,14 +25,17 @@ function fixture(options = {}) {
   const surface = () => ({
     surfaceId: "surface/opaque", kind: "display",
     bounds: { x: -10, y: 20, width: 390, height: 844 },
-    geometryRevision: revision, capabilities: [],
+    geometryRevision: revision, capabilities: options.systemUi
+      ? [{ id: "surface.ui", version: 1, features: ["getSystemUiSnapshot", "querySystemUi", "tapSystemUiMatch"] }]
+      : [],
   });
   const targets = new Map(["one", "two"].map((id) => [id, {
     targetId: id, providerId: "provider", targetTypeId: "type", status: "running", surfaces: [surface()],
     nativeIdentity: { platform: "ios", nativeId: `real-native-${id}`, isVirtual: true },
   }]));
   const providers = [{ providerId: "provider", name: "Provider", version: "1", state: "ready", capabilities: [] }];
-  const capabilities = [{ id: "target.lifecycle", version: 1, features: ["startTarget", "stopTarget", "rebootTarget", "resetTarget", "deleteTarget", ...(options.reveal ? ["revealTarget"] : [])] }];
+  const capabilities = [{ id: "target.lifecycle", version: 1, features: ["startTarget", "stopTarget", "rebootTarget", "resetTarget", "deleteTarget", ...(options.reveal ? ["revealTarget"] : [])] },
+    ...(options.systemUi ? [{ id: "surface.ui", version: 1, features: ["getSystemUiSnapshot", "querySystemUi", "tapSystemUiMatch"] }] : [])];
   const client = {
     async getHostStatus() { return { hostId: "host", profile: "ailoha.target-host/v1", version: "test", state: "ready", capabilities: [] }; },
     async listProviders() { return providers; },
@@ -116,6 +120,7 @@ function fixture(options = {}) {
   const backend = new AilohaMobileBackend({
     scope: { sessionId: "unique-session", viewId: "unique-view" },
     client, media, owner, selectionStore, reveal: options.reveal, revealState: options.revealState,
+    systemUi: options.systemUi, systemUiState: options.systemUiState,
     confirmDestructive: options.confirmDestructive,
     saveScreenshot: options.saveScreenshot,
     operationState: options.operationState,
@@ -238,6 +243,171 @@ test("System UI identities fail explicitly without a canonical lossless tree or 
   assert.equal(raw.status, 501);
   assert.equal((await raw.json()).code, "ui_contract_unavailable");
   assert.equal(state.calls.some(([kind]) => kind === "tap"), false);
+});
+
+function systemUiFixture(respond, options = {}) {
+  let state;
+  const systemUi = createAilohaSystemUiAdapter({
+    signal: new AbortController().signal,
+    transport: {
+      async response(path, request) {
+        state.calls.push(["system-ui", path, request]);
+        return respond(path, request, state);
+      },
+    },
+  });
+  state = fixture({ ...options, systemUi });
+  return state;
+}
+
+function systemUiResponse(kind, overrides = {}) {
+  const targetHost = { targetId: "one", providerId: "provider", surfaceId: "surface/opaque", geometryRevision: 7 };
+  const element = { role: "button", rawRole: "AXButton", label: "Save", value: null, identifier: "save",
+    hint: "Stores changes", frame: { x: 10, y: 20, width: 40, height: 20 },
+    enabled: true, focused: false, interactable: true, children: [] };
+  const base = { targetId: "one", targetHost, uiRevision: "ui-r1" };
+  const body = kind === "snapshot"
+    ? { ...base, platform: "ios", root: { ...element, frame: null, children: [element] }, elementCount: 2 }
+    : kind === "find"
+      ? { ...base, matches: [{ element, path: "0", centerX: 30, centerY: 30 }], total: 2 }
+      : { ...base, match: { element, path: "0", centerX: 30, centerY: 30 }, total: 2 };
+  return { status: 200, contentType: "application/json", body: { ...body, ...overrides } };
+}
+
+test("shared source-approved System UI projects exact legacy shapes through actions and actual compatibility HTTP", async (t) => {
+  const state = systemUiFixture((path) => systemUiResponse(
+    path.includes("system-snapshot") ? "snapshot" : path.includes("/actions/tap") ? "tap" : "find",
+    path.includes("includeRaw=true") ? { raw: "raw" } : {}));
+  t.after(() => state.backend.dispose());
+  const dump = await state.backend.invokeAction("ui_dump", { deviceId: "one", includeRaw: true });
+  assert.deepEqual(Object.keys(dump), ["schemaVersion", "deviceId", "platform", "root", "elementCount", "raw"]);
+  assert.equal(dump.root.frame, null);
+  assert.equal(dump.raw, "raw");
+  const found = await state.backend.invokeAction("ui_find", { deviceId: "one", text: "Save", limit: 1 });
+  assert.deepEqual(Object.keys(found), ["schemaVersion", "deviceId", "matches", "total"]);
+  assert.equal(found.total, 2);
+  assert.equal(found.matches[0].path, "0");
+  const tapped = await state.backend.invokeAction("ui_tap", { deviceId: "one", role: "AXButton" });
+  assert.deepEqual(Object.keys(tapped), ["schemaVersion", "success", "deviceId", "match", "total"]);
+  assert.equal(tapped.match.centerX, 30);
+  const raw = await state.backend.request("/api/v1/devices/one/ui?raw=true");
+  assert.equal((await raw.json()).raw, "raw");
+  const find = await state.backend.request("/api/v1/devices/one/ui/find", {
+    method: "POST", body: JSON.stringify({ text: "Save", limit: 1 }),
+  });
+  assert.equal((await find.json()).total, 2);
+  assert.equal(state.calls.filter(([kind]) => kind === "system-ui").length, 6);
+  assert.equal(state.calls.some(([kind]) => kind === "tap"), false);
+  const nativeTap = state.calls.find(([kind, path]) => kind === "system-ui" && path.includes("/actions/tap"));
+  assert.equal(JSON.parse(nativeTap[2].body).interactableOnly, false);
+  assert.equal(JSON.parse(nativeTap[2].body).uiRevision, "ui-r1");
+});
+
+test("native System UI tap never posts after a changed context, geometry or process owner", async (t) => {
+  const waiting = deferred();
+  const state = systemUiFixture(async (path) => {
+    if (path.includes("system-snapshot")) await waiting.promise;
+    return systemUiResponse(path.includes("system-snapshot") ? "snapshot" : "tap");
+  });
+  t.after(() => state.backend.dispose());
+  const pending = state.backend.uiTap("one", { text: "Save" });
+  while (!state.calls.some(([kind]) => kind === "system-ui")) await new Promise((resolve) => setImmediate(resolve));
+  state.selectHost("other");
+  waiting.resolve();
+  await assert.rejects(pending, { code: "selection_superseded" });
+  assert.equal(state.calls.filter(([kind, path]) => kind === "system-ui" && path.includes("/actions/tap")).length, 0);
+  const geometry = systemUiFixture((path) => {
+    if (path.includes("system-snapshot")) geometry.geometryChanged();
+    return systemUiResponse(path.includes("system-snapshot") ? "snapshot" : "tap");
+  });
+  t.after(() => geometry.backend.dispose());
+  await assert.rejects(geometry.backend.uiTap("one", { text: "Save" }), { code: "system_ui_owner_changed" });
+  assert.equal(geometry.calls.filter(([kind, path]) => kind === "system-ui" && path.includes("/actions/tap")).length, 0);
+  const native = systemUiFixture((path, _request, state) => {
+    if (path.includes("system-snapshot")) {
+      state.targets.get("one").nativeIdentity = {
+        ...state.targets.get("one").nativeIdentity, nativeId: "replacement-native",
+      };
+    }
+    return systemUiResponse(path.includes("system-snapshot") ? "snapshot" : "tap");
+  });
+  t.after(() => native.backend.dispose());
+  await assert.rejects(native.backend.uiTap("one", { text: "Save" }), { code: "system_ui_owner_changed" });
+  assert.equal(native.calls.filter(([kind, path]) => kind === "system-ui" && path.includes("/actions/tap")).length, 0);
+});
+
+test("App UI or absent System UI capability never enables native System compatibility", async (t) => {
+  const state = systemUiFixture(() => { throw new Error("System UI transport must not be used"); }, {
+    client: { async getTargetCapabilities() {
+      return [{ id: "surface.ui", version: 1, features: ["getTargetUiTree", "queryTargetElements", "tapTargetElement"] }];
+    } },
+  });
+  t.after(() => state.backend.dispose());
+  await assert.rejects(state.backend.uiDump("one"), { code: "capability_not_supported" });
+  await assert.rejects(state.backend.uiFind("one", { text: "Save" }), { code: "capability_not_supported" });
+  await assert.rejects(state.backend.uiTap("one", { text: "Save" }), { code: "capability_not_supported" });
+  assert.equal(state.calls.some(([kind]) => kind === "system-ui"), false);
+});
+
+test("unknown native tap retains a single original receipt, definitive 403 releases, HTTP 408 never replays", async (t) => {
+  for (const status of [403, 408, 502]) {
+    const state = systemUiFixture((path) => {
+      if (!path.includes("/actions/tap")) return systemUiResponse("snapshot");
+      if (status < 500) {
+        const error = new Error("typed native rejection");
+        error.name = "TargetHostTransportError";
+        error.code = "HttpError";
+        error.status = status;
+        error.response = { status };
+        throw error;
+      }
+      return { status, contentType: "application/json", body: { error: "rejected" } };
+    });
+    t.after(() => state.backend.dispose());
+    await assert.rejects(state.backend.uiTap("one", { text: "Save" }));
+    const original = state.calls.filter(([kind, path]) => kind === "system-ui" && path.includes("/actions/tap")).length;
+    assert.equal(original, 1);
+    if (status !== 403) {
+      await assert.rejects(state.backend.uiTap("one", { text: "Save" }), { code: "ui_tap_outcome_uncertain" });
+      assert.equal(state.calls.filter(([kind, path]) => kind === "system-ui" && path.includes("/actions/tap")).length, 1);
+    } else {
+      await assert.rejects(state.backend.uiTap("one", { text: "Save" }));
+      assert.equal(state.calls.filter(([kind, path]) => kind === "system-ui" && path.includes("/actions/tap")).length, 2);
+    }
+  }
+});
+
+test("completed native UI tap survives a failed authority read without another POST", async (t) => {
+  const state = systemUiFixture((path) => {
+    if (path.includes("/actions/tap")) {
+      state.selectionStore.readSnapshot = async () => { throw new Error("authority read failed"); };
+    }
+    return systemUiResponse(path.includes("system-snapshot") ? "snapshot" : "tap");
+  });
+  t.after(() => state.backend.dispose());
+  const originalRead = state.selectionStore.readSnapshot.bind(state.selectionStore);
+  await assert.rejects(state.backend.uiTap("one", { text: "Save" }), /authority read failed/);
+  assert.equal(state.calls.filter(([kind, path]) => kind === "system-ui" && path.includes("/actions/tap")).length, 1);
+  state.selectionStore.readSnapshot = originalRead;
+  const result = await state.backend.uiTap("one", { text: "Save" });
+  assert.equal(result.success, true);
+  assert.equal(state.calls.filter(([kind, path]) => kind === "system-ui" && path.includes("/actions/tap")).length, 1);
+});
+
+test("unknown native UI tap cannot move to a new process incarnation with the same host ID", async (t) => {
+  const stateByIntent = new Map();
+  const first = systemUiFixture((path) => path.includes("/actions/tap")
+    ? { status: 408, contentType: "application/json", body: {} }
+    : systemUiResponse("snapshot"), { systemUiState: stateByIntent });
+  t.after(() => first.backend.dispose());
+  await assert.rejects(first.backend.uiTap("one", { text: "Save" }));
+  const second = systemUiFixture(() => { throw new Error("replacement transport must not be used"); }, {
+    systemUiState: stateByIntent,
+    connectionRef: { ...first.owner.connectionRef, processStartedAt: "2026-10-10T01:00:00Z" },
+  });
+  t.after(() => second.backend.dispose());
+  await assert.rejects(second.backend.uiTap("one", { text: "Save" }), { code: "runtime_incarnation_changed" });
+  assert.equal(second.calls.filter(([kind]) => kind === "system-ui").length, 0);
 });
 
 test("reveal projects the native target only when the selected provider advertises it", async (t) => {

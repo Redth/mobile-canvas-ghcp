@@ -449,16 +449,26 @@ The legacy .NET canvas serves the shared semantic module as a public embedded
 bootstrap asset, while its inspection API remains authenticated. This
 source-only slice has no
 workspace-application-to-native-agent mapping or binding control. The three
-legacy `mobile_device_ui_dump/find/tap` identities are explicitly unavailable
-in the opt-in (`ui_contract_unavailable`, HTTP 501); the App/System semantic
-panels do not produce their legacy result shapes. The native
-`MobileCanvasUiAdapter.SnapshotAsync` always requests `includeRaw: false`;
-`Project` collapses a null frame into zero bounds, while native bounded query
-results have no complete total or legacy child-index path contract. A
-lossless System snapshot, optional untouched raw payload, complete query
-count/path and retained owner/geometry for the selected element across tap
-are prerequisites to enabling these tools. Neither host guesses the missing
-fields or routes UI taps via a different App/agent lens.
+legacy `mobile_device_ui_dump/find/tap` identities remain installed, but the
+opt-in returns `ui_contract_unavailable` (HTTP 501) without the exact reviewed
+native System UI source in its verified runtime pin. The source-only
+`microsoft/ailoha@afaccc8238bb9f15bf9e9dc707310bb55edc5026` contract
+supplies `surface.ui` operations `getSystemUiSnapshot`, `querySystemUi`, and
+`tapSystemUiMatch`; no compatible public runtime/pin is available yet. The
+shared projection uses only `/ui/system-snapshot`, `/ui/system-elements`, and
+`/ui/system-elements/actions/tap`, never the App semantic lens or generic
+`/ui/tree`. It preserves nullable frames, raw role/hint, explicit bounded
+UTF-8 raw payload, full count before limit, and native `UiTree` paths (`0`,
+`1`, `1/0`). Null-frame find centers remain zero as in the legacy projection;
+tap sends a fresh UI revision with captured geometry and the original query,
+defaulting `interactableOnly` to false so the first legacy match is not
+substituted. The native owner performs the query and input under one lease;
+Mobile Canvas never follows find with a coordinate POST. Changed view/native
+identity/surface/process and uncertain tap outcomes do not authorize replay.
+Native queries cap `limit` at 256; larger legacy requests fail explicitly
+(`ui_query_limit_unavailable`) rather than silently returning partial matches.
+This source-only consumer mapping is **not** proof of released SDK/native
+compatibility, other-platform CI, or device validation.
 
 Reveal requires advertised `target.lifecycle/revealTarget` and a running
 provider-owned target, then calls only the canonical Target Host

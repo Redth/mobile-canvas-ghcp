@@ -25,7 +25,10 @@ function fixture(options = {}) {
         }),
         async ready() { return { backend: "ailoha" }; },
         async select(deviceId) { calls.push(["select", id, deviceId]); },
-        async request(path) {
+        async request(path, requestOptions) {
+          if (/\/ui(?:\/|$|\?)/.test(path) && options.uiResponse) {
+            return options.uiResponse(path, requestOptions);
+          }
           return new Response(JSON.stringify(
             path.endsWith("/ui") || path.endsWith("/ui/find") || path.endsWith("/ui/tap")
               ? { code: "ui_contract_unavailable" }
@@ -102,6 +105,42 @@ test("registered GitHub canvas forwards reveal and gates legacy System UI paths 
     assert.equal(path.endsWith("/reveal") ? body.path : body.code,
       path.endsWith("/reveal") ? path : "ui_contract_unavailable");
   }
+});
+
+test("registered GitHub canvas passes source-approved System UI result shapes through its authenticated API", async (t) => {
+  const calls = [];
+  const { host } = fixture({
+    uiResponse(path, request) {
+      calls.push([path, request]);
+      const body = path.endsWith("/ui?raw=true")
+        ? { schemaVersion: "1.0", deviceId: "one", platform: "ios", root: null, elementCount: 0, raw: "native" }
+        : path.endsWith("/ui/find")
+          ? { schemaVersion: "1.0", deviceId: "one", matches: [], total: 0 }
+          : { schemaVersion: "1.0", success: true, deviceId: "one", match: {
+            element: { label: "Save", frame: { x: 1, y: 2, width: 4, height: 6 } },
+            path: "1/0", centerX: 3, centerY: 5,
+          }, total: 2 };
+      return new Response(JSON.stringify(body), { headers: { "content-type": "application/json" } });
+    },
+  });
+  t.after(() => host.closeCanvas());
+  const { url, cookie } = await bootstrap(host);
+  for (const [path, method, expected] of [
+    ["/api/v1/devices/one/ui?raw=true", "GET", "native"],
+    ["/api/v1/devices/one/ui/find", "POST", 0],
+    ["/api/v1/devices/one/ui/tap", "POST", "1/0"],
+  ]) {
+    const response = await fetch(new URL(path, url), {
+      method, headers: { Cookie: cookie, ...(method === "POST" ? { "content-type": "application/json" } : {}) },
+      ...(method === "POST" ? { body: '{"text":"Save"}' } : {}),
+    });
+    assert.equal(response.status, 200);
+    const body = await response.json();
+    assert.equal(path.endsWith("/ui?raw=true") ? body.raw
+      : path.endsWith("/ui/find") ? body.total : body.match.path, expected);
+  }
+  assert.equal(calls.length, 3);
+  assert.equal(calls[2][1].method, "POST");
 });
 
 test("early official socket messages are delivered only after the non-secret owned descriptor", async (t) => {

@@ -25,13 +25,14 @@ function fixture(options = {}) {
     scope,
     createBackend: async () => ({
       async ready() {},
-      async request(path) {
+      async request(path, request) {
         if (path === "/api/v1/devices/opaque%2Ftarget/reveal") {
           calls.push(["reveal-api", path]);
           return new Response(JSON.stringify({ id: "opaque/target", nativeId: "native-target" }),
             { headers: { "content-type": "application/json" } });
         }
         if (/\/ui(?:\/|$)/.test(path)) {
+          if (options.uiResponse) return options.uiResponse(path, request);
           return new Response(JSON.stringify({ code: "ui_contract_unavailable" }),
             { status: 501, headers: { "content-type": "application/json" } });
         }
@@ -100,6 +101,39 @@ test("compiled VS Code bridge routes reveal and System UI negatives through the 
   assert.equal(state.messages.find((message) => message.id === "reveal").status, 200);
   assert.equal(state.messages.find((message) => message.id === "ui").status, 501);
   assert.deepEqual(state.calls.filter(([kind]) => kind === "reveal-api").length, 1);
+});
+
+test("compiled VS Code bridge carries source-approved System UI dump/find/tap shapes through its bound API", async (t) => {
+  const calls = [];
+  const state = fixture({
+    uiResponse(path, request) {
+      calls.push([path, request]);
+      const value = path.endsWith("/ui") ? { schemaVersion: "1.0", deviceId: "opaque/target",
+        platform: "ios", root: null, elementCount: 0, raw: null }
+        : path.endsWith("/ui/find") ? { schemaVersion: "1.0", deviceId: "opaque/target", matches: [], total: 0 }
+          : { schemaVersion: "1.0", success: true, deviceId: "opaque/target", match: {
+            element: { label: "Save" }, path: "1/0", centerX: 3, centerY: 5,
+          }, total: 2 };
+      return new Response(JSON.stringify(value), { headers: { "content-type": "application/json" } });
+    },
+  });
+  t.after(async () => { state.bridge.dispose(); await state.bridge.closed(); });
+  await state.bridge.handleMessage({ type: "ready" });
+  for (const [id, path, method] of [
+    ["dump", "/api/v1/devices/opaque%2Ftarget/ui", "GET"],
+    ["find", "/api/v1/devices/opaque%2Ftarget/ui/find", "POST"],
+    ["tap", "/api/v1/devices/opaque%2Ftarget/ui/tap", "POST"],
+  ]) {
+    await state.bridge.handleMessage({
+      type: "api", id, path, method,
+      ...(method === "POST" ? { body: '{"text":"Save"}' } : {}),
+    });
+  }
+  const result = (id) => JSON.parse(new TextDecoder().decode(state.messages.find((message) => message.id === id).body));
+  assert.equal(result("dump").elementCount, 0);
+  assert.equal(result("find").total, 0);
+  assert.equal(result("tap").match.path, "1/0");
+  assert.deepEqual(calls.map(([path]) => path.split("/").at(-1)), ["ui", "find", "tap"]);
 });
 
 for (const kind of ["false", "throw", "reject"]) {
