@@ -175,6 +175,29 @@ export interface ConfirmationOptions extends RequestOptions {
 
 export interface ConfirmedLifecycleOptions extends LifecycleOptions, ConfirmationOptions {}
 
+export interface InstalledTargetApp {
+  appId: string;
+  state: "installed" | "running" | "stopped" | "installing" | "uninstalling";
+  name: string;
+  version: string;
+  buildNumber: string;
+  packageId: string;
+  theme?: string | null;
+}
+
+export interface TargetAppOp {
+  appOpId: string;
+  appId?: string;
+  mode: "allow" | "deny" | "foreground" | "default" | "ignored";
+}
+
+export interface AppLaunchRequest {
+  arguments?: string[];
+  environment?: Record<string, string>;
+  deepLink?: string;
+  requestId?: string;
+}
+
 export type OperationStatus =
   | "queued" | "running" | "succeeded" | "failed" | "cancelling" | "cancelled";
 
@@ -226,7 +249,7 @@ export type ProtocolErrorCode =
   | "invalid_connection" | "invalid_options" | "invalid_identifier"
   | "invalid_request" | "confirmation_required" | "request_too_large"
   | "incompatible_profile" | "host_identity_mismatch" | "target_identity_mismatch"
-  | "provider_identity_mismatch"
+  | "provider_identity_mismatch" | "app_identity_mismatch"
   | "operation_identity_mismatch" | "operation_failed" | "operation_cancelled"
   | "invalid_response" | "credential_exposure" | "redirect_rejected"
   | "response_too_large" | "timeout" | "cancelled" | "transport_error"
@@ -267,6 +290,13 @@ export interface TargetHostClient {
   listTargets(options?: TargetListOptions): Promise<Target[]>;
   getTarget(targetId: string, options?: RequestOptions): Promise<Target>;
   getTargetCapabilities(targetId: string, options?: RequestOptions): Promise<Capability[]>;
+  listTargetApps(targetId: string, options?: RequestOptions & { includeSystem?: boolean }): Promise<InstalledTargetApp[]>;
+  getTargetApp(targetId: string, appId: string, options?: RequestOptions): Promise<InstalledTargetApp>;
+  launchTargetApp(targetId: string, appId: string, request?: AppLaunchRequest, options?: RequestOptions): Promise<Operation>;
+  terminateTargetApp(targetId: string, appId: string, options?: RequestOptions): Promise<Operation>;
+  uninstallTargetApp(targetId: string, appId: string, options: ConfirmationOptions): Promise<Operation>;
+  listTargetAppOps(targetId: string, appId: string, options?: RequestOptions): Promise<TargetAppOp[]>;
+  updateTargetAppOp(targetId: string, appId: string, appOpId: string, mode: TargetAppOp["mode"], options?: RequestOptions): Promise<TargetAppOp>;
   listTargetSurfaces(targetId: string, options?: RequestOptions): Promise<Surface[]>;
   createTarget(request: TargetCreateRequest, options?: RequestOptions): Promise<Operation>;
   startTarget(targetId: string, options?: LifecycleOptions): Promise<Operation>;
@@ -297,7 +327,7 @@ export interface OwnerTransportResponse<T = unknown> {
 
 export interface OwnerTargetHostTransport {
   response<T = unknown>(path: string, options?: {
-    method?: "GET" | "POST" | "DELETE";
+    method?: "GET" | "POST" | "PUT" | "DELETE";
     body?: string | Uint8Array;
     signal?: AbortSignal;
     timeoutMs?: number;

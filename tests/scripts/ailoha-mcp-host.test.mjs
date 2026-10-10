@@ -16,7 +16,8 @@ test("MCP preserves all61 installed identities and advertises broader opt-in lim
   const baseline = JSON.parse(readFileSync(new URL("./ailoha-compatibility-baseline.json", import.meta.url), "utf8"));
   assert.deepEqual(catalog.map((tool) => tool.name).sort(), baseline.mcpTools);
   assert.equal(catalog.length, 61);
-  assert.equal(catalog.find((tool) => tool.name === "mobile_device_app_launch").description.includes("positively unsupported"), true);
+  assert.equal(catalog.find((tool) => tool.name === "mobile_device_app_launch").description.includes("bound view/Target Host"), true);
+  assert.equal(catalog.find((tool) => tool.name === "mobile_device_app_install").description.includes("explicitly unsupported"), true);
   assert.equal(catalog.every((tool) => tool.execution.taskSupport === "forbidden"), true);
   assert.equal(catalog.find((tool) => tool.name === "mobile_device_tap").inputSchema.properties.geometryRevision.maximum, 0xffffffff);
   const selected = catalog.find((tool) => tool.name === "mobile_device_get_selected");
@@ -60,6 +61,13 @@ test("actual dispatch uses the bound context with original tool meanings and cap
   const screenshot = await dispatcher.handle(call("mobile_device_screenshot", { deviceId: "opaque-target" }));
   assert.equal(screenshot.result.content[1].type, "image");
   assert.equal(screenshot.result.content[1].mimeType, "image/png");
+  const launched = await dispatcher.handle(call("mobile_device_app_launch", {
+    deviceId: "opaque-target", bundleId: "com.example.fixture", relaunch: true,
+  }));
+  assert.equal(launched.result.structuredContent.operation, "launch_app");
+  assert.deepEqual(calls.at(-1).input, {
+    deviceId: "opaque-target", bundleId: "com.example.fixture", relaunch: true,
+  });
 });
 
 test("unsupported/invalid/cross-scope calls are positive failures before any runtime resolution", async (t) => {
@@ -69,7 +77,7 @@ test("unsupported/invalid/cross-scope calls are positive failures before any run
   });
   t.after(() => dispatcher.dispose());
   for (const request of [
-    call("mobile_device_app_launch", { deviceId: "target", bundleId: "app" }),
+    call("mobile_device_app_launch", { deviceId: "target" }),
     call("mobile_device_tap", { deviceId: "target", x: "bad", y: 1 }),
     call("mobile_device_select", { deviceId: "target", sessionId: "other" }),
   ]) {

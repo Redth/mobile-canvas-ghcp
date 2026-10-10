@@ -31,12 +31,36 @@ function fixture(options = {}) {
   }]));
   const providers = [{ providerId: "provider", name: "Provider", version: "1", state: "ready", capabilities: [] }];
   const capabilities = [{ id: "target.lifecycle", version: 1, features: ["startTarget", "stopTarget", "rebootTarget", "resetTarget", "deleteTarget"] }];
+  if (options.app) {
+    capabilities.push({ id: "target.apps", version: 1,
+      features: ["listTargetApps", "launchTargetApp", "terminateTargetApp", "uninstallTargetApp"] });
+    capabilities.push({ id: "target.app-ops", version: 1, features: ["listTargetAppOps", "updateTargetAppOp"] });
+  }
   const client = {
     async getHostStatus() { return { hostId: "host", profile: "ailoha.target-host/v1", version: "test", state: "ready", capabilities: [] }; },
     async listProviders() { return providers; },
     async listTargets() { return [...targets.values()]; },
     async getTarget(id) { calls.push(["get", id]); return { ...targets.get(id), surfaces: [surface()] }; },
     async getTargetCapabilities() { return capabilities; },
+    async listTargetApps(id, query) {
+      calls.push(["app-list", id, query.includeSystem]);
+      return options.apps ?? [{
+        appId: "opaque-app", packageId: "com.example.native", state: "installed",
+        name: "Fixture", version: "1", buildNumber: "2",
+      }];
+    },
+    async getTargetApp(id, appId) {
+      calls.push(["app-get", id, appId]);
+      return { appId, packageId: "com.example.native", state: "stopped" };
+    },
+    async launchTargetApp(id, appId, request) {
+      calls.push(["app-launch", id, appId, request]); return { operationId: "app-launch" };
+    },
+    async terminateTargetApp(id, appId) { calls.push(["app-terminate", id, appId]); return { operationId: "app-terminate" }; },
+    async uninstallTargetApp(id, appId, request) {
+      calls.push(["app-uninstall", id, appId, request.confirmed]); return { operationId: "app-uninstall" };
+    },
+    async listTargetAppOps(id, appId) { calls.push(["app-op-list", id, appId]); return options.appOps ?? []; },
     async startTarget(id) { calls.push(["start", id]); return { operationId: `start-${id}` }; },
     async stopTarget(id) { calls.push(["stop", id]); return { operationId: `stop-${id}` }; },
     async rebootTarget(id) { calls.push(["reboot", id]); return { operationId: `reboot-${id}` }; },
@@ -122,6 +146,218 @@ function fixture(options = {}) {
     selectHost(hostId) { selection = { targetHostId: hostId, targetId: "one" }; },
   };
 }
+
+test("app compatibility uses native package mapping and waits for its exact accepted target operation", async (t) => {
+  const state = fixture({ app: true });
+  t.after(() => state.backend.dispose());
+  state.client.waitForOperation = async (id) => ({
+    operationId: id, kind: id === "app-launch" ? "launchTargetApp" : "terminateTargetApp",
+    targetId: "one", providerId: "provider", status: "succeeded", destructive: false,
+  });
+  assert.equal((await state.backend.launchApp("one", "com.example.native")).bundleId, "com.example.native");
+  assert.deepEqual(state.calls.find((call) => call[0] === "app-launch"), ["app-launch", "one", "opaque-app", {}]);
+  assert.equal((await state.backend.launchApp("one", "com.example.native", true)).operation, "launch");
+  const sequence = state.calls.filter(([name]) => name === "app-terminate" || name === "app-get" || name === "app-launch")
+    .map(([name]) => name);
+  assert.deepEqual(sequence.slice(-3), ["app-terminate", "app-get", "app-launch"]);
+  const api = await state.backend.request("/api/v1/devices/one/apps/launch", {
+    method: "POST", body: JSON.stringify({ bundleId: "com.example.native" }),
+  });
+  assert.equal(api.status, 200);
+  assert.equal((await api.json()).bundleId, "com.example.native");
+  const withArguments = await state.backend.request("/api/v1/devices/one/apps/launch", {
+    method: "POST", body: JSON.stringify({ bundleId: "com.example.native", arguments: ["--safe", "two words"] }),
+  });
+  assert.equal(withArguments.status, 200);
+  assert.deepEqual(state.calls.filter(([name]) => name === "app-launch").at(-1),
+    ["app-launch", "one", "opaque-app", { arguments: ["--safe", "two words"] }]);
+  assert.equal((await state.backend.request("/api/v1/devices/one/apps/launch", {
+    method: "POST", body: JSON.stringify({ bundleId: "com.example.native", arguments: ["ok", 3] }),
+  })).status, 400);
+});
+
+test("missing canonical inventory fields never become invented user/system, process or path metadata", async (t) => {
+  const state = fixture({ app: true });
+  t.after(() => state.backend.dispose());
+  await assert.rejects(state.backend.listApps("one"), { code: "capability_not_supported" });
+  await assert.rejects(state.backend.listApps("one", { includeSystem: true }), { code: "capability_not_supported" });
+  const empty = fixture({ app: true, apps: [] });
+  t.after(() => empty.backend.dispose());
+  assert.deepEqual(await empty.backend.listApps("one"), {
+    schemaVersion: "1.0", deviceId: "one", platform: "ios", total: 0, apps: [],
+  });
+  assert.equal((await state.backend.request("/api/v1/devices/one/apps?system=true")).status, 501);
+  assert.deepEqual(state.calls.filter(([name]) => name === "app-launch"), []);
+});
+
+test("stale named app authority before dispatch and failed terminate prevent the next mutation", async (t) => {
+  const state = canonicalFixture({ app: true });
+  t.after(() => state.backend.dispose());
+  const waiting = deferred();
+  const proceed = deferred();
+  state.client.listTargetApps = async () => {
+    waiting.resolve();
+    await proceed.promise;
+    return [{ appId: "opaque-app", packageId: "com.example.native", state: "installed" }];
+  };
+  const pending = assert.rejects(state.backend.launchApp("one", "com.example.native"), { code: "context_snapshot_superseded" });
+  await waiting.promise;
+  await state.advanceSelection();
+  proceed.resolve();
+  await pending;
+  assert.equal(state.calls.some(([name]) => name === "app-launch"), false);
+  const failed = fixture({ app: true });
+  t.after(() => failed.backend.dispose());
+  failed.client.waitForOperation = async (id) => {
+    throw new AilohaProtocolError("operation_failed", {
+      operationId: id,
+      operation: { operationId: id, kind: "terminateTargetApp", targetId: "one", providerId: "provider", status: "failed" },
+    });
+  };
+  await assert.rejects(failed.backend.launchApp("one", "com.example.native", true), { code: "operation_failed" });
+  assert.equal(failed.calls.some(([name]) => name === "app-launch"), false);
+});
+
+test("lost app acceptance retains original operation and native app across a selected-target change", async (t) => {
+  const state = fixture({ app: true });
+  t.after(() => state.backend.dispose());
+  let submissions = 0;
+  const accepted = deferred();
+  const complete = deferred();
+  state.client.launchTargetApp = async () => {
+    submissions += 1;
+    throw new AilohaProtocolError("transport_error", { status: 202, operationId: "accepted-app-launch" });
+  };
+  state.client.waitForOperation = async (id) => {
+    assert.equal(id, "accepted-app-launch");
+    accepted.resolve();
+    await complete.promise;
+    return {
+      operationId: id, targetId: "one", providerId: "provider",
+      kind: "launchTargetApp", status: "succeeded", destructive: false,
+    };
+  };
+  const pending = state.backend.launchApp("one", "com.example.native");
+  await accepted.promise;
+  await state.backend.select("two");
+  complete.resolve();
+  assert.equal((await pending).success, true);
+  assert.equal(submissions, 1);
+});
+
+test("unknown app acceptance cannot submit twice and cold relaunch never repeats a successful stop", async (t) => {
+  const uncertain = fixture({ app: true });
+  t.after(() => uncertain.backend.dispose());
+  let posts = 0;
+  uncertain.client.launchTargetApp = async () => {
+    posts += 1;
+    throw new AilohaProtocolError("transport_error");
+  };
+  await assert.rejects(uncertain.backend.launchApp("one", "com.example.native"), { code: "transport_error" });
+  await assert.rejects(uncertain.backend.launchApp("one", "com.example.native"), { code: "app_outcome_uncertain" });
+  assert.equal(posts, 1);
+
+  const cold = fixture({ app: true });
+  t.after(() => cold.backend.dispose());
+  let stops = 0;
+  let starts = 0;
+  cold.client.terminateTargetApp = async () => { stops += 1; return { operationId: "app-terminate" }; };
+  cold.client.launchTargetApp = async () => { starts += 1; throw new AilohaProtocolError("transport_error"); };
+  cold.client.waitForOperation = async () => ({
+    operationId: "app-terminate", targetId: "one", providerId: "provider",
+    kind: "terminateTargetApp", status: "succeeded", destructive: false,
+  });
+  await assert.rejects(cold.backend.launchApp("one", "com.example.native", true), { code: "transport_error" });
+  await assert.rejects(cold.backend.launchApp("one", "com.example.native", true), { code: "app_outcome_uncertain" });
+  assert.equal(stops, 1);
+  assert.equal(starts, 1);
+});
+
+test("concurrent cold relaunch calls share the original stop and launch", async (t) => {
+  const state = fixture({ app: true });
+  t.after(() => state.backend.dispose());
+  const stopEntered = deferred();
+  const finishStop = deferred();
+  state.client.terminateTargetApp = async () => {
+    state.calls.push(["app-terminate"]);
+    stopEntered.resolve();
+    await finishStop.promise;
+    return { operationId: "app-terminate" };
+  };
+  state.client.waitForOperation = async (id) => ({
+    operationId: id, kind: id === "app-terminate" ? "terminateTargetApp" : "launchTargetApp",
+    targetId: "one", providerId: "provider", status: "succeeded", destructive: false,
+  });
+  const first = state.backend.launchApp("one", "com.example.native", true);
+  await stopEntered.promise;
+  const second = state.backend.launchApp("one", "com.example.native", true);
+  finishStop.resolve();
+  assert.equal((await first).success, true);
+  assert.equal((await second).success, true);
+  assert.equal(state.calls.filter(([name]) => name === "app-terminate").length, 1);
+  assert.equal(state.calls.filter(([name]) => name === "app-launch").length, 1);
+});
+
+test("app failures carry only captured ownership and operation receipt, not provider paths", async (t) => {
+  const state = canonicalFixture({ app: true });
+  t.after(() => state.backend.dispose());
+  state.client.launchTargetApp = async () => ({ operationId: "app-secret-error" });
+  state.client.waitForOperation = async () => {
+    throw new AilohaProtocolError("operation_failed", {
+      operationId: "app-secret-error",
+      operation: {
+        operationId: "app-secret-error", kind: "launchTargetApp", targetId: "one",
+        providerId: "provider", status: "failed",
+        result: { privatePath: "/private/native/path", credential: "sensitive" },
+      },
+    });
+  };
+  const response = await state.backend.request("/api/v1/devices/one/apps/launch", {
+    method: "POST", body: JSON.stringify({ bundleId: "com.example.native" }),
+  });
+  assert.equal(response.status, 502);
+  const error = await response.json();
+  assert.equal(error.code, "operation_failed");
+  assert.equal(error.operationId, "app-secret-error");
+  assert.equal(error.operation.targetId, "one");
+  assert.equal(error.operation.appId, "opaque-app");
+  assert.equal(error.contextIdentity.scopeEpoch, "original-epoch");
+  assert.equal(JSON.stringify(error).includes("/private/native/path"), false);
+  assert.equal(JSON.stringify(error).includes("sensitive"), false);
+});
+
+test("failed native inventory before submission retains captured target and sanitizes diagnostics", async (t) => {
+  const state = canonicalFixture({ app: true });
+  t.after(() => state.backend.dispose());
+  state.client.listTargetApps = async () => { throw new Error("private host path /secret/device.apk"); };
+  const response = await state.backend.request("/api/v1/devices/one/apps/launch", {
+    method: "POST", body: JSON.stringify({ bundleId: "com.example.native" }),
+  });
+  assert.equal(response.status, 502);
+  const error = await response.json();
+  assert.equal(error.operation.targetId, "one");
+  assert.equal(error.operation.targetHostId, "host");
+  assert.equal(error.contextIdentity.scopeEpoch, "original-epoch");
+  assert.equal(JSON.stringify(error).includes("/secret/"), false);
+  assert.equal(state.calls.some(([name]) => name === "app-launch"), false);
+});
+
+test("install, destructive uninstall and Android app-op mutation remain explicitly gated", async (t) => {
+  const state = fixture({ app: true });
+  t.after(() => state.backend.dispose());
+  await assert.rejects(state.backend.installApp("one", "/synthetic/fixture.apk"), { code: "capability_not_supported" });
+  await assert.rejects(state.backend.uninstallApp("one", "com.example.native", false), { code: "confirmation_required" });
+  await assert.rejects(state.backend.uninstallApp("one", "com.example.native", true), { code: "capability_not_supported" });
+  await assert.rejects(state.backend.listAppOps("one", "com.example.native"), { code: "capability_not_supported" });
+  assert.equal(state.calls.some(([name]) => name === "app-uninstall" || name === "app-op-list"), false);
+  for (const target of state.targets.values()) target.nativeIdentity.platform = "android";
+  await assert.rejects(state.backend.setAppOp("one", "com.example.native", "SYSTEM_ALERT_WINDOW"), { code: "capability_not_supported" });
+  assert.deepEqual(await state.backend.listAppOps("one", "com.example.native"), {
+    schemaVersion: "1.0", deviceId: "one", platform: "android", bundleId: "com.example.native", operations: [], total: 0,
+  });
+  state.client.listTargetAppOps = async () => [{ appOpId: "SYSTEM_ALERT_WINDOW", appId: "com.example.native", mode: "allow" }];
+  await assert.rejects(state.backend.listAppOps("one", "com.example.native"), { code: "capability_not_supported" });
+});
 
 function canonicalFixture(options = {}) {
   const scope = { sessionId: "unique-session", viewId: "unique-view" };

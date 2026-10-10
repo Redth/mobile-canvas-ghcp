@@ -189,6 +189,62 @@ function safeError(error, code, status, ErrorType = AilohaProtocolError) {
   return true;
 }
 
+test("published target app and Android app-op routes preserve native package identity and accepted receipts", async (t) => {
+    const app = {
+      appId: "canonical/app%id", packageId: "com.example.native", state: "running",
+      name: "Fixture", version: "1", buildNumber: "2",
+    };
+    const root = `/api/v1/targets/${encodeURIComponent(targetId)}`;
+    const seen = [];
+    const fixture = await host(t, (request, response) => {
+      seen.push([request.method, request.url]);
+      if (request.method === "GET" && request.url === `${root}/apps?includeSystem=false`) {
+        json(response, [app]); return;
+      }
+      if (request.method === "GET" && request.url === `${root}/apps?includeSystem=true`) {
+        json(response, [app]); return;
+      }
+      if (request.method === "GET" && request.url === `${root}/apps/${encodeURIComponent(app.appId)}`) {
+        json(response, app); return;
+      }
+      if (request.method === "GET" && request.url === `${root}/app-ops?appId=${encodeURIComponent(app.packageId)}`) {
+        json(response, [{ appOpId: "SYSTEM_ALERT_WINDOW", appId: app.packageId, mode: "default" }]); return;
+      }
+      if (request.method === "PUT" && request.url === `${root}/app-ops/SYSTEM_ALERT_WINDOW`) {
+        receiveBody(request, (body) => {
+          assert.deepEqual(JSON.parse(body), { appId: app.packageId, mode: "allow" });
+          json(response, { appOpId: "SYSTEM_ALERT_WINDOW", appId: app.packageId, mode: "allow" });
+        }); return;
+      }
+      if (request.method === "GET" && request.url === `/api/v1/operations/${encodeURIComponent(operationId)}`) {
+        json(response, operationFixture("succeeded", { kind: "launchTargetApp" })); return;
+      }
+      receiveBody(request, (body) => {
+        assert.deepEqual(request.method === "POST" && request.url.endsWith("/actions/launch")
+          ? JSON.parse(body) : body, request.url.endsWith("/actions/launch") ? { arguments: [] } : "");
+        const kind = request.url.endsWith("/actions/launch") ? "launchTargetApp"
+          : request.url.endsWith("/actions/terminate") ? "terminateTargetApp" : "uninstallTargetApp";
+        accepted(response, operationFixture("queued", { kind, destructive: kind === "uninstallTargetApp" }));
+      });
+    });
+    const client = await fixture.connect();
+    assert.deepEqual(await client.listTargetApps(targetId), [app]);
+    assert.deepEqual(await client.listTargetApps(targetId, { includeSystem: true }), [app]);
+    assert.deepEqual(await client.getTargetApp(targetId, app.appId), app);
+    assert.deepEqual(await client.listTargetAppOps(targetId, app.packageId), [
+      { appOpId: "SYSTEM_ALERT_WINDOW", appId: app.packageId, mode: "default" },
+    ]);
+    assert.equal((await client.updateTargetAppOp(targetId, app.packageId, "SYSTEM_ALERT_WINDOW", "allow")).mode, "allow");
+    assert.equal((await client.launchTargetApp(targetId, app.appId, { arguments: [] })).kind, "launchTargetApp");
+    assert.equal((await client.waitForOperation(operationId)).status, "succeeded");
+    assert.equal((await client.terminateTargetApp(targetId, app.appId)).kind, "terminateTargetApp");
+    await assert.rejects(client.uninstallTargetApp(targetId, app.appId, {}), { code: "confirmation_required" });
+    assert.equal((await client.uninstallTargetApp(targetId, app.appId, { confirmed: true })).destructive, true);
+    assert.deepEqual(seen.filter(([method]) => method === "DELETE").map(([, path]) => path),
+      [`${root}/apps/${encodeURIComponent(app.appId)}`]);
+    await assert.rejects(client.launchTargetApp(targetId, app.appId, { requestId: 42 }), { code: "invalid_request" });
+});
+
 function rejects(promise, code, status) {
   return assert.rejects(promise, (error) => safeError(error, code, status));
 }

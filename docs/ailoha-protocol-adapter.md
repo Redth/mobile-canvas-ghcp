@@ -54,8 +54,43 @@ Clients expose `getHostStatus`, `listProviders`, `listTargets`,
 `getTarget`, `getTargetCapabilities`, `listTargetSurfaces`, `createTarget`,
 `startTarget`, `stopTarget`, `rebootTarget`, `resetTarget`, `deleteTarget`,
 `listOperations`, `getOperation`, `cancelOperation`, `waitForOperation`, and `dispose`.
+The source-only target-app client also exposes `listTargetApps`, `getTargetApp`,
+`launchTargetApp`, `terminateTargetApp`, `uninstallTargetApp`, `listTargetAppOps`,
+and `updateTargetAppOp`. These use the published `/api/v1/targets/{targetId}`
+app and app-op routes, not workspace application or agent identities.
+Mutations return accepted operations; launch/terminate/uninstall do not treat
+HTTP 202 as completion. Uninstall's `confirmed: true` is only a client-side gate,
+not evidence of human consent. App-op PUT returns a descriptor rather than an
+operation. Native package IDs are resolved through canonical app inventory,
+not assumed to equal `appId`.
 `listTargets` accepts only optional `providerId`, `status`, and `signal`;
 other reads accept only `signal`. No arbitrary API paths or caller headers exist.
+
+The Mobile Canvas opt-in routes seven existing app tool identities to the shared
+backend used by the GitHub canvas and VS Code HostBridge/MCP proxy. For now,
+canonical launch and terminate require positive per-target capability evidence,
+native package lookup, exact operation ownership and terminal success.
+Cold relaunch waits for a successful terminate and a non-running app read before
+submitting launch. Legacy API launch arguments are forwarded to the canonical
+request; distinct argument lists cannot borrow one another's accepted receipts.
+The original target and accepted receipt survive UI selection
+changes; an unknown acceptance is never retried or routed to legacy.
+
+This source-only slice **does not yet claim full app parity**. The current
+canonical `InstalledApp` omits the legacy kind, process ID, install path and data
+container, so a nonempty app list cannot be represented faithfully and
+`includeSystem=true` cannot distinguish system apps. Empty supported inventory
+is returned as empty, not inferred from a failed read. Canonical `AppOp` omits
+the legacy effective UID-scoped flag: nonempty app-op lists are explicitly
+unsupported, as is app-op mutation without scoped consent and readback.
+Install remains unsupported until a reviewed host-owned package staging API can
+validate local paths, stream `.apk` files or archive `.app` directories, recheck
+the original named context before submission, and clean up the owned artifact.
+The existing combined install CLI/MCP commands do not expose that fence;
+neither renderer buffering nor a direct native process fallback is used.
+Uninstall additionally requires real scoped host consent; `confirm=true` by
+itself never authorizes it. The installed hosts do not currently supply that
+consent callback. All these limitations fail explicitly without fallback.
 
 All reads use `/api/v1` and bearer authentication, including status and inventory.
 Collections are bare arrays. Status includes `profile`, `hostId`, `version`,
