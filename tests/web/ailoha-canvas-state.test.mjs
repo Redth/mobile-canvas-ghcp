@@ -108,3 +108,42 @@ test("actual legacy autoscale debounce still works and a queued callback cannot 
   assert.equal(restarts, 1);
   assert.equal(queued.length, 1);
 });
+
+for (const action of ["erase", "delete"]) {
+  test(`actual ${action} handler uses a captured Ailoha target and only updates its original selection after host approval`, async () => {
+    const source = readFileSync(new URL(productModule("web/device-canvas.js")), "utf8");
+    const definition = new RegExp(`document\\.querySelector\\("#${action}-button"\\)\\.addEventListener\\("click", ([\\s\\S]*?)\\n\\}\\);`).exec(source)?.[1];
+    const guard = /function isDestructiveSelectionCurrent\(captured\) \{[\s\S]*?\n\}/.exec(source)?.[0];
+    assert.ok(definition);
+    assert.ok(guard);
+    const current = state();
+    current.panelVisible = true;
+    current.detached = false;
+    let legacyPrompts = 0;
+    let requested;
+    let complete;
+    const response = new Promise((resolve) => { complete = resolve; });
+    const context = {
+      state: current, captureCanvasInvocation, capitalize: (value) => value, selectedNoun: () => "device",
+      elements: {
+        dataDialog: { close() {} }, view: { classList: { add() {} } }, empty: { classList: { remove() {} } },
+      },
+      requestConfirmation: async () => { legacyPrompts += 1; return true; },
+      runBusy: async (_, work) => work(),
+      api: async (path) => { requested = path; return response; },
+      refresh: async () => {}, showToast() {}, showError(error) { throw error; }, stopStream() {},
+    };
+    vm.createContext(context);
+    vm.runInContext(guard, context);
+    const handler = vm.runInContext(`(${definition}\n})`, context);
+    const work = handler({ currentTarget: {} });
+    assert.equal(legacyPrompts, 0);
+    assert.equal(requested, `/api/v1/devices/opaque${action === "erase" ? "/erase" : ""}`);
+    current.selected = { ...current.selected, id: "new-selection" };
+    current.selectionVersion += 1;
+    complete({ json: async () => ({ id: "old-approved-target" }) });
+    await work;
+    await Promise.resolve();
+    assert.equal(current.selected.id, "new-selection");
+  });
+}
