@@ -16,6 +16,7 @@ const modules = [
   "lib/ailoha/runtime-sdk.mjs", "lib/ailoha/runtime-backend.mjs", "lib/ailoha/github-adapter.mjs",
   "lib/ailoha/index.mjs", "web/ailoha-canvas-state.js", "web/ailoha-video-player.js", "web/ailoha-video-receiver.js",
   "lib/ailoha/workspace-inspection.mjs", "web/ailoha-workspace-view.js",
+  "lib/ailoha/semantic-inspection.mjs", "lib/ailoha/semantic-mcp.mjs", "web/ailoha-semantic-view.js",
   "web/device-canvas.js", "web/device-canvas.css", "web/index.html",
 ];
 const tests = [
@@ -26,11 +27,13 @@ const tests = [
   "tests/scripts/ailoha-canvas-host.test.mjs",
   "tests/scripts/ailoha-context-adapter.test.mjs",
   "tests/scripts/ailoha-workspace-inspection.test.mjs",
+  "tests/scripts/ailoha-semantic-inspection.test.mjs",
   "tests/scripts/ailoha-mcp-host.test.mjs",
   "tests/web/ailoha-video-player.test.mjs",
   "tests/web/ailoha-presentation-lease.test.mjs",
   "tests/web/ailoha-canvas-state.test.mjs",
   "tests/web/ailoha-workspace-view.test.mjs",
+  "tests/web/ailoha-semantic-view.test.mjs",
 ];
 for (const product of products) {
   for (const path of modules) {

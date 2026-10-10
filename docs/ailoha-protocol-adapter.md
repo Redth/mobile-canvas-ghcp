@@ -325,9 +325,20 @@ tooling is not a ready-shaped empty inventory.
 
 Implemented: inventory/select, advertised start/stop/reboot, PNG screenshot,
 basic geometry-bound pointer gestures, shared ALHV WebCodecs display, and
-[read-only explicit-root workspace/application evidence](ailoha-workspace-inspection.md).
+[read-only explicit-root workspace/application evidence](ailoha-workspace-inspection.md),
+plus read-only canonical composed `app_tree`, `app_query` and `app_status`
+through the host-owned MCP client. System reads require the selected Target
+Host target and request `target-host` routing; App reads require an explicitly
+selected `verified-native-instance` in the named context and request
+`require-agent` routing. Each result checks captured context ref/epoch/revision,
+target, surface, owner and native runtime provenance before display; retired
+reads never project. The shared UI bounds depth, element count and text, and
+renders canonical element text literally. This source-only slice has no
+workspace-application-to-native-agent mapping, binding control, or legacy
+`ui_*` compatibility claim. Both hosts bundle the exact-pinned MCP client
+graph, while the official Ailoha runtime pin remains a separate release gate.
 Unsupported: compatibility creation/catalog, reveal/rotation/keyboard/buttons,
-reset/delete without scoped consent, app/system semantic trees, app deployment,
+reset/delete without scoped consent, app deployment,
 recording and broader settings/diagnostics/file/hardware operations. No claim of
 device or full feature parity is made.
 

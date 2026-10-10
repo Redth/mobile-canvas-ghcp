@@ -30,7 +30,7 @@ async (page) => {
   const deletes = (value) => value.calls.filter((call) => call.method === "DELETE").length;
   const inspect = async (expectedStatus) => {
     const generation = (await evidence()).workspace.generation;
-    await page.getByRole("button", { name: "Inspect", exact: true }).click();
+    await page.locator("#workspace-inspection").getByRole("button", { name: "Inspect", exact: true }).click();
     if (expectedStatus) await page.waitForFunction(({ generation, expectedStatus }) => {
       const element = document.querySelector("#workspace-inspection");
       return Number(element.dataset.generation) > generation && element.dataset.status === expectedStatus;

@@ -83,3 +83,55 @@ export function prepareAilohaGraph(output, { sourceRoot = root } = {}) {
   }, null, 2)}\n`);
   return true;
 }
+
+export function prepareSemanticGraph(output, { sourceRoot = root } = {}) {
+  const lock = JSON.parse(readFileSync(join(sourceRoot, "package-lock.json"), "utf8"));
+  const version = JSON.parse(readFileSync(join(sourceRoot, "package.json"), "utf8"))
+    .dependencies["@modelcontextprotocol/sdk"];
+  if (!/^\d+\.\d+\.\d+$/.test(version)) {
+    throw new Error("The shared MCP client must be exact-pinned in the product manifest.");
+  }
+  const seen = new Set();
+  const rootRequire = createRequire(join(sourceRoot, "package.json"));
+  function include(name, fromRequire) {
+    let entryPath;
+    try { entryPath = fromRequire.resolve(`${name}/package.json`); }
+    catch { entryPath = fromRequire.resolve(name); }
+    let directory = dirname(entryPath);
+    while (true) {
+      const candidate = join(directory, "package.json");
+      if (existsSync(candidate) && JSON.parse(readFileSync(candidate, "utf8")).name === name) break;
+      const parent = dirname(directory);
+      if (parent === directory || !directory.startsWith(sourceRoot)) {
+        throw new Error(`MCP client dependency ${name} has no package root.`);
+      }
+      directory = parent;
+    }
+    const manifestPath = join(directory, "package.json");
+    const key = relative(sourceRoot, directory).split(sep).join("/");
+    if (!key.startsWith("node_modules/") || key.includes("..")) {
+      throw new Error(`MCP client dependency ${name} escapes the prepared source graph.`);
+    }
+    if (seen.has(key)) return;
+    seen.add(key);
+    const manifest = JSON.parse(readFileSync(manifestPath, "utf8"));
+    const entry = lock.packages[key];
+    if (!entry || entry.version !== manifest.version || !entry.integrity || !entry.resolved
+      || !existsSync(join(directory, "LICENSE")) && !existsSync(join(directory, "LICENSE.md"))
+        && !existsSync(join(directory, "LICENSE.txt"))) {
+      throw new Error(`MCP client dependency ${name} has no locked source or license.`);
+    }
+    const destination = join(output, key);
+    mkdirSync(dirname(destination), { recursive: true });
+    cpSync(directory, destination, {
+      recursive: true, dereference: false,
+      filter: (path) => !path.endsWith(".map") && !path.endsWith(".d.ts") && !path.endsWith(".d.mts"),
+    });
+    const requireDependency = createRequire(manifestPath);
+    for (const dependency of Object.keys(manifest.dependencies ?? {})) include(dependency, requireDependency);
+  }
+  include("@modelcontextprotocol/sdk", rootRequire);
+  const manifest = JSON.parse(readFileSync(join(output, "node_modules/@modelcontextprotocol/sdk/package.json"), "utf8"));
+  if (manifest.version !== version) throw new Error("The prepared MCP client does not match the exact shared source pin.");
+  return [...seen];
+}

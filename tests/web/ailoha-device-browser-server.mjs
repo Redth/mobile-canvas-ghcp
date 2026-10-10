@@ -2,7 +2,6 @@ import { cpSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs"
 import { createServer } from "node:http";
 import { randomUUID } from "node:crypto";
 import { join, resolve } from "node:path";
-import { createRequire } from "node:module";
 import { pathToFileURL } from "node:url";
 import "../scripts/fixtures/ailoha-installed-hooks.mjs";
 import { scenario, sourceSha } from "../scripts/fixtures/ailoha-sdk-double.mjs";
@@ -13,8 +12,7 @@ const inspectionCheck = process.argv.includes("--workspace-inspection");
 const product = inspectionCheck ? `${contextPath}.product` : preparedProduct;
 if (inspectionCheck) {
   for (const directory of ["lib", "web"]) cpSync(join(preparedProduct, directory), join(product, directory), { recursive: true });
-  const require = createRequire(import.meta.url);
-  cpSync(join(require.resolve("ws/package.json"), ".."), join(product, "node_modules/ws"), { recursive: true });
+  cpSync(join(preparedProduct, "node_modules"), join(product, "node_modules"), { recursive: true });
   writeFileSync(join(product, "package.json"), '{"type":"module"}\n');
 }
 const fixtureRoot = join(contextPath, "..", "browser-workspace-root");
