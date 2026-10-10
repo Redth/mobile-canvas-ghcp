@@ -103,6 +103,9 @@ export async function startCatalogHost(t, { model = createCatalogModel(), before
         for await (const chunk of request) chunks.push(chunk);
         call.body = JSON.parse(Buffer.concat(chunks).toString("utf8"));
         const input = call.body;
+        if (state.submissionStatus !== undefined) {
+          return reply(response, problem(state.submissionStatus, "Owned creation submission failure"), state.submissionStatus);
+        }
         const number = operations.size + 1;
         const targetId = `created/opaque-${number}%2F`;
         const provider = model.providerCatalogs.find((entry) => entry.providerId === input.providerId);
