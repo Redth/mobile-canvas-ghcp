@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { productModule } from "../ailoha-test-module.mjs";
 
-const { createAilohaSystemUiAdapter, REVIEWED_SYSTEM_UI_SOURCE } =
+const { createAilohaSystemUiAdapter } =
   await import(productModule("lib/ailoha/system-ui-adapter.mjs"));
 
 const invocation = {
@@ -37,7 +37,6 @@ function fixture(respond) {
 }
 
 test("reviewed System surface snapshot projects legacy nullable frames, raw bytes and full node count", async () => {
-  assert.match(REVIEWED_SYSTEM_UI_SOURCE, /^[a-f0-9]{40}$/);
   const { adapter, calls } = fixture(() => asResponse({
     targetId: invocation.targetId, targetHost, platform: "ios",
     root, elementCount: 4, raw: "é😀", uiRevision: "revision-a",
@@ -167,4 +166,9 @@ test("malformed, cross-owner, stale, missing-frame and oversized native replies 
     elementCount: 3, uiRevision: "revision-a",
   }));
   await assert.rejects(brokenCount.snapshot(invocation), { code: "invalid_system_ui_response" });
+  const { adapter: oversizedBody } = fixture(() => asResponse({
+    targetId: invocation.targetId, targetHost, platform: "ios",
+    root: node("x".repeat(16 * 1024 * 1024)), elementCount: 1, uiRevision: "revision-a",
+  }));
+  await assert.rejects(oversizedBody.snapshot(invocation), { code: "invalid_system_ui_response" });
 });
