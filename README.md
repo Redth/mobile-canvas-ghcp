@@ -40,6 +40,14 @@ Reload Copilot after installation. The plugin registers the canvas and all
   <img src="assets/github-copilot-canvas.png" width="1100" alt="Mobile Canvas running as a maximized canvas in the GitHub Copilot app">
 </p>
 
+Alternatively, you can install **mobile-canvas** through the Copilot UI.
+
+1. From the **Customize** system, select the **Plugins** tab.
+2. Opposite the **Available** section header is a drop-down for which marketplace to filter and a settings gear icon to modify your available marketplaces. Select that to open the **Manage marketplaces** pop-up.
+3. Add the `Redth/mobile-canvas-ghcp` marketplace and return to the .
+4. Back in the **Plugins** tab, search for `mobile-canvas` to find this plugin and select **+ Install**.
+5. Reload Copilot to find the **Mobile Device** canvas to one of your chat sessions.
+
 ### VS Code
 
 <p>
