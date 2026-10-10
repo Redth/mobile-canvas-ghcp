@@ -786,8 +786,8 @@ receipt proves the original context, host incarnation, recording and stop
 identities, nonempty landed artifact and output. A lost or failed stop/download
 response retries only captured recovery, never a second stop. Pending, failed and unknown
 recovery outcomes retain the owner and block lease release or another start.
-A cancelled status or stop caller does not claim a completed receipt, while a
-live caller can recover the original stop without submitting another one.
+A cancelled status, stop or competing start retry does not claim a completed
+receipt, while a live caller can recover the original stop without submitting another one.
 A file at the output path alone never proves completion. A pending start may
 have no recording ID; only the first authoritatively known ID is pinned.
 The Ailoha MCP status tool advertises `readOnlyHint: false` because status

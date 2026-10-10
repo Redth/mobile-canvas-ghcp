@@ -212,6 +212,49 @@ test("a cancelled recording caller retains its accepted start and stop for live 
   assert.equal(calls.filter((action) => action === "stop").length, 1);
 });
 
+for (const retry of ["start", "stop"]) {
+  test(`a cancelled ${retry} retry retains the original downloaded recording receipt`, async () => {
+    const entered = deferred();
+    const release = deferred();
+    const caller = new AbortController();
+    const calls = [];
+    let recoveries = 0;
+    const { coordinator } = fixture({
+      async run(action) {
+        calls.push(action);
+        if (action === "status") return "null";
+        if (action === "start") return JSON.stringify(record());
+        if (action === "stop") throw new Error("original stop acknowledgement lost");
+        if (action === "recover") {
+          recoveries += 1;
+          if (recoveries === 1) {
+            entered.resolve();
+            await release.promise;
+          }
+          return JSON.stringify(recovery());
+        }
+        throw new Error("Unexpected recording command.");
+      },
+    });
+    await coordinator.start(invocation);
+    await assert.rejects(coordinator.stop("target-one"), /original stop acknowledgement lost/);
+    const requireCaller = () => caller.signal.throwIfAborted();
+    const pending = retry === "start"
+      ? coordinator.start(invocation, {}, requireCaller)
+      : coordinator.stop("target-one", requireCaller);
+    await entered.promise;
+    caller.abort();
+    release.resolve();
+    await assert.rejects(pending, { name: "AbortError" });
+    assert.equal(coordinator.tracked, true);
+    assert.equal((await coordinator.status(invocation)).isRecording, false);
+    assert.equal(coordinator.tracked, false);
+    assert.equal(recoveries, 2);
+    assert.equal(calls.filter((action) => action === "start").length, 1);
+    assert.equal(calls.filter((action) => action === "stop").length, 1);
+  });
+}
+
 test("lost start acceptance is not replayed; only captured status/stop can recover it", async () => {
   const calls = [];
   let active = null;
