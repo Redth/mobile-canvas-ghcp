@@ -1,13 +1,15 @@
 import { createServer } from "node:http";
 import { readFile } from "node:fs/promises";
-import { dirname, join } from "node:path";
+import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
 const root = join(dirname(fileURLToPath(import.meta.url)), "../..");
+const githubProduct = process.argv[2] ? resolve(process.argv[2]) : join(root, ".build/copilot-plugin-thin/mobile-canvas");
+const vscodeProduct = process.argv[3] ? resolve(process.argv[3]) : join(root, "vscode/dist");
 const mappings = Object.freeze({
   "/source/": join(root, "web"),
-  "/github/": join(root, ".build/copilot-plugin-thin/mobile-canvas/web"),
-  "/vscode/": join(root, "vscode/dist/web"),
+  "/github/": join(githubProduct, "web"),
+  "/vscode/": join(vscodeProduct, "web"),
   "/fixtures/": join(root, "tests/web/fixtures/ailoha-baseline"),
   "/fixtures-bframes/": join(root, "tests/web/fixtures/ailoha-bframes"),
   "/tests/": join(root, "tests/web"),

@@ -12,11 +12,13 @@ export const AILOHA_VIDEO_PLAYER_LIMITS = Object.freeze({
   maxDecodedPixels: 16 * 1024 * 1024,
   decodeTimeoutMs: 5000,
 });
+const playerErrors = new WeakSet();
 
 function playerError(code, message) {
   const error = new Error(message);
   error.name = "AilohaVideoPlayerError";
   error.code = code;
+  playerErrors.add(error);
   return error;
 }
 
@@ -37,6 +39,7 @@ function configurationFrom(payload) {
     throw playerError("InvalidAccessUnit", "ALHV H.264 payload must be a complete Annex B access unit.");
   }
   const configuration = [];
+  const nals = [];
   let codec;
   let hasPicture = false;
   let hasKeyPicture = false;
@@ -48,16 +51,18 @@ function configurationFrom(payload) {
       throw playerError("InvalidAccessUnit", "H.264 access unit contains an invalid NAL header.");
     }
     const type = payload[header] & 0x1f;
+    const data = payload.subarray(header, end);
+    nals.push({ type, bytes: data });
     hasPicture ||= type === 1 || type === 5;
     hasKeyPicture ||= type === 5;
     if (type === 7 || type === 8) configuration.push({ type, bytes: payload.subarray(start.index, end) });
     if (type === 7) {
-      if (header + 3 >= end) throw playerError("InvalidConfiguration", "H.264 SPS is truncated.");
+      if (header + 4 >= end) throw playerError("InvalidConfiguration", "H.264 SPS is truncated.");
       codec = `avc1.${[payload[header + 1], payload[header + 2], payload[header + 3]]
         .map((value) => value.toString(16).padStart(2, "0")).join("")}`;
-    }
+    } else if (type === 8 && data.length < 2) throw playerError("InvalidConfiguration", "H.264 PPS is truncated.");
   }
-  return { configuration, codec, hasPicture, hasKeyPicture };
+  return { configuration, codec, hasPicture, hasKeyPicture, nals };
 }
 
 function concatenate(parts, limit) {
@@ -70,6 +75,108 @@ function concatenate(parts, limit) {
     offset += part.byteLength;
   }
   return bytes;
+}
+
+function parameterBits(nal, cursor = 0) {
+  const rbsp = [];
+  let zeros = 0;
+  for (let index = 1; index < nal.length; index += 1) {
+    const byte = nal[index];
+    if (zeros === 2 && byte === 3) {
+      if (index + 1 >= nal.length || nal[index + 1] > 3) {
+        throw playerError("InvalidConfiguration", "H.264 SPS has an invalid emulation-prevention byte.");
+      }
+      zeros = 0;
+      continue;
+    }
+    if (zeros === 2 && byte < 3) {
+      throw playerError("InvalidConfiguration", "H.264 parameter set is missing an emulation-prevention byte.");
+    }
+    rbsp.push(byte);
+    zeros = byte === 0 ? zeros + 1 : 0;
+  }
+  const bit = () => {
+    if (cursor >= rbsp.length * 8) throw playerError("InvalidConfiguration", "H.264 parameter-set fields are truncated.");
+    const value = (rbsp[cursor >> 3] >> (7 - (cursor & 7))) & 1;
+    cursor += 1;
+    return value;
+  };
+  const unsigned = (maximum) => {
+    let leading = 0;
+    while (bit() === 0) {
+      if (++leading > 31) throw playerError("InvalidConfiguration", "H.264 parameter-set field is too large.");
+    }
+    let value = 1;
+    for (let index = 0; index < leading; index += 1) value = value * 2 + bit();
+    value -= 1;
+    if (value > maximum) throw playerError("InvalidConfiguration", "H.264 SPS format field exceeds its permitted range.");
+    return value;
+  };
+  return { bit, unsigned };
+}
+
+function spsFormat(sps) {
+  const { bit, unsigned } = parameterBits(sps, 24);
+  const id = unsigned(31);
+  if (![100, 110, 122, 144].includes(sps[1])) return { id, extension: [] };
+  const chromaFormat = unsigned(3);
+  if (chromaFormat === 3) bit();
+  const lumaDepth = unsigned(6);
+  const chromaDepth = unsigned(6);
+  return { id, extension: [0xfc | chromaFormat, 0xf8 | lumaDepth, 0xf8 | chromaDepth, 0] };
+}
+
+function decoderDescription(configuration) {
+  const { nals } = configurationFrom(configuration);
+  const sequence = nals.filter((nal) => nal.type === 7);
+  const picture = nals.filter((nal) => nal.type === 8);
+  if (!sequence.length || !picture.length || sequence.length > 31 || picture.length > 255) {
+    throw playerError("InvalidConfiguration", "AVC configuration requires bounded complete SPS and PPS parameter sets.");
+  }
+  const first = sequence[0].bytes;
+  if (sequence.some(({ bytes }) => bytes[1] !== first[1] || bytes[2] !== first[2] || bytes[3] !== first[3])) {
+    throw playerError("InvalidConfiguration", "H.264 parameter sets disagree on the decoder profile and level.");
+  }
+  const parameterSet = ({ bytes }) => {
+    if (bytes.length > 0xffff) throw playerError("InvalidConfiguration", "AVC parameter set exceeds its 16-bit length.");
+    return [new Uint8Array([bytes.length >> 8, bytes.length & 0xff]), bytes];
+  };
+  const formats = sequence.map(({ bytes }) => spsFormat(bytes));
+  if (formats.some((value) => value.extension.join() !== formats[0].extension.join())) {
+    throw playerError("InvalidConfiguration", "H.264 parameter sets disagree on chroma format or bit depth.");
+  }
+  for (const { bytes } of picture) {
+    const fields = parameterBits(bytes);
+    fields.unsigned(255);
+    const sequenceId = fields.unsigned(31);
+    if (!formats.some(({ id }) => id === sequenceId)) {
+      throw playerError("InvalidConfiguration", "H.264 PPS refers to a missing SPS.");
+    }
+  }
+  // A description selects AVC: decoder chunks use 4-byte NAL lengths, never Annex B prefixes.
+  return concatenate([
+    new Uint8Array([1, first[1], first[2], first[3], 0xff, 0xe0 | sequence.length]),
+    ...sequence.flatMap(parameterSet),
+    new Uint8Array([picture.length]),
+    ...picture.flatMap(parameterSet),
+    new Uint8Array(formats[0].extension),
+  ], AILOHA_VIDEO_PLAYER_LIMITS.maxConfigurationBytes);
+}
+
+function decoderAccessUnit(nals) {
+  const picture = nals.filter((nal) => nal.type !== 7 && nal.type !== 8);
+  const delimiters = picture.filter((nal) => nal.type === 9);
+  const firstPicture = picture.findIndex((nal) => nal.type >= 1 && nal.type <= 5);
+  if (delimiters.length > 1 || (delimiters.length && picture.indexOf(delimiters[0]) > firstPicture)) {
+    throw playerError("InvalidAccessUnit", "A complete AVC access unit may have only one delimiter before its primary picture.");
+  }
+  // Canonical AVC places AUD first even when the wire config unit prepended SEI.
+  const canonical = delimiters.length ? [delimiters[0], ...picture.filter((nal) => nal.type !== 9)] : picture;
+  return concatenate(canonical.flatMap(({ bytes }) => {
+    const length = new Uint8Array(4);
+    new DataView(length.buffer).setUint32(0, bytes.length, false);
+    return [length, bytes];
+  }), MAX_AILOHA_VIDEO_PAYLOAD_BYTES + AILOHA_VIDEO_PLAYER_LIMITS.maxConfigurationBytes);
 }
 
 export function createAilohaVideoPlayer({
@@ -231,7 +338,10 @@ export function createAilohaVideoPlayer({
     if (!codec || !configurationByType.has(7) || !configurationByType.has(8)) {
       throw playerError("ConfigurationUnavailable", "Ailoha has not supplied the required H.264 SPS and PPS configuration.");
     }
-    const config = { codec, optimizeForLatency: true, hardwareAcceleration: "prefer-hardware" };
+    const config = {
+      codec, description: decoderDescription(configuration),
+      optimizeForLatency: true, hardwareAcceleration: "prefer-hardware",
+    };
     if (typeof Decoder.isConfigSupported === "function") {
       const support = await new Promise((resolve, reject) => {
         const abort = () => { cleanup(); resolve(null); };
@@ -304,10 +414,7 @@ export function createAilohaVideoPlayer({
       return true;
     }
     if (!await configure(scope) || !live(scope)) return true;
-    const payload = frame.isKeyFrame
-      ? concatenate([configuration, frame.payload],
-        MAX_AILOHA_VIDEO_PAYLOAD_BYTES + AILOHA_VIDEO_PLAYER_LIMITS.maxConfigurationBytes)
-      : frame.payload;
+    const payload = decoderAccessUnit(parsed.nals);
     if (decoder.decodeQueueSize >= AILOHA_VIDEO_PLAYER_LIMITS.maxDecodeQueueSize
       || pending.size >= AILOHA_VIDEO_PLAYER_LIMITS.maxPendingPictures
       || pendingBytes + payload.byteLength > AILOHA_VIDEO_PLAYER_LIMITS.maxPendingBytes) {
@@ -383,7 +490,7 @@ export function createAilohaVideoPlayer({
     },
     onError(error) {
       resetDecoder();
-      onError(error);
+      onError(playerErrors.has(error.cause) ? error.cause : error);
     },
   });
 

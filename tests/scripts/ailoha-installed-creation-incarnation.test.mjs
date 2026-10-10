@@ -28,7 +28,7 @@ for (const [kind, product] of [
     const { createRuntimeCanvasHost } = await import(pathToFileURL(join(product, "lib/ailoha/runtime-backend.mjs")).href);
     const { mobileErrorResult } = await import(pathToFileURL(join(product, "lib/ailoha/mobile-backend.mjs")).href);
     for (const changed of variants) {
-      for (const outcome of ["unknown", "pending", "completed"]) {
+      for (const outcome of ["unknown", "http408", "http499", "pending", "completed"]) {
         await t.test(`${Object.keys(changed)[0]} ${outcome} is blocked before replacement IO and never rekeyed`, async () => {
           const scratch = join(process.env.AILOHA_TEST_ARTIFACT_ROOT ?? join(root, ".build"),
             `creation-incarnation-${kind}-${randomUUID()}`);
@@ -89,15 +89,23 @@ for (const [kind, product] of [
                 && type.targetTypeId === catalogIds.type).id,
             };
             scenario.creationAcceptance = outcome === "unknown" ? "unknown" : undefined;
+            scenario.creationSubmissionStatus = outcome === "http408" ? 408 : outcome === "http499" ? 499 : undefined;
             scenario.creationPollFailure = outcome === "pending";
             scenario.creationTargetStatus = outcome === "completed" ? "stopped" : undefined;
             const failed = await create(input);
             assert.ok(failed.status >= 400);
-            if (outcome !== "unknown") assert.equal(failed.body.operationId, "creation/operation-1%2F");
+            if (outcome === "pending" || outcome === "completed") {
+              assert.equal(failed.body.operationId, "creation/operation-1%2F");
+            }
+            if (scenario.creationSubmissionStatus !== undefined) {
+              assert.equal(failed.body.upstreamStatus, scenario.creationSubmissionStatus);
+              assert.equal(scenario.createdTargets.size, 0);
+            }
             assert.equal(scenario.calls.filter((call) => call.path === "/api/v1/targets" && call.method === "POST").length, 1);
             await close();
             scenario.connectionRef = { ...connectionRef, ...changed };
             scenario.creationAcceptance = undefined;
+            scenario.creationSubmissionStatus = undefined;
             scenario.creationPollFailure = false;
             scenario.creationTargetStatus = undefined;
             for (const target of scenario.createdTargets.values()) target.status = "running";
@@ -114,7 +122,7 @@ for (const [kind, product] of [
             await reopen();
             const recoveryBefore = scenario.calls.length;
             const recovered = await create(input);
-            if (outcome === "unknown") {
+            if (outcome === "unknown" || outcome === "http408" || outcome === "http499") {
               assert.equal(recovered.body.code, "creation_outcome_uncertain");
               assert.equal(scenario.calls.length, recoveryBefore);
             } else {
@@ -131,6 +139,7 @@ for (const [kind, product] of [
             else await host.closeCanvas();
             scenario.connectionRef = connectionRef;
             scenario.creationAcceptance = undefined;
+            scenario.creationSubmissionStatus = undefined;
             scenario.creationPollFailure = false;
             scenario.creationTargetStatus = undefined;
             if (previousContext === undefined) delete process.env.AILOHA_TEST_CONTEXT_STATE;
