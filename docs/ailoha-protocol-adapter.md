@@ -168,11 +168,8 @@ idle delays: by default the client's request timeout, configurable from 1 to
 60,000 ms; each poll also honors the client's shorter request timeout. Poll
 intervals are bounded from 1 to 60,000 ms. Timeout, caller abort, and disposal
 stop local reads/timers only; they never cancel the external operation.
-The explicit/default polling interval remains the wait policy. A subsequent
-poll is scheduled only when its full interval leaves time before the absolute
-deadline; otherwise the existing deadline timer ends the wait. Intervals are not
-shortened into deadline-boundary reads, and server `Retry-After` hints cannot
-override or extend the caller's total deadline.
+The explicit/default polling interval remains the wait policy; server
+`Retry-After` hints cannot override or extend the caller's total deadline.
 
 Operation errors retain `operationId`, the latest validated `operation` when
 available, and sanitized primary Problem Details. HTTP errors remain `http_error`
