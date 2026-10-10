@@ -71,6 +71,13 @@ export function runFencedAppCli(args) {
     }));
     return 1;
   }
+  if (["AppActionRejected", "AppActionDeliveryUnknown"].includes(process.env.AILOHA_TEST_FENCED_ERROR_TYPE)) {
+    process.stderr.write(JSON.stringify({
+      error: "The synthetic native action was not confirmed.",
+      type: process.env.AILOHA_TEST_FENCED_ERROR_TYPE, retryable: false,
+    }));
+    return 1;
+  }
   const operationId = `synthetic-fenced-${randomUUID()}`;
   const operation = {
     operationId, kind: args[2] === "uninstall-fenced" ? "uninstallFencedTargetApp" : "updateFencedTargetAppOp",

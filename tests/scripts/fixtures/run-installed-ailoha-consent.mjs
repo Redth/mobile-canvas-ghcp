@@ -536,6 +536,31 @@ try {
     evidence.cases.push("fenced-ios-app-op-unsupported");
     await close();
   }
+  current = await open("fenced-native-errors");
+  {
+    await current.action("select_device", { deviceId: "opaque/target" });
+    const input = { deviceId: "opaque/target", bundleId: "com.example.native", confirm: true };
+    const recordPath = `${process.env.AILOHA_TEST_CONTEXT_STATE}.fenced`;
+    process.env.AILOHA_TEST_FENCED_ERROR_TYPE = "AppActionRejected";
+    try {
+      const rejectedWork = current.action("uninstall_app", input);
+      const rejected = assert.rejects(rejectedWork, { code: "app_action_rejected" });
+      (await promptFor()).answer("approve");
+      await rejected;
+      assert.equal(JSON.parse(readFileSync(recordPath, "utf8")).length, 2);
+      process.env.AILOHA_TEST_FENCED_ERROR_TYPE = "AppActionDeliveryUnknown";
+      const unknownWork = current.action("uninstall_app", input);
+      const unknown = assert.rejects(unknownWork, { code: "app_action_delivery_unknown" });
+      (await promptFor()).answer("approve");
+      await unknown;
+      await assert.rejects(current.action("uninstall_app", input), { code: "app_action_outcome_uncertain" });
+      assert.equal(JSON.parse(readFileSync(recordPath, "utf8")).length, 2);
+      evidence.cases.push("fenced-native-errors");
+    } finally {
+      delete process.env.AILOHA_TEST_FENCED_ERROR_TYPE;
+      await close();
+    }
+  }
   scenario.platform = "android";
   process.env.AILOHA_TEST_APP_PLATFORM = "android";
   current = await open("fenced-android-app-op");
