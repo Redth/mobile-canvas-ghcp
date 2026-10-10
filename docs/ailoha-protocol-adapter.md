@@ -340,6 +340,9 @@ read to confirm the original provider and native deployment before projection
 or mutation dispatch. A supplied but mismatched provider is rejected.
 Mutations retain captured receipts across accepted-operation polling or failed
 settings readback; an unknown submission cannot be replayed as a new mutation.
+The shared typed HTTP rejection policy evicts only proven pre-admission 403
+responses; 408 and responses carrying accepted operation evidence retain the
+original receipt without replay.
 Caller cancellation before feature admission blocks a new submission after app
 lookup or target verification; it does not discard already submitted work.
 The MCP names, request fields, and legacy output envelopes remain unchanged.

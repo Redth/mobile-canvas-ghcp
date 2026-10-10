@@ -289,6 +289,13 @@ function featureFixture(options = {}) {
     async response(path, request) {
       wire.push({ path, method: request.method, body: request.body });
       assert.ok(["GET", "POST", "PATCH", "DELETE", ...(options.allowPut ? ["PUT"] : [])].includes(request.method));
+      if (request.method === "PUT" && ["typed_forbidden", "typed_timeout", "typed_accepted"].includes(options.putFailure)) {
+        const status = options.putFailure === "typed_timeout" ? 408 : 403;
+        throw Object.assign(new Error("private typed PUT diagnostics"), {
+          name: "TargetHostTransportError", code: "HttpError", status,
+          ...(options.putFailure === "typed_accepted" ? { operationId: "accepted-native-operation" } : {}),
+        });
+      }
       if (request.method === "PUT" && options.putFailure === "unknown") {
         throw new Error("private PUT transport diagnostics");
       }
@@ -374,6 +381,11 @@ function featureFixture(options = {}) {
           : "sendTargetPushNotification";
         const operationId = `op-${kind}`;
         if (options.submitFailure === "unknown") throw new Error("private transport diagnostics");
+        if (options.submitFailure === "typed_forbidden") {
+          throw Object.assign(new Error("private typed POST diagnostics"), {
+            name: "TargetHostTransportError", code: "HttpError", status: 403,
+          });
+        }
         if (options.submitFailure === "accepted") {
           return reply({ malformed: true }, 202, `/api/v1/operations/${operationId}`);
         }
@@ -724,6 +736,35 @@ test("setter readback failures and wrong capability never resubmit an uncertain 
     deviceId: "one", level: 20,
   }), { code: "capability_not_supported" });
   assert.equal(disabled.wire.length, 0);
+});
+
+test("official typed feature rejections evict definite 403 but retain 408 and accepted evidence", async (t) => {
+  const input = { deviceId: "one", level: 80 };
+  const options = { allowPut: true, putFailure: "typed_forbidden" };
+  const denied = featureFixture(options);
+  t.after(() => denied.backend.dispose());
+  await assert.rejects(denied.backend.invokeAction("set_battery", input), { code: "http_error", status: 403 });
+  options.putFailure = undefined;
+  assert.equal((await denied.backend.invokeAction("set_battery", input)).batteryLevel, 80);
+  assert.equal(denied.wire.filter(({ method }) => method === "PUT").length, 2);
+
+  for (const putFailure of ["typed_timeout", "typed_accepted"]) {
+    const uncertain = featureFixture({ allowPut: true, putFailure });
+    t.after(() => uncertain.backend.dispose());
+    await assert.rejects(uncertain.backend.invokeAction("set_battery", input));
+    await assert.rejects(uncertain.backend.invokeAction("set_battery", input),
+      { code: "feature_outcome_uncertain" });
+    assert.equal(uncertain.wire.filter(({ method }) => method === "PUT").length, 1);
+  }
+
+  const postOptions = { submitFailure: "typed_forbidden" };
+  const post = featureFixture(postOptions);
+  t.after(() => post.backend.dispose());
+  const sms = { deviceId: "one", from: "+123", body: "hello" };
+  await assert.rejects(post.backend.invokeAction("send_sms", sms), { code: "http_error", status: 403 });
+  postOptions.submitFailure = undefined;
+  assert.equal((await post.backend.invokeAction("send_sms", sms)).operation, "sms-send");
+  assert.equal(post.wire.filter(({ method }) => method === "POST").length, 2);
 });
 
 test("draft native profile and Android biometric require terminal evidence without inventing confirmation", async (t) => {
