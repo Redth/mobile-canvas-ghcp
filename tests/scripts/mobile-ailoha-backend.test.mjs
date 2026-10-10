@@ -287,6 +287,49 @@ test("parent: media staging retains original source identity after capture and u
   assert.deepEqual(JSON.parse(commands[0][commands[0].indexOf("--sources") + 1]), ["/owned/original.png"]);
 });
 
+test("parent: staged completion preserves its accepted destructive operation identity without replay", async (t) => {
+  const source = "/owned/original.bin";
+  const commands = [];
+  let receipt;
+  let polls = 0;
+  const state = canonicalFixture({
+    confirmDestructive: async () => true,
+    client: {
+      async getTargetCapabilities() {
+        return [{ id: "target.files", version: 1, features: ["importStagedTargetFile"] }];
+      },
+      async waitForOperation() {
+        return {
+          ...stagedOperation("importStagedTargetFile", ["stage-artifact-0"], "succeeded"),
+          destructive: ++polls !== 1,
+        };
+      },
+    },
+    async runCli(args) {
+      const action = args[args.indexOf("native-stage") + 1];
+      commands.push(action);
+      if (action === "stage") {
+        receipt = stagedFixture([source], "file", "/Documents/original.bin", state.owner);
+        return JSON.stringify({ status: "ready", receipt });
+      }
+      if (action === "continue") return JSON.stringify({
+        status: "accepted", receipt, attemptId: "0123456789abcdef0123456789abcdef",
+        operation: stagedOperation("importStagedTargetFile", ["stage-artifact-0"]),
+      });
+      return stagedCleanup(receipt);
+    },
+  });
+  t.after(() => state.backend.dispose());
+  const input = { deviceId: "one", input: source, path: "/Documents/original.bin" };
+  await assert.rejects(state.backend.stageArtifact("mobile_device_file_push", input), {
+    code: "artifact_operation_mismatch",
+  });
+  assert.equal(commands.filter((action) => action === "continue").length, 1);
+  const resumed = await state.backend.stageArtifact("mobile_device_file_push", input);
+  assert.equal(resumed.success, true);
+  assert.equal(commands.filter((action) => action === "continue").length, 1);
+});
+
 test("owned zero-byte file push uses exact native receipt, captured approval and GET-only completion", async (t) => {
   const dir = await mkdtemp(join(process.cwd(), "tests/scripts/fixtures/staged-owned-"));
   t.after(() => rm(dir, { recursive: true, force: true }));
