@@ -547,9 +547,11 @@ runtime graph is prepared. Native staged file/media writes and mutation
 receipts are still under review, and no public binary or real-device parity
 is claimed.
 
-At canonical `microsoft/ailoha` source
+For comparison, at the earlier canonical `microsoft/ailoha` source
 `f5eadd9f7a31b6da9322bf74e7549286d8844668`, the root Target Host feature
-API and provider adapter do not yet supply the legacy guarantees:
+API and provider adapter did not yet supply the legacy guarantees below.
+The conditional read subset above now uses newer reviewed draft source; this
+historical table does not describe the currently mapped read routes:
 
 | Legacy surface | Missing native compatibility semantics |
 | --- | --- |
