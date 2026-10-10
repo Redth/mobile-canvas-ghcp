@@ -56,9 +56,9 @@ async (page) => {
   async function fillCreate(platform, name) {
     await page.locator("#create-button").click();
     await page.locator("#create-dialog").waitFor({ state: "visible" });
-    if (platform === "android") await page.locator('#create-platform [role="radio"][aria-label="Android"]').click();
+    if (platform === "android") await page.locator('#create-platform [role="radio"][aria-label="Android Emulators"]').click();
     else {
-      const ios = page.locator('#create-platform [role="radio"][aria-label="iOS"]');
+      const ios = page.locator('#create-platform [role="radio"][aria-label="iOS Simulators"]');
       if (await ios.count()) await ios.click();
     }
     const runtime = catalog.runtimes.find((entry) => entry.platform === platform
@@ -107,7 +107,7 @@ async (page) => {
   await waitFor((value) => createPosts(value).length === 3);
   await page.locator("#create-cancel").click();
   await page.locator("#device-selector").click();
-  await page.getByRole("button", { name: /Synthetic device/ }).click();
+  await page.getByRole("option", { name: /Synthetic device/ }).click();
   await page.waitForFunction(() => document.querySelector("#selector-name")?.textContent === "Synthetic device");
   await control("creation-release");
   await page.waitForFunction(() => document.querySelector("#toast")?.textContent.includes("current selection unchanged"));
