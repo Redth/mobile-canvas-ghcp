@@ -583,17 +583,20 @@ compatibility paths, not a public SDK/runtime pin. The normal Ailoha opt-in
 remains unavailable until an approved public runtime graph is prepared; no
 public binary, real-device parity or default migration is claimed.
 
-The locally implemented guarded delete and mkdir adapters prepare against the
-original named view and native owner, require backend-confirmed mutation paths
-on terminal success, and recover accepted operations by original-operation GET
-without resubmission. Delete requires scoped human approval; a literal
-confirmation flag is not approval. The corresponding GitHub API and VS Code
-API/MCP routes are conditionally mapped in local source only, pending review
-and publication. File pull remains publicly gated: the native typed export
-follow-up must be independently reviewed and published before its
-backend-confirmed `devicePath`, bounded streamed host output, overwrite consent
-and byte-count readback can be projected. The local guarded export parser and
-owned fixtures are not a public runtime claim or a substitute for that gate.
+The locally implemented guarded pull, delete and mkdir adapters prepare
+against the original named view and native owner and recover accepted
+operations by original-operation GET without resubmission. Pull projects only
+the backend-confirmed export `devicePath` associated with the original
+operation's artifact, actual verified byte count (including zero), and native
+resolved absolute host destination. The canonical CLI owns bounded streaming,
+SHA-256 verification, destination overwrite and repeat-readback checks; JS
+never downloads or substitutes a guessed source path. Delete and mkdir require
+backend-confirmed mutation paths on terminal success. Pull and delete require
+scoped human approval; a literal confirmation flag is not approval. The
+corresponding GitHub API and VS Code API/MCP routes are conditionally mapped
+in local source only, pending consumer review and publication against the
+reviewed native source. No public native runtime pin or device execution is
+claimed.
 
 For comparison, at the earlier canonical `microsoft/ailoha` source
 `f5eadd9f7a31b6da9322bf74e7549286d8844668`, the root Target Host feature

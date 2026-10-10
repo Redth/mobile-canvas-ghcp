@@ -524,6 +524,46 @@ test("guarded unknown acceptance retries original recovery without another devic
   assert.deepEqual(actions, ["prepare", "continue", "recover", "recover"]);
 });
 
+test("a replacement host incarnation cannot inherit an accepted guarded mutation", async (t) => {
+  const artifactState = new Map();
+  let receipt;
+  const actions = [];
+  const first = canonicalFixture({
+    artifactState,
+    client: {
+      async getTargetCapabilities() {
+        return [{ id: "target.files", version: 1, features: ["createTargetDirectory"] }];
+      },
+    },
+    async runCli(args) {
+      const action = args[args.indexOf("native-file") + 1];
+      actions.push(action);
+      if (action === "prepare") {
+        receipt = guardedFixture("mkdir", "/Documents/owned", first.owner);
+        return JSON.stringify({ status: "prepared", receipt });
+      }
+      if (action === "recover") throw Object.assign(new Error("Original GET failed"), { code: "owned_get_failed" });
+      const operation = guardedOperation("mkdir", receipt);
+      return JSON.stringify({ status: "accepted", receipt, operationId: operation.operationId, operation });
+    },
+  });
+  t.after(() => first.backend.dispose());
+  const input = { deviceId: "one", path: "/Documents/owned" };
+  await assert.rejects(first.backend.guardedFile("mobile_device_file_mkdir", input),
+    { code: "owned_get_failed" });
+  let replacements = 0;
+  const replacement = canonicalFixture({
+    artifactState,
+    connectionRef: { ...first.owner.connectionRef, pid: 54321 },
+    async runCli() { replacements += 1; throw new Error("replacement read or mutation"); },
+  });
+  t.after(() => replacement.backend.dispose());
+  await assert.rejects(replacement.backend.guardedFile("mobile_device_file_mkdir", input),
+    { code: "runtime_incarnation_changed" });
+  assert.equal(replacements, 0);
+  assert.deepEqual(actions, ["prepare", "continue", "recover"]);
+});
+
 test("local guarded export uses backend-confirmed source path and verified zero/nonzero native readback", async (t) => {
   for (const bytes of [0, 5]) {
     const directory = await mkdtemp(join(process.cwd(), "tests/scripts/fixtures/export-owned-"));
@@ -601,7 +641,7 @@ test("local guarded export uses backend-confirmed source path and verified zero/
   }
 });
 
-test("cancelled guarded input and publicly gated export never launch a device command", async (t) => {
+test("cancelled guarded input and unadvertised export never launch a device command", async (t) => {
   let launched = 0;
   const state = canonicalFixture({
     async runCli() { launched += 1; throw new Error("device command was admitted"); },
@@ -613,7 +653,25 @@ test("cancelled guarded input and publicly gated export never launch a device co
     { deviceId: "one", path: "/Documents/new" }, { signal: abort.signal }), { code: "cancelled" });
   await assert.rejects(state.backend.invokeAction("mobile_device_file_pull",
     { deviceId: "one", path: "/Documents/new", output: "/owned/file" }),
-  { code: "artifact_contract_unavailable" });
+  { code: "capability_not_supported" });
+  assert.equal(launched, 0);
+});
+
+test("file transfer and mutation selectors cannot silently reinterpret a blank app as a device path", async (t) => {
+  let launched = 0;
+  const state = canonicalFixture({
+    async runCli() { launched += 1; throw new Error("invalid app admitted native work"); },
+  });
+  t.after(() => state.backend.dispose());
+  for (const identity of ["mobile_device_file_pull", "mobile_device_file_delete", "mobile_device_file_mkdir"]) {
+    await assert.rejects(state.backend.guardedFile(identity, {
+      deviceId: "one", bundleId: " \t", path: "/Documents/file",
+      ...(identity === "mobile_device_file_pull" ? { output: "/owned/file" } : {}),
+    }), { code: "invalid_request" });
+  }
+  await assert.rejects(state.backend.stageArtifact("mobile_device_file_push", {
+    deviceId: "one", bundleId: " \t", path: "/Documents/file", input: "/owned/fixture",
+  }), { code: "invalid_request" });
   assert.equal(launched, 0);
 });
 

@@ -1,5 +1,6 @@
 import { createHash } from "node:crypto";
-import { appendFileSync, readFileSync } from "node:fs";
+import { appendFileSync, existsSync, mkdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
+import { basename, dirname, isAbsolute, join, sep } from "node:path";
 
 const hash = (value) => createHash("sha256").update(value).digest("hex");
 const ticks = (value) => (BigInt(Date.parse(value)) + 62135596800000n) * 10000n;
@@ -37,6 +38,17 @@ export function runNativeFile(args, contexts) {
     const hostInstanceId = `host-${hash(`${connection.serviceId}\0${connection.pid}\0${ticks(connection.startedAt)}\0${ticks(connection.processStartedAt)}`)}`;
     const kind = value("--kind");
     const path = value("--path");
+    let destinationPath = null;
+    if (kind === "export") {
+      const requested = value("--destination");
+      if (!isAbsolute(requested)) throw new Error("Native export needs an absolute host destination.");
+      destinationPath = existsSync(requested) && statSync(requested).isDirectory()
+        ? join(requested, basename(path.replace(/\/+$/, ""))) : requested;
+      if (!process.env.AILOHA_TEST_GUARDED_ROOT
+        || !destinationPath.startsWith(`${process.env.AILOHA_TEST_GUARDED_ROOT}${sep}`)) {
+        throw new Error("Synthetic export cannot write outside the isolated installed-host fixture.");
+      }
+    }
     receipt = {
       kind, path, targetHostId: "synthetic-host",
       attemptId: hash(`guarded:${context.contextRef}:${events.length}:${path}`).slice(0, 32),
@@ -48,7 +60,7 @@ export function runNativeFile(args, contexts) {
       contextRef: context.contextRef, scopeEpoch: context.scopeEpoch, revision: context.revision,
       ownerProcessId: context.owner.processId, ownerStartedAt: context.owner.processStartedAt,
       appId: null, recursive: args.includes("--recursive"),
-      destinationPath: kind === "export" ? value("--destination") : null,
+      destinationPath,
       overwrite: args.includes("--overwrite"), maximumBytes: Number(value("--maximum-bytes")),
     };
     appendFileSync(journalPath(), `${JSON.stringify({ action, receipt })}\n`);
@@ -70,11 +82,48 @@ export function runNativeFile(args, contexts) {
   }
   const operation = {
     operationId: `guarded-${receipt.attemptId}`, requestId: receipt.attemptId,
-    kind: receipt.kind === "delete" ? "deleteTargetFileWithOptions" : "createTargetDirectory",
+    kind: receipt.kind === "export" ? "exportTargetFile"
+      : receipt.kind === "delete" ? "deleteTargetFileWithOptions" : "createTargetDirectory",
     targetId: receipt.owner.targetId, providerId: receipt.owner.providerId,
     destructive: receipt.kind === "delete", createdAt: "2026-10-10T00:00:00Z",
     status: action === "continue" ? "queued" : "succeeded",
   };
+  if (receipt.kind === "export") {
+    const bytes = receipt.path.endsWith("/empty") ? Buffer.alloc(0) : Buffer.from("abcde");
+    const artifactId = `artifact-${receipt.attemptId}`;
+    operation.artifactIds = [artifactId];
+    if (action === "recover") {
+      operation.result = { artifactId, devicePath: receipt.path.startsWith("app://")
+        ? receipt.path.split("/").slice(3).join("/") : receipt.path };
+      const earlierReads = events.filter((event) => event.action === "recover"
+        && JSON.stringify(event.receipt) === JSON.stringify(receipt));
+      if (earlierReads.length) {
+        const actual = readFileSync(receipt.destinationPath);
+        if (hash(actual) !== hash(bytes)) {
+          appendFileSync(journalPath(), `${JSON.stringify({ action, receipt, operation, contentGet: false })}\n`);
+          return { status: "readbackUnconfirmed", receipt, operationId: operation.operationId,
+            operation, errorCode: "GuardedDestinationChanged" };
+        }
+      } else {
+        mkdirSync(dirname(receipt.destinationPath), { recursive: true });
+        writeFileSync(receipt.destinationPath, bytes);
+      }
+      appendFileSync(journalPath(), `${JSON.stringify({
+        action, receipt, operation, contentGet: earlierReads.length === 0, downloadedBytes: bytes.length,
+      })}\n`);
+      if (!earlierReads.length && process.env.AILOHA_TEST_GUARDED_LOST_REPLY === "1") {
+        throw new Error("Synthetic native output was committed before the reply was lost.");
+      }
+      return { status: "downloaded", receipt, operationId: operation.operationId, operation,
+        downloadedBytes: bytes.length, devicePath: operation.result.devicePath,
+        artifact: {
+          artifactId, kind: "file", status: "ready",
+          contentType: "application/octet-stream", createdAt: operation.createdAt,
+          targetId: receipt.owner.targetId, operationId: operation.operationId,
+          fileName: basename(receipt.path), size: bytes.length, sha256: hash(bytes),
+        } };
+    }
+  }
   appendFileSync(journalPath(), `${JSON.stringify({ action, receipt, operation })}\n`);
   return { status: action === "continue" ? "accepted" : "succeeded",
     receipt, operationId: operation.operationId, operation,
