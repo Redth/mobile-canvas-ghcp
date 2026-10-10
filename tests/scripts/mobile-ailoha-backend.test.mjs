@@ -268,7 +268,7 @@ function featureFixture(options = {}) {
       });
       if (path.includes("/permissions?appId=")) return reply([{
         name: "camera", ...(options.missingPlatformName ? {} : { platformName: "android.permission.CAMERA" }),
-        status: "unknown",
+        status: options.permissionListStatus ?? "unknown",
         appId: "canonical/app-id", "x-ailoha-target-host": context,
       }]);
       if (path.endsWith("/permissions/camera") && request.method === "PUT") return reply({
@@ -315,7 +315,7 @@ function featureFixture(options = {}) {
           calls: options.missingCalls ? undefined : [{ number: "+123", state: "RINGING" }],
           "x-ailoha-target-host": context,
         } : id === "op-simulateTargetBiometricResult" && options.allowNativeFidelity
-          ? { action: "match", confirmed: platform === "android" ? true : null } : undefined;
+          ? { action: "match", confirmed: platform === "android" ? options.biometricConfirmed ?? true : null } : undefined;
         const nativeProfile = id === "op-applyTargetNativeNetworkProfile" ? {
           networkIsIndicatorOnly: options.indicatorMismatch ? platform !== "ios" : platform === "ios",
           "x-ailoha-target-host": context,
@@ -495,6 +495,28 @@ test("draft native omissions fail closed without replaying accepted call or perm
   await assert.rejects(missingName.backend.invokeAction("list_permissions", {
     deviceId: "one", bundleId: "com.example.native",
   }), { code: "capability_not_supported" });
+});
+
+test("native denied permission and unconfirmed Android scan retain explicit false instead of inferred success", async (t) => {
+  const state = featureFixture({
+    platform: "android", allowNativeFidelity: true,
+    biometricConfirmed: false, permissionListStatus: "denied",
+  });
+  t.after(() => state.backend.dispose());
+  const permissions = await state.backend.invokeAction("list_permissions", {
+    deviceId: "one", bundleId: "com.example.native",
+  });
+  assert.equal(permissions.permissions[0].granted, false);
+  const scan = await state.backend.invokeAction("send_biometric", {
+    deviceId: "one", action: "match", fingerId: 7,
+  });
+  assert.equal(scan.confirmed, false);
+  assert.equal(state.wire.filter(({ method }) => method === "POST").length, 1);
+  const ios = featureFixture({ allowNativeFidelity: true });
+  t.after(() => ios.backend.dispose());
+  assert.equal((await ios.backend.invokeAction("send_biometric", {
+    deviceId: "one", action: "match",
+  })).confirmed, false);
 });
 
 test("draft permission lookup and accepted call retain original target and process ownership", async (t) => {
