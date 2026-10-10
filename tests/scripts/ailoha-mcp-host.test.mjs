@@ -17,6 +17,16 @@ test("MCP preserves all61 installed identities and advertises broader opt-in lim
   assert.deepEqual(catalog.map((tool) => tool.name).sort(), baseline.mcpTools);
   assert.equal(catalog.length, 61);
   assert.equal(catalog.find((tool) => tool.name === "mobile_device_app_launch").description.includes("positively unsupported"), true);
+  for (const name of ["hardware_get", "clipboard_get", "settings_get", "settings_set",
+    "location_clear", "sms_send", "biometric", "notification_push"]) {
+    assert.equal(catalog.find((tool) => tool.name === `mobile_device_${name}`)
+      .description.includes("capability evidence is required"), true);
+  }
+  for (const name of ["battery_set", "network_set", "location_set", "clipboard_set",
+    "call", "calls", "permission_list", "permission_set"]) {
+    assert.equal(catalog.find((tool) => tool.name === `mobile_device_${name}`)
+      .description.includes("positively unsupported"), true);
+  }
   assert.equal(catalog.every((tool) => tool.execution.taskSupport === "forbidden"), true);
   assert.equal(catalog.find((tool) => tool.name === "mobile_device_tap").inputSchema.properties.geometryRevision.maximum, 0xffffffff);
   const selected = catalog.find((tool) => tool.name === "mobile_device_get_selected");
@@ -57,6 +67,21 @@ test("actual dispatch uses the bound context with original tool meanings and cap
   }));
   assert.equal(tapped.result.structuredContent.operation, "tap_device");
   assert.equal(calls[0].input.geometryRevision, 13);
+  for (const [tool, action, input] of [
+    ["mobile_device_hardware_get", "get_hardware", { deviceId: "opaque-target" }],
+    ["mobile_device_clipboard_get", "get_clipboard", { deviceId: "opaque-target" }],
+    ["mobile_device_settings_get", "get_settings", { deviceId: "opaque-target" }],
+    ["mobile_device_settings_set", "set_settings", { deviceId: "opaque-target", appearance: "dark" }],
+    ["mobile_device_location_clear", "clear_location", { deviceId: "opaque-target" }],
+    ["mobile_device_sms_send", "send_sms", { deviceId: "opaque-target", from: "+123", body: "text" }],
+    ["mobile_device_biometric", "send_biometric", { deviceId: "opaque-target", action: "nomatch" }],
+    ["mobile_device_notification_push", "push_notification",
+      { deviceId: "opaque-target", bundleId: "com.example.native", payload: '{"aps":{}}' }],
+  ]) {
+    const response = await dispatcher.handle(call(tool, input));
+    assert.equal(response.result.structuredContent.operation, action);
+    assert.deepEqual(calls.at(-1), { name: action, input });
+  }
   const screenshot = await dispatcher.handle(call("mobile_device_screenshot", { deviceId: "opaque-target" }));
   assert.equal(screenshot.result.content[1].type, "image");
   assert.equal(screenshot.result.content[1].mimeType, "image/png");
@@ -72,6 +97,8 @@ test("unsupported/invalid/cross-scope calls are positive failures before any run
     call("mobile_device_app_launch", { deviceId: "target", bundleId: "app" }),
     call("mobile_device_tap", { deviceId: "target", x: "bad", y: 1 }),
     call("mobile_device_select", { deviceId: "target", sessionId: "other" }),
+    call("mobile_device_battery_set", { deviceId: "target", level: 80 }),
+    call("mobile_device_permission_list", { deviceId: "target", bundleId: "com.example.app" }),
   ]) {
     const result = await dispatcher.handle(request);
     assert.equal(result.result.isError, true);

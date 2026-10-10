@@ -6,6 +6,7 @@ import { createCatalogModel } from "./ailoha-catalog-creation.mjs";
 export const scenario = {
   calls: [], leases: new Map(), videos: new Map(), operations: new Map(), status: "running", geometryRevision: 13,
   catalog: null, createdTargets: new Map(), creationGate: null,
+  featureAppearance: "light",
   connectionRef: {
     schema: "ailoha.target-host.connection/v1", serviceId: "synthetic-service", pid: 12345,
     startedAt: "2026-10-09T23:00:00Z", processStartedAt: "2026-10-09T22:59:59Z",
@@ -21,6 +22,14 @@ const captures = [
   { id: "target.surfaces", version: 1, features: ["listTargetSurfaces", "getTargetSurface"] },
   { id: "surface.capture", version: 1, features: ["captureTargetScreenshot", "createLiveVideoSession", "getLiveVideoSession", "stopLiveVideoSession"] },
   { id: "surface.input", version: 1, features: ["tapTargetElement", "performTargetGesture"] },
+  { id: "target.hardware", version: 1, features: ["getTargetHardware"] },
+  { id: "target.clipboard", version: 1, features: ["getTargetClipboard"] },
+  { id: "target.settings", version: 1, features: ["getTargetSettings", "updateTargetSettings"] },
+  { id: "target.location", version: 1, features: ["clearTargetLocation"] },
+  { id: "target.biometrics", version: 1, features: ["simulateTargetBiometricResult"] },
+  { id: "target.apps", version: 1, features: ["listTargetApps"] },
+  { id: "target.push", version: 1, features: ["sendTargetPushNotification"] },
+  { id: "target.telephony", version: 1, features: ["simulateTargetSms"] },
 ];
 const surface = {
   surfaceId, kind: "display", bounds: { x: 0, y: 0, width: 48, height: 32 },
@@ -117,6 +126,9 @@ export async function openTargetHostTransport(leaseId) {
       scenario.calls.push({ path, method: options.method ?? "GET", body });
       if (closed) throw new Error("closed double");
       if (options.signal?.aborted) throw new Error("aborted double");
+      if (!["GET", "POST", "PATCH", "DELETE"].includes(options.method ?? "GET")) {
+        throw new Error("Official-shaped fixture does not support this HTTP verb");
+      }
       if (path === "/api/v1/host/status") return reply({
         hostId: "synthetic-host", profile: "ailoha.target-host/v1", version: "synthetic",
         state: "ready", capabilities: mergedCapabilities([...captures, ...(scenario.catalog?.status.capabilities ?? [])]),
@@ -186,6 +198,49 @@ export async function openTargetHostTransport(leaseId) {
         const id = decodeURIComponent(path.split("/").at(-1));
         if (id.startsWith("creation/") && scenario.creationGate) await scenario.creationGate.promise;
         return reply(scenario.operations.get(id));
+      }
+      const featureRoute = /^\/api\/v1\/targets\/([^/]+)\/(hardware|clipboard|settings\/device|location|biometrics\/results|apps\?includeSystem=true|push\/notifications|telephony\/sms)$/.exec(path);
+      if (featureRoute) {
+        const id = decodeURIComponent(featureRoute[1]);
+        const device = id === targetId ? target() : createdTarget(id);
+        if (!device) throw new Error("Unknown feature target");
+        const provenance = { "x-ailoha-target-host": { targetId: id, providerId: device.providerId } };
+        if (featureRoute[2] === "hardware" && options.method === "GET") return reply({
+          ...provenance, targetId: id, platform: device.nativeIdentity.platform,
+          batteryLevel: 0.8, batteryState: "charging", downloadBitsPerSecond: null,
+          uploadBitsPerSecond: null, latencyMs: null, networkIsIndicatorOnly: false,
+          unreadable: ["location"],
+        });
+        if (featureRoute[2] === "clipboard" && options.method === "GET") return reply({
+          ...provenance, contentType: "text/plain", text: "synthetic clipboard",
+        });
+        if (featureRoute[2] === "apps?includeSystem=true" && options.method === "GET") return reply([{
+          appId: "com.example.synthetic", packageId: "com.example.synthetic",
+          state: "installed", ...provenance,
+        }]);
+        if (featureRoute[2] === "settings/device") {
+          if (options.method === "PATCH") {
+            scenario.featureAppearance = JSON.parse(body).values.appearance;
+          }
+          return reply({ ...provenance, namespace: "device", values: { appearance: scenario.featureAppearance } });
+        }
+        if (featureRoute[2] === "location" && options.method === "DELETE") {
+          return { status: 204, contentType: null, body: null, location: null };
+        }
+        if (["biometrics/results", "push/notifications", "telephony/sms"].includes(featureRoute[2])
+          && options.method === "POST") {
+          const operationId = `feature-scan-${scenario.operations.size}`;
+          const kind = featureRoute[2] === "biometrics/results"
+            ? "simulateTargetBiometricResult" : featureRoute[2] === "telephony/sms"
+              ? "simulateTargetSms" : "sendTargetPushNotification";
+          const operation = {
+            operationId, kind, status: "queued", destructive: false,
+            targetId: id, providerId: device.providerId, createdAt: "2026-10-10T03:00:00Z",
+          };
+          scenario.operations.set(operationId, { ...operation, status: "succeeded", completedAt: "2026-10-10T03:00:01Z" });
+          return reply(operation, 202, `/api/v1/operations/${operationId}`);
+        }
+        throw new Error("Unsupported feature verb");
       }
       const surfaceRoute = /^\/api\/v1\/targets\/([^/]+)\/surfaces\/([^/]+)\/(.+)$/.exec(path);
       const mediaTargetId = surfaceRoute ? decodeURIComponent(surfaceRoute[1]) : targetId;

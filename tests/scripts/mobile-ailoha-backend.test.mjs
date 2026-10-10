@@ -4,6 +4,7 @@ import { productModule } from "../ailoha-test-module.mjs";
 const { AilohaMobileBackend } = await import(productModule("lib/ailoha/mobile-backend.mjs"));
 const { mobileCanvasBackend } = await import(productModule("lib/backend.mjs"));
 const { createAilohaMediaAdapter } = await import(productModule("lib/ailoha/media-adapter.mjs"));
+const { createAilohaDeviceFeatures } = await import(productModule("lib/ailoha/device-features.mjs"));
 const { AilohaProtocolError } = await import(productModule("lib/ailoha/errors.mjs"));
 const { publicSnapshot, MobileAilohaError } = await import(productModule("lib/ailoha/mobile-projection.mjs"));
 const { createAilohaContextStore } = await import(productModule("lib/ailoha/context-adapter.mjs"));
@@ -29,8 +30,9 @@ function fixture(options = {}) {
     targetId: id, providerId: "provider", targetTypeId: "type", status: "running", surfaces: [surface()],
     nativeIdentity: { platform: "ios", nativeId: `real-native-${id}`, isVirtual: true },
   }]));
-  const providers = [{ providerId: "provider", name: "Provider", version: "1", state: "ready", capabilities: [] }];
-  const capabilities = [{ id: "target.lifecycle", version: 1, features: ["startTarget", "stopTarget", "rebootTarget", "resetTarget", "deleteTarget"] }];
+  const featureCapabilities = options.featureCapabilities ?? [];
+  const providers = [{ providerId: "provider", name: "Provider", version: "1", state: "ready", capabilities: featureCapabilities }];
+  const capabilities = [{ id: "target.lifecycle", version: 1, features: ["startTarget", "stopTarget", "rebootTarget", "resetTarget", "deleteTarget"] }, ...featureCapabilities];
   const client = {
     async getHostStatus() { return { hostId: "host", profile: "ailoha.target-host/v1", version: "test", state: "ready", capabilities: [] }; },
     async listProviders() { return providers; },
@@ -114,7 +116,7 @@ function fixture(options = {}) {
   };
   const backend = new AilohaMobileBackend({
     scope: { sessionId: "unique-session", viewId: "unique-view" },
-    client, media, owner, selectionStore,
+    client, media, owner, selectionStore, features: options.features, featureState: options.featureState,
     confirmDestructive: options.confirmDestructive,
     saveScreenshot: options.saveScreenshot,
     operationState: options.operationState,
@@ -179,6 +181,215 @@ test("legacy remains the default and invalid opt-in never becomes a fallback", (
   assert.equal(mobileCanvasBackend("legacy"), "legacy");
   assert.equal(mobileCanvasBackend("ailoha"), "ailoha");
   for (const value of ["", "Ailoha", "unknown"]) assert.throws(() => mobileCanvasBackend(value), /never falls back/);
+});
+
+const deviceFeatures = [
+  { id: "target.hardware", version: 1, features: ["getTargetHardware"] },
+  { id: "target.clipboard", version: 1, features: ["getTargetClipboard"] },
+  { id: "target.settings", version: 1, features: ["getTargetSettings", "updateTargetSettings"] },
+  { id: "target.location", version: 1, features: ["clearTargetLocation"] },
+  { id: "target.telephony", version: 1, features: ["simulateTargetSms"] },
+  { id: "target.biometrics", version: 1, features: ["simulateTargetBiometricResult"] },
+  { id: "target.apps", version: 1, features: ["listTargetApps"] },
+  { id: "target.push", version: 1, features: ["sendTargetPushNotification"] },
+];
+
+function featureFixture(options = {}) {
+  const wire = [];
+  let appearance = "light";
+  let readsFail = false;
+  let smsGate = options.smsGate;
+  let appGate = options.appGate;
+  const context = { targetId: "one", providerId: "provider" };
+  const transport = {
+    async response(path, request) {
+      wire.push({ path, method: request.method, body: request.body });
+      assert.ok(["GET", "POST", "PATCH", "DELETE"].includes(request.method));
+      const reply = (body, status = 200, location) =>
+        ({ status, contentType: status === 204 ? null : "application/json", location, body });
+      if (path.endsWith("/hardware")) return reply({
+        targetId: "one", platform: "ios", batteryLevel: 0.57, batteryState: "charging",
+        downloadBitsPerSecond: null, uploadBitsPerSecond: null, latencyMs: null,
+        networkIsIndicatorOnly: true, unreadable: ["location"],
+        "x-ailoha-target-host": options.wrongOwner ? { ...context, providerId: "other" } : context,
+      });
+      if (path.endsWith("/clipboard")) return reply({
+        contentType: "text/plain", text: "pasteboard", "x-ailoha-target-host": context,
+      });
+      if (path.endsWith("/settings/device") && request.method === "GET") {
+        if (readsFail) throw new Error("private readback diagnostics");
+        return reply({ namespace: "device", values: { appearance }, "x-ailoha-target-host": context });
+      }
+      if (path.endsWith("/settings/device") && request.method === "PATCH") {
+        appearance = JSON.parse(request.body).values.appearance;
+        return reply({ namespace: "device", values: { appearance }, "x-ailoha-target-host": context });
+      }
+      if (path.endsWith("/location") && request.method === "DELETE") return reply(null, 204);
+      if (path.endsWith("/apps?includeSystem=true")) {
+        if (appGate) await appGate.promise;
+        return reply([{
+          appId: "canonical/app-id", packageId: "com.example.native", state: "installed",
+          "x-ailoha-target-host": context,
+        }]);
+      }
+      if (path.endsWith("/telephony/sms") || path.endsWith("/biometrics/results")
+        || path.endsWith("/push/notifications")) {
+        if (smsGate) await smsGate.promise;
+        const kind = path.endsWith("/telephony/sms") ? "simulateTargetSms"
+          : path.endsWith("/biometrics/results") ? "simulateTargetBiometricResult" : "sendTargetPushNotification";
+        const operationId = `op-${kind}`;
+        if (options.submitFailure === "unknown") throw new Error("private transport diagnostics");
+        if (options.submitFailure === "accepted") {
+          return reply({ malformed: true }, 202, `/api/v1/operations/${operationId}`);
+        }
+        return reply({
+          operationId, kind, status: "queued", destructive: false, targetId: "one", providerId: "provider",
+          createdAt: "2026-10-10T03:00:00Z",
+        }, 202, `/api/v1/operations/${operationId}`);
+      }
+      throw new Error("Unexpected canonical feature route");
+    },
+  };
+  const state = fixture({
+    featureCapabilities: options.featureCapabilities ?? deviceFeatures,
+    features: createAilohaDeviceFeatures({ transport }),
+    featureState: options.featureState,
+    connectionRef: options.connectionRef,
+    client: {
+      async waitForOperation(id) {
+        return {
+          operationId: id, kind: id.slice(3), status: "succeeded", destructive: false,
+          targetId: "one", providerId: "provider", createdAt: "2026-10-10T03:00:00Z",
+          completedAt: "2026-10-10T03:00:01Z",
+        };
+      },
+    },
+  });
+  return {
+    ...state, wire,
+    failReads() { readsFail = true; },
+    allowReads() { readsFail = false; },
+    releaseSms() { smsGate?.resolve(); smsGate = null; },
+    releaseApps() { appGate?.resolve(); appGate = null; },
+  };
+}
+
+test("canonical feature transport preserves legacy hardware, clipboard, settings, clear, SMS and iOS scan outputs", async (t) => {
+  const state = featureFixture();
+  t.after(() => state.backend.dispose());
+  assert.deepEqual(await state.backend.invokeAction("get_hardware", { deviceId: "one" }), {
+    schemaVersion: "1.0", deviceId: "one", platform: "ios", batteryLevel: 57, batteryState: "charging",
+    downloadBitsPerSecond: null, uploadBitsPerSecond: null, latencyMs: null,
+    networkIsIndicatorOnly: true, unreadable: ["location"],
+  });
+  assert.deepEqual(await state.backend.invokeAction("get_clipboard", { deviceId: "one" }), {
+    schemaVersion: "1.0", deviceId: "one", platform: "ios", text: "pasteboard",
+  });
+  assert.equal((await state.backend.invokeAction("get_settings", { deviceId: "one" })).appearance, "light");
+  assert.equal((await state.backend.invokeAction("set_settings", { deviceId: "one", appearance: "dark" })).appearance, "dark");
+  assert.deepEqual(await state.backend.invokeAction("clear_location", { deviceId: "one" }), {
+    success: true, operation: "location-clear", deviceId: null,
+  });
+  assert.deepEqual(await state.backend.invokeAction("send_sms", { deviceId: "one", from: "+123", body: "hello" }), {
+    success: true, operation: "sms-send", deviceId: "one",
+  });
+  assert.deepEqual(await state.backend.invokeAction("send_biometric", { deviceId: "one", action: "nomatch" }), {
+    schemaVersion: "1.0", deviceId: "one", platform: "ios", action: "nomatch", confirmed: false,
+  });
+  assert.deepEqual(await state.backend.invokeAction("push_notification", {
+    deviceId: "one", bundleId: "com.example.native", payload: '{"aps":{"alert":"hello"}}',
+  }), { success: true, operation: "notification-push", deviceId: null });
+  assert.deepEqual(state.wire.map(({ path, method }) => [method, path.replace("/api/v1/targets/one/", "")]), [
+    ["GET", "hardware"], ["GET", "clipboard"], ["GET", "settings/device"],
+    ["PATCH", "settings/device"], ["GET", "settings/device"], ["DELETE", "location"],
+    ["POST", "telephony/sms"], ["POST", "biometrics/results"],
+    ["GET", "apps?includeSystem=true"], ["POST", "push/notifications"],
+  ]);
+  assert.deepEqual(JSON.parse(state.wire[6].body), { phoneNumber: "+123", message: "hello" });
+  assert.deepEqual(JSON.parse(state.wire[7].body), { result: "failure" });
+  assert.deepEqual(JSON.parse(state.wire[9].body), {
+    appId: "canonical/app-id", payload: { aps: { alert: "hello" } },
+  });
+});
+
+test("feature capability negatives and lost readback do not become unsupported-verb or duplicate mutations", async (t) => {
+  const disabled = featureFixture({ featureCapabilities: [] });
+  t.after(() => disabled.backend.dispose());
+  await assert.rejects(disabled.backend.deviceFeature("hardware_get", "one"), { code: "capability_not_supported" });
+  assert.equal(disabled.wire.length, 0);
+  const state = featureFixture();
+  t.after(() => state.backend.dispose());
+  state.failReads();
+  await assert.rejects(state.backend.deviceFeature("settings_set", "one", { appearance: "dark" }));
+  state.allowReads();
+  assert.equal((await state.backend.deviceFeature("settings_set", "one", { appearance: "dark" })).appearance, "dark");
+  assert.equal(state.wire.filter(({ method }) => method === "PATCH").length, 1);
+  for (const name of ["battery_set", "network_set", "location_set", "clipboard_set",
+    "permission_list", "permission_set", "calls", "call"]) {
+    await assert.rejects(state.backend.deviceFeature(name, "one"), { code: "capability_not_supported" });
+  }
+  await assert.rejects(state.backend.deviceFeature("notification_push", "one", {
+    bundleId: "com.example.missing", payload: '{"aps":{}}',
+  }), { code: "app_identity_unavailable" });
+  assert.equal(state.wire.filter(({ method }) => method === "POST").length, 0);
+  assert.equal(state.wire.some(({ method }) => method === "PUT"), false);
+});
+
+test("accepted feature work is single-flight and changed-incarnation retry never rebinds", async (t) => {
+  const gate = deferred();
+  const featureState = new Map();
+  const first = featureFixture({ featureState, smsGate: gate });
+  t.after(() => first.backend.dispose());
+  const input = { deviceId: "one", from: "+123", body: "hello" };
+  const pending = first.backend.invokeAction("send_sms", input);
+  const concurrent = first.backend.invokeAction("send_sms", input);
+  first.releaseSms();
+  await Promise.all([pending, concurrent]);
+  assert.equal(first.wire.filter(({ method }) => method === "POST").length, 1);
+  const captured = featureFixture({ featureState, smsGate: deferred() });
+  t.after(() => captured.backend.dispose());
+  const unfinished = captured.backend.invokeAction("send_sms", input);
+  await new Promise((resolve) => setImmediate(resolve));
+  const changed = featureFixture({ featureState, connectionRef: { ...captured.backend.connectionRef, pid: 99999 } });
+  t.after(() => changed.backend.dispose());
+  await assert.rejects(changed.backend.invokeAction("send_sms", input), { code: "runtime_incarnation_changed" });
+  assert.equal(changed.wire.length, 0);
+  captured.releaseSms();
+  await unfinished;
+});
+
+test("feature acceptance Location survives a truncated 202 while unknown submission cannot replay", async (t) => {
+  const input = { deviceId: "one", from: "+123", body: "hello" };
+  const accepted = featureFixture({ submitFailure: "accepted" });
+  t.after(() => accepted.backend.dispose());
+  assert.equal((await accepted.backend.invokeAction("send_sms", input)).operation, "sms-send");
+  assert.equal(accepted.wire.filter(({ method }) => method === "POST").length, 1);
+  const unknown = featureFixture({ submitFailure: "unknown" });
+  t.after(() => unknown.backend.dispose());
+  await assert.rejects(unknown.backend.invokeAction("send_sms", input));
+  await assert.rejects(unknown.backend.invokeAction("send_sms", input), { code: "feature_outcome_uncertain" });
+  assert.equal(unknown.wire.filter(({ method }) => method === "POST").length, 1);
+});
+
+test("feature results require original provider and resolved native package cannot dispatch after view retirement", async (t) => {
+  const wrong = featureFixture({ wrongOwner: true });
+  t.after(() => wrong.backend.dispose());
+  await assert.rejects(wrong.backend.deviceFeature("hardware_get", "one"), { code: "invalid_feature_response" });
+  const appGate = deferred();
+  const state = featureFixture({ appGate });
+  t.after(() => state.backend.dispose());
+  const pending = state.backend.invokeAction("push_notification", {
+    deviceId: "one", bundleId: "com.example.native", payload: '{"aps":{}}',
+  });
+  for (let tries = 0; tries < 100
+    && !state.wire.some(({ path }) => path.endsWith("/apps?includeSystem=true")); tries += 1) {
+    await new Promise((resolve) => setImmediate(resolve));
+  }
+  assert.equal(state.wire.some(({ path }) => path.endsWith("/apps?includeSystem=true")), true);
+  state.retireContext();
+  state.releaseApps();
+  await assert.rejects(pending, { code: "view_closed" });
+  assert.equal(state.wire.filter(({ method }) => method === "POST").length, 0);
 });
 
 test("trusted backend captures the original full lease evidence without serializing it", async (t) => {

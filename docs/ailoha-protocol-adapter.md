@@ -297,6 +297,36 @@ the exact created type/runtime/template/name, running state and authoritative
 virtual-device native identity. Errors retain operation metadata and any
 attributable `createdTargetId`; no client-side destructive cleanup is attempted.
 
+### Device feature compatibility (source-gated)
+
+The shared `device-features.mjs` adapter serves both installed hosts through the
+official Target Host owner transport; it never starts a second provider, runs a
+native shell, or invokes the legacy engine in the opt-in. Every enabled feature
+requires an advertised target **and provider** operation, a running virtual mobile
+target with a native identity, and the captured view's original context and
+connection incarnation. Reads reject malformed or cross-target result context.
+Mutations retain captured receipts across accepted-operation polling or failed
+settings readback; an unknown submission cannot be replayed as a new mutation.
+The MCP names, request fields, and legacy output envelopes remain unchanged.
+
+| Existing identity | Opt-in delivery | Canonical contract / gate |
+| --- | --- | --- |
+| `mobile_device_hardware_get` | Enabled with `target.hardware` | `GET /hardware`; nullable battery/network values and `unreadable` are retained; battery ratio maps to legacy integer percentage. |
+| `mobile_device_clipboard_get` | Enabled with `target.clipboard` | `GET /clipboard` only when the content is `text/plain` with a reported `text`. |
+| `mobile_device_settings_get`, `mobile_device_settings_set` | Enabled with `target.settings` | `GET` and `PATCH /settings/device`; setters require the actual device namespace and read back the resulting settings. |
+| `mobile_device_location_clear` | Enabled with `target.location` | `DELETE /location` requires a completed 204; no simulated fix is fabricated. |
+| `mobile_device_sms_send` | Enabled with `target.telephony` | `POST /telephony/sms`, confirmed by the matching terminal operation. |
+| `mobile_device_notification_push` | Enabled on iOS with `target.push` and `target.apps` | Resolve exactly one installed app by `packageId` through `GET /apps?includeSystem=true`; use the returned `appId` for `POST /push/notifications` and confirm the matching terminal operation. Workspace IDs are never substituted for native package IDs. |
+| `mobile_device_biometric` | iOS match/nomatch only with `target.biometrics` | `POST /biometrics/results` confirms completion, while `confirmed` remains false because iOS cannot confirm the scan listener. Android is gated: canonical completion discards the legacy `confirmed` signal; `fingerId` has no canonical representation. |
+| `mobile_device_battery_set`, `mobile_device_network_set`, `mobile_device_location_set`, `mobile_device_clipboard_set`, `mobile_device_permission_set` | Gated | Canonical setters are PUT; the reviewed official runtime transport currently allows GET/POST/PATCH/DELETE, **not** PUT. No synthetic alternate verb is used. |
+| `mobile_device_permission_list` | Gated | Canonical permission state omits the legacy `platformName` for each permission. The setter also collapses a multi-permission fan-out to one record. |
+| `mobile_device_call`, `mobile_device_calls` | Gated | Canonical telephony has only a single normalized call state/number; it loses the full list and platform-native state, and has no accept/hold/cancel action. |
+
+These source-level gates do not indicate that the current public Ailoha package
+can run the opt-in: no compatible public runtime pin has been approved. Enabling
+PUT-dependent features needs exact official runtime support, not a fixture-only
+verb; native contract fields omitted above require separate upstream changes.
+
 ### Selection, input and cleanup
 
 Opaque host/target/surface IDs are separate from `nativeIdentity.nativeId` and

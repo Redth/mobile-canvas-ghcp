@@ -52,6 +52,56 @@ const mcpCall = (name, input = {}) => ({
   jsonrpc: "2.0", id: randomUUID(), method: "tools/call", params: { name, arguments: input },
 });
 
+async function checkDeviceFeatures(api, selected) {
+  const base = "/api/v1/devices/opaque%2Ftarget";
+  const hardware = await api(`${base}/hardware`);
+  assert.equal(hardware.status, 200);
+  assert.deepEqual(await hardware.json(), {
+    schemaVersion: "1.0", deviceId: "opaque/target", platform: "ios",
+    batteryLevel: 80, batteryState: "charging", downloadBitsPerSecond: null,
+    uploadBitsPerSecond: null, latencyMs: null, networkIsIndicatorOnly: false,
+    unreadable: ["location"],
+  });
+  const clipboard = await api(`${base}/clipboard`);
+  assert.equal((await clipboard.json()).text, "synthetic clipboard");
+  const settings = await api(`${base}/settings`, "POST", { appearance: "dark" });
+  assert.equal(settings.status, 200);
+  assert.equal((await settings.json()).appearance, "dark");
+  assert.equal((await (await api(`${base}/settings`)).json()).appearance, "dark");
+  const clear = await api(`${base}/hardware/location`, "DELETE");
+  assert.deepEqual(await clear.json(), { success: true, operation: "location-clear", deviceId: null });
+  assert.equal((await api(`${base}/hardware/battery`, "POST", { level: 80 })).status, 501);
+  const direct = await createAilohaMcpDispatcher({ version: "synthetic-only", binding: returnedBinding(selected) });
+  try {
+    for (const [name, expected] of [
+      ["mobile_device_hardware_get", "batteryLevel"],
+      ["mobile_device_clipboard_get", "text"],
+      ["mobile_device_settings_get", "appearance"],
+    ]) {
+      const reply = await direct.handle(mcpCall(name, { deviceId: "opaque/target" }));
+      assert.notEqual(reply.result.isError, true);
+      assert.equal(Object.hasOwn(reply.result.structuredContent, expected), true);
+    }
+    const scan = await direct.handle(mcpCall("mobile_device_biometric",
+      { deviceId: "opaque/target", action: "nomatch" }));
+    assert.deepEqual(scan.result.structuredContent, {
+      schemaVersion: "1.0", deviceId: "opaque/target", platform: "ios",
+      action: "nomatch", confirmed: false,
+    });
+    const push = await direct.handle(mcpCall("mobile_device_notification_push", {
+      deviceId: "opaque/target", bundleId: "com.example.synthetic", payload: '{"aps":{"alert":"hi"}}',
+    }));
+    assert.deepEqual(push.result.structuredContent, {
+      success: true, operation: "notification-push", deviceId: null,
+    });
+    assert.equal(scenario.calls.some((call) => call.path?.endsWith("/apps?includeSystem=true")), true);
+    const gated = await direct.handle(mcpCall("mobile_device_battery_set",
+      { deviceId: "opaque/target", level: 80 }));
+    assert.equal(JSON.parse(gated.result.content[0].text).code, "capability_not_supported");
+  } finally { await direct.dispose(); }
+  assert.equal(scenario.calls.some((call) => call.method === "PUT"), false);
+}
+
 async function checkEmptyContext(selection) {
   assert.equal(selection.hasSelection, false);
   assert.equal(Object.hasOwn(selection, "device"), false);
@@ -182,6 +232,10 @@ try {
     });
     assert.equal(bootstrap.status, 204);
     const cookie = bootstrap.headers.get("set-cookie").split(";", 1)[0];
+    await checkDeviceFeatures(async (path, method = "GET", body) => fetch(new URL(path, url), {
+      method, headers: { Cookie: cookie, ...(body === undefined ? {} : { "Content-Type": "application/json" }) },
+      ...(body === undefined ? {} : { body: JSON.stringify(body) }),
+    }), selected);
     const socketUrl = new URL("/ws/video?deviceId=opaque%2Ftarget", url);
     socketUrl.protocol = "ws:";
     const socket = new WebSocket(socketUrl, "ailoha.video.v1", { headers: { Cookie: cookie } });
@@ -272,6 +326,7 @@ try {
     selectedContext = selected.selection;
     assert.equal(selected.deviceId, "opaque/target");
     returnedBinding(selected.selection);
+    await checkDeviceFeatures(api, selected.selection);
     const screenshot = await bridge.getSelectedScreenshot();
     assert.equal(screenshot.bytes[0], 137);
     assert.equal((await api("/api/v1/devices/opaque%2Ftarget/shutdown", "POST")).status, 200);
@@ -317,6 +372,19 @@ try {
     assert.equal(selectedContext.device.nativeId, created.nativeId);
     creationRecords.push(created);
   }
+  const androidMcp = await createAilohaMcpDispatcher({
+    version: "synthetic-only", binding: returnedBinding(selectedContext),
+  });
+  try {
+    const sms = await androidMcp.handle(mcpCall("mobile_device_sms_send", {
+      deviceId: selectedContext.device.id, from: "+123", body: "android text",
+    }));
+    assert.deepEqual(sms.result.structuredContent, {
+      success: true, operation: "sms-send", deviceId: selectedContext.device.id,
+    });
+    assert.equal(scenario.calls.some((call) => call.path?.endsWith("/telephony/sms")
+      && JSON.parse(call.body).phoneNumber === "+123"), true);
+  } finally { await androidMcp.dispose(); }
   const rawMcp = await createAilohaMcpDispatcher({ version: "synthetic-only", binding: returnedBinding(selectedContext) });
   try {
     const created = await rawMcp.handle({
@@ -344,7 +412,8 @@ try {
       creationRecords.push(created.result.structuredContent);
     } finally { await followedMcp.dispose(); }
   }
-  const creationCalls = scenario.calls.slice(callsBeforeCreate).filter((call) => call.method === "POST");
+  const creationCalls = scenario.calls.slice(callsBeforeCreate)
+    .filter((call) => call.method === "POST" && call.path === "/api/v1/targets");
   assert.equal(creationCalls.length, creationRecords.length);
   assert.equal(creationCalls.every((call) => call.path === "/api/v1/targets" && JSON.parse(call.body).start === true), true);
   assert.equal(creationCalls.every((call) => {
@@ -410,6 +479,7 @@ try {
     })),
     createPosts: creationCalls.length, noSeparateBootPost: true,
     connectionRefCapturedInternally: true, connectionRefNotSerialized: true,
+    deviceFeaturesValidated: true,
   }));
 } finally {
   await dispatcher?.dispose();
