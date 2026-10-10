@@ -505,7 +505,11 @@ both-platform and template projections, ambiguous/partial/unavailable catalogs,
 lost 202 bodies, unknown acceptance, timeout, failure/cancellation, stale views,
 pool races and receipt reuse under replacement owners. The installed entrypoint
 fixture also creates both platforms through the actual GitHub registration and
-compiled VS Code bridge, and exercises the compatibility MCP dispatcher.
+compiled VS Code bridge, and exercises the compatibility MCP dispatcher. Its
+controlled app fixture checks native package-ID routing, reported inventory
+metadata, accepted launch completion, terminate, Android app-op reads and
+positive install/uninstall/app-op mutation and iOS app-op gates through both
+installed hosts. It does not install or change a real app.
 All provider mutations are original synthetic fixtures, not native-device acceptance.
 
 `ailoha-creation-browser-server.mjs <prepared-root> <github|vscode> <context-file>`

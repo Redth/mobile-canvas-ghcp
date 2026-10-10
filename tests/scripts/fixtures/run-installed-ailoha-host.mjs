@@ -30,6 +30,7 @@ let selectedContext;
 let readCatalog;
 let createFromHost;
 let selectedFromHost;
+let requestFromHost;
 const logs = [];
 const units = [];
 
@@ -182,6 +183,10 @@ try {
     });
     assert.equal(bootstrap.status, 204);
     const cookie = bootstrap.headers.get("set-cookie").split(";", 1)[0];
+    requestFromHost = (path, method = "GET", body) => fetch(new URL(path, url), {
+      method, headers: { Cookie: cookie, ...(body === undefined ? {} : { "Content-Type": "application/json" }) },
+      ...(body === undefined ? {} : { body: JSON.stringify(body) }),
+    });
     const socketUrl = new URL("/ws/video?deviceId=opaque%2Ftarget", url);
     socketUrl.protocol = "ws:";
     const socket = new WebSocket(socketUrl, "ailoha.video.v1", { headers: { Cookie: cookie } });
@@ -264,6 +269,7 @@ try {
       return response.json();
     };
     selectedFromHost = async () => (await api("/api/v1/selection")).json();
+    requestFromHost = api;
     const catalog = await (await api("/api/v1/catalog")).json();
     assert.equal(catalog.devices[0].nativeId, "native-deployment-not-opaque-target");
     await checkEmptyContext(await (await api("/api/v1/selection")).json());
@@ -352,6 +358,64 @@ try {
     return input.runtimeId === catalogIds.runtime && input.targetTypeId === catalogIds.type
       && [catalogIds.iosProvider, catalogIds.androidProvider].includes(input.providerId);
   }), true);
+  scenario.appResponses = true;
+  const appTargetId = selectedContext.device.id;
+  const appRoot = `/api/v1/devices/${encodeURIComponent(appTargetId)}`;
+  const appList = await requestFromHost(`${appRoot}/apps`);
+  assert.equal(appList.status, 200);
+  assert.deepEqual((await appList.json()).apps, [{
+    bundleId: "com.example.native", name: "Synthetic native app", version: "1", build: "2",
+    kind: "user", running: true, processId: 4321,
+    path: "/apps/example.app", dataContainer: "/containers/example",
+  }]);
+  const launch = await requestFromHost(`${appRoot}/apps/launch`, "POST", { bundleId: "com.example.native" });
+  assert.equal(launch.status, 200, JSON.stringify(await launch.clone().json()));
+  assert.deepEqual(await launch.json(), {
+    schemaVersion: "1.0", success: true, deviceId: appTargetId,
+    bundleId: "com.example.native", operation: "launch", processId: 4321,
+    detail: "com.example.native/.Main",
+  });
+  const appMcp = await createAilohaMcpDispatcher({
+    version: "synthetic-only", binding: returnedBinding(selectedContext),
+  });
+  try {
+    const inventory = await appMcp.handle(mcpCall("mobile_device_app_list", { deviceId: appTargetId }));
+    assert.notEqual(inventory.result.isError, true);
+    assert.equal(inventory.result.structuredContent.apps[0].bundleId, "com.example.native");
+    const ops = await appMcp.handle(mcpCall("mobile_device_app_op_list", {
+      deviceId: appTargetId, bundleId: "com.example.native",
+    }));
+    assert.notEqual(ops.result.isError, true);
+    assert.deepEqual(ops.result.structuredContent.operations,
+      [{ name: "SYSTEM_ALERT_WINDOW", mode: "default", uidScoped: true }]);
+    const terminated = await appMcp.handle(mcpCall("mobile_device_app_terminate", {
+      deviceId: appTargetId, bundleId: "com.example.native",
+    }));
+    assert.notEqual(terminated.result.isError, true);
+    assert.equal(terminated.result.structuredContent.operation, "terminate");
+    const appCallsBeforeGates = scenario.calls.length;
+    for (const [name, input] of [
+      ["mobile_device_app_install", { deviceId: appTargetId, path: "/host/synthetic.apk" }],
+      ["mobile_device_app_uninstall", { deviceId: appTargetId, bundleId: "com.example.native", confirm: true }],
+      ["mobile_device_app_op_set", {
+        deviceId: appTargetId, bundleId: "com.example.native",
+        operation: "SYSTEM_ALERT_WINDOW", mode: "allow",
+      }],
+      ["mobile_device_app_op_list", { deviceId: "opaque/target", bundleId: "com.example.native" }],
+    ]) {
+      const gated = await appMcp.handle(mcpCall(name, input));
+      assert.equal(gated.result.isError, true, name);
+      assert.equal(JSON.parse(gated.result.content[0].text).code, "capability_not_supported", name);
+    }
+    assert.equal(scenario.calls.slice(appCallsBeforeGates).some((call) =>
+      call.method === "POST" || call.method === "PUT" || call.method === "DELETE"), false);
+  } finally { await appMcp.dispose(); }
+  const nativeApps = scenario.calls.filter((call) => call.path?.includes("/apps"));
+  assert.equal(nativeApps.some((call) => call.path?.endsWith("/apps?includeSystem=false")), true);
+  assert.equal(nativeApps.some((call) => call.path?.includes("/synthetic%2Fapp%25id/actions/launch")
+    && call.method === "POST"), true);
+  assert.equal(nativeApps.some((call) => call.path?.includes("/synthetic%2Fapp%25id/actions/terminate")
+    && call.method === "POST"), true);
   await release();
   release = null;
   assert.deepEqual(units, [0, 1, 2, 3, 4, 5]);
@@ -410,6 +474,7 @@ try {
     })),
     createPosts: creationCalls.length, noSeparateBootPost: true,
     connectionRefCapturedInternally: true, connectionRefNotSerialized: true,
+    installedAppRoutes: true, noUnsupportedAppMutations: true,
   }));
 } finally {
   await dispatcher?.dispose();
