@@ -74,6 +74,7 @@ async function checkDeviceFeatures(api, selected) {
   for (const [path, input] of [
     ["hardware/battery", { level: 80 }],
     ["hardware/network", { latencyMs: 100 }],
+    ["hardware/network", { profile: "lte" }],
     ["hardware/location", { latitude: 1, longitude: 2 }],
     ["clipboard", { text: "text" }],
   ]) {

@@ -27,7 +27,7 @@ const captures = [
   { id: "target.settings", version: 1, features: ["getTargetSettings", "updateTargetSettings"] },
   { id: "target.location", version: 1, features: ["clearTargetLocation", "updateTargetLocation"] },
   { id: "target.battery", version: 1, features: ["updateTargetBattery"] },
-  { id: "target.network", version: 1, features: ["updateTargetNetwork"] },
+  { id: "target.network", version: 1, features: ["updateTargetNetwork", "applyTargetNativeNetworkProfile"] },
   { id: "target.biometrics", version: 1, features: ["simulateTargetBiometricResult"] },
   { id: "target.apps", version: 1, features: ["listTargetApps"] },
   { id: "target.push", version: 1, features: ["sendTargetPushNotification"] },

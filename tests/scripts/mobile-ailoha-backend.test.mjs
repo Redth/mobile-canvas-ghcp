@@ -189,7 +189,7 @@ const deviceFeatures = [
   { id: "target.settings", version: 1, features: ["getTargetSettings", "updateTargetSettings"] },
   { id: "target.location", version: 1, features: ["clearTargetLocation", "updateTargetLocation"] },
   { id: "target.battery", version: 1, features: ["updateTargetBattery"] },
-  { id: "target.network", version: 1, features: ["updateTargetNetwork"] },
+  { id: "target.network", version: 1, features: ["updateTargetNetwork", "applyTargetNativeNetworkProfile"] },
   { id: "target.telephony", version: 1, features: ["simulateTargetSms"] },
   { id: "target.biometrics", version: 1, features: ["simulateTargetBiometricResult"] },
   { id: "target.apps", version: 1, features: ["listTargetApps"] },
@@ -332,10 +332,15 @@ test("feature capability negatives and lost readback do not become unsupported-v
   state.allowReads();
   assert.equal((await state.backend.deviceFeature("settings_set", "one", { appearance: "dark" })).appearance, "dark");
   assert.equal(state.wire.filter(({ method }) => method === "PATCH").length, 1);
-  for (const name of ["battery_set", "network_set", "location_set", "clipboard_set",
-    "permission_list", "permission_set", "calls", "call"]) {
-    await assert.rejects(state.backend.deviceFeature(name, "one"), { code: "capability_not_supported" });
+  for (const [name, input] of [
+    ["battery_set", { level: 80 }], ["network_set", { latencyMs: 100 }],
+    ["location_set", { latitude: 1, longitude: 2 }], ["clipboard_set", { text: "hello" }],
+    ...["permission_list", "permission_set", "calls", "call"].map((feature) => [feature, {}]),
+  ]) {
+    await assert.rejects(state.backend.deviceFeature(name, "one", input), { code: "capability_not_supported" });
   }
+  await assert.rejects(state.backend.deviceFeature("network_set", "one", { profile: "lte" }),
+    { code: "capability_not_supported" });
   await assert.rejects(state.backend.deviceFeature("notification_push", "one", {
     bundleId: "com.example.missing", payload: '{"aps":{}}',
   }), { code: "app_identity_unavailable" });

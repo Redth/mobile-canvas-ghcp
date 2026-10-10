@@ -320,7 +320,7 @@ The MCP names, request fields, and legacy output envelopes remain unchanged.
 | --- | --- | --- |
 | `mobile_device_battery_set` | Gated; source-conditional | `target.battery` PUT `/battery` takes legacy integer percentage as ratio, then `target.hardware` readback. Official runtime PUT and installed acceptance are pending. |
 | `mobile_device_hardware_get` | Enabled with `target.hardware` | `GET /hardware`; nullable battery/network values and `unreadable` are retained; battery ratio maps to legacy integer percentage. |
-| `mobile_device_network_set` | Gated; partial source-conditional | `target.network` PUT `/network` could update Android `latencyMs` with `target.hardware` readback after official runtime PUT lands. Legacy `profile` is not expressible for raw platform names, iOS indicator overrides, or combined profile and latency. |
+| `mobile_device_network_set` | Gated; source-conditional | `target.network` PUT `/network` could update Android `latencyMs` with `target.hardware` readback after official runtime PUT lands. A separate *draft, unreviewed* native `applyTargetNativeNetworkProfile` POST would preserve raw/shared profiles on both platforms and combined Android latency, pending reviewed native source and installed-host acceptance. |
 | `mobile_device_location_set` | Gated; source-conditional | `target.location` PUT `/location` verifies a 200 simulated fix but preserves the legacy success-only result; no unreadable location is fabricated. Official runtime PUT and installed acceptance are pending. |
 | `mobile_device_location_clear` | Enabled with `target.location` | `DELETE /location` requires a completed 204; no simulated fix is fabricated. |
 | `mobile_device_clipboard_get` | Enabled with `target.clipboard` | `GET /clipboard` only when the content is `text/plain` with a reported `text`. |
@@ -339,11 +339,11 @@ These source-level gates do not indicate that the current public Ailoha package
 can run the opt-in: no compatible public runtime pin has been approved. Enabling
 PUT-dependent features needs exact official runtime support, not a fixture-only
 verb; native contract fields omitted above require separate upstream changes.
-Network `profile` is also gated after PUT support: the current canonical update
-accepts latency but no profile, while the separate profile endpoint supports
-Android's predefined profiles only, not raw platform names or iOS's indicator
-override. Returning a latency-only result for a profile request would change
-the legacy meaning.
+Network `profile` is also gated independently of PUT until its separate,
+new native-profile contract is reviewed: the current canonical update accepts
+latency but no profile, and the existing generic profile endpoint supports
+Android predefined names only. Returning a latency-only result for a profile
+request would change the legacy meaning.
 
 ### Selection, input and cleanup
 
