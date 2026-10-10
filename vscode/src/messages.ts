@@ -44,6 +44,7 @@ export type WebviewMessage =
       method?: string;
       body?: string;
     }
+  | { type: "api-cancel"; id: string }
   | {
       type: "socket-open";
       id: string;
