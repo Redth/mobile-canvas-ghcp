@@ -3247,6 +3247,61 @@ test("cancelled recording API and action intents cannot start after target prepa
   await state.backend.dispose();
 });
 
+test("cancelled recording status and stop callers never dispatch through action or API", async () => {
+  const calls = [];
+  const state = fixture({
+    recording: {
+      async status() { calls.push("status"); },
+      async stop() { calls.push("stop"); },
+    },
+  });
+  const caller = new AbortController();
+  caller.abort();
+  for (const action of ["get_recording_status", "stop_recording"]) {
+    await assert.rejects(state.backend.invokeAction(action, { deviceId: "one" }, { signal: caller.signal }),
+      { code: "request_cancelled" });
+  }
+  for (const [method, route] of [["GET", "recording"], ["POST", "recording/stop"]]) {
+    const response = await state.backend.request(`/api/v1/devices/one/${route}`, {
+      method, signal: caller.signal,
+    });
+    assert.equal(response.status, 409);
+    assert.equal((await response.json()).code, "request_cancelled");
+  }
+  assert.deepEqual(calls, []);
+  await state.backend.dispose();
+});
+
+test("recording status and stop API callers cannot receive success after cancellation", async () => {
+  for (const [method, route, name] of [
+    ["GET", "recording", "status"], ["POST", "recording/stop", "stop"],
+  ]) {
+    const entered = deferred();
+    const release = deferred();
+    const state = fixture({
+      recording: {
+        async [name](_input, requireCaller) {
+          entered.resolve();
+          await release.promise;
+          requireCaller();
+          return { deviceId: "one", isRecording: false, outputPath: "/host/original.mp4" };
+        },
+      },
+    });
+    const caller = new AbortController();
+    const pending = state.backend.request(`/api/v1/devices/one/${route}`, {
+      method, signal: caller.signal,
+    });
+    await entered.promise;
+    caller.abort();
+    release.resolve();
+    const response = await pending;
+    assert.equal(response.status, 409);
+    assert.equal((await response.json()).code, "request_cancelled");
+    await state.backend.dispose();
+  }
+});
+
 test("unavailable recovery hides recording despite capture support and rejects starts", async () => {
   let starts = 0;
   const state = fixture({
@@ -3364,7 +3419,7 @@ test("view close waits for a concurrent accepted recording start before releasin
   const closing = state.backend.dispose();
   assert.equal(state.calls.some((call) => call[0] === "release-begin"), false);
   accepted.resolve();
-  await starting;
+  await assert.rejects(starting, { code: "request_cancelled" });
   await closing;
   assert.deepEqual(calls, ["status", "start", "status", "stop", "recover"]);
   assert.equal(state.calls.filter((call) => call[0] === "release-end").length, 1);
@@ -4359,6 +4414,70 @@ test("lifecycle awaits authoritative completion and selection cannot retarget ac
   assert.equal(stopped.state, "shutdown");
   assert.equal(stopped.invocation.targetId, "one");
   assert.equal((await state.backend.getSelected()).device.id, "two");
+});
+
+for (const [name, action] of [
+  ["boot_device", "boot"], ["shutdown_device", "shutdown"], ["restart_device", "restart"],
+]) {
+  test(`${name} forwards caller options to the shared lifecycle operation`, async (t) => {
+    const state = fixture();
+    t.after(() => state.backend.dispose());
+    const caller = new AbortController();
+    let received;
+    state.backend.lifecycle = async (operation, deviceId, input, options) => {
+      received = { operation, deviceId, signal: options.signal };
+      return { success: true };
+    };
+    await state.backend.invokeAction(name, { deviceId: "one" }, { signal: caller.signal });
+    assert.deepEqual(received, { operation: action, deviceId: "one", signal: caller.signal });
+  });
+}
+
+test("a cancelled action lifecycle waiter does not poison an accepted live peer", async (t) => {
+  const wait = deferred();
+  const entered = deferred();
+  const state = fixture({ wait });
+  t.after(() => state.backend.dispose());
+  const originalWait = state.client.waitForOperation;
+  state.client.waitForOperation = async (...args) => {
+    entered.resolve();
+    return originalWait(...args);
+  };
+  const caller = new AbortController();
+  const cancelled = state.backend.invokeAction("restart_device", { deviceId: "one" },
+    { signal: caller.signal });
+  await entered.promise;
+  const live = state.backend.invokeAction("restart_device", { deviceId: "one" });
+  caller.abort();
+  wait.resolve();
+  await assert.rejects(cancelled, { code: "cancelled" });
+  assert.equal((await live).id, "one");
+  assert.deepEqual(state.calls.filter(([kind]) => kind === "reboot"), [["reboot", "one"]]);
+});
+
+test("a sole cancelled lifecycle waiter leaves its completed receipt for a later live caller", async (t) => {
+  const wait = deferred();
+  const entered = deferred();
+  const confirmed = deferred();
+  const state = fixture({ wait });
+  t.after(() => state.backend.dispose());
+  const originalWait = state.client.waitForOperation;
+  state.client.waitForOperation = async (...args) => {
+    entered.resolve();
+    const operation = await originalWait(...args);
+    confirmed.resolve();
+    return operation;
+  };
+  const caller = new AbortController();
+  const cancelled = state.backend.invokeAction("restart_device", { deviceId: "one" },
+    { signal: caller.signal });
+  await entered.promise;
+  caller.abort();
+  await assert.rejects(cancelled, { code: "cancelled" });
+  wait.resolve();
+  await confirmed.promise;
+  assert.equal((await state.backend.invokeAction("restart_device", { deviceId: "one" })).id, "one");
+  assert.deepEqual(state.calls.filter(([kind]) => kind === "reboot"), [["reboot", "one"]]);
 });
 
 test("missing real scoped destructive consent is unsupported even when confirm is true", async (t) => {

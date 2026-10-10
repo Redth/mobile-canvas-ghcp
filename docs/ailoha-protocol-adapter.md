@@ -437,6 +437,10 @@ and confirmation are single-flight, with bounded preparation and shared 64-recei
 pools and post-await scope/admission checks. Valid accepted Location survives a lost body;
 timeout, hide/resource replacement, reopened authority and output-confirmation
 failure retain the original receipt. Retry uses GET/poll, not create/start.
+Boot, shutdown and restart actions forward their caller signal to lifecycle;
+after acceptance a cancelled waiter cannot claim late success or evict the
+original receipt, while a live peer or later caller can confirm it without
+another mutation.
 Terminal creation failure/cancellation and unknown acceptance remain retained;
 cancellation is not rollback. Success requires a correlated terminal operation,
 the exact created type/runtime/template/name, running state and authoritative
@@ -766,7 +770,8 @@ the device selector before awaiting backend initialization. It also captures
 the context ref/epoch/revision and host/target/surface. A lost start response
 is not submitted twice. Caller cancellation or view retirement before CLI
 dispatch blocks a new start; cancellation after dispatch does not
-abort or retarget an accepted recording. The view retains that captured owner
+abort or retarget an accepted recording, but the cancelled caller cannot receive
+a late success. The view retains that captured owner
 across runtime lease replacement and selection changes. Stop uses the original
 bound owner even after selecting another target; failed finalization/download
 remains visible and prevents the canvas lease from releasing. The canonical
@@ -780,8 +785,10 @@ Mobile Canvas releases the owner only after a matching durable downloaded
 receipt proves the original context, host incarnation, recording and stop
 identities, nonempty landed artifact and output. A lost or failed stop/download
 response retries only captured recovery, never a second stop. Pending, failed and unknown
-recovery outcomes retain the owner and block lease release or another start;
-a file at the output path alone never proves completion. A pending start may
+recovery outcomes retain the owner and block lease release or another start.
+A cancelled status or stop caller does not claim a completed receipt, while a
+live caller can recover the original stop without submitting another one.
+A file at the output path alone never proves completion. A pending start may
 have no recording ID; only the first authoritatively known ID is pinned.
 The Ailoha MCP status tool advertises `readOnlyHint: false` because status
 after a stop may recover and write that original output; it never deletes a

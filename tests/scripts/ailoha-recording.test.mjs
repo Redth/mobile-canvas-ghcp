@@ -34,6 +34,12 @@ const unresolved = (outcome = "pending", entry = record()) => ({
   ...entry, outcome, code: "RecordingPending",
 });
 
+function deferred() {
+  let resolve;
+  const promise = new Promise((complete) => { resolve = complete; });
+  return { promise, resolve };
+}
+
 function fixture({ run } = {}) {
   const calls = [];
   let active = null;
@@ -149,6 +155,61 @@ test("an untracked same-view host cannot finalize another host's accepted record
   await original.finalize();
   assert.equal(calls.filter((action) => action === "stop").length, 1);
   assert.equal(original.tracked, false);
+});
+
+test("a cancelled recording caller retains its accepted start and stop for live recovery", async () => {
+  const startGate = { entered: deferred(), release: deferred() };
+  const stopGate = { entered: deferred(), release: deferred() };
+  const calls = [];
+  let active = null;
+  const coordinator = new AilohaRecordingCoordinator({
+    output: async () => path,
+    async run(args, options) {
+      const action = args[1];
+      calls.push(action);
+      if (action === "status") return JSON.stringify(active);
+      if (action === "start") {
+        options.beforeDispatch();
+        startGate.entered.resolve();
+        await startGate.release.promise;
+        active = record();
+        return JSON.stringify(active);
+      }
+      if (action === "stop") {
+        stopGate.entered.resolve();
+        await stopGate.release.promise;
+        active = record("completed");
+        return JSON.stringify(active);
+      }
+      if (action === "recover") return JSON.stringify(recovery());
+      throw new Error("Unexpected recording command.");
+    },
+  });
+  const startCaller = new AbortController();
+  const starting = coordinator.start(invocation, {}, () => startCaller.signal.throwIfAborted());
+  await startGate.entered.promise;
+  startCaller.abort();
+  startGate.release.resolve();
+  await assert.rejects(starting, { name: "AbortError" });
+  assert.equal(coordinator.tracked, true);
+  assert.equal((await coordinator.status(invocation)).isRecording, true);
+
+  const earlyStop = new AbortController();
+  earlyStop.abort();
+  await assert.rejects(coordinator.stop("target-one", () => earlyStop.signal.throwIfAborted()),
+    { name: "AbortError" });
+  assert.equal(calls.includes("stop"), false);
+  const stopCaller = new AbortController();
+  const stopping = coordinator.stop("target-one", () => stopCaller.signal.throwIfAborted());
+  await stopGate.entered.promise;
+  stopCaller.abort();
+  stopGate.release.resolve();
+  await assert.rejects(stopping, { name: "AbortError" });
+  assert.equal(coordinator.tracked, true);
+  assert.equal((await coordinator.status(invocation)).isRecording, false);
+  assert.equal(coordinator.tracked, false);
+  assert.equal(calls.filter((action) => action === "start").length, 1);
+  assert.equal(calls.filter((action) => action === "stop").length, 1);
 });
 
 test("lost start acceptance is not replayed; only captured status/stop can recover it", async () => {
