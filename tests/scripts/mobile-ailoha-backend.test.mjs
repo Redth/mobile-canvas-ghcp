@@ -497,3 +497,88 @@ test("receipt admission remains exactly64 after concurrent asynchronous destruct
   await assert.rejects(state.backend.lifecycle("erase", "target-0", { confirm: true }), { code: "timeout" });
   assert.equal(state.calls.filter(([name]) => name === "reset").length, before);
 });
+
+test("an old delayed output cannot evict a newly submitted same-key lifecycle receipt", async (t) => {
+  const delayedRead = deferred();
+  const readStarted = deferred();
+  const secondReceiptWait = deferred();
+  const operationState = new Map();
+  let posts = 0;
+  let oldFinalReads = 0;
+  let returnedWaits = 0;
+  const state = fixture({ operationState });
+  t.after(() => state.backend.dispose());
+  state.client.rebootTarget = async () => ({ operationId: `reboot-${++posts}` });
+  state.client.waitForOperation = async (operationId) => {
+    if (operationId === "reboot-2") await secondReceiptWait.promise;
+    if (operationId === "reboot-1") returnedWaits += 1;
+    return {
+      operationId, kind: "rebootTarget", targetId: "one", providerId: "provider",
+      status: "succeeded", destructive: false, createdAt: "2026-10-09T23:00:00Z",
+    };
+  };
+  const get = state.client.getTarget;
+  state.client.getTarget = async (id, options) => {
+    if (returnedWaits > 0 && posts === 1 && ++oldFinalReads === 2) {
+      readStarted.resolve();
+      await delayedRead.promise;
+    }
+    return get(id, options);
+  };
+  const oldA = state.backend.lifecycle("restart", "one");
+  const oldB = state.backend.lifecycle("restart", "one");
+  await readStarted.promise;
+  await oldA;
+  assert.equal(operationState.size, 0);
+  const newA = state.backend.lifecycle("restart", "one");
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(posts, 2);
+  delayedRead.resolve();
+  await oldB;
+  assert.equal(operationState.size, 1);
+  const newB = state.backend.lifecycle("restart", "one");
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(posts, 2);
+  secondReceiptWait.resolve();
+  await Promise.all([newA, newB]);
+  assert.equal(operationState.size, 0);
+});
+
+test("an old terminal failure cannot remove a new same-key pending lifecycle receipt", async (t) => {
+  const oldFailure = deferred();
+  const newCompletion = deferred();
+  const operationState = new Map();
+  let posts = 0;
+  let oldPolls = 0;
+  const state = fixture({ operationState });
+  t.after(() => state.backend.dispose());
+  state.client.rebootTarget = async () => ({ operationId: `reboot-${++posts}` });
+  state.client.waitForOperation = async (operationId) => {
+    if (operationId === "reboot-1" && ++oldPolls === 2) {
+      await oldFailure.promise;
+      throw new AilohaProtocolError("operation_failed", {
+        operationId, operation: { operationId, status: "failed" },
+      });
+    }
+    if (operationId === "reboot-2") await newCompletion.promise;
+    return {
+      operationId, kind: "rebootTarget", targetId: "one", providerId: "provider",
+      status: "succeeded", destructive: false, createdAt: "2026-10-09T23:00:00Z",
+    };
+  };
+  const oldA = state.backend.lifecycle("restart", "one");
+  const oldB = state.backend.lifecycle("restart", "one");
+  const oldRejected = assert.rejects(oldB, { code: "operation_failed" });
+  await oldA;
+  const newA = state.backend.lifecycle("restart", "one");
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(posts, 2);
+  oldFailure.resolve();
+  await oldRejected;
+  assert.equal(operationState.size, 1);
+  const newB = state.backend.lifecycle("restart", "one");
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(posts, 2);
+  newCompletion.resolve();
+  await Promise.all([newA, newB]);
+});
