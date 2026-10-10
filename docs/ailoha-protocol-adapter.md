@@ -49,6 +49,8 @@ projections are not trusted connection sources.
 The public API is `connectTargetHost`, `TARGET_HOST_PROFILE`, and
 `AilohaProtocolError`; adjacent `index.d.mts` supplies TypeScript declarations.
 Clients expose `getHostStatus`, `listProviders`, `listTargets`,
+`listProviderCatalogs`, `listProviderRuntimes`, `listProviderTargetTypes`,
+`listProviderTemplates`, `getProviderDiagnostics`,
 `getTarget`, `getTargetCapabilities`, `listTargetSurfaces`, `createTarget`,
 `startTarget`, `stopTarget`, `rebootTarget`, `resetTarget`, `deleteTarget`,
 `listOperations`, `getOperation`, `cancelOperation`, `waitForOperation`, and `dispose`.
@@ -131,6 +133,7 @@ missing, inherited, accessor, false, or non-boolean confirmation is rejected
 **before any network IO**. `confirmed` is a consumer-side gate and is never sent
 to the server. It is not evidence of human consent: the product adapters obtain
 the separately captured approval described below before setting it.
+Creation is explicitly requested through the existing non-erasing workflow.
 
 Mutation bodies are strict JSON snapshots, capped at 64 KiB of serialized UTF-8
 and 64 nesting levels. Unknown request fields, non-JSON values, accessors,
@@ -256,6 +259,73 @@ not a guarantee of universal abort-Location retention or grounds for replay.
 JSON failures use failure HTTP statuses at the product boundary even when the
 upstream malformed response was 201/202; accepted is never presented as completed.
 
+### Catalog choices and creation
+
+`mobile-catalog.mjs` reads only genuine advertised `provider.catalog` operations
+at `/api/v1/providers/{providerId}/{catalogs|runtimes|target-types|templates}`.
+Every descriptor is schema-checked and matched to the captured provider/host.
+Raw descriptors, template configuration and dependency guidance remain in
+`providerCatalogs`. Missing advertised responses are failures, not empty arrays;
+missing capabilities produce explicit inventory-only/partial catalogs.
+Native settings guidance is retained but does not enable unwired settings controls.
+
+The legacy `runtimes`/`deviceTypes` fields use reversible, versioned
+`ailoha-catalog-v1:` IDs containing the exact host/provider/catalog tuple.
+They never interpret an Ailoha opaque ID as a UDID, AVD or provider prefix.
+`catalogSelection`, `canonicalRuntimeId`, `targetTypeId` and `templateId` expose
+the canonical identities separately. Native runtime metadata's explicit
+`supportedDeviceTypeIds` preserves the established compatibility semantics:
+an empty advertised list permits matching-platform types; absence is not an
+unconstrained list. Providers without that metadata need exact template pairs.
+Unknown references, duplicates, cross-platform pairs and configuration-dependent
+choices are rejected or positively unsupported. Only available choices with
+host/provider/type create+boot evidence enable the existing dialog.
+
+`create_device`, the panel API and `mobile_device_create` use one canonical
+`POST /api/v1/targets` with `start: true`, preserving public Mobile Canvas
+create-plus-boot semantics without a second start POST. Platform still defaults
+to `ios`; Android requires its explicit platform and returned choices. Raw MCP
+creation does not select, matching the unscoped legacy tool; canvas/panel and
+the VS Code MCP adapter follow the captured view only if its original selection,
+epoch and revision remain current. A late result returns the created native
+record with `selectionApplied: false`, never retargeting the changed view.
+Reopening the same live authority under a replacement resource compares the
+original canonical identity, not a restarted owner's local generation counter.
+
+Creation and lifecycle share `operation-receipts.mjs`. Same-key catalog validation
+and confirmation are single-flight, with bounded preparation and shared 64-receipt
+pools and post-await scope/admission checks. Valid accepted Location survives a lost body;
+timeout, hide/resource replacement, reopened authority and output-confirmation
+failure retain the original receipt. Retry uses GET/poll, not create/start.
+Terminal creation failure/cancellation and unknown acceptance remain retained;
+cancellation is not rollback. Success requires a correlated terminal operation,
+the exact created type/runtime/template/name, running state and authoritative
+virtual-device native identity. Errors retain operation metadata and any
+attributable `createdTargetId`; no client-side destructive cleanup is attempted.
+
+Creation accepts a host-only `signal` option through the direct backend, canvas
+action, compatibility API and named MCP dispatcher. Cancellation received during
+snapshot/catalog preparation prevents admission and removes only that caller.
+Same-key callers share preparation and confirmation; one cancelled caller cannot
+abort another active caller's intent. When the last caller retires, its owned
+submission signal is cancelled, but an accepted or uncertain receipt stays bound
+to the original compatibility tuple. Late accepted Location metadata remains
+recoverable through GET/wait, never a new create/start. Cancelled callers do not
+apply late selection; an active recovery caller still uses the original selection
+snapshot and owner checks.
+
+The loopback host installs each request's disconnect listeners before body or
+backend awaits, checks already-aborted/destroyed state, and removes listeners on
+completion. Normal completion of the request body is not cancellation. Scoped
+host request/action options keep caller cancellation separate from shared backend
+initialization and lease lifetime. VS Code API requests use a bounded per-request
+controller and `api-cancel` IPC message; its Ailoha adapter invokes the same
+trusted, scoped backend API directly rather than waiting for a later loopback
+disconnect. Legacy HTTP behavior is unchanged. HTTP cancellation tests observe
+the captured signal before releasing a held native read: a client-side abort and
+immediate fixture release cannot prove when a remote TCP disconnect was received.
+No event-loop delay, grace period or atomic remote-cancellation claim is added.
+
 ### Selection, input and cleanup
 
 Opaque host/target/surface IDs are separate from `nativeIdentity.nativeId` and
@@ -294,6 +364,18 @@ bridge adapters expose `connectionRef`; `captureInvocation` retains the same
 frozen value in a non-enumerable host-only property after public capture.
 `captureConnectionRef` and `sameConnectionRef` are the shared capture/comparison
 helpers; no derived `hostInstanceId` or private metadata lookup is used.
+
+Creation captures that same frozen connection evidence in its non-enumerable
+private invocation before submission. Every same-key retry checks it before
+catalog/context/operation/target reads, including unknown acceptance, pending
+operations and succeeded operations awaiting output confirmation. A replacement
+service ID, PID, service start or process start cannot join an old owner's
+confirmation promise or resume its receipt. Receipt keys use the original
+compatibility choice tuple, not the replacement owner's discovery/incarnation
+identity, so that mismatch never authorizes new catalog reads or another create
+or boot.
+Original-owner accepted work and cleanup keep their original captured transport;
+public creation results and error envelopes deliberately omit this private tuple.
 
 Spreading, structured-cloning or publicly projecting an invocation deliberately
 drops that internal property. Trusted adapters that extend an invocation must
@@ -425,9 +507,19 @@ view resource replacement; a subsequent action resumes the original operation
 with GET/wait, never a repeated POST. An outcome without a recovery receipt is
 explicitly uncertain and is not replayed. Reset/delete require both the own
 literal confirmation gate and real scoped consent. Hosts without the required
-approval facility report these actions as unsupported. Create/start omission semantics in the underlying client remain
-unchanged, but the existing creation/catalog compatibility workflow is not
-enabled in this slice.
+approval facility report these actions as unsupported. Create/start omission
+semantics in the underlying client remain unchanged; the compatibility creation
+path explicitly requests `start: true`.
+
+Creation and direct lifecycle submission share one definitive-rejection policy:
+HTTP 408, HTTP 499 and a disposed client retain the original uncertain receipt
+and cannot authorize replay. HTTP 403 and known pre-admission protocol failures
+may release only the same receipt identity. A trusted approval budget that
+expires before the client is invoked is also pre-admission; once invoked,
+unknown outcomes remain owned. Creation keys stay bound to the original
+compatibility-choice tuple, with the shared 64-receipt admission bound.
+Preparation observes even immediate submission failures before handing off the
+receipt; an admitted intent counts only once against that bound.
 
 PNG capture validates its 201 artifact/Location, ownership, MIME and applicable
 size/digest before reading content. Video session creation preserves omitted
@@ -446,7 +538,8 @@ tooling is not a ready-shaped empty inventory.
 
 ### Scope and verification
 
-Implemented: inventory/select, advertised start/stop/reboot, PNG screenshot,
+Implemented: authoritative advertised catalogs and compatible create+boot,
+inventory/select, advertised start/stop/reboot, PNG screenshot,
 basic geometry-bound pointer gestures, shared ALHV WebCodecs display, and
 advertised reset/delete when the host can obtain genuine captured approval,
 plus [read-only explicit-root workspace/application evidence](ailoha-workspace-inspection.md)
@@ -479,7 +572,7 @@ App tree/query/status through both prepared host clients against the real
 canonical broker and mock Target Host/Core-MAUI agents, including stale-context
 and missing-Agent failures. This does not qualify a public package, normal
 installation, native platform matrix or real-device acceptance.
-Unsupported: compatibility creation/catalog, reveal/rotation/keyboard/buttons,
+Unsupported: configuration-dependent creation, reveal/rotation/keyboard/buttons,
 reset/delete without scoped consent, app deployment,
 recording and broader settings/diagnostics/file/hardware operations. No claim of
 device or full feature parity is made.
@@ -508,6 +601,25 @@ fixture host and verifies resource counts, pointer input and hide/resume.
 Prepared VS Code shared renderer checks use the same host adapter; the separately
 tested compiled extension/webview bridge is not replaced by a browser-only proxy
 claim.
+
+`mobile-ailoha-creation.test.mjs` asserts exact POST counts across canvas/API/MCP,
+both-platform and template projections, ambiguous/partial/unavailable catalogs,
+lost 202 bodies, unknown acceptance, timeout, failure/cancellation, stale views,
+pool races and receipt reuse under replacement owners. The installed entrypoint
+fixture also creates both platforms through the actual GitHub registration and
+compiled VS Code bridge, and exercises the compatibility MCP dispatcher.
+All provider mutations are original synthetic fixtures, not native-device acceptance.
+
+`ailoha-creation-browser-server.mjs <prepared-root> <github|vscode> <context-file>`
+serves the complete shared renderer with synthetic catalogs/creation. Its VS Code
+mode uses the actual compiled HTML builder, theme/transport scripts and HostBridge;
+only the browser's stand-in for native webview IPC uses a test-only HTTP/SSE shim.
+Run `ailoha-creation-browser-check.mjs` in Playwright with
+`window.ailohaBrowserTestOptions` set to the emitted options. It verifies enabled
+compatible create controls, both-platform payload/native IDs, real WebCodecs
+resize/idle behavior, one video per creation handoff despite its selection echo,
+stale-selection protection and zero leases/videos after hide.
+Stop the helper to restore/remove its explicitly synthetic prepared pin.
 
 ```sh
 npm ci --ignore-scripts --omit=optional
@@ -546,6 +658,11 @@ The interface reference is the Target Host contract at
 `docs/target-host/README.md`, `docs/target-host/openapi.yaml`, and the referenced
 resource definitions. These references were readable only with authorized
 repository access; anonymous public availability has not been established.
+Catalog/create choices and actual start semantics were additionally checked at
+`microsoft/ailoha@58761b338b9344a3b4d912c5c75233bfcf67ac20`: core/mobile/context
+schemas, `TargetHostEndpoints`, `TargetModels`, `TargetCatalogTools`, advertised
+capability folding and the mobile provider's runtime metadata/create dispatch.
+This consumer does not vendor those provider/runtime/scanner implementations.
 
 Focused checks use only Node and fake loopback HTTP servers:
 

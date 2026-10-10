@@ -44,7 +44,7 @@ module.exports = {
     onDidChangeWorkspaceFolders(listener) { folderListeners.add(listener); return new Disposable(() => folderListeners.delete(listener)); },
     onDidGrantWorkspaceTrust(listener) { trustListeners.add(listener); return new Disposable(() => trustListeners.delete(listener)); },
   },
-  Uri: { file: uri, joinPath: (base, path) => uri(`${base.fsPath}/${path}`) },
+  Uri: { file: uri, joinPath: (base, ...paths) => uri(`${base.fsPath}/${paths.join("/")}`) },
   Disposable,
   __test: {
     foldersChanged() { for (const listener of folderListeners) listener(); },

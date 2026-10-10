@@ -16,6 +16,8 @@ const modules = [
   "lib/ailoha/runtime-sdk.mjs", "lib/ailoha/runtime-backend.mjs", "lib/ailoha/github-adapter.mjs",
   "lib/ailoha/destructive-consent.mjs",
   "lib/ailoha/index.mjs", "web/ailoha-canvas-state.js", "web/ailoha-video-player.js", "web/ailoha-video-receiver.js",
+  "lib/ailoha/protocol.mjs", "lib/ailoha/mobile-catalog.mjs", "lib/ailoha/operation-receipts.mjs",
+  "web/create-device-options.js",
   "lib/ailoha/workspace-inspection.mjs", "web/ailoha-workspace-view.js",
   "lib/ailoha/semantic-inspection.mjs", "lib/ailoha/semantic-mcp.mjs", "web/ailoha-semantic-view.js",
   "web/device-canvas.js", "web/device-canvas.css", "web/index.html",
@@ -23,6 +25,8 @@ const modules = [
 const tests = [
   "tests/scripts/mobile-ailoha-projection.test.mjs",
   "tests/scripts/mobile-ailoha-backend.test.mjs",
+  "tests/scripts/mobile-ailoha-creation.test.mjs",
+  "tests/scripts/parent-operation-receipts.test.mjs",
   "tests/scripts/ailoha-owner-transport.test.mjs",
   "tests/scripts/ailoha-media-adapter.test.mjs",
   "tests/scripts/ailoha-canvas-host.test.mjs",

@@ -326,7 +326,7 @@ const loadCatalog = createLatestCatalogLoader(
   (catalog) => {
     state.catalog = catalog;
     if (catalog.backend === "ailoha") {
-      document.querySelector("#create-button").disabled = true;
+      document.querySelector("#create-button").disabled = creatablePlatforms(catalog).length === 0;
     }
     renderDiagnostics();
     renderDeviceList();
@@ -1794,7 +1794,7 @@ async function followSelection(deviceId) {
     // A device the agent created moments ago is not in the catalog this panel loaded.
     await loadCatalog();
     // A later announcement overtook this one while the catalog loaded; that one wins.
-    if (state.followTarget !== deviceId) return;
+    if (state.followTarget !== deviceId || state.selectionTarget === deviceId || state.selected?.id === deviceId) return;
     device = state.catalog?.devices?.find((entry) => entry.id === deviceId);
   }
   if (device) await selectDevice(device, false);
@@ -2434,6 +2434,7 @@ elements.createRuntime.addEventListener("change", populateCreateOptions);
 elements.createForm.addEventListener("submit", (event) => {
   event.preventDefault();
   runBusy(elements.createSubmit, async () => {
+    const selectionVersion = state.selectionVersion;
     const response = await api("/api/v1/devices", {
       method: "POST",
       body: JSON.stringify({
@@ -2443,10 +2444,17 @@ elements.createForm.addEventListener("submit", (event) => {
         deviceTypeId: elements.createDeviceType.value,
       }),
     });
-    state.selected = await response.json();
+    const created = await response.json();
+    const applySelection = !state.detached && selectionVersion === state.selectionVersion && created.selectionApplied !== false;
     elements.createDialog.close();
-    await refresh();
-    showToast(`${state.selected.name} created and started`);
+    if (created.backend === "ailoha") {
+      if (applySelection) await selectDevice(created, false);
+      await loadCatalog();
+    } else {
+      if (applySelection) state.selected = created;
+      await refresh();
+    }
+    showToast(`${created.name} created and started${created.selectionApplied === false ? "; current selection unchanged" : ""}`);
   }).catch(showError);
 });
 

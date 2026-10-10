@@ -21,8 +21,19 @@ gate is supplied it reports unavailable instead of starting legacy. It keeps
 existing extension/view/tool identities and uses a unique live window/view
 context, not a workspace preference hash.
 
-The first slice supports inventory/select, advertised start/stop/reboot, PNG
+The source slice supports authoritative provider/runtime/device-type/template
+catalogs, compatible iOS/Android create+boot, inventory/select, advertised start/stop/reboot, PNG
 screenshots, observed-geometry pointer gestures and ALHV WebCodecs display.
+Create controls require genuine compatibility and capability evidence. Creation
+uses one canonical `start: true` operation, preserves native deployment IDs and
+cannot overwrite a view selection changed while that operation was pending.
+The VS Code MCP adapter follows a newly created device; raw named-context MCP
+creation does not change presentation selection. Both retain the existing `ios` default.
+API cancellation is correlated to its request ID and stops only that caller.
+The Ailoha bridge uses the shared scoped backend API with the captured signal;
+cancelled creation keeps accepted/unknown operation receipts for safe recovery
+without replay or late selection. Other requests and shared initialization remain
+independent; the production legacy HTTP adapter is unchanged.
 `#mobileDevice` and `#mobileScreenshot` use that captured owner;
 `#mobileUiTree`, recording, app deployment/inspection and broader controls report
 unsupported. Static unbound MCP cannot choose the first view; the extension

@@ -14,6 +14,7 @@ const execFileAsync = promisify(execFile);
 if (mobileCanvasBackend() === "ailoha") {
   try {
     await runAilohaMcp(process.argv.slice(2), {
+      selectCreated: true,
       onEvent: (activity) => { void writeViewSignal({ type: "automation", activity }); },
     });
   } catch (error) {

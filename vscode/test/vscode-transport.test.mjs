@@ -35,6 +35,7 @@ test("bridges bootstrap, API responses, and socket frames", async () => {
     MessageEvent,
     CloseEvent: TestCloseEvent,
     Response,
+    DOMException,
     ArrayBuffer,
     Blob,
     Uint8Array,
@@ -77,6 +78,31 @@ test("bridges bootstrap, API responses, and socket frames", async () => {
     body: new TextEncoder().encode('{"devices":[]}').buffer,
   });
   assert.deepEqual((await (await api).json()).devices, []);
+
+  const alreadyCancelled = new AbortController();
+  alreadyCancelled.abort();
+  await assert.rejects(transport.api("/api/v1/devices", { method: "POST", signal: alreadyCancelled.signal }), { name: "AbortError" });
+  assert.equal(outbound.length, 0);
+  const controller = new AbortController();
+  const cancelledApi = transport.api("/api/v1/devices", { method: "POST", signal: controller.signal });
+  const cancelledRequest = outbound.shift();
+  const survivingApi = transport.api("/api/v1/catalog");
+  const survivingRequest = outbound.shift();
+  controller.abort();
+  await assert.rejects(cancelledApi, { name: "AbortError" });
+  assert.deepEqual(JSON.parse(JSON.stringify(outbound.shift())), { type: "api-cancel", id: cancelledRequest.id });
+  receive({ type: "api-result", id: cancelledRequest.id, status: 200, headers: {}, body: null });
+  receive({ type: "api-result", id: survivingRequest.id, status: 200, headers: {}, body: null });
+  assert.equal((await survivingApi).status, 200);
+  assert.equal(outbound.length, 0);
+
+  const completedController = new AbortController();
+  const completedApi = transport.api("/api/v1/catalog", { signal: completedController.signal });
+  const completedRequest = outbound.shift();
+  receive({ type: "api-result", id: completedRequest.id, status: 200, headers: {}, body: null });
+  assert.equal((await completedApi).status, 200);
+  completedController.abort();
+  assert.equal(outbound.length, 0);
 
   const settings = transport.api("/api/v1/host/settings/accessibility", {
     method: "POST",

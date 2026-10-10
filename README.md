@@ -78,15 +78,18 @@ the window. Without that prepared, exact-pinned public graph, opt-in reports
 and refreshed legacy embedded-web native artifacts are still release gates;
 this is not a normal-install-ready release.
 
-The opt-in covers inventory/selection, advertised start/stop/reboot, PNG
+The opt-in covers authoritative provider/runtime/device-type/template catalogs,
+compatible iOS/Android create+boot, inventory/selection, advertised start/stop/reboot, PNG
 screenshots, observed-geometry tap/held-press/swipe/scroll, and complete ALHV
 H.264 access units. Device control and System inspection require no app
-instrumentation; App inspection requires an explicitly selected verified native
-runtime instance in the canonical named context. Workspace application evidence
-cannot bind an agent. Creation/catalog mapping and destructive reset/delete on
-hosts without genuine scoped approval remain unsupported. Recording,
-keyboard/buttons and broader controls remain unsupported. See
-[the Ailoha adapter contract](docs/ailoha-protocol-adapter.md)
+instrumentation; App inspection does. Creation uses exact
+host/provider catalog choices and one canonical operation; accepted retries do
+not submit another create or boot. Destructive reset/delete on hosts without
+genuine scoped human approval remain unsupported. The read-only System lens uses the selected Target Host target;
+the App lens requires an explicitly selected verified native runtime instance
+in the canonical named context. Workspace application evidence cannot bind an
+agent. Recording, keyboard/buttons and broader controls remain unsupported.
+See [the Ailoha adapter contract](docs/ailoha-protocol-adapter.md)
 for ownership, setup, package evidence and remaining gates.
 
 ## Give Copilot hands and eyes

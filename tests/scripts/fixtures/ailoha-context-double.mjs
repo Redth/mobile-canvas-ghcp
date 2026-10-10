@@ -1,7 +1,15 @@
 import { randomUUID } from "node:crypto";
-import { readFileSync, renameSync, writeFileSync } from "node:fs";
+import { readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
 
 const args = process.argv.slice(2);
+if (args[0] === "--fixture-state") {
+  if (!args[1]) throw new Error("Combined inspection requires an explicitly owned synthetic state file.");
+  process.env.AILOHA_TEST_CONTEXT_STATE = args[1];
+  args.splice(0, 2);
+}
+if (args[0] === "mcp-serve") {
+  await import("./semantic-mcp-server.mjs");
+} else {
 if (args[0] === "workspace") {
   const { runWorkspaceDouble } = await import("./ailoha-workspace-double.mjs");
   process.exitCode = await runWorkspaceDouble(args);
@@ -46,9 +54,14 @@ if (args[1] === "detach") {
   context.observed = null;
   context.revision = String(BigInt(context.revision) + 1n);
 }
-if (args[1] !== "get") {
-  const temporary = `${path}.${process.pid}.${randomUUID()}.tmp`;
-  writeFileSync(temporary, JSON.stringify(contexts), { flag: "wx" });
-  renameSync(temporary, path);
+if (["open", "select", "detach"].includes(args[1])) {
+  const pending = `${path}.${process.pid}.${randomUUID()}.pending`;
+  try {
+    writeFileSync(pending, JSON.stringify(contexts), { flag: "wx" });
+    renameSync(pending, path);
+  } finally {
+    rmSync(pending, { force: true });
+  }
 }
 process.stdout.write(JSON.stringify({ ok: true, context, error: null }));
+}
