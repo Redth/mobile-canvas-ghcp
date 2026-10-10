@@ -64,6 +64,7 @@ function verifyExtracted(directory) {
     "extension/dist/lib/ailoha/media-adapter.mjs",
     "extension/dist/lib/ailoha/reveal-adapter.mjs",
     "extension/dist/lib/ailoha/system-ui-adapter.mjs",
+    "extension/dist/lib/ailoha/control-adapter.mjs",
     "extension/dist/lib/ailoha/runtime-sdk.mjs",
     "extension/dist/lib/ailoha/runtime-backend.mjs",
     "extension/dist/lib/ailoha/staged-apps.mjs",

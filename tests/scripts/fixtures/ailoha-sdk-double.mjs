@@ -6,6 +6,8 @@ import { stageEvents } from "./ailoha-native-stage-double.mjs";
 
 export const scenario = {
   calls: [], leases: new Map(), videos: new Map(), operations: new Map(), status: "running", geometryRevision: 13,
+  orientation: "landscape", statusBar: { enabled: false, readable: true },
+  androidStatusBars: new Map(),
   catalog: null, createdTargets: new Map(), creationGate: null,
   featureAppearance: "light",
   sourceFeatureContracts: false, featureStates: new Map(),
@@ -13,6 +15,7 @@ export const scenario = {
   appResponses: process.env.AILOHA_TEST_APP_RESPONSES === "1",
   fencedAppResponses: process.env.AILOHA_TEST_FENCED_APP_RESPONSES === "1",
   platform: process.env.AILOHA_TEST_APP_PLATFORM ?? "ios",
+  focusedText: false,
   targets: new Map(), providerId: "synthetic-provider", nativeId: "native-deployment-not-opaque-target",
   connectionRef: {
     schema: "ailoha.target-host.connection/v1", serviceId: "synthetic-service", pid: 12345,
@@ -35,7 +38,9 @@ const captures = [
   { id: "target.lifecycle", version: 1, features: ["listTargets", "getTarget", "getTargetCapabilities", "startTarget", "stopTarget", "rebootTarget", "resetTarget", "deleteTarget"] },
   { id: "target.surfaces", version: 1, features: ["listTargetSurfaces", "getTargetSurface"] },
   { id: "surface.capture", version: 1, features: ["captureTargetScreenshot", "createLiveVideoSession", "getLiveVideoSession", "stopLiveVideoSession"] },
-  { id: "surface.input", version: 1, features: ["tapTargetElement", "performTargetGesture"] },
+  { id: "surface.input", version: 1, features: ["tapTargetElement", "performTargetGesture", "pressTargetKey", "fillTargetElement"] },
+  { id: "surface.ui", version: 1, features: ["getTargetUiTree"] },
+  { id: "target.presentation", version: 1, features: ["updateTargetPresentation"] },
   { id: "target.hardware", version: 1, features: ["getTargetHardware"] },
   { id: "target.clipboard", version: 1, features: ["getTargetClipboard", "updateTargetClipboard"] },
   { id: "target.settings", version: 1, features: ["getTargetSettings", "updateTargetSettings"] },
@@ -55,7 +60,8 @@ const appCapabilities = [
 const surface = {
   surfaceId, kind: "display", bounds: { x: 0, y: 0, width: 48, height: 32 },
   geometryRevision: initialGeometryRevision, pixelDensity: 2, orientation: "landscape",
-  capabilities: [{ id: "surface.input", version: 1, features: ["tap.point", "long-press.point", "gesture", "swipe.point"] }],
+  capabilities: [{ id: "surface.input", version: 1,
+    features: ["tap.point", "long-press.point", "gesture", "swipe.point", "key", "button", "text", "rotate"] }],
 };
 export function enableCatalogCreation() {
   scenario.catalog = createCatalogModel();
@@ -73,13 +79,17 @@ function mergedCapabilities(values) {
   }
   return [...groups.values()];
 }
+function targetCapabilities() {
+  return captures.map((capability) => capability.id === "surface.input" && scenario.focusedText
+    ? { ...capability, features: [...capability.features, "typeFocusedText"] } : capability);
+}
 function providerRecords() {
   const fencedFeatures = scenario.fencedAppResponses ? [
     { id: "target.apps", version: 1, features: ["captureFencedTargetAppAction", "uninstallFencedTargetApp"] },
     { id: "target.app-ops", version: 1, features: ["updateFencedTargetAppOp"] },
   ] : [];
   const features = mergedCapabilities([
-    ...captures,
+    ...targetCapabilities(),
     ...(scenario.sourceFeatureContracts ? [
       { id: "target.permissions", version: 1, features: ["listTargetPermissions", "updateTargetPermission"] },
       { id: "target.telephony", version: 1, features: ["getTargetTelephony", "controlTargetCall"] },
@@ -111,7 +121,11 @@ function providerRecords() {
 function target() {
   return {
     targetId, providerId: scenario.providerId, targetTypeId: "opaque/type", name: "Synthetic device",
-    status: scenario.status, surfaces: scenario.status === "running" ? [{ ...surface, geometryRevision: scenario.geometryRevision }] : [],
+    status: scenario.status, surfaces: scenario.status === "running" ? [{
+      ...surface, bounds: scenario.orientation === "portrait"
+        ? { x: 0, y: 0, width: 32, height: 48 } : surface.bounds,
+      orientation: scenario.orientation, geometryRevision: scenario.geometryRevision,
+    }] : [],
     nativeIdentity: { platform: scenario.platform, nativeId: scenario.nativeId, isVirtual: true },
   };
 }
@@ -208,7 +222,8 @@ export async function openTargetHostTransport(leaseId) {
       if (path === "/api/v1/host/status") return reply({
         hostId: "synthetic-host", profile: "ailoha.target-host/v1", version: "synthetic",
         state: "ready", capabilities: mergedCapabilities([
-          ...captures, ...(scenario.appResponses ? appCapabilities : []), ...(scenario.catalog?.status.capabilities ?? []),
+          ...targetCapabilities(), ...(scenario.appResponses ? appCapabilities : []),
+          ...(scenario.catalog?.status.capabilities ?? []),
         ]),
       });
       if (path === "/api/v1/providers") {
@@ -528,6 +543,45 @@ export async function openTargetHostTransport(leaseId) {
           throw new Error("Unsupported source feature verb");
         }
       }
+      const presentationRoute = /^\/api\/v1\/targets\/([^/]+)\/presentation$/.exec(path);
+      if (presentationRoute) {
+        const selectedTargetId = decodeURIComponent(presentationRoute[1]);
+        if (selectedTargetId !== targetId && !scenario.createdTargets.has(selectedTargetId)) throw new Error("Unknown synthetic presentation target");
+        if (options.method === "PATCH") {
+          scenario.orientation = JSON.parse(body).orientation;
+          scenario.geometryRevision += 1;
+        }
+        return reply({
+          width: scenario.orientation === "portrait" ? 32 : 48,
+          height: scenario.orientation === "portrait" ? 48 : 32,
+          density: 2, orientation: scenario.orientation,
+          "x-ailoha-target-host": { targetId: selectedTargetId },
+        });
+      }
+      const settingsRoute = /^\/api\/v1\/targets\/([^/]+)\/settings\/status-bar$/.exec(path);
+      if (settingsRoute) {
+        const selectedTargetId = decodeURIComponent(settingsRoute[1]);
+        if (selectedTargetId !== targetId && !scenario.createdTargets.has(selectedTargetId)) throw new Error("Unknown synthetic settings target");
+        const selectedDevice = selectedTargetId === targetId ? target() : createdTarget(selectedTargetId);
+        if (selectedDevice.nativeIdentity.platform === "android") {
+          if (options.method === "PATCH") {
+            const { enabled } = JSON.parse(body).values;
+            if (enabled !== undefined) scenario.androidStatusBars.set(selectedTargetId, enabled);
+          }
+          return reply({
+            namespace: "status-bar",
+            values: { enabled: scenario.androidStatusBars.get(selectedTargetId) ?? false, readable: false },
+            "x-ailoha-target-host": { targetId: selectedTargetId },
+          });
+        }
+        if (options.method === "PATCH") Object.assign(scenario.statusBar, JSON.parse(body).values);
+        return reply({ namespace: "status-bar", values: {
+          ...scenario.statusBar,
+          ...Object.fromEntries(Object.entries(scenario.statusBar)
+            .filter(([key]) => !["enabled", "readable"].includes(key))
+            .map(([key, value]) => [key, String(value)])),
+        }, "x-ailoha-target-host": { targetId: selectedTargetId } });
+      }
       const surfaceRoute = /^\/api\/v1\/targets\/([^/]+)\/surfaces\/([^/]+)\/(.+)$/.exec(path);
       const mediaTargetId = surfaceRoute ? decodeURIComponent(surfaceRoute[1]) : targetId;
       const mediaSurfaceId = surfaceRoute ? decodeURIComponent(surfaceRoute[2]) : surfaceId;
@@ -538,9 +592,24 @@ export async function openTargetHostTransport(leaseId) {
           targetId: mediaTargetId, surfaceId: mediaSurfaceId, createdAt: "2026-10-09T23:00:00Z", size: image.length,
         }, 201, "/api/v1/artifacts/synthetic%2Fscreenshot");
       }
-      if (path.includes("/input/actions/")) return reply({
-        success: true, "x-ailoha-target-host": { targetId: mediaTargetId, surfaceId: mediaSurfaceId, geometryRevision: scenario.geometryRevision },
-      });
+      if (path.endsWith("/ui/tree?depth=64")) return reply([{
+        id: "focused-field", type: "TextField", fullType: "TextField", framework: "native", role: "field",
+        state: { displayed: true, enabled: true, selected: false, focused: true, opacity: 1 },
+        bounds: { x: 1, y: 1, width: 10, height: 5 }, children: [],
+        "x-ailoha-target-host": {
+          targetId: mediaTargetId, surfaceId: mediaSurfaceId, geometryRevision: scenario.geometryRevision,
+        },
+      }]);
+      if (path.includes("/input/actions/")) {
+        if (path.endsWith("/type-focused-text") && !scenario.focusedText) throw new Error("Focused text not advertised by synthetic host");
+        return reply({
+          success: true, "x-ailoha-target-host": {
+            targetId: mediaTargetId,
+            providerId: mediaTargetId === targetId ? scenario.providerId : scenario.createdTargets.get(mediaTargetId)?.providerId,
+            surfaceId: mediaSurfaceId, geometryRevision: scenario.geometryRevision,
+          },
+        });
+      }
       const collection = `/api/v1/targets/${encodeURIComponent(mediaTargetId)}/surfaces/${encodeURIComponent(mediaSurfaceId)}/video/sessions`;
       if (path === collection && options.method === "POST") {
         scenario.geometryRevision = initialGeometryRevision;

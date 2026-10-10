@@ -963,7 +963,54 @@ positive install/uninstall/app-op mutation and iOS app-op gates through both
 installed hosts. It does not install or change a real app.
 All provider mutations are original synthetic fixtures, not native-device acceptance.
 
-`ailoha-creation-browser-server.mjs <prepared-root> <github|vscode> <context-file>`
+Agentless controls in the opt-in use the captured Target Host selection and
+per-target/per-surface capability evidence, without an app agent: `pressTargetKey`
+for numeric USB HID keys and physical button names, and
+`updateTargetPresentation` for portrait/landscape rotation. Legacy button
+aliases and case variants remain accepted (including iOS `side` and
+Android `recents`, `app-switch`, `volumeup`, and `volumedown`); only recognized
+names are sent as normalized canonical JSON.
+The legacy `/presentation` API and MCP identity mean **status-bar overrides**, not
+Target Host display presentation: they map to `getTargetSettings` and
+`updateTargetSettings` in the `status-bar` namespace, preserving
+`enabled`/`readable`/`overrides` semantics. Missing focus, capability, or
+directional rotation support is explicit unsupported/error, never a fallback.
+The Target Host only guarantees generic landscape and portrait; requests for
+landscape-right or portrait-upside-down are not silently approximated.
+Changes to orientation invalidate observed logical geometry; new pointer input
+needs a fresh display observation. The existing ALHV resource stays owned
+through rotation, while view hide/resume releases only its own resource.
+These are synchronous canonical actions; uncertain delivery is not retried.
+Both hosts share the control adapter and renderer; neither gains native
+commands or credentials in the webview.
+
+The source fixtures accept canonical `PATCH` for rotation and status-bar
+writes. The currently examined upstream runtime transport only accepts
+GET/POST/DELETE, so these fixture results are not proof of installed SDK
+write readiness. A reviewed, publicly pinned SDK transport with `PATCH`
+support is required before either write can be accepted as installed parity;
+the adapter must not bypass that transport or substitute a different method.
+
+The pinned Target Host `fill` implementation taps the field center before
+typing, even when it was already focused. Unlike legacy `TypeTextAsync`,
+successive character events or a paste can therefore move an existing caret.
+The opt-in advertises `text: true` only when the target's `surface.input`
+advertises `typeFocusedText` **and** the selected surface's `surface.input`
+advertises `text`. Otherwise plain typing and paste return unsupported with
+no input POST; the shared adapter retains `fillElement` only for an explicitly
+named, observed editable element. The conditional source mapping follows
+reviewed [microsoft/ailoha#73](https://github.com/microsoft/ailoha/pull/73): synchronous `POST
+/api/v1/targets/{targetId}/surfaces/{surfaceId}/input/actions/type-focused-text`
+with literal JSON `{ "text": "..." }`, no tap/refocus/clear, 1..4096 strict
+UTF-8 bytes, valid Unicode and no NUL. The owner receipt must match the
+captured target/provider/surface/geometry. Accepted failures are not retried
+or sent through Fill/key/legacy. The first public SDK preview cannot advertise
+this operation; actual activation remains gated on a reviewed compatible
+public SDK/native Target Host and device verification. The native Android
+backend explicitly rejects text it cannot transmit literally (non-printable,
+non-ASCII, `%s`); Mobile does not approximate it.
+
+`ailoha-creation-browser-server.mjs <prepared-root> <github|vscode> <context-file> [--focused-text]`
 serves the complete shared renderer with synthetic catalogs/creation. Its VS Code
 mode uses the actual compiled HTML builder, theme/transport scripts and HostBridge;
 only the browser's stand-in for native webview IPC uses a test-only HTTP/SSE shim.
@@ -972,6 +1019,9 @@ Run `ailoha-creation-browser-check.mjs` in Playwright with
 compatible create controls, both-platform payload/native IDs, real WebCodecs
 resize/idle behavior, one video per creation handoff despite its selection echo,
 stale-selection protection and zero leases/videos after hide.
+The optional synthetic focused-text flag exercises positive per-character and
+paste events; without it the old Fill-only target remains text-unsupported.
+Neither mode proves a matching native/public SDK boundary.
 Stop the helper to restore/remove its explicitly synthetic prepared pin.
 
 ```sh

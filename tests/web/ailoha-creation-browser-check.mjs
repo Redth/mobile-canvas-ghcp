@@ -24,12 +24,13 @@ async (page) => {
     }
     throw new Error("The real renderer did not reach its expected owned creation state");
   };
-  const api = async (path) => page.evaluate(async (path) => {
+  const api = async (path, init = {}) => page.evaluate(async ({ path, init }) => {
     const response = window.mobileCanvasTransport
-      ? await window.mobileCanvasTransport.api(path) : await fetch(path, { credentials: "include" });
+      ? await window.mobileCanvasTransport.api(path, init)
+      : await fetch(path, { credentials: "include", ...init });
     if (!response.ok) throw new Error(`Owned renderer API failed: ${response.status}`);
     return response.json();
-  }, path);
+  }, { path, init });
   const videoPosts = (value) => value.calls.filter((call) => call.method === "POST" && call.path?.endsWith("/video/sessions")).length;
   const createPosts = (value) => value.calls.filter((call) => call.method === "POST" && call.path === "/api/v1/targets");
   await evidence();
@@ -66,6 +67,45 @@ async (page) => {
   verify(gesture.geometryRevision === 14 && gesture.actions[0].x === 12 && gesture.actions.at(-1).x === 36
     && gesture.actions.every((action) => action.y === undefined || action.y === 16),
   "The renderer lost captured logical swipe geometry");
+  await page.locator('[data-action="home"]').click();
+  await page.locator("#device-screen").focus();
+  await page.keyboard.press("Enter");
+  await page.keyboard.type("A");
+  if (options.focusedText) await waitFor((entry) =>
+    entry.calls.filter((item) => item.path?.endsWith("/input/actions/type-focused-text")).length === 1);
+  await page.evaluate(() => {
+    const event = new Event("paste", { bubbles: true, cancelable: true });
+    Object.defineProperty(event, "clipboardData", { value: { getData: () => "literal \u2603" } });
+    document.querySelector("#device-screen").dispatchEvent(event);
+  });
+  value = await waitFor((entry) => entry.calls.filter((item) => item.path?.endsWith("/input/actions/key")).length >= 2
+    && (!options.focusedText || entry.calls.filter((item) => item.path?.endsWith("/input/actions/type-focused-text")).length === 2));
+  verify(value.calls.some((item) => item.path?.endsWith("/input/actions/key")
+    && JSON.parse(item.body).key === "home")
+    && value.calls.some((item) => item.path?.endsWith("/input/actions/key")
+      && JSON.parse(item.body).key === "40")
+    && !value.calls.some((item) => item.path?.endsWith("/input/actions/fill")),
+  "The prepared renderer did not preserve button/key transport or avoid explicit Fill.");
+  const typed = value.calls.filter((item) => item.path?.endsWith("/input/actions/type-focused-text"));
+  if (options.focusedText) verify(typed.length === 2
+    && typed.every((item) => item.method === "POST")
+    && JSON.parse(typed[0].body).text === "A"
+    && JSON.parse(typed[1].body).text === "literal \u2603",
+  "The prepared renderer did not send literal per-character and paste input through focused text.");
+  else verify(typed.length === 0
+    && (await page.locator("#toast").textContent())?.includes("cursor-preserving text input"),
+  "The old-capability renderer did not reject plain text without HTTP mutation.");
+  await page.locator('[data-action="rotate"]').click();
+  value = await waitFor((entry) => entry.calls.some((item) =>
+    item.path?.endsWith("/presentation") && item.method === "PATCH"));
+  verify(videoPosts(value) === 1, "The shared renderer recreated the live video on rotation.");
+  const status = await api("/api/v1/devices/opaque%2Ftarget/presentation", {
+    method: "POST", body: JSON.stringify({ enabled: true, time: "09:41" }),
+  });
+  verify(status.enabled && status.overrides.some((item) => item.name === "time" && item.value === "09:41"),
+    "Status-bar write did not preserve the compatibility result.");
+  verify((await api("/api/v1/devices/opaque%2Ftarget/presentation")).readable,
+    "Status-bar read lost its readable flag.");
   const combined = options.combined === true;
   const workspace = page.locator("#workspace-inspection");
   const semantic = page.locator("#semantic-inspection");

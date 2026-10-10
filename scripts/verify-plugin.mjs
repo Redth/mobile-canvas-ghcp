@@ -51,6 +51,7 @@ for (const relative of [
   "lib/ailoha/media-adapter.mjs",
   "lib/ailoha/reveal-adapter.mjs",
   "lib/ailoha/system-ui-adapter.mjs",
+  "lib/ailoha/control-adapter.mjs",
   "lib/ailoha/runtime-sdk.mjs",
   "lib/ailoha/runtime-backend.mjs",
   "lib/ailoha/staged-apps.mjs",
