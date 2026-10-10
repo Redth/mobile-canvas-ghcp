@@ -134,7 +134,41 @@ async function checkSourceConditionalFeatures(selected, androidId) {
     ownerProcessId: binding.ownerProcessId, allowContextReopen: false,
     featureOptions: { allowPut: true, allowNativeFidelity: true },
   };
-  const apiBackend = await createRuntimeMobileBackend(options);
+  const sourceHost = createRuntimeCanvasHost(options);
+  let api;
+  let closeApi;
+  if (host === "github") {
+    const opened = await sourceHost.openCanvas();
+    const url = new URL(opened.url);
+    const fragment = new URLSearchParams(url.hash.slice(1));
+    const bootstrap = await fetch(new URL("/api/v1/auth/bootstrap", url), {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ secret: fragment.get("bootstrap"), sessionId: scope.sessionId, instanceId: scope.viewId }),
+    });
+    assert.equal(bootstrap.status, 204);
+    const cookie = bootstrap.headers.get("set-cookie").split(";", 1)[0];
+    api = (path, { method = "GET", body } = {}) => fetch(new URL(path, url), {
+      method, headers: { Cookie: cookie, ...(body === undefined ? {} : { "Content-Type": "application/json" }) },
+      ...(body === undefined ? {} : { body }),
+    });
+  } else {
+    const require = createRequire(import.meta.url);
+    const extensionRoot = resolve(process.argv[4] ?? join(source, "vscode"));
+    const { HostBridge } = require(join(extensionRoot, "out", "hostBridge.js"));
+    const messages = [];
+    const bridge = new HostBridge(undefined, scope.sessionId, scope.viewId, {
+      async postMessage(message) { messages.push(message); return true; },
+    }, { appendLine() {} }, undefined, sourceHost);
+    await bridge.handleMessage({ type: "ready" });
+    api = async (path, { method = "GET", body } = {}) => {
+      const id = randomUUID();
+      await bridge.handleMessage({ type: "api", id, path, method, body });
+      const result = messages.find((message) => message.id === id);
+      assert.equal(result.type, "api-result");
+      return new Response(result.body, { status: result.status, headers: result.headers });
+    };
+    closeApi = async () => { bridge.dispose(); await bridge.closed(); };
+  }
   const sourceMcp = await createAilohaMcpDispatcher({
     binding, version: "source-contract-only", allowPut: true, allowNativeFidelity: true,
     createBackend: () => createRuntimeMobileBackend(options),
@@ -174,7 +208,7 @@ async function checkSourceConditionalFeatures(selected, androidId) {
   try {
     for (const [name, id, path, method, input, field, value] of cases) {
       const route = `/api/v1/devices/${encodeURIComponent(id)}/${path}`;
-      const response = await apiBackend.request(route, {
+      const response = await api(route, {
         method, ...(method === "GET" || method === "DELETE" ? {} : { body: JSON.stringify(input) }),
       });
       assert.equal(response.status, 200, `${host} source API ${name}: ${await response.clone().text()}`);
@@ -227,7 +261,7 @@ async function checkSourceConditionalFeatures(selected, androidId) {
         : name === "network_set" ? "hardware/network" : name;
       const route = `/api/v1/devices/${encodeURIComponent(id)}/${path}`;
       const before = wire.filter((call) => call.method === wireMethod).length;
-      const request = () => apiBackend.request(route, {
+      const request = () => api(route, {
         method, ...(method === "GET" ? {} : { body: JSON.stringify(input) }),
       });
       const response = await request();
@@ -251,7 +285,8 @@ async function checkSourceConditionalFeatures(selected, androidId) {
   } finally {
     scenario.omitSourceEvidence = null;
     await sourceMcp.dispose();
-    await apiBackend.dispose();
+    await closeApi?.();
+    await sourceHost.closeCanvas();
     scenario.sourceFeatureContracts = false;
   }
 }
