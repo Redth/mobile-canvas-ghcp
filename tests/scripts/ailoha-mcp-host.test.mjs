@@ -98,6 +98,9 @@ test("unsupported/invalid/cross-scope calls are positive failures before any run
     call("mobile_device_tap", { deviceId: "target", x: "bad", y: 1 }),
     call("mobile_device_select", { deviceId: "target", sessionId: "other" }),
     call("mobile_device_battery_set", { deviceId: "target", level: 80 }),
+    call("mobile_device_network_set", { deviceId: "target", profile: "lte" }),
+    call("mobile_device_location_set", { deviceId: "target", latitude: 1, longitude: 2 }),
+    call("mobile_device_clipboard_set", { deviceId: "target", text: "hello" }),
     call("mobile_device_permission_list", { deviceId: "target", bundleId: "com.example.app" }),
   ]) {
     const result = await dispatcher.handle(request);

@@ -71,7 +71,14 @@ async function checkDeviceFeatures(api, selected) {
   assert.equal((await (await api(`${base}/settings`)).json()).appearance, "dark");
   const clear = await api(`${base}/hardware/location`, "DELETE");
   assert.deepEqual(await clear.json(), { success: true, operation: "location-clear", deviceId: null });
-  assert.equal((await api(`${base}/hardware/battery`, "POST", { level: 80 })).status, 501);
+  for (const [path, input] of [
+    ["hardware/battery", { level: 80 }],
+    ["hardware/network", { latencyMs: 100 }],
+    ["hardware/location", { latitude: 1, longitude: 2 }],
+    ["clipboard", { text: "text" }],
+  ]) {
+    assert.equal((await api(`${base}/${path}`, "POST", input)).status, 501);
+  }
   const direct = await createAilohaMcpDispatcher({ version: "synthetic-only", binding: returnedBinding(selected) });
   try {
     for (const [name, expected] of [

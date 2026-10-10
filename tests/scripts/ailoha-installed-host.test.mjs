@@ -39,6 +39,6 @@ for (const [host, product] of [
     assert.equal(evidence.creationRecords.every((record) => record.state === "booted" && record.nativeId !== record.id), true);
     assert.equal(evidence.creationRecords[2].selectionApplied, false);
     assert.deepEqual(evidence.logs, host === "vscode"
-      ? ["capability_not_supported", "capability_not_supported"] : []);
+      ? Array(5).fill("capability_not_supported") : []);
   });
 }
