@@ -128,6 +128,13 @@ async function checkArtifactReads(api, selection) {
   const logs = await api(`${target}/log?bundleId=native-app&level=fatal&limit=2`, "GET");
   assert.equal(logs.status, 200);
   assert.deepEqual((await logs.json()).entries.map((entry) => entry.level), ["verbose", "fatal"]);
+  for (const blank of ["", " \t"]) {
+    const reply = await api(`${target}/log?text=${encodeURIComponent(blank)}`, "GET");
+    assert.equal(reply.status, 200);
+    assert.equal((await reply.json()).total, 2);
+    const query = scenario.calls.findLast((call) => call.path?.includes("/logs/query?")).path;
+    assert.equal(new URL(query, "http://localhost").searchParams.get("text"), blank);
+  }
   const crashes = await api(`${target}/crashes?text=App&limit=1`, "GET");
   assert.equal(crashes.status, 200);
   assert.equal((await crashes.json()).total, 2);
@@ -141,6 +148,7 @@ async function checkArtifactReads(api, selection) {
     for (const [name, input, expected] of [
       ["mobile_device_file_list", { deviceId: "opaque/target", bundleId: "native-app", path: "Documents" }, "empty.db"],
       ["mobile_device_log", { deviceId: "opaque/target", level: "fatal", limit: 2 }, "verbose"],
+      ["mobile_device_log", { deviceId: "opaque/target", text: " \t" }, "verbose"],
       ["mobile_device_crashes", { deviceId: "opaque/target", text: "App", limit: 1 }, "App"],
       ["mobile_device_crash_report", { deviceId: "opaque/target", crashId: "report" }, "full stack"],
     ]) {

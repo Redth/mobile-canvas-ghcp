@@ -23,6 +23,8 @@ test("read inputs retain legacy names, exact app addressing and root semantics",
   assert.equal(artifactFilePath("/data/local/tmp"), "/data/local/tmp");
   assert.equal(artifactQueryLimit(undefined, 25, 500), 25);
   assert.equal(artifactQueryText(" Crash "), " Crash ");
+  assert.equal(artifactQueryText(""), "");
+  assert.equal(artifactQueryText(" \t"), " \t");
 });
 
 test("unsupported native query windows never silently clamp or reinterpret legacy input", () => {
@@ -34,7 +36,6 @@ test("unsupported native query windows never silently clamp or reinterpret legac
     assert.throws(() => artifactFilePath(path),
       { code: path.includes("..") || path.includes("\\") ? "invalid_request" : "artifact_contract_unavailable" });
   }
-  assert.throws(() => artifactQueryText("  "), { code: "artifact_contract_unavailable" });
   assert.throws(() => artifactApiInput("mobile_device_log",
     "/api/v1/devices/target/log?limit=1&limit=2"), { code: "invalid_request" });
   assert.throws(() => artifactApiInput("mobile_device_file_list",

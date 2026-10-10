@@ -432,13 +432,17 @@ Ordinary installs still use the legacy backend unless explicitly opted in.
 This is **not** nine-tool file/media/diagnostics parity.
 
 The read adapter requires the captured target/provider/native identity and
-original context revision before each new native read. App selectors resolve
+original context revision before each new native read and again before
+projecting a completed result. It refreshes the named view and native target
+after an in-flight read, so retirement, revision changes and native identity
+replacement cannot produce usable stale output. App selectors resolve
 through the installed-app inventory to its package ID, not a workspace ID.
 It rejects incomplete listings/totals, foreign entry ownership, unsupported
 native query bounds and ambiguous app selectors rather than fabricating
 results. File sizes include legitimate zero-byte files; native modification
 and platform path spelling are retained. Native log query results preserve
-the backend's chronological retained window and pre-limit total. Inline
+the backend's chronological retained window and pre-limit total; blank text
+retains the native no-filter semantics. Inline
 crash detail is bounded to 1 MiB UTF-8; larger reports are not silently
 truncated or marked successful. A streamed export/readback path remains a
 delivery gate.

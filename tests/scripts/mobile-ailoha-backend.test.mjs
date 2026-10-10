@@ -367,6 +367,33 @@ test("stale view revision cannot borrow a newer app lookup for a file read", asy
   }), { code: "context_snapshot_superseded" });
 });
 
+for (const retirement of ["revision", "detach"]) {
+  test(`parent regression: native log read cannot return usable output after ${retirement} of its original view`, async (t) => {
+    let state;
+    state = canonicalFixture({
+      client: {
+        async getTargetCapabilities() {
+          return [{ id: "target.diagnostics", version: 1, features: ["queryTargetLogs"] }];
+        },
+        async queryTargetLogs() {
+          if (retirement === "revision") await state.advanceSelection();
+          else await state.retireAuthority();
+          return {
+            total: 1,
+            entries: [{
+              nativeTimestamp: "original time", nativeLevel: "info", nativeSource: "native-app",
+              source: "native", message: "original-owner-only",
+              "x-ailoha-target-host": { targetId: "one", providerId: "provider" },
+            }],
+          };
+        },
+      },
+    });
+    t.after(() => state.backend.dispose());
+    await assert.rejects(state.backend.readArtifact("mobile_device_log", { deviceId: "one" }));
+  });
+}
+
 test("read adapters reject invalid limits before inventory and refuse ambiguous/foreign/incomplete results", async (t) => {
   let apps = [{ appId: "app", packageId: "pkg",
     "x-ailoha-target-host": { targetId: "one", providerId: "provider" } }];
@@ -392,7 +419,6 @@ test("read adapters reject invalid limits before inventory and refuse ambiguous/
   t.after(() => state.backend.dispose());
   for (const input of [
     { deviceId: "one", limit: 0 }, { deviceId: "one", limit: 501 },
-    { deviceId: "one", text: "  " },
   ]) {
     await assert.rejects(state.backend.readArtifact("mobile_device_crashes", input),
       { code: "artifact_contract_unavailable", status: 501 });
@@ -413,6 +439,38 @@ test("read adapters reject invalid limits before inventory and refuse ambiguous/
   await assert.rejects(state.backend.readArtifact("mobile_device_file_list", {
     deviceId: "one", bundleId: "pkg",
   }), { code: "artifact_owner_mismatch", status: 502 });
+});
+
+test("an in-flight native read cannot return data after revision, retirement or native identity changes", async (t) => {
+  for (const change of ["revision", "retirement", "native"]) {
+    const entered = deferred();
+    const finish = deferred();
+    const state = canonicalFixture({
+      client: {
+        async getTargetCapabilities() {
+          return [{ id: "target.diagnostics", version: 1, features: ["queryTargetCrashes"] }];
+        },
+        async queryTargetCrashes(id) {
+          assert.equal(id, "one");
+          entered.resolve();
+          await finish.promise;
+          return { total: 0, crashes: [] };
+        },
+      },
+    });
+    t.after(() => state.backend.dispose());
+    const pending = state.backend.readArtifact("mobile_device_crashes", { deviceId: "one" });
+    await entered.promise;
+    if (change === "revision") await state.advanceSelection();
+    if (change === "retirement") await state.retireAuthority();
+    if (change === "native") state.targets.get("one").nativeIdentity.nativeId = "replacement-native-id";
+    finish.resolve();
+    await assert.rejects(pending, {
+      code: change === "native" ? "artifact_owner_mismatch"
+        : change === "retirement" ? "view_closed" : "context_snapshot_superseded",
+    });
+    assert.equal(state.calls.filter(([name]) => name === "get").every(([, id]) => id === "one"), true);
+  }
 });
 
 test("an open empty canonical view projects its verified binding without inferring a target", async (t) => {

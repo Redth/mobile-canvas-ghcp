@@ -312,11 +312,15 @@ export interface TargetHostClient {
   getTarget(targetId: string, options?: RequestOptions): Promise<Target>;
   getTargetCapabilities(targetId: string, options?: RequestOptions): Promise<Capability[]>;
   listTargetApps(targetId: string, options?: RequestOptions): Promise<Array<{
-    appId: string; packageId?: string; "x-ailoha-target-host"?: TargetArtifactContext;
+    appId: string; packageId?: string | null; "x-ailoha-target-host"?: TargetArtifactContext;
   }>>;
   queryTargetFiles(targetId: string, path: string, options?: RequestOptions): Promise<TargetFileListing>;
-  queryTargetLogs(targetId: string, query: Record<string, string>, options?: RequestOptions): Promise<TargetLogListing>;
-  queryTargetCrashes(targetId: string, query: Record<string, string>, options?: RequestOptions):
+  queryTargetLogs(targetId: string, query: {
+    appId?: string; text?: string; level?: string; limit?: string; since?: string; until?: string;
+  }, options?: RequestOptions): Promise<TargetLogListing>;
+  queryTargetCrashes(targetId: string, query: {
+    appId?: string; text?: string; limit?: string;
+  }, options?: RequestOptions):
     Promise<{ total?: number; crashes: TargetCrashReport[] }>;
   getTargetCrashDetail(targetId: string, crashId: string, options?: RequestOptions): Promise<TargetCrashReport>;
   listTargetSurfaces(targetId: string, options?: RequestOptions): Promise<Surface[]>;
