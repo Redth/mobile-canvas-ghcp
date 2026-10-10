@@ -1,9 +1,11 @@
 import { readFileSync } from "node:fs";
 import { randomUUID } from "node:crypto";
 import { fileURLToPath } from "node:url";
+import { createCatalogModel } from "./ailoha-catalog-creation.mjs";
 
 export const scenario = {
   calls: [], leases: new Map(), videos: new Map(), operations: new Map(), status: "running", geometryRevision: 13,
+  catalog: null, createdTargets: new Map(), creationGate: null,
 };
 export const sourceSha = "0000000000000000000000000000000000000000";
 const targetId = "opaque/target";
@@ -21,12 +23,41 @@ const surface = {
   geometryRevision: 13, pixelDensity: 2, orientation: "landscape",
   capabilities: [{ id: "surface.input", version: 1, features: ["tap.point", "long-press.point", "gesture", "swipe.point"] }],
 };
+export function enableCatalogCreation() {
+  scenario.catalog = createCatalogModel();
+  scenario.catalog.status.hostId = "synthetic-host";
+  for (const entry of scenario.catalog.providerCatalogs) entry.targetHostId = "synthetic-host";
+  return scenario.catalog;
+}
+function mergedCapabilities(values) {
+  const groups = new Map();
+  for (const capability of values) {
+    const previous = groups.get(capability.id);
+    groups.set(capability.id, {
+      ...capability, features: [...new Set([...(previous?.features ?? []), ...(capability.features ?? [])])],
+    });
+  }
+  return [...groups.values()];
+}
+function providerRecords() {
+  return [{
+    providerId: "synthetic-provider", name: "Synthetic provider", version: "synthetic", state: "ready", capabilities: captures,
+  }, ...(scenario.catalog?.providers ?? []).map((provider) => ({
+    ...provider, capabilities: mergedCapabilities([...provider.capabilities, ...captures]),
+  }))];
+}
 function target() {
   return {
     targetId, providerId: "synthetic-provider", targetTypeId: "opaque/type", name: "Synthetic device",
     status: scenario.status, surfaces: scenario.status === "running" ? [{ ...surface, geometryRevision: scenario.geometryRevision }] : [],
     nativeIdentity: { platform: "ios", nativeId: "native-deployment-not-opaque-target", isVirtual: true },
   };
+}
+function createdTarget(id) {
+  const record = scenario.createdTargets.get(id);
+  return record ? {
+    ...record, surfaces: record.status === "running" ? [{ ...surface, geometryRevision: scenario.geometryRevision }] : [],
+  } : undefined;
 }
 const reply = (body, status = 200, location = null) => ({
   status, contentType: "application/json", body, location, retryAfterMs: status === 202 ? 1000 : null,
@@ -76,15 +107,56 @@ export async function openTargetHostTransport(leaseId) {
       if (options.signal?.aborted) throw new Error("aborted double");
       if (path === "/api/v1/host/status") return reply({
         hostId: "synthetic-host", profile: "ailoha.target-host/v1", version: "synthetic",
-        state: "ready", capabilities: captures,
+        state: "ready", capabilities: mergedCapabilities([...captures, ...(scenario.catalog?.status.capabilities ?? [])]),
       });
-      if (path === "/api/v1/providers") return reply([{
-        providerId: "synthetic-provider", name: "Synthetic provider", version: "synthetic", state: "ready", capabilities: captures,
-      }]);
-      if (path === "/api/v1/targets") return reply([target()]);
-      if (path === "/api/v1/targets/opaque%2Ftarget") return reply(target());
-      if (path.endsWith("/capabilities")) return reply(captures);
-      if (path.endsWith("/surfaces")) return reply([{ ...surface, geometryRevision: scenario.geometryRevision }]);
+      if (path === "/api/v1/providers") return reply(providerRecords());
+      const catalogRoute = /^\/api\/v1\/providers\/([^/]+)\/(catalogs|runtimes|target-types|templates)$/.exec(path);
+      if (catalogRoute) {
+        const entry = scenario.catalog?.providerCatalogs.find((entry) => entry.providerId === decodeURIComponent(catalogRoute[1]));
+        if (!entry) throw new Error("Unadvertised synthetic catalog");
+        return reply(entry[catalogRoute[2] === "target-types" ? "targetTypes" : catalogRoute[2]]);
+      }
+      if (path === "/api/v1/targets" && options.method === "POST") {
+        if (!scenario.catalog) throw new Error("Synthetic creation is disabled");
+        const input = JSON.parse(options.body);
+        const provider = scenario.catalog.providerCatalogs.find((entry) => entry.providerId === input.providerId);
+        const type = provider?.targetTypes.find((entry) => entry.targetTypeId === input.targetTypeId);
+        if (!type) throw new Error("Unknown exact synthetic provider/type");
+        const number = scenario.createdTargets.size + 1;
+        const createdId = `created/opaque-${number}%2F`;
+        const record = {
+          targetId: createdId, providerId: input.providerId, targetTypeId: input.targetTypeId, name: input.name,
+          ...(input.runtimeId ? { runtimeId: input.runtimeId } : {}),
+          ...(input.templateId ? { templateId: input.templateId } : {}),
+          status: input.start === false ? "stopped" : "running", surfaces: [],
+          nativeIdentity: {
+            platform: type.platform, nativeId: type.platform === "ios" ? `owned-udid-${number}` : `owned_avd_${number}`,
+            ...(type.platform === "android" ? { serial: `emulator-${5600 + number}` } : {}),
+            isVirtual: true,
+          },
+        };
+        scenario.createdTargets.set(createdId, record);
+        const operationId = `creation/operation-${number}%2F`;
+        const operation = {
+          operationId, kind: "createTarget", providerId: input.providerId, destructive: true, status: "queued",
+          createdAt: "2026-10-10T03:00:00Z",
+        };
+        scenario.operations.set(operationId, {
+          ...operation, status: "succeeded", targetId: createdId, result: { targetId: createdId },
+          startedAt: "2026-10-10T03:00:01Z", completedAt: "2026-10-10T03:00:02Z",
+        });
+        return reply(operation, 202, `/api/v1/operations/${encodeURIComponent(operationId)}`);
+      }
+      if (path === "/api/v1/targets") return reply([target(), ...[...scenario.createdTargets.keys()].map(createdTarget)]);
+      const targetRoute = /^\/api\/v1\/targets\/([^/]+)(?:\/(capabilities|surfaces))?$/.exec(path);
+      const selectedId = targetRoute ? decodeURIComponent(targetRoute[1]) : undefined;
+      const selected = selectedId === targetId ? target() : createdTarget(selectedId);
+      if (targetRoute) {
+        if (!selected) throw new Error("Unknown synthetic target");
+        if (targetRoute[2] === "capabilities") return reply(providerRecords().find((provider) => provider.providerId === selected.providerId).capabilities);
+        if (targetRoute[2] === "surfaces") return reply(selected.surfaces);
+        return reply(selected);
+      }
       if (/\/actions\/(start|stop|reboot)$/.test(path)) {
         const action = path.split("/").at(-1);
         const operationId = randomUUID();
@@ -98,25 +170,32 @@ export async function openTargetHostTransport(leaseId) {
         });
         return reply(operation, 202, `/api/v1/operations/${operationId}`);
       }
-      if (path.startsWith("/api/v1/operations/")) return reply(scenario.operations.get(decodeURIComponent(path.split("/").at(-1))));
+      if (path.startsWith("/api/v1/operations/")) {
+        const id = decodeURIComponent(path.split("/").at(-1));
+        if (id.startsWith("creation/") && scenario.creationGate) await scenario.creationGate.promise;
+        return reply(scenario.operations.get(id));
+      }
+      const surfaceRoute = /^\/api\/v1\/targets\/([^/]+)\/surfaces\/([^/]+)\/(.+)$/.exec(path);
+      const mediaTargetId = surfaceRoute ? decodeURIComponent(surfaceRoute[1]) : targetId;
+      const mediaSurfaceId = surfaceRoute ? decodeURIComponent(surfaceRoute[2]) : surfaceId;
       if (path.endsWith("/screenshots")) {
         const image = readFileSync(new URL("reference-1.png", packetRoot));
         return reply({
           artifactId: "synthetic/screenshot", kind: "screenshot", status: "ready", contentType: "image/png",
-          targetId, surfaceId, createdAt: "2026-10-09T23:00:00Z", size: image.length,
+          targetId: mediaTargetId, surfaceId: mediaSurfaceId, createdAt: "2026-10-09T23:00:00Z", size: image.length,
         }, 201, "/api/v1/artifacts/synthetic%2Fscreenshot");
       }
       if (path.includes("/input/actions/")) return reply({
-        success: true, "x-ailoha-target-host": { targetId, surfaceId, geometryRevision: scenario.geometryRevision },
+        success: true, "x-ailoha-target-host": { targetId: mediaTargetId, surfaceId: mediaSurfaceId, geometryRevision: scenario.geometryRevision },
       });
-      const collection = "/api/v1/targets/opaque%2Ftarget/surfaces/opaque%2Fsurface/video/sessions";
+      const collection = `/api/v1/targets/${encodeURIComponent(mediaTargetId)}/surfaces/${encodeURIComponent(mediaSurfaceId)}/video/sessions`;
       if (path === collection && options.method === "POST") {
         scenario.geometryRevision = 13;
         const videoSessionId = randomUUID();
         const session = {
-          videoSessionId, targetId, surfaceId, codec: "h264", state: "ready",
+          videoSessionId, targetId: mediaTargetId, surfaceId: mediaSurfaceId, codec: "h264", state: "ready",
           createdAt: "2026-10-09T23:00:00Z", geometryRevision: 13, source: "synthetic-fixture",
-          websocketUrl: `/ws/v1/targets/opaque%2Ftarget/surfaces/opaque%2Fsurface/video/${videoSessionId}`,
+          websocketUrl: `/ws/v1/targets/${encodeURIComponent(mediaTargetId)}/surfaces/${encodeURIComponent(mediaSurfaceId)}/video/${videoSessionId}`,
         };
         scenario.videos.set(videoSessionId, session);
         return reply(session, 201, `${collection}/${videoSessionId}`);

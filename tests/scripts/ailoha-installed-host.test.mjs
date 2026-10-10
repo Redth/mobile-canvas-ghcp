@@ -27,5 +27,12 @@ for (const [host, product] of [
     assert.equal(evidence.videoResourcesAfterClose, 0);
     assert.equal(evidence.leaseCountAfterClose, 0);
     assert.equal(evidence.noHostStop, true);
+    assert.equal(evidence.createPosts, host === "github" ? 3 : 4);
+    assert.equal(evidence.noSeparateBootPost, true);
+    assert.equal(evidence.creationRecords[0].platform, "ios");
+    assert.equal(evidence.creationRecords[1].platform, "android");
+    assert.equal(evidence.creationRecords.every((record) => record.state === "booted" && record.nativeId !== record.id), true);
+    assert.equal(evidence.creationRecords[2].selectionApplied, false);
+    assert.deepEqual(evidence.logs, host === "vscode" ? ["capability_not_supported"] : []);
   });
 }

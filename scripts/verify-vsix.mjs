@@ -53,6 +53,8 @@ function verifyExtracted(directory) {
     "extension/dist/lib/ailoha/errors.mjs",
     "extension/dist/lib/ailoha/protocol.mjs",
     "extension/dist/lib/ailoha/mobile-backend.mjs",
+    "extension/dist/lib/ailoha/mobile-catalog.mjs",
+    "extension/dist/lib/ailoha/operation-receipts.mjs",
     "extension/dist/lib/ailoha/mobile-projection.mjs",
     "extension/dist/lib/ailoha/media-adapter.mjs",
     "extension/dist/lib/ailoha/runtime-sdk.mjs",

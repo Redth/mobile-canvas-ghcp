@@ -78,10 +78,12 @@ the window. Without that prepared, exact-pinned public graph, opt-in reports
 and refreshed legacy embedded-web native artifacts are still release gates;
 this is not a normal-install-ready release.
 
-The opt-in covers inventory/selection, advertised start/stop/reboot, PNG
+The opt-in covers authoritative provider/runtime/device-type/template catalogs,
+compatible iOS/Android create+boot, inventory/selection, advertised start/stop/reboot, PNG
 screenshots, observed-geometry tap/held-press/swipe/scroll, and complete ALHV
-H.264 access units. It requires no app instrumentation. Creation/catalog
-mapping, destructive reset/delete without scoped human consent, app/system
+H.264 access units. It requires no app instrumentation. Creation uses exact
+host/provider catalog choices and one canonical operation; accepted retries do
+not submit another create or boot. Destructive reset/delete without scoped human consent, app/system
 inspection, recording, keyboard/buttons and broader controls remain explicitly
 unsupported. See [the Ailoha adapter contract](docs/ailoha-protocol-adapter.md)
 for ownership, setup, package evidence and remaining gates.

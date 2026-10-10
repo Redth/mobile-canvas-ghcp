@@ -41,6 +41,53 @@ export interface Provider {
   description?: string;
 }
 
+export interface CatalogDescriptor {
+  catalogId: string;
+  providerId: string;
+  name: string;
+  kind: "runtime" | "target-type" | "template" | "application" | "media";
+  revision?: string;
+  metadata?: JsonObject;
+}
+
+export interface RuntimeDescriptor {
+  runtimeId: string;
+  providerId: string;
+  name: string;
+  platform: string;
+  version: string;
+  architecture?: string;
+  state?: "available" | "installing" | "unavailable";
+  metadata?: JsonObject;
+}
+
+export interface TargetTypeDescriptor {
+  targetTypeId: string;
+  providerId: string;
+  name: string;
+  kind: "simulator" | "emulator" | "physical-device" | "desktop" | "browser" | "remote";
+  platform?: string;
+  configSchema?: JsonObject;
+  capabilities?: Capability[];
+}
+
+export interface TemplateDescriptor {
+  templateId: string;
+  providerId: string;
+  targetTypeId: string;
+  name: string;
+  runtimeId?: string;
+  description?: string;
+  configuration?: JsonObject;
+}
+
+export interface ProviderDiagnostics {
+  providerId: string;
+  state: Provider["state"];
+  checkedAt: string;
+  checks: { name: string; status: "pass" | "warn" | "fail"; detail?: string }[];
+}
+
 export interface Bounds {
   x: number;
   y: number;
@@ -179,6 +226,7 @@ export type ProtocolErrorCode =
   | "invalid_connection" | "invalid_options" | "invalid_identifier"
   | "invalid_request" | "confirmation_required" | "request_too_large"
   | "incompatible_profile" | "host_identity_mismatch" | "target_identity_mismatch"
+  | "provider_identity_mismatch"
   | "operation_identity_mismatch" | "operation_failed" | "operation_cancelled"
   | "invalid_response" | "credential_exposure" | "redirect_rejected"
   | "response_too_large" | "timeout" | "cancelled" | "transport_error"
@@ -211,6 +259,11 @@ export interface TargetHostClient {
   readonly connection: PublicConnection;
   getHostStatus(options?: RequestOptions): Promise<HostStatus>;
   listProviders(options?: RequestOptions): Promise<Provider[]>;
+  listProviderCatalogs(providerId: string, options?: RequestOptions): Promise<CatalogDescriptor[]>;
+  listProviderRuntimes(providerId: string, options?: RequestOptions): Promise<RuntimeDescriptor[]>;
+  listProviderTargetTypes(providerId: string, options?: RequestOptions): Promise<TargetTypeDescriptor[]>;
+  listProviderTemplates(providerId: string, options?: RequestOptions): Promise<TemplateDescriptor[]>;
+  getProviderDiagnostics(providerId: string, options?: RequestOptions): Promise<ProviderDiagnostics>;
   listTargets(options?: TargetListOptions): Promise<Target[]>;
   getTarget(targetId: string, options?: RequestOptions): Promise<Target>;
   getTargetCapabilities(targetId: string, options?: RequestOptions): Promise<Capability[]>;

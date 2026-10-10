@@ -5,7 +5,8 @@ import { fileURLToPath, pathToFileURL } from "node:url";
 import { randomUUID } from "node:crypto";
 import { createRequire } from "node:module";
 import { WebSocket } from "ws";
-import { scenario, sourceSha } from "./ailoha-sdk-double.mjs";
+import { enableCatalogCreation, scenario, sourceSha } from "./ailoha-sdk-double.mjs";
+import { catalogIds } from "./ailoha-catalog-creation.mjs";
 
 const root = resolve(process.argv[2]);
 const host = process.argv[3];
@@ -26,6 +27,9 @@ let release;
 let receiver;
 let dispatcher;
 let selectedContext;
+let readCatalog;
+let createFromHost;
+let selectedFromHost;
 const logs = [];
 const units = [];
 
@@ -97,6 +101,10 @@ try {
     assert.equal(canvas.actions.length, 24);
     const context = { sessionId: scope.sessionId, instanceId: scope.viewId };
     const action = (name, input = {}) => canvas.actions.find((entry) => entry.name === name).handler({ ...context, input });
+    readCatalog = () => action("get_device_catalog");
+    createFromHost = (input) => action("create_device", input);
+    selectedFromHost = () => action("get_selected_device");
+    assert.equal(canvas.actions.find((entry) => entry.name === "create_device").inputSchema.properties.platform.default, "ios");
     const opened = await canvas.open(context);
     release = async () => {
       await canvas.onClose(context);
@@ -199,6 +207,13 @@ try {
       assert.equal(result.type, "api-result");
       return new Response(result.body, { status: result.status, headers: result.headers });
     }
+    readCatalog = async () => (await api("/api/v1/catalog")).json();
+    createFromHost = async (input) => {
+      const response = await api("/api/v1/devices", "POST", input);
+      assert.equal(response.status, 200);
+      return response.json();
+    };
+    selectedFromHost = async () => (await api("/api/v1/selection")).json();
     const catalog = await (await api("/api/v1/catalog")).json();
     assert.equal(catalog.devices[0].nativeId, "native-deployment-not-opaque-target");
     await checkEmptyContext(await (await api("/api/v1/selection")).json());
@@ -225,6 +240,67 @@ try {
     assert.equal((await bridge.getSelectedDeviceContext()).deviceId, "opaque/target");
     assert.equal(messages.some((message) => JSON.stringify(message).includes("controlCredential")), false);
   } else throw new Error("Unknown installed host test.");
+  enableCatalogCreation();
+  const creationCatalog = await readCatalog();
+  assert.equal(creationCatalog.creationSupport.supported, true);
+  const inputFor = (platform, name) => ({
+    platform, name,
+    runtimeId: creationCatalog.runtimes.find((runtime) =>
+      runtime.catalogSelection.providerId === catalogIds[`${platform}Provider`]
+      && runtime.catalogSelection.runtimeId === catalogIds.runtime).id,
+    deviceTypeId: creationCatalog.deviceTypes.find((type) =>
+      type.catalogSelection.providerId === catalogIds[`${platform}Provider`] && type.targetTypeId === catalogIds.type).id,
+  });
+  const creationRecords = [];
+  const callsBeforeCreate = scenario.calls.length;
+  for (const platform of ["ios", "android"]) {
+    const input = inputFor(platform, `Owned installed ${platform}`);
+    const created = await createFromHost(input);
+    assert.equal(created.state, "booted");
+    assert.equal(created.selectionApplied, true);
+    assert.notEqual(created.nativeId, created.id);
+    assert.equal(created.runtimeId, input.runtimeId);
+    assert.equal(created.deviceTypeId, input.deviceTypeId);
+    selectedContext = await selectedFromHost();
+    assert.equal(selectedContext.device.id, created.id);
+    assert.equal(selectedContext.device.nativeId, created.nativeId);
+    creationRecords.push(created);
+  }
+  const rawMcp = await createAilohaMcpDispatcher({ version: "synthetic-only", binding: returnedBinding(selectedContext) });
+  try {
+    const created = await rawMcp.handle({
+      ...mcpCall("mobile_device_create"),
+      params: { name: "mobile_device_create", arguments: inputFor("ios", "Owned installed raw MCP") },
+    });
+    assert.notEqual(created.result.isError, true);
+    assert.equal(created.result.structuredContent.selectionApplied, false);
+    assert.equal((await selectedFromHost()).device.id, selectedContext.device.id);
+    creationRecords.push(created.result.structuredContent);
+  } finally { await rawMcp.dispose(); }
+  if (host === "vscode") {
+    const followedMcp = await createAilohaMcpDispatcher({
+      version: "synthetic-only", selectCreated: true, binding: returnedBinding(selectedContext),
+    });
+    try {
+      const created = await followedMcp.handle({
+        ...mcpCall("mobile_device_create"),
+        params: { name: "mobile_device_create", arguments: inputFor("android", "Owned installed VS Code MCP") },
+      });
+      assert.notEqual(created.result.isError, true);
+      assert.equal(created.result.structuredContent.selectionApplied, true);
+      selectedContext = await selectedFromHost();
+      assert.equal(selectedContext.device.id, created.result.structuredContent.id);
+      creationRecords.push(created.result.structuredContent);
+    } finally { await followedMcp.dispose(); }
+  }
+  const creationCalls = scenario.calls.slice(callsBeforeCreate).filter((call) => call.method === "POST");
+  assert.equal(creationCalls.length, creationRecords.length);
+  assert.equal(creationCalls.every((call) => call.path === "/api/v1/targets" && JSON.parse(call.body).start === true), true);
+  assert.equal(creationCalls.every((call) => {
+    const input = JSON.parse(call.body);
+    return input.runtimeId === catalogIds.runtime && input.targetTypeId === catalogIds.type
+      && [catalogIds.iosProvider, catalogIds.androidProvider].includes(input.providerId);
+  }), true);
   await release();
   release = null;
   assert.deepEqual(units, [0, 1, 2, 3, 4, 5]);
@@ -272,6 +348,11 @@ try {
     videoResourcesAfterClose: scenario.videos.size, operationPolls: scenario.calls.filter((call) => call.path?.startsWith("/api/v1/operations/")).length,
     nativeIdentityPreserved: true, returnedBindingConsumed: true, emptyContextInventory: true,
     externalRetirementRejected: true, readOnlyDiscovery: true, missingPublicPinRejected: true, noHostStop: true, logs,
+    creationRecords: creationRecords.map((record) => ({
+      id: record.id, platform: record.platform, nativeId: record.nativeId, state: record.state,
+      selectionApplied: record.selectionApplied, operationId: record.acceptedOperation.operationId,
+    })),
+    createPosts: creationCalls.length, noSeparateBootPost: true,
   }));
 } finally {
   await dispatcher?.dispose();

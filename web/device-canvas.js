@@ -287,7 +287,7 @@ const loadCatalog = createLatestCatalogLoader(
   (catalog) => {
     state.catalog = catalog;
     if (catalog.backend === "ailoha") {
-      document.querySelector("#create-button").disabled = true;
+      document.querySelector("#create-button").disabled = creatablePlatforms(catalog).length === 0;
     }
     renderDiagnostics();
     renderDeviceList();
@@ -2379,6 +2379,7 @@ elements.createRuntime.addEventListener("change", populateCreateOptions);
 elements.createForm.addEventListener("submit", (event) => {
   event.preventDefault();
   runBusy(elements.createSubmit, async () => {
+    const selectionVersion = state.selectionVersion;
     const response = await api("/api/v1/devices", {
       method: "POST",
       body: JSON.stringify({
@@ -2388,10 +2389,13 @@ elements.createForm.addEventListener("submit", (event) => {
         deviceTypeId: elements.createDeviceType.value,
       }),
     });
-    state.selected = await response.json();
+    const created = await response.json();
+    if (!state.detached && selectionVersion === state.selectionVersion && created.selectionApplied !== false) {
+      state.selected = created;
+    }
     elements.createDialog.close();
     await refresh();
-    showToast(`${state.selected.name} created and started`);
+    showToast(`${created.name} created and started${created.selectionApplied === false ? "; current selection unchanged" : ""}`);
   }).catch(showError);
 });
 
