@@ -2,6 +2,11 @@ import { randomUUID } from "node:crypto";
 import { readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
 
 const args = process.argv.slice(2);
+if (args[0] === "workspace") {
+  const { runWorkspaceDouble } = await import("./ailoha-workspace-double.mjs");
+  process.exitCode = await runWorkspaceDouble(args);
+  process.exit();
+}
 const path = process.env.AILOHA_TEST_CONTEXT_STATE;
 if (!path) throw new Error("The synthetic CLI is only available in an isolated test.");
 let contexts;

@@ -383,9 +383,39 @@ tooling is not a ready-shaped empty inventory.
 
 Implemented: authoritative advertised catalogs and compatible create+boot,
 inventory/select, advertised start/stop/reboot, PNG screenshot,
-basic geometry-bound pointer gestures and shared ALHV WebCodecs display.
+basic geometry-bound pointer gestures, shared ALHV WebCodecs display, and
+[read-only explicit-root workspace/application evidence](ailoha-workspace-inspection.md),
+plus read-only canonical composed `app_tree`, `app_query` and `app_status`
+through the host-owned MCP client. System reads require the selected Target
+Host target and request `target-host` routing; App reads require an explicitly
+selected `verified-native-instance` in the named context and request
+`require-agent` routing. Each result checks captured context ref/epoch/revision,
+target, surface, owner and native runtime provenance before display; retired
+reads never project. The shared UI bounds depth, element count and text, and
+renders canonical element text literally. Changing a lens or operation retires
+the previous read without clearing typed query filters. Canonical MCP errors
+expose only a finite public capability code/message or a fixed failure message;
+native stderr, paths and error details are not forwarded to the renderer.
+The official JS MCP SDK's full tool-list validator rejects native C# tool
+metadata such as a valid boolean JSON Schema `true` at
+`outputSchema.properties.result` (for example `target_file_mkdir`);
+discovery validates only bounded advertised tool names
+through that SDK, then validates the actual composed result against captured
+route and provenance. The stdio child receives only named context/broker
+configuration from the host environment, never ambient target/agent selectors.
+The legacy .NET canvas serves the shared semantic module as a public embedded
+bootstrap asset, while its inspection API remains authenticated. This
+source-only slice has no
+workspace-application-to-native-agent mapping, binding control, or legacy
+`ui_*` compatibility claim. Both hosts bundle the exact-pinned MCP client
+graph, while the official Ailoha runtime pin remains a separate release gate.
+Controlled native development CLI proof exercised System and explicitly bound
+App tree/query/status through both prepared host clients against the real
+canonical broker and mock Target Host/Core-MAUI agents, including stale-context
+and missing-Agent failures. This does not qualify a public package, normal
+installation, native platform matrix or real-device acceptance.
 Unsupported: configuration-dependent creation, reveal/rotation/keyboard/buttons,
-reset/delete without scoped consent, app/system semantic trees, app deployment,
+reset/delete without scoped consent, app deployment,
 recording and broader settings/diagnostics/file/hardware operations. No claim of
 device or full feature parity is made.
 

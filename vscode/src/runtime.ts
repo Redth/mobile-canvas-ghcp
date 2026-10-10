@@ -1,6 +1,7 @@
 import { pathToFileURL } from "node:url";
 import type * as vscode from "vscode";
 import type { AilohaCanvasHost } from "./hostBridge";
+import type { WorkspaceRootError } from "./workspaceRoots";
 
 interface RuntimeResolution {
   command: string;
@@ -22,6 +23,7 @@ interface AilohaRuntimeModule {
   createRuntimeCanvasHost(options: {
     scope: { sessionId: string; viewId: string };
     onError(error: { code: string; message: string }): void;
+    validateWorkspaceRoot?(path: string): WorkspaceRootError | undefined;
   }): AilohaCanvasHost;
   getRuntimeContextBinding(scope: { sessionId: string; viewId: string }): Promise<AilohaContextBinding>;
 }
@@ -49,11 +51,12 @@ export async function resolveAilohaCanvasHost(
   context: vscode.ExtensionContext,
   scope: { sessionId: string; viewId: string },
   onError: (error: { code: string; message: string }) => void,
+  validateWorkspaceRoot?: (path: string) => WorkspaceRootError | undefined,
 ): Promise<AilohaCanvasHost> {
   const module: AilohaRuntimeModule = await import(
     pathToFileURL(context.asAbsolutePath("dist/lib/ailoha/runtime-backend.mjs")).href
   );
-  return module.createRuntimeCanvasHost({ scope, onError });
+  return module.createRuntimeCanvasHost({ scope, onError, validateWorkspaceRoot });
 }
 
 export async function resolveAilohaContextBinding(

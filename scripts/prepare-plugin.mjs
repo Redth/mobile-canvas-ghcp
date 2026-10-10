@@ -8,7 +8,7 @@ import {
   assertDarwinHelperEntries,
   remoteRuntimeManifest,
 } from "../lib/runtime-assets.mjs";
-import { prepareAilohaGraph } from "./prepare-ailoha-graph.mjs";
+import { prepareAilohaGraph, prepareSemanticGraph } from "./prepare-ailoha-graph.mjs";
 
 const root = join(dirname(fileURLToPath(import.meta.url)), "..");
 const thin = process.argv.includes("--thin");
@@ -57,6 +57,7 @@ for (const relative of [
 const wsRoot = join(root, "node_modules", "ws");
 cpSync(wsRoot, join(output, "node_modules", "ws"), { recursive: true });
 prepareAilohaGraph(output);
+prepareSemanticGraph(output);
 
 if (thin) {
   const remoteManifest = remoteRuntimeManifest(runtimeManifest);
