@@ -443,6 +443,13 @@ These are synchronous canonical actions; uncertain delivery is not retried.
 Both hosts share the control adapter and renderer; neither gains native
 commands or credentials in the webview.
 
+The source fixtures accept canonical `PATCH` for rotation and status-bar
+writes. The currently examined upstream runtime transport only accepts
+GET/POST/DELETE, so these fixture results are not proof of installed SDK
+write readiness. A reviewed, publicly pinned SDK transport with `PATCH`
+support is required before either write can be accepted as installed parity;
+the adapter must not bypass that transport or substitute a different method.
+
 The pinned Target Host `fill` implementation taps the field center before
 typing, even when it was already focused. Unlike legacy `TypeTextAsync`,
 successive character events or a paste can therefore move an existing caret.
