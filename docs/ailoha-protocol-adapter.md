@@ -81,6 +81,11 @@ and launch remains fenced to the original context. Legacy API launch arguments a
 request; distinct argument lists cannot borrow one another's accepted receipts.
 The original target and accepted receipt survive UI selection
 changes; an unknown acceptance is never retried or routed to legacy.
+The Target Host ID is stable discovery identity across process restarts, not an
+incarnation fence. The published owner transport does not atomically verify its
+process identity with each HTTP mutation; this source slice does not claim safe
+same-ServiceId restart continuation pending reviewed lease evidence and a
+request-time native fence.
 
 This source-only slice **does not yet claim full app parity**. The current
 canonical `InstalledApp` omits the legacy kind, process ID, install path and data
