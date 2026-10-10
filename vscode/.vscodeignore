@@ -2,6 +2,7 @@ src/**
 test/**
 out/test/**
 out/**/*.map
+node_modules/**/*.map
 tsconfig.json
 .npmrc
 *.tsbuildinfo

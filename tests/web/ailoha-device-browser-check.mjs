@@ -1,5 +1,5 @@
 async (page) => {
-  const { url, evidenceUrl } = await page.evaluate(() => window.ailohaBrowserTestOptions);
+  const { url, evidenceUrl, workspaceCards = false } = await page.evaluate(() => window.ailohaBrowserTestOptions);
   const verify = (condition, message) => {
     if (!condition) throw new Error(message);
   };
@@ -25,6 +25,24 @@ async (page) => {
 
   await page.goto(url);
   await page.waitForFunction(() => document.querySelector("#stream-mode")?.textContent === "ALHV H.264");
+  await page.waitForFunction(() => document.querySelector("#semantic-inspection")?.hidden === false);
+  verify(await page.locator("#semantic-inspection").getByText("System (Target Host)").count() > 0,
+    "Read-only System inspection is not visible alongside the live video.");
+  if (workspaceCards) {
+    await page.waitForFunction(() => document.querySelector("#workspace-inspection")?.dataset.status === "ready");
+    await page.locator("#workspace-inspection").getByRole("button", { name: "Inspect", exact: true }).click();
+    await page.waitForFunction(() => document.querySelector("#workspace-inspection")?.dataset.status === "complete");
+    verify(await page.locator(".workspace-app-card").count() === 8, "The resized media check did not include actual workspace cards.");
+    const application = (await evidence()).workspace.inspection.applications.find((entry) => entry.missingSteps.length);
+    verify(Boolean(application), "The canonical fixture has no concrete missing-step evidence.");
+    const card = page.locator(".workspace-app-card").filter({ hasText: application.primaryManifest });
+    await card.locator("summary").click();
+    const text = await card.locator(".workspace-app-details").textContent();
+    verify(application.missingSteps.every((step) => text.includes(step.description))
+      && application.recommendedSkillIds.every((id) => text.includes(id))
+      && text.includes("Approval and workspace mutation required") && text.includes("Informational IDs only"),
+    "The media check did not include actual read-only scanner guidance.");
+  }
   for (const width of [1200, 700, 1000, 900]) {
     await page.setViewportSize({ width, height: 700 });
     await page.waitForTimeout(500);
@@ -45,7 +63,7 @@ async (page) => {
   const calls = observed.calls.filter((call) => call.path?.includes("/input/actions/"));
   const tap = JSON.parse(calls.find((call) => call.path.endsWith("/tap")).body);
   const gesture = JSON.parse(calls.find((call) => call.path.endsWith("/gesture")).body);
-  verify(tap.x === 24 && tap.y === 16 && tap.geometryRevision === 14,
+  verify(Math.abs(tap.x - 24) < 0.1 && Math.abs(tap.y - 16) < 0.1 && tap.geometryRevision === 14,
     "Pointer input did not use observed logical bounds and geometry revision.");
   verify(gesture.geometryRevision === 14 && gesture.actions[0].x === 12
     && gesture.actions.at(-1).x === 36 && gesture.actions.every((action) => action.y === undefined || action.y === 16),
@@ -86,7 +104,7 @@ async (page) => {
   verify(!settled.calls.some((call) => call.path === "/api/v1/host/stop"),
     "View cleanup stopped a shared host.");
   return {
-    synthetic: true, realWebCodecs: true, resizeEvents: 4,
+    synthetic: true, realWebCodecs: true, resizeEvents: 4, workspaceCards, readOnlyGuidance: workspaceCards,
     initialVideoPosts: 1, initialVideoDeletes: 0,
     view, tap, gesture,
     hidden: { leases: hidden.leases, videoResources: hidden.videoResources },

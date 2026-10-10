@@ -35,6 +35,8 @@
     <EmbeddedResource Include="..\..\web\ailoha-video-protocol.js" LogicalName="MobileCanvas.Web.ailoha-video-protocol.js" />
     <EmbeddedResource Include="..\..\web\ailoha-video-receiver.js" LogicalName="MobileCanvas.Web.ailoha-video-receiver.js" />
     <EmbeddedResource Include="..\..\web\ailoha-video-player.js" LogicalName="MobileCanvas.Web.ailoha-video-player.js" />
+    <EmbeddedResource Include="..\..\web\ailoha-workspace-view.js" LogicalName="MobileCanvas.Web.ailoha-workspace-view.js" />
+    <EmbeddedResource Include="..\..\web\ailoha-semantic-view.js" LogicalName="MobileCanvas.Web.ailoha-semantic-view.js" />
     <EmbeddedResource Include="..\..\web\create-device-options.js" LogicalName="MobileCanvas.Web.create-device-options.js" />
     <EmbeddedResource Include="..\..\web\device-canvas.js" LogicalName="MobileCanvas.Web.device-canvas.js" />
     <EmbeddedResource Include="..\..\web\device-canvas.css" LogicalName="MobileCanvas.Web.device-canvas.css" />
