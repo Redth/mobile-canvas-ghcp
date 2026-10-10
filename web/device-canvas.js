@@ -131,6 +131,7 @@ const state = {
   inputIndicatorTimer: null,
   inputQueue: Promise.resolve(),
   recording: false,
+  recordingPending: false,
   detached: false,
   activeScale: null,
   scaleTimer: null,
@@ -515,6 +516,7 @@ async function selectDevice(device, persist) {
   const retainFrame = shouldRetainDeviceFrame(state.frameDeviceId, device.id);
   state.selected = device;
   state.display = null;
+  setRecordingState(false);
   storeDeviceId(localStorage, canvasPreferenceId(), device.id);
   // A cursor left over from the previous device would point at coordinates that no longer mean
   // anything, so drop the overlay whenever the selection changes.
@@ -546,7 +548,7 @@ async function selectDevice(device, persist) {
     fitDeviceScreen();
     setInputStatus("ready", "Input ready");
     startStream();
-    if (device.backend !== "ailoha") await updateRecordingStatus(device.id, selectionVersion);
+    await updateRecordingStatus(device.id, selectionVersion);
   } else {
     state.display = device.display || null;
     fitDeviceScreen();
@@ -2504,29 +2506,34 @@ async function updateRecordingStatus(
     selectionVersion !== state.selectionVersion
     || state.selected?.id !== deviceId
   ) return;
-  setRecordingState(status.isRecording);
+  setRecordingState(status.isRecording, state.selected?.backend === "ailoha" && Boolean(status.outputPath));
 }
 
-function setRecordingState(isRecording) {
+function setRecordingState(isRecording, pending = false) {
   state.recording = isRecording;
+  state.recordingPending = pending;
   elements.record.classList.toggle("recording", isRecording);
-  elements.record.setAttribute("aria-label", isRecording ? "Stop recording" : "Start recording");
-  elements.record.title = isRecording ? "Stop recording" : "Start recording";
+  const label = isRecording ? "Stop recording" : pending ? "Save recording" : "Start recording";
+  elements.record.setAttribute("aria-label", label);
+  elements.record.title = label;
 }
 
 async function toggleRecording() {
-  const operation = state.recording ? "stop" : "start";
+  const deviceId = state.selected.id;
+  const selectionVersion = state.selectionVersion;
+  const operation = state.recording || state.recordingPending ? "stop" : "start";
   const response = await api(
-    `/api/v1/devices/${encodeURIComponent(state.selected.id)}/recording/${operation}`,
+    `/api/v1/devices/${encodeURIComponent(deviceId)}/recording/${operation}`,
     {
       method: "POST",
-      ...(state.recording ? {} : { body: JSON.stringify({ timeoutSeconds: 180 }) }),
+      ...(operation === "stop" ? {} : { body: JSON.stringify({ timeoutSeconds: 180 }) }),
     },
   );
   const status = await response.json();
-  setRecordingState(status.isRecording);
+  if (selectionVersion !== state.selectionVersion || state.selected?.id !== deviceId) return;
+  setRecordingState(status.isRecording, operation === "start" && state.selected?.backend === "ailoha");
   showToast(
-    state.recording
+    operation === "start"
       ? "Recording started"
       : `Recording saved to ${status.outputPath}`,
   );

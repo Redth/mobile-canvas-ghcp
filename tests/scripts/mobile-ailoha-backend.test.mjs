@@ -37,6 +37,9 @@ function fixture(options = {}) {
     async listTargets() { return [...targets.values()]; },
     async getTarget(id) { calls.push(["get", id]); return { ...targets.get(id), surfaces: [surface()] }; },
     async getTargetCapabilities() { return capabilities; },
+    async listProviderTargetTypes() { return [
+      { targetTypeId: "type", kind: "simulator", platform: "ios" },
+    ]; },
     async startTarget(id) { calls.push(["start", id]); return { operationId: `start-${id}` }; },
     async stopTarget(id) { calls.push(["stop", id]); return { operationId: `stop-${id}` }; },
     async rebootTarget(id) { calls.push(["reboot", id]); return { operationId: `reboot-${id}` }; },
@@ -113,10 +116,12 @@ function fixture(options = {}) {
     client, media, owner, selectionStore,
     confirmDestructive: options.confirmDestructive,
     saveScreenshot: options.saveScreenshot,
+    recording: options.recording,
+    finalizeRecordings: options.finalizeRecordings,
     operationState: options.operationState,
   });
   return {
-    backend, calls, targets, providers, client, media, cleanups, selectionStore,
+    backend, calls, targets, providers, client, media, cleanups, selectionStore, capabilities,
     retireContext() { contextState = "detached"; },
     geometryChanged() { revision += 1; },
     selectHost(hostId) { selection = { targetHostId: hostId, targetId: "one" }; },
@@ -174,6 +179,88 @@ test("legacy remains the default and invalid opt-in never becomes a fallback", (
   assert.equal(mobileCanvasBackend("legacy"), "legacy");
   assert.equal(mobileCanvasBackend("ailoha"), "ailoha");
   for (const value of ["", "Ailoha", "unknown"]) assert.throws(() => mobileCanvasBackend(value), /never falls back/);
+});
+
+test("shared recording API and action identifiers preserve legacy outputs and captured owner across selection", async () => {
+  const recordings = [];
+  let tracked = false;
+  const state = fixture({
+    recording: {
+      get tracked() { return tracked; },
+      async start(invocation, input) {
+        recordings.push(["start", invocation, input]);
+        tracked = true;
+        return { deviceId: invocation.targetId, isRecording: true, outputPath: "/host/record.mp4",
+          startedAt: "2026-10-10T01:00:00Z", timeoutSeconds: input.timeoutSeconds };
+      },
+      async status(invocation) {
+        recordings.push(["status", invocation.targetId]);
+        return { deviceId: invocation.targetId, isRecording: tracked && invocation.targetId === "one",
+          outputPath: tracked && invocation.targetId === "one" ? "/host/record.mp4" : null };
+      },
+      async stop(deviceId) {
+        recordings.push(["stop", deviceId]);
+        tracked = false;
+        return { deviceId, isRecording: false, outputPath: "/host/record.mp4" };
+      },
+      async finalize() { if (tracked) await this.stop("one"); },
+    },
+    finalizeRecordings: true,
+  });
+  state.capabilities.push({ id: "surface.capture", version: 1,
+    features: ["startTargetRecording", "getTargetRecording", "stopTargetRecording"] });
+  assert.equal((await state.backend.getDevice("one")).capabilities.recording, true);
+  const response = await state.backend.request("/api/v1/devices/one/recording/start", {
+    method: "POST", body: JSON.stringify({ timeoutSeconds: 180 }),
+  });
+  assert.equal(response.status, 200);
+  assert.deepEqual(await response.json(), {
+    deviceId: "one", isRecording: true, outputPath: "/host/record.mp4",
+    startedAt: "2026-10-10T01:00:00Z", timeoutSeconds: 180,
+  });
+  assert.equal(recordings[0][1].targetHostId, "host");
+  assert.equal(recordings[0][1].surfaceId, "surface/opaque");
+  await state.backend.select("two");
+  assert.deepEqual(await state.backend.invokeAction("get_recording_status", { deviceId: "two" }), {
+    deviceId: "two", isRecording: false, outputPath: null,
+  });
+  await state.backend.dispose();
+  assert.deepEqual(recordings.at(-1), ["stop", "one"]);
+  assert.ok(state.calls.findIndex((call) => call[0] === "client-dispose")
+    > state.calls.findIndex((call) => call[0] === "release-end"));
+  assert.equal(state.calls.some((call) => call[0] === "stop"), false);
+});
+
+test("recording finalization failure prevents lease release and retry stays on original target", async () => {
+  let failures = 1;
+  let stops = 0;
+  const state = fixture({
+    recording: {
+      get tracked() { return true; },
+      async finalize() {
+        stops += 1;
+        if (failures--) throw new Error("artifact download failed");
+      },
+    },
+    finalizeRecordings: true,
+  });
+  await assert.rejects(state.backend.dispose(), /artifact download failed/);
+  assert.equal(state.calls.some((call) => call[0] === "release-begin"), false);
+  await state.backend.dispose();
+  assert.equal(stops, 2);
+  assert.equal(state.calls.filter((call) => call[0] === "release-begin").length, 1);
+});
+
+test("remote and non-virtual targets advertise no recording even when capture methods exist", async (t) => {
+  const state = fixture({ recording: { async start() { throw new Error("must not reach"); } } });
+  t.after(() => state.backend.dispose());
+  state.capabilities.push({ id: "surface.capture", version: 1,
+    features: ["startTargetRecording", "getTargetRecording", "stopTargetRecording"] });
+  state.client.listProviderTargetTypes = async () => [{ targetTypeId: "type", kind: "remote", platform: "ios" }];
+  assert.equal((await state.backend.getDevice("one")).capabilities.recording, false);
+  const response = await state.backend.request("/api/v1/devices/one/recording/start", { method: "POST" });
+  assert.equal(response.status, 501);
+  assert.equal((await response.json()).code, "capability_not_supported");
 });
 
 test("real compatibility action paths project inventory/selection/native identity and positive unsupported", async (t) => {

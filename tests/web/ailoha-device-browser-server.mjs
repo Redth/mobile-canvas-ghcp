@@ -1,13 +1,19 @@
-import { readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { createServer } from "node:http";
 import { randomUUID } from "node:crypto";
-import { join, resolve } from "node:path";
+import { dirname, join, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 import "../scripts/fixtures/ailoha-installed-hooks.mjs";
 import { scenario, sourceSha } from "../scripts/fixtures/ailoha-sdk-double.mjs";
 
 const product = resolve(process.argv[2]);
 const contextPath = resolve(process.argv[3]);
+const recording = process.argv.includes("--recording");
+if (recording) {
+  mkdirSync(dirname(contextPath), { recursive: true });
+  process.env.HOME = dirname(contextPath);
+  scenario.recordingEnabled = true;
+}
 const pinPath = join(product, "lib/ailoha/runtime-package.json");
 let previous;
 try { previous = readFileSync(pinPath); }
@@ -23,15 +29,20 @@ const host = createPreparedHost({
 const opened = await host.openCanvas();
 await host.invokeAction("select_device", { deviceId: "opaque/target" });
 const evidence = createServer((_request, response) => {
+  const recordingDirectory = join(dirname(contextPath), ".mobile-canvas", "artifacts", "recordings");
   response.writeHead(200, { "Content-Type": "application/json" });
   response.end(JSON.stringify({
     synthetic: true, errors, targetStatus: scenario.status,
     leases: scenario.leases.size, videoResources: scenario.videos.size,
     calls: scenario.calls,
+    recordingCommands: recording && existsSync(`${contextPath}.recording-calls`)
+      ? readFileSync(`${contextPath}.recording-calls`, "utf8").trim().split("\n") : [],
+    recordingFiles: recording && existsSync(recordingDirectory)
+      ? readdirSync(recordingDirectory).filter((file) => file.endsWith(".mp4")).length : 0,
   }));
 });
 await new Promise((resolve) => evidence.listen(0, "127.0.0.1", resolve));
-console.log(JSON.stringify({ url: opened.url, evidenceUrl: `http://127.0.0.1:${evidence.address().port}` }));
+console.log(JSON.stringify({ url: opened.url, evidenceUrl: `http://127.0.0.1:${evidence.address().port}`, recording }));
 let closing;
 async function close() {
   if (closing) return closing;
@@ -41,6 +52,10 @@ async function close() {
     if (previous) writeFileSync(pinPath, previous);
     else rmSync(pinPath, { force: true });
     rmSync(contextPath, { force: true });
+    if (recording) {
+      rmSync(`${contextPath}.recording-calls`, { force: true });
+      rmSync(join(dirname(contextPath), ".mobile-canvas"), { recursive: true, force: true });
+    }
   })();
   return closing;
 }

@@ -6,6 +6,7 @@ import { createCatalogModel } from "./ailoha-catalog-creation.mjs";
 export const scenario = {
   calls: [], leases: new Map(), videos: new Map(), operations: new Map(), status: "running", geometryRevision: 13,
   catalog: null, createdTargets: new Map(), creationGate: null,
+  recordingEnabled: false,
 };
 export const sourceSha = "0000000000000000000000000000000000000000";
 const targetId = "opaque/target";
@@ -40,10 +41,13 @@ function mergedCapabilities(values) {
   return [...groups.values()];
 }
 function providerRecords() {
+  const capabilities = scenario.recordingEnabled
+    ? mergedCapabilities([...captures, { id: "surface.capture", version: 1,
+      features: ["startTargetRecording", "getTargetRecording", "stopTargetRecording"] }]) : captures;
   return [{
-    providerId: "synthetic-provider", name: "Synthetic provider", version: "synthetic", state: "ready", capabilities: captures,
+    providerId: "synthetic-provider", name: "Synthetic provider", version: "synthetic", state: "ready", capabilities,
   }, ...(scenario.catalog?.providers ?? []).map((provider) => ({
-    ...provider, capabilities: mergedCapabilities([...provider.capabilities, ...captures]),
+    ...provider, capabilities: mergedCapabilities([...provider.capabilities, ...capabilities]),
   }))];
 }
 function target() {
@@ -117,6 +121,10 @@ export async function openTargetHostTransport(leaseId) {
         state: "ready", capabilities: mergedCapabilities([...captures, ...(scenario.catalog?.status.capabilities ?? [])]),
       });
       if (path === "/api/v1/providers") return reply(providerRecords());
+      if (path === "/api/v1/providers/synthetic-provider/target-types" && scenario.recordingEnabled) {
+        return reply([{ targetTypeId: "opaque/type", providerId: "synthetic-provider",
+          kind: "simulator", platform: "ios", name: "Fixture simulator" }]);
+      }
       const catalogRoute = /^\/api\/v1\/providers\/([^/]+)\/(catalogs|runtimes|target-types|templates)$/.exec(path);
       if (catalogRoute) {
         const entry = scenario.catalog?.providerCatalogs.find((entry) => entry.providerId === decodeURIComponent(catalogRoute[1]));

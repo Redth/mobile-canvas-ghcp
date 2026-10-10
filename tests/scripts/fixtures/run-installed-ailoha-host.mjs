@@ -30,6 +30,7 @@ let selectedContext;
 let readCatalog;
 let createFromHost;
 let selectedFromHost;
+let recordThroughHost;
 const logs = [];
 const units = [];
 
@@ -154,6 +155,13 @@ try {
     });
     assert.equal(bootstrap.status, 204);
     const cookie = bootstrap.headers.get("set-cookie").split(";", 1)[0];
+    recordThroughHost = async (outputPath) => {
+      const started = await action("start_recording", { deviceId: "opaque/target", outputPath, timeoutSeconds: 180 });
+      assert.equal(started.isRecording, true);
+      const response = await fetch(new URL("/api/v1/devices/opaque%2Ftarget/recording", url), { headers: { Cookie: cookie } });
+      assert.equal(response.status, 200);
+      assert.equal((await response.json()).outputPath, outputPath);
+    };
     const socketUrl = new URL("/ws/video?deviceId=opaque%2Ftarget", url);
     socketUrl.protocol = "ws:";
     const socket = new WebSocket(socketUrl, "ailoha.video.v1", { headers: { Cookie: cookie } });
@@ -247,7 +255,16 @@ try {
     assert.equal((await api("/api/v1/devices/opaque%2Ftarget/boot", "POST")).status, 200);
     const display = await (await api("/api/v1/devices/opaque%2Ftarget/display")).json();
     await api("/api/v1/devices/opaque%2Ftarget/input/tap", "POST", { x: 12, y: 10, geometryRevision: display.geometryRevision });
-    assert.equal((await api("/api/v1/devices/opaque%2Ftarget/recording")).status, 501);
+    const emptyRecording = await api("/api/v1/devices/opaque%2Ftarget/recording");
+    assert.equal(emptyRecording.status, 200);
+    assert.equal((await emptyRecording.json()).isRecording, false);
+    recordThroughHost = async (outputPath) => {
+      const response = await api("/api/v1/devices/opaque%2Ftarget/recording/start", "POST", { timeoutSeconds: 180, outputPath });
+      assert.equal(response.status, 200);
+      assert.equal((await response.json()).isRecording, true);
+      const status = await (await api("/api/v1/devices/opaque%2Ftarget/recording")).json();
+      assert.equal(status.outputPath, outputPath);
+    };
     await bridge.handleMessage({ type: "socket-open", id: "video", channel: "video", query: "deviceId=opaque%2Ftarget" });
     await waitFor(() => receiver?.lastAcknowledgedSequence === 5);
     await receiver.dispose();
@@ -259,6 +276,21 @@ try {
     assert.equal((await bridge.getSelectedDeviceContext()).deviceId, "opaque/target");
     assert.equal(messages.some((message) => JSON.stringify(message).includes("controlCredential")), false);
   } else throw new Error("Unknown installed host test.");
+  scenario.recordingEnabled = true;
+  const recorded = join(scratch, "owned-recording.mp4");
+  const finalizedOnClose = join(scratch, "owned-close.mp4");
+  await recordThroughHost(recorded);
+  const recordingMcp = await createAilohaMcpDispatcher({ version: "synthetic-only", binding: returnedBinding(selectedContext) });
+  try {
+    const status = await recordingMcp.handle(mcpCall("mobile_device_recording_status", { deviceId: "opaque/target" }));
+    assert.equal(status.result.structuredContent.isRecording, true);
+    const stopped = await recordingMcp.handle(mcpCall("mobile_device_recording_stop", { deviceId: "opaque/target" }));
+    assert.equal(stopped.result.structuredContent.isRecording, false);
+    assert.equal(stopped.result.structuredContent.outputPath, recorded);
+  } finally { await recordingMcp.dispose(); }
+  assert.equal(existsSync(recorded), true);
+  await recordThroughHost(finalizedOnClose);
+  scenario.recordingEnabled = false;
   enableCatalogCreation();
   const creationCatalog = await readCatalog();
   assert.equal(creationCatalog.creationSupport.supported, true);
@@ -322,6 +354,11 @@ try {
   }), true);
   await release();
   release = null;
+  assert.equal(existsSync(finalizedOnClose), true);
+  const recordingCommands = readFileSync(`${process.env.AILOHA_TEST_CONTEXT_STATE}.recording-calls`, "utf8").trim().split("\n");
+  assert.equal(recordingCommands.filter((command) => command === "start").length, 2);
+  assert.equal(recordingCommands.filter((command) => command === "stop").length, 2);
+  assert.equal(existsSync(`${process.env.AILOHA_TEST_CONTEXT_STATE}.recording`), false);
   assert.deepEqual(units, [0, 1, 2, 3, 4, 5]);
   assert.equal(scenario.videos.size, 0);
   assert.equal(scenario.leases.size, 0);
@@ -377,6 +414,7 @@ try {
       selectionApplied: record.selectionApplied, operationId: record.acceptedOperation.operationId,
     })),
     createPosts: creationCalls.length, noSeparateBootPost: true,
+    recordingCommands, recordingFinalizedOnClose: true,
   }));
 } finally {
   await dispatcher?.dispose();

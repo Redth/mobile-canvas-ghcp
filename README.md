@@ -84,7 +84,7 @@ screenshots, observed-geometry tap/held-press/swipe/scroll, and complete ALHV
 H.264 access units. It requires no app instrumentation. Creation uses exact
 host/provider catalog choices and one canonical operation; accepted retries do
 not submit another create or boot. Destructive reset/delete without scoped human consent, app/system
-inspection, recording, keyboard/buttons and broader controls remain explicitly
+inspection, keyboard/buttons and broader controls remain explicitly
 unsupported. See [the Ailoha adapter contract](docs/ailoha-protocol-adapter.md)
 for ownership, setup, package evidence and remaining gates.
 

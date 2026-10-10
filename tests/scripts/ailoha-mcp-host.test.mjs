@@ -17,6 +17,9 @@ test("MCP preserves all61 installed identities and advertises broader opt-in lim
   assert.deepEqual(catalog.map((tool) => tool.name).sort(), baseline.mcpTools);
   assert.equal(catalog.length, 61);
   assert.equal(catalog.find((tool) => tool.name === "mobile_device_app_launch").description.includes("positively unsupported"), true);
+  assert.equal(catalog.find((tool) => tool.name === "mobile_device_recording_start").description.includes("positively unsupported"), false);
+  assert.equal(catalog.find((tool) => tool.name === "mobile_device_recording_status").description.includes("positively unsupported"), false);
+  assert.equal(catalog.find((tool) => tool.name === "mobile_device_recording_stop").description.includes("positively unsupported"), false);
   assert.equal(catalog.every((tool) => tool.execution.taskSupport === "forbidden"), true);
   assert.equal(catalog.find((tool) => tool.name === "mobile_device_tap").inputSchema.properties.geometryRevision.maximum, 0xffffffff);
   const selected = catalog.find((tool) => tool.name === "mobile_device_get_selected");
@@ -60,6 +63,14 @@ test("actual dispatch uses the bound context with original tool meanings and cap
   const screenshot = await dispatcher.handle(call("mobile_device_screenshot", { deviceId: "opaque-target" }));
   assert.equal(screenshot.result.content[1].type, "image");
   assert.equal(screenshot.result.content[1].mimeType, "image/png");
+  for (const [tool, action] of [
+    ["mobile_device_recording_start", "start_recording"],
+    ["mobile_device_recording_status", "get_recording_status"],
+    ["mobile_device_recording_stop", "stop_recording"],
+  ]) {
+    const result = await dispatcher.handle(call(tool, { deviceId: "opaque-target" }));
+    assert.equal(result.result.structuredContent.operation, action);
+  }
 });
 
 test("unsupported/invalid/cross-scope calls are positive failures before any runtime resolution", async (t) => {

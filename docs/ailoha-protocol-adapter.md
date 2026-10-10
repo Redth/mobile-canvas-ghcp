@@ -374,6 +374,29 @@ session DELETE, then authoritative operation wait before lease release. A lost
 never DELETE or a broad 404-as-success fallback. Unknown create outcomes cannot
 automatically create a replacement on close/reopen.
 
+Recording preserves the Mobile Canvas `recording/start`, `recording` status and
+`recording/stop` API paths and the three MCP tool identifiers/output fields.
+Only a booted virtual iOS simulator or Android emulator whose exact target type
+and surface advertise start/get/stop recording is enabled. The verified Ailoha
+CLI's scoped recording coordinator owns cross-process acceptance markers,
+operation reconciliation, stop and bounded artifact download; Mobile Canvas
+does not implement provider recording or forward a credential to the renderer.
+Start captures the context ref/epoch/revision and host/target/surface; a lost
+start response is not submitted twice. Stop uses the original bound owner even
+after selecting another target; failed finalization/download remains visible
+and prevents the canvas lease from releasing. The canonical CLI exposes generic
+errors for both indeterminate/failed stops and retryable downloads, and its
+retry can issue a new Target Host stop after a terminal failure. Mobile Canvas
+therefore never issues another CLI stop after an attempted stop; it can reconcile
+an externally landed file, but safe poll/download-only recovery of a failed or
+timed-out stop requires a new native contract.
+The default host output is a unique MP4 under
+`~/.mobile-canvas/artifacts/recordings`; explicit absolute MP4 host paths are
+accepted, but the canonical landing refuses an existing file rather than
+silently overwriting it. No remote/storage fallback is attempted. MCP process
+exit releases its own lease without finalizing a recording that belongs to the
+still-open view; view close/suspend finalizes before lease release.
+
 Hide/close/dispose retires only that view's sockets, receiver, decoder and owned
 resources. The shared host/broker/devices remain running. Provider state and
 description are projected separately from a connected control plane; unavailable
@@ -383,10 +406,11 @@ tooling is not a ready-shaped empty inventory.
 
 Implemented: authoritative advertised catalogs and compatible create+boot,
 inventory/select, advertised start/stop/reboot, PNG screenshot,
-basic geometry-bound pointer gestures and shared ALHV WebCodecs display.
+basic geometry-bound pointer gestures, shared ALHV WebCodecs display and
+target-host recording through the official scoped CLI.
 Unsupported: configuration-dependent creation, reveal/rotation/keyboard/buttons,
 reset/delete without scoped consent, app/system semantic trees, app deployment,
-recording and broader settings/diagnostics/file/hardware operations. No claim of
+broader settings/diagnostics/file/hardware operations. No claim of
 device or full feature parity is made.
 
 Tests exercise actual prepared GitHub entrypoints and compiled VS Code bridge
@@ -408,8 +432,14 @@ an unchanged scoped selection announcement does not recreate the live resource.
 `tests/web/ailoha-device-browser-server.mjs` serves only the synthetic fixture;
 `ailoha-device-browser-check.mjs` is a Playwright MCP code file to repeat that
 check. On a blank page set `window.ailohaBrowserTestOptions` to the server's
-`{url, evidenceUrl}`, then run the code file; it navigates once into a fresh
-fixture host and verifies resource counts, pointer input and hide/resume.
+`{url, evidenceUrl, recording}`, then run the code file; it navigates once into
+a fresh fixture host and verifies resource counts, pointer input and hide/resume.
+Pass `--recording` to the server to enable synthetic recording support. This
+also checks the prepared shared renderer's start/stop button and hide-time
+finalization against its captured view, with recording output isolated under
+the fixture's context directory. Run it against both prepared plugin and VSIX
+roots; the compiled VS Code HostBridge is exercised by the separate installed
+entrypoint fixture.
 Prepared VS Code shared renderer checks use the same host adapter; the separately
 tested compiled extension/webview bridge is not replaced by a browser-only proxy
 claim.

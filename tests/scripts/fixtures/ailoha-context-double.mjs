@@ -1,5 +1,6 @@
 import { randomUUID } from "node:crypto";
-import { readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
+import { appendFileSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
+import { isAbsolute } from "node:path";
 
 const args = process.argv.slice(2);
 const path = process.env.AILOHA_TEST_CONTEXT_STATE;
@@ -7,6 +8,45 @@ if (!path) throw new Error("The synthetic CLI is only available in an isolated t
 let contexts;
 try { contexts = JSON.parse(readFileSync(path, "utf8")); }
 catch (error) { if (error.code !== "ENOENT") throw error; contexts = []; }
+if (args[0] === "recording") {
+  const option = (name) => args[args.indexOf(name) + 1];
+  const contextRef = option("--context");
+  const scopeEpoch = option("--context-epoch");
+  const recordingPath = `${path}.recording`;
+  let tracked = null;
+  try { tracked = JSON.parse(readFileSync(recordingPath, "utf8")); }
+  catch (error) { if (error.code !== "ENOENT") throw error; }
+  appendFileSync(`${path}.recording-calls`, `${args[1]}\n`);
+  if (tracked && (tracked.contextRef !== contextRef || tracked.scopeEpoch !== scopeEpoch)) {
+    throw new Error("The synthetic recording belongs to another scoped authority.");
+  }
+  if (args[1] === "status") {
+    process.stdout.write(JSON.stringify(tracked?.output ?? null));
+  } else if (args[1] === "start") {
+    const context = contexts.find((entry) => entry.contextRef === contextRef && entry.scopeEpoch === scopeEpoch);
+    if (!context || context.state !== "open" || context.revision !== option("--context-revision")
+      || context.selection?.targetHostId !== option("--target-host")
+      || context.selection.targetId !== option("--target")
+      || context.selection.surfaceId !== option("--surface") || tracked) {
+      throw new Error("The synthetic recording start was not authorized by the captured view.");
+    }
+    const outputFile = option("--output");
+    if (!isAbsolute(outputFile) || !outputFile.endsWith(".mp4")) throw new Error("The synthetic output must be an absolute MP4.");
+    const output = {
+      recordingId: randomUUID(), targetHostId: context.selection.targetHostId,
+      targetId: context.selection.targetId, surfaceId: context.selection.surfaceId,
+      state: "recording", outputFile, startedAt: new Date().toISOString(),
+    };
+    writeFileSync(recordingPath, JSON.stringify({ contextRef, scopeEpoch, output }), { flag: "wx" });
+    process.stdout.write(JSON.stringify(output));
+  } else if (args[1] === "stop") {
+    if (!tracked) throw new Error("The synthetic recording has no accepted owner.");
+    writeFileSync(tracked.output.outputFile, Buffer.from("synthetic-mp4-fixture"), { flag: "wx" });
+    rmSync(recordingPath);
+    process.stdout.write(JSON.stringify({ ...tracked.output, state: "completed", artifactId: randomUUID() }));
+  } else throw new Error("Unexpected synthetic recording command.");
+  process.exit(0);
+}
 const requestIndex = args.indexOf("--request-json");
 const input = requestIndex >= 0 ? JSON.parse(args[requestIndex + 1]) : null;
 let context;
