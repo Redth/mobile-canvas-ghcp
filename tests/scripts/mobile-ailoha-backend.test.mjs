@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
+import { createHash } from "node:crypto";
 import test from "node:test";
-import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { access, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { productModule } from "../ailoha-test-module.mjs";
 const { AilohaMobileBackend } = await import(productModule("lib/ailoha/mobile-backend.mjs"));
@@ -9,6 +10,7 @@ const { createAilohaMediaAdapter } = await import(productModule("lib/ailoha/medi
 const { AilohaProtocolError } = await import(productModule("lib/ailoha/errors.mjs"));
 const { publicSnapshot, MobileAilohaError } = await import(productModule("lib/ailoha/mobile-projection.mjs"));
 const { createAilohaContextStore } = await import(productModule("lib/ailoha/context-adapter.mjs"));
+const { createVerifiedAilohaCli } = await import(productModule("lib/ailoha/runtime-sdk.mjs"));
 
 function deferred() {
   let resolve;
@@ -144,7 +146,6 @@ function fixture(options = {}) {
     scope: { sessionId: "unique-session", viewId: "unique-view" },
     client, media, owner, selectionStore,
     confirmDestructive: options.confirmDestructive,
-    beginDestructiveApproval: options.beginDestructiveApproval,
     stagedApps: options.stagedApps,
     allowHostPackage: options.allowHostPackage,
     saveScreenshot: options.saveScreenshot,
@@ -726,33 +727,44 @@ test("install, destructive uninstall and Android app-op mutation remain explicit
 });
 
 async function stagedFixture(t, overrides = {}) {
-  const { stagedApps: stagedOverrides, ...fixtureOverrides } = overrides;
+  const { stagedApps: stagedOverrides, beginDestructiveApproval, ...fixtureOverrides } = overrides;
   const directory = await mkdtemp(join(process.cwd(), ".mobile-stage-"));
   t.after(() => rm(directory, { recursive: true, force: true }));
   const sourcePath = join(directory, "local app.apk");
   await writeFile(sourcePath, "controlled fixture");
   const steps = [];
-  const approvalSignal = new AbortController().signal;
   let stageSignal;
+  const hash = (value) => createHash("sha256").update(value).digest("hex");
   const stagedApps = {
     async stage(invocation, path, options) {
       assert.equal(options.timeoutMs, 11 * 60_000);
       assert.ok(options.signal instanceof AbortSignal);
       stageSignal = options.signal;
       steps.push(["stage", path, invocation.executionContext?.revision]);
-      return { artifactId: "private-artifact", proof: { packageName: "local app.apk", receiptHash: "private-hash" } };
+      const receipt = "a".repeat(64);
+      return {
+        artifactId: "private-artifact", sourcePath: path, receipt, size: 18, sha256: "b".repeat(64),
+        proof: {
+          targetHostId: invocation.targetHostId, targetId: invocation.targetId,
+          providerId: invocation.providerId, nativeTargetId: invocation.nativeIdentity.nativeId,
+          nativeTargetPlatform: invocation.nativeIdentity.platform,
+          contextRef: invocation.executionContext.contextRef, scopeEpoch: invocation.executionContext.scopeEpoch,
+          revision: invocation.executionContext.revision, hostInstanceId: "staged-host-incarnation",
+          ownerProcessId: invocation.contextOwner.processId,
+          ownerStartedAt: invocation.contextOwner.processStartedAt,
+          sourcePathHash: hash(path), packageName: "local app.apk", receiptHash: hash(receipt),
+        },
+      };
     },
     async install(invocation, staged, options) {
       assert.ok(options.signal instanceof AbortSignal);
-      if (!fixtureOverrides.beginDestructiveApproval) assert.equal(options.signal, approvalSignal);
-      assert.equal(options.timeoutMs, 30_000);
+      assert.ok(options.timeoutMs > 0 && options.timeoutMs <= 30_000);
       steps.push(["install", invocation.executionContext?.revision]);
       return { operationId: "install-operation" };
     },
     async cleanup(invocation, staged, options) {
       assert.ok(options.signal instanceof AbortSignal);
-      if (stageSignal) assert.equal(options.signal, stageSignal);
-      assert.notEqual(options.signal, approvalSignal);
+      if (stageSignal?.aborted) assert.equal(options.signal.aborted, false);
       assert.equal(options.timeoutMs, 30_000);
       steps.push(["cleanup", invocation.executionContext?.revision]);
       return { operationId: "cleanup-operation" };
@@ -761,26 +773,16 @@ async function stagedFixture(t, overrides = {}) {
   };
   const state = canonicalFixture({
     app: true, stagedApps, allowHostPackage: () => true,
-    beginDestructiveApproval(action, invocation, { stagedArtifact: proof }) {
-      assert.equal(action, "install");
-      assert.equal(JSON.stringify(invocation).includes("connectionRef"), false);
-      steps.push(["approval", action, proof.artifactId, invocation.executionContext.revision]);
-      return {
-        approved: Promise.resolve(),
-        signal: approvalSignal,
-        remainingTimeoutMs(ceiling) { return ceiling; },
-        async run(work) { return work(); },
-        requireCurrent() {},
-        consume(owned, receipt) {
-          assert.equal(owned, invocation);
-          assert.equal(receipt, proof);
-          steps.push(["consumed", proof.artifactId]);
-        },
-        dispose() {},
-      };
+    confirmDestructive(request) {
+      assert.equal(request.action, "install");
+      assert.equal(JSON.stringify(request.invocation).includes("connectionRef"), false);
+      steps.push(["approval", request.action, request.stagedArtifact.artifactId,
+        request.invocation.executionContext.revision]);
+      return true;
     },
     ...fixtureOverrides,
   });
+  if (beginDestructiveApproval) state.backend.beginDestructiveApproval = beginDestructiveApproval;
   state.client.waitForOperation = async (id) => {
     steps.push(["wait", id]);
     return { operationId: id, targetId: "one", providerId: "provider",
@@ -788,7 +790,7 @@ async function stagedFixture(t, overrides = {}) {
       status: "succeeded", destructive: true };
   };
   t.after(() => state.backend.dispose());
-  return { ...state, sourcePath, steps, approvalSignal };
+  return { ...state, sourcePath, steps };
 }
 
 test("source-conditional install stages on host, waits for accepted install and owned deletion, never exposes path", async (t) => {
@@ -799,7 +801,7 @@ test("source-conditional install stages on host, waits for accepted install and 
     bundleId: null, operation: "install", processId: null, detail: null,
   });
   assert.deepEqual(state.steps.map(([name]) => name),
-    ["stage", "approval", "consumed", "install", "wait", "cleanup", "wait"]);
+    ["stage", "approval", "install", "wait", "cleanup", "wait"]);
   assert.equal(JSON.stringify(result).includes(state.sourcePath), false);
 });
 
@@ -807,43 +809,129 @@ test("install cannot submit while a genuine scoped approval decision is pending 
   const requested = deferred();
   const decision = deferred();
   let state;
-  state = await stagedFixture(t, { beginDestructiveApproval(action, invocation, { stagedArtifact }) {
-    assert.equal(action, "install");
-    assert.equal(stagedArtifact.artifactId, "private-artifact");
+  state = await stagedFixture(t, { confirmDestructive(request) {
+    assert.equal(request.action, "install");
+    assert.equal(request.stagedArtifact.artifactId, "private-artifact");
     state.steps.push(["approval"]);
     requested.resolve();
-    return {
-      approved: decision.promise, signal: new AbortController().signal,
-      remainingTimeoutMs(ceiling) { return ceiling; },
-      async run(work) { return work(); },
-      requireCurrent() {},
-      consume(owned, staged) {
-        assert.equal(owned, invocation);
-        assert.equal(staged, stagedArtifact);
-        state.steps.push(["consumed"]);
-      },
-      dispose() {},
-    };
+    return decision.promise;
   } });
   const pending = state.backend.installApp("one", state.sourcePath);
   await requested.promise;
   assert.deepEqual(state.steps.map(([name]) => name), ["stage", "approval"]);
-  decision.resolve();
+  decision.resolve(true);
   assert.equal((await pending).success, true);
   assert.deepEqual(state.steps.map(([name]) => name),
-    ["stage", "approval", "consumed", "install", "wait", "cleanup", "wait"]);
+    ["stage", "approval", "install", "wait", "cleanup", "wait"]);
 
-  const expired = await stagedFixture(t, { beginDestructiveApproval() {
-    return {
-      approved: Promise.reject(new MobileAilohaError("consent_expired", "Approval expired.", 409)),
-      signal: new AbortController().signal,
-      remainingTimeoutMs(ceiling) { return ceiling; },
-      async run() { throw Error("must not run"); },
-      requireCurrent() {}, consume() { throw Error("must not consume"); }, dispose() {},
-    };
+  const denied = await stagedFixture(t, { confirmDestructive: async () => false });
+  await assert.rejects(denied.backend.installApp("one", denied.sourcePath), { code: "consent_denied" });
+  assert.deepEqual(denied.steps.map(([name]) => name), ["stage", "cleanup", "wait"]);
+});
+
+for (const cancellation of ["caller", "owner", "deadline"]) {
+  test(`staged install ${cancellation} cancellation while genuine approval is pending cleans only its original artifact`, async (t) => {
+    const waiting = deferred();
+    const decision = deferred();
+    const caller = new AbortController();
+    const state = await stagedFixture(t, { confirmDestructive(request) {
+      assert.equal(request.action, "install");
+      waiting.resolve();
+      return decision.promise;
+    } });
+    const originalTimer = globalThis.setTimeout;
+    let expire;
+    if (cancellation === "deadline") {
+      globalThis.setTimeout = (callback, delay, ...args) => {
+        if (delay === 60_000) expire = () => callback(...args);
+        return originalTimer(callback, delay, ...args);
+      };
+    }
+    try {
+      const work = state.backend.invokeAction("install_app", { deviceId: "one", path: state.sourcePath },
+        { signal: caller.signal });
+      const rejected = assert.rejects(work, {
+        code: cancellation === "deadline" ? "consent_timeout" : "consent_cancelled",
+      });
+      await waiting.promise;
+      assert.deepEqual(state.steps.map(([name]) => name), ["stage"]);
+      if (cancellation === "caller") caller.abort();
+      else if (cancellation === "owner") state.backend.cancelPendingApprovals();
+      else expire();
+      decision.resolve(true);
+      await rejected;
+      assert.deepEqual(state.steps.map(([name]) => name), ["stage", "cleanup", "wait"]);
+    } finally {
+      globalThis.setTimeout = originalTimer;
+    }
+  });
+}
+
+test("canvas API forwards its original request abort through staged install without cancelling owned cleanup", async (t) => {
+  const waiting = deferred();
+  const decision = deferred();
+  const caller = new AbortController();
+  const state = await stagedFixture(t, { confirmDestructive() {
+    waiting.resolve();
+    return decision.promise;
   } });
-  await assert.rejects(expired.backend.installApp("one", expired.sourcePath), { code: "consent_expired" });
-  assert.deepEqual(expired.steps.map(([name]) => name), ["stage", "cleanup", "wait"]);
+  const request = state.backend.request("/api/v1/devices/one/apps/install", {
+    method: "POST", body: JSON.stringify({ path: state.sourcePath }), signal: caller.signal,
+  });
+  await waiting.promise;
+  caller.abort();
+  decision.resolve(true);
+  const response = await request;
+  assert.equal(response.status, 409);
+  const body = await response.json();
+  assert.equal(body.code, "consent_cancelled");
+  assert.equal(JSON.stringify(body).includes(state.sourcePath), false);
+  assert.deepEqual(state.steps.map(([name]) => name), ["stage", "cleanup", "wait"]);
+});
+
+test("cancelled original install authority during verified CLI acquisition cannot start a native child", async (t) => {
+  const entered = deferred();
+  const release = deferred();
+  const caller = new AbortController();
+  const pin = { version: "synthetic-only", sourceSha: "a".repeat(40) };
+  const directory = await mkdtemp(join(process.cwd(), ".mobile-native-"));
+  t.after(() => rm(directory, { recursive: true, force: true }));
+  const marker = join(directory, "native-post");
+  let launches = 0;
+  const runCli = createVerifiedAilohaCli({ pin, sdk: {
+    async getVerifiedCliLaunch() {
+      launches += 1;
+      entered.resolve();
+      await release.promise;
+      return { ...pin, file: process.execPath,
+        args: ["-e", `require('node:fs').writeFileSync(${JSON.stringify(marker)}, 'POST')`] };
+    },
+  } });
+  const state = await stagedFixture(t, { stagedApps: {
+    async install(invocation, staged, options) {
+      state.steps.push(["install-start"]);
+      await runCli(["target", "app", "install-staged", "--json"], options);
+      return { operationId: "must-not-submit" };
+    },
+  } });
+  const work = state.backend.invokeAction("install_app", { deviceId: "one", path: state.sourcePath },
+    { signal: caller.signal });
+  const rejected = assert.rejects(work, (error) => {
+    assert.equal(error.code, "consent_cancelled");
+    return true;
+  });
+  await entered.promise;
+  caller.abort();
+  release.resolve();
+  await rejected;
+  assert.equal(launches, 1);
+  await assert.rejects(access(marker), { code: "ENOENT" });
+  assert.deepEqual(state.steps.map(([name]) => name),
+    ["stage", "approval", "install-start"]);
+  assert.equal(state.calls.some(([name]) => name === "app-install"), false);
+  await assert.rejects(state.backend.installApp("one", state.sourcePath), {
+    code: "app_install_outcome_uncertain",
+  });
 });
 
 test("a timed-out accepted staged install resumes only the original operation read", async (t) => {
@@ -860,7 +948,7 @@ test("a timed-out accepted staged install resumes only the original operation re
   state.client.getTargetCapabilities = async () => { throw new Error("A new capability read must not replace an accepted owner."); };
   assert.equal((await state.backend.installApp("one", state.sourcePath)).success, true);
   assert.deepEqual(state.steps.map(([name]) => name),
-    ["stage", "approval", "consumed", "install", "wait", "cleanup", "wait"]);
+    ["stage", "approval", "install", "wait", "cleanup", "wait"]);
 });
 
 test("approval expiry after an accepted install keeps the original operation ID for GET-only recovery", async (t) => {
@@ -922,19 +1010,10 @@ test("host-rejected staged install and denied approval never submit a second ins
   await assert.rejects(rejected.backend.installApp("one", rejected.sourcePath), { code: "install_rejected" });
   await assert.rejects(rejected.backend.installApp("one", rejected.sourcePath), { code: "install_rejected" });
   assert.deepEqual(rejected.steps.map(([name]) => name),
-    ["stage", "approval", "consumed", "install", "cleanup", "wait"]);
-  const denied = await stagedFixture(t, { beginDestructiveApproval() {
-    return { approved: Promise.reject(new MobileAilohaError("consent_denied", "Approval declined.", 403)),
-      signal: new AbortController().signal,
-      remainingTimeoutMs(ceiling) { return ceiling; },
-      async run() { throw Error("must not run"); },
-      requireCurrent() {}, consume() { throw Error("must not consume"); }, dispose() {} };
-  } });
+    ["stage", "approval", "install", "cleanup", "wait"]);
+  const denied = await stagedFixture(t, { confirmDestructive: async () => false });
   await assert.rejects(denied.backend.installApp("one", denied.sourcePath), { code: "consent_denied" });
   assert.deepEqual(denied.steps.map(([name]) => name), ["stage", "cleanup", "wait"]);
-  const booleanOnly = await stagedFixture(t, { beginDestructiveApproval() { return true; } });
-  await assert.rejects(booleanOnly.backend.installApp("one", booleanOnly.sourcePath), { code: "capability_not_supported" });
-  assert.deepEqual(booleanOnly.steps.map(([name]) => name), ["stage", "cleanup", "wait"]);
 });
 
 test("stage uncertainty and accepted install errors cannot replay on retry or replacement incarnation", async (t) => {
@@ -1032,7 +1111,7 @@ test("cleanup failure reports the secondary error without erasing the successful
   assert.equal(body.operationId, "install-operation");
   assert.equal(JSON.stringify(body).includes(state.sourcePath), false);
   assert.deepEqual(state.steps.map(([name]) => name),
-    ["stage", "approval", "consumed", "install", "wait", "cleanup"]);
+    ["stage", "approval", "install", "wait", "cleanup"]);
   const unknown = await stagedFixture(t, { stagedApps: {
     async cleanup() {
       unknown.steps.push(["cleanup"]);
@@ -1048,7 +1127,7 @@ test("cleanup failure reports the secondary error without erasing the successful
 
 test("missing scoped consent, host topology or source capability cannot stage a package", async (t) => {
   for (const options of [
-    { beginDestructiveApproval: undefined },
+    { confirmDestructive: undefined },
     { allowHostPackage: () => false },
     { client: { async getHostStatus() {
       return { hostId: "host", profile: "ailoha.target-host/v1", state: "ready", version: "test", capabilities: [] };
@@ -1106,6 +1185,67 @@ function canonicalFixture(options = {}) {
   };
 }
 
+for (const status of [408, 499]) {
+  test(`destructive HTTP ${status} uncertainty retains the original receipt without another mutation or approval`, async (t) => {
+    let submissions = 0;
+    let prompts = 0;
+    const operationState = new Map();
+    const state = canonicalFixture({
+      operationState,
+      confirmDestructive: async () => { prompts += 1; return true; },
+      client: {
+        async resetTarget() { submissions += 1; throw new AilohaProtocolError("http_error", { status }); },
+      },
+    });
+    t.after(() => state.backend.dispose());
+    await assert.rejects(state.backend.lifecycle("erase", "one", { confirm: true }));
+    const original = [...operationState.values()][0];
+    await assert.rejects(state.backend.lifecycle("erase", "one", { confirm: true }), { code: "lifecycle_outcome_uncertain" });
+    assert.equal([...operationState.values()][0], original);
+    assert.equal(original.invocation.targetId, "one");
+    assert.equal(submissions, 1);
+    assert.equal(prompts, 1);
+  });
+}
+
+test("a disposed client with an unknown destructive outcome cannot erase the original receipt", async (t) => {
+  let submissions = 0;
+  const state = canonicalFixture({
+    confirmDestructive: async () => true,
+    client: {
+      async resetTarget() { submissions += 1; throw new AilohaProtocolError("client_disposed"); },
+    },
+  });
+  t.after(() => state.backend.dispose());
+  await assert.rejects(state.backend.lifecycle("erase", "one", { confirm: true }));
+  await assert.rejects(state.backend.lifecycle("erase", "one", { confirm: true }), { code: "lifecycle_outcome_uncertain" });
+  assert.equal(submissions, 1);
+});
+
+test("late authoritative acceptance remains recoverable by GET despite outward approval expiry", async (t) => {
+  let clock = 0;
+  t.mock.method(performance, "now", () => clock);
+  const operationState = new Map();
+  let submissions = 0;
+  let prompts = 0;
+  const state = canonicalFixture({
+    operationState,
+    confirmDestructive: async () => { prompts += 1; return true; },
+    client: {
+      async resetTarget() { submissions += 1; clock = 60_001; return { operationId: "reset-one" }; },
+    },
+  });
+  t.after(() => state.backend.dispose());
+  await assert.rejects(state.backend.lifecycle("erase", "one", { confirm: true }), { code: "submission_outcome_unknown" });
+  const original = [...operationState.values()][0];
+  assert.equal(original.operationId, "reset-one");
+  assert.equal(original.invocation.executionContext.revision, "1");
+  const recovered = await state.backend.lifecycle("erase", "one", { confirm: true });
+  assert.equal(recovered.id, "one");
+  assert.equal(recovered.invocation.executionContext.revision, "1");
+  assert.equal(submissions, 1);
+  assert.equal(prompts, 1);
+});
 test("legacy remains the default and invalid opt-in never becomes a fallback", () => {
   assert.equal(mobileCanvasBackend(), "legacy");
   assert.equal(mobileCanvasBackend("legacy"), "legacy");
@@ -1367,16 +1507,107 @@ test("missing real scoped destructive consent is unsupported even when confirm i
 test("real consent is captured to the original target and is separate from the literal gate", async (t) => {
   const consent = deferred();
   let captured;
-  const state = fixture({ confirmDestructive: (context) => { captured = context; return consent.promise; } });
+  const state = canonicalFixture({ confirmDestructive: (context) => { captured = context; return consent.promise; } });
   t.after(() => state.backend.dispose());
-  await state.backend.select("one");
   const resetting = state.backend.lifecycle("erase", "one", { confirm: true });
+  const rejected = assert.rejects(resetting, { code: "context_snapshot_superseded" });
   await new Promise((resolve) => setImmediate(resolve));
   await state.backend.select("two");
   assert.equal(captured.invocation.targetId, "one");
+  assert.equal(captured.invocation.executionContext.revision, "1");
+  assert.equal(captured.invocation.connectionRef, state.backend.connectionRef);
+  assert.equal(Object.isFrozen(captured.invocation), true);
+  assert.equal(JSON.stringify(captured).includes("contextOwner"), false);
+  assert.equal(captured.invocation.contextOwner.processStartedAt, "2026-10-10T00:00:00Z");
   consent.resolve(false);
-  await assert.rejects(resetting, { code: "consent_denied" });
+  await rejected;
   assert.equal(state.calls.some(([kind]) => kind === "reset"), false);
+});
+
+test("known revision replacement during post-approval target revalidation cancels before any DELETE", async (t) => {
+  const state = canonicalFixture({ confirmDestructive: async () => true });
+  t.after(() => state.backend.dispose());
+  const entered = deferred();
+  const release = deferred();
+  const getTarget = state.client.getTarget;
+  let reads = 0;
+  state.client.getTarget = async (id) => {
+    if (++reads === 2) { entered.resolve(); await release.promise; }
+    return getTarget(id);
+  };
+  const pending = state.backend.lifecycle("delete", "one", { confirm: true });
+  const rejected = assert.rejects(pending, { code: "context_snapshot_superseded" });
+  await entered.promise;
+  await state.advanceSelection();
+  await rejected;
+  release.resolve();
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(state.calls.some(([kind]) => kind === "delete"), false);
+});
+
+for (const cancellation of ["caller", "owner", "deadline"]) {
+  test(`captured ${cancellation} cancellation after consume prevents a queued destructive POST and retains its uncertain owner`, async (t) => {
+    if (cancellation === "deadline") t.mock.timers.enable({ apis: ["setTimeout"] });
+    const caller = new AbortController();
+    const queued = deferred();
+    const entered = deferred();
+    const operationState = new Map();
+    let prompts = 0;
+    let wirePosts = 0;
+    const state = canonicalFixture({
+      operationState,
+      confirmDestructive: async () => { prompts += 1; return true; },
+      client: {
+        async resetTarget(id, options) {
+          entered.resolve(options);
+          await queued.promise;
+          if (options.signal.aborted) throw new AilohaProtocolError("cancelled");
+          wirePosts += 1;
+          return { operationId: `reset-${id}` };
+        },
+      },
+    });
+    t.after(() => state.backend.dispose());
+    const work = state.backend.lifecycle("erase", "one", { confirm: true }, { signal: caller.signal });
+    const rejected = assert.rejects(work, { code: {
+      caller: "consent_cancelled", owner: "view_closed", deadline: "submission_outcome_unknown",
+    }[cancellation] });
+    const options = await entered.promise;
+    assert.ok(options.timeoutMs > 0 && options.timeoutMs <= 15_000);
+    if (cancellation === "caller") caller.abort();
+    else if (cancellation === "owner") await state.backend.dispose();
+    else t.mock.timers.tick(60_000);
+    assert.equal(options.signal.aborted, true);
+    queued.resolve();
+    await rejected;
+    assert.equal(wirePosts, 0);
+    assert.equal(prompts, 1);
+    const receipt = [...operationState.values()][0];
+    assert.equal(receipt.invocation.targetId, "one");
+    assert.equal(receipt.invocation.executionContext.revision, "1");
+    assert.equal(receipt.uncertain, true);
+    if (cancellation !== "owner") {
+      await assert.rejects(state.backend.lifecycle("erase", "one", { confirm: true }), { code: "lifecycle_outcome_uncertain" });
+      assert.equal(prompts, 1);
+      assert.equal(wirePosts, 0);
+    }
+  });
+}
+
+test("a consumed approval with no whole millisecond remaining fails before client dispatch and does not create an uncertain receipt", async (t) => {
+  let clock = 0;
+  t.mock.method(performance, "now", () => clock);
+  const operationState = new Map();
+  let prompts = 0;
+  const state = canonicalFixture({
+    operationState,
+    confirmDestructive: async () => { prompts += 1; clock = 59_999.5; return true; },
+  });
+  t.after(() => state.backend.dispose());
+  await assert.rejects(state.backend.lifecycle("erase", "one", { confirm: true }), { code: "consent_timeout" });
+  assert.equal(state.calls.some(([kind]) => kind === "reset"), false);
+  assert.equal(operationState.size, 0);
+  assert.equal(prompts, 1);
 });
 
 test("geometry-observed input uses logical bounds and rejects later revisions before dispatch", async (t) => {
@@ -1494,6 +1725,21 @@ test("lost create result remains explicit and cannot trigger a second create or 
   const response = await state.backend.request("/api/v1/devices/one/input/rotate", { method: "POST" });
   assert.equal(response.status, 501);
 });
+
+for (const status of [408, 499]) {
+  test(`video creation HTTP ${status} uncertainty cannot submit another create`, async (t) => {
+    let creates = 0;
+    const state = fixture({
+      media: {
+        async createVideo() { creates += 1; throw new AilohaProtocolError("http_error", { status }); },
+      },
+    });
+    t.after(() => state.backend.dispose());
+    await assert.rejects(state.backend.openVideo("one", () => {}, () => {}));
+    await assert.rejects(state.backend.openVideo("one", () => {}, () => {}), { code: "video_create_uncertain" });
+    assert.equal(creates, 1);
+  });
+}
 
 test("unknown SDK failures are explicitly reported without serializing private diagnostic data", async (t) => {
   const state = fixture({ client: { async listTargets() { throw new Error("Bearer private-secret http://private-origin"); } } });
@@ -1818,7 +2064,7 @@ test("receipt admission remains exactly64 after concurrent asynchronous destruct
   const approval = deferred();
   const operationState = new Map();
   let approvals = 0;
-  const state = fixture({
+  const state = canonicalFixture({
     operationState,
     async confirmDestructive() { approvals += 1; await approval.promise; return true; },
     client: {
@@ -1828,7 +2074,9 @@ test("receipt admission remains exactly64 after concurrent asynchronous destruct
   t.after(() => state.backend.dispose());
   for (let index = 0; index < 65; index += 1) {
     const id = `target-${index}`;
-    state.targets.set(id, { ...structuredClone(state.targets.get("one")), targetId: id });
+    const target = { ...structuredClone(state.targets.get("one")), targetId: id };
+    target.nativeIdentity.nativeId = `native-target-${index}`;
+    state.targets.set(id, target);
   }
   const work = Array.from({ length: 65 }, (_, index) =>
     state.backend.lifecycle("erase", `target-${index}`, { confirm: true }));

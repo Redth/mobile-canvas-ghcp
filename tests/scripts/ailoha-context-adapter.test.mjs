@@ -72,6 +72,7 @@ function fixture(options = {}) {
     externalRetirement() {
       current = { ...current, state: "detached", revision: String(BigInt(current.revision) + 1n), selection: null, observed: null };
     },
+    externalOwnerBirth(value) { current = { ...current, owner: { ...current.owner, processStartedAt: value } }; },
   };
 }
 
@@ -129,6 +130,25 @@ test("one immutable read snapshot binds selection, canonical projection, identit
   assert.equal(reopened.identity.scopeEpoch, "new-epoch");
   assert.equal(state.store.isCurrentSnapshot(first), false);
   assert.equal(state.store.isCurrentSnapshot(reopened), true);
+});
+
+test("canonical owner birth is captured privately with the same snapshot and cannot follow a later read", async () => {
+  const state = fixture();
+  await state.store.binding();
+  const snapshot = await state.store.readSnapshot();
+  assert.deepEqual(snapshot.contextOwner, document.owner);
+  assert.equal(Object.isFrozen(snapshot.contextOwner), true);
+  assert.equal(Object.keys(snapshot).includes("contextOwner"), false);
+  assert.equal(Object.hasOwn(structuredClone(snapshot), "contextOwner"), false);
+  assert.equal(JSON.stringify(snapshot).includes('"contextOwner"'), false);
+  let changed = 0;
+  const unsubscribe = state.store.onChange(() => { changed += 1; });
+  state.externalOwnerBirth("2026-10-10T00:36:44.610199+00:00");
+  await state.store.readSnapshot();
+  assert.equal(state.store.isCurrentSnapshot(snapshot), false);
+  assert.equal(snapshot.contextOwner.processStartedAt, "2026-10-10T00:36:44.610198+00:00");
+  assert.equal(changed, 1);
+  unsubscribe();
 });
 
 test("selection is complete-tuple CAS with string revisions and no stale intent retries", async () => {

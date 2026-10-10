@@ -374,7 +374,7 @@ test("verified one-shot process accepts only structured exit-2 scans and preserv
   const before = launches;
   const cancelled = new AbortController();
   cancelled.abort();
-  await assert.rejects(runCli(args, { signal: cancelled.signal }), { name: "AbortError" });
+  await assert.rejects(runCli(args, { signal: cancelled.signal }), { code: "ailoha_cli_cancelled" });
   assert.equal(launches, before);
   process.env.AILOHA_TEST_INSPECTION_MODE = "complete";
   process.env.AILOHA_TEST_INSPECTION_DELAY_MS = "1000";

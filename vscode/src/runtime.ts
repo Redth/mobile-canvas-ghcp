@@ -2,6 +2,7 @@ import { pathToFileURL } from "node:url";
 import type * as vscode from "vscode";
 import type { AilohaCanvasHost } from "./hostBridge";
 import type { WorkspaceRootError } from "./workspaceRoots";
+import { createDestructivePrompt, type DestructivePrompt } from "./destructiveConsent";
 
 interface RuntimeResolution {
   command: string;
@@ -25,6 +26,7 @@ interface AilohaRuntimeModule {
     onError(error: { code: string; message: string }): void;
     validateWorkspaceRoot?(path: string): WorkspaceRootError | undefined;
     allowHostPackage?(): boolean;
+    confirmDestructive: DestructivePrompt;
   }): AilohaCanvasHost;
   getRuntimeContextBinding(scope: { sessionId: string; viewId: string }): Promise<AilohaContextBinding>;
 }
@@ -58,7 +60,9 @@ export async function resolveAilohaCanvasHost(
   const module: AilohaRuntimeModule = await import(
     pathToFileURL(context.asAbsolutePath("dist/lib/ailoha/runtime-backend.mjs")).href
   );
-  return module.createRuntimeCanvasHost({ scope, onError, validateWorkspaceRoot, allowHostPackage });
+  return module.createRuntimeCanvasHost({
+    scope, onError, validateWorkspaceRoot, allowHostPackage, confirmDestructive: createDestructivePrompt(),
+  });
 }
 
 export async function resolveAilohaContextBinding(

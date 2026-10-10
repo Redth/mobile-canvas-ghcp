@@ -12,9 +12,12 @@ const invocation = {
   nativeIdentity: { platform: "ios", nativeId: "native" },
   executionContext: {
     contextRef: "ctx-owned", scopeEpoch: "epoch", revision: "7",
-    ownerProcessId: 1234, processStartedAt: "2026-10-10T00:00:00Z",
+    ownerProcessId: 1234,
   },
 };
+Object.defineProperty(invocation, "contextOwner", {
+  value: Object.freeze({ processId: 1234, processStartedAt: "2026-10-10T00:00:00Z" }),
+});
 
 function stage(sourcePath) {
   const hash = (value) => createHash("sha256").update(value).digest("hex");
@@ -71,6 +74,8 @@ test("staged receipt and accepted operation cannot substitute host, provider, na
     { proof: { ...stage(sourcePath).proof, providerId: "replacement" } },
     { proof: { ...stage(sourcePath).proof, revision: "8" } },
     { proof: { ...stage(sourcePath).proof, nativeTargetId: "replacement" } },
+    { proof: { ...stage(sourcePath).proof, ownerProcessId: 4321 } },
+    { proof: { ...stage(sourcePath).proof, ownerStartedAt: "2026-10-10T00:00:00.000Z" } },
   ]) {
     const cli = createStagedAppCli({ async runCli() { return JSON.stringify({ ...stage(sourcePath), ...changed }); } });
     await assert.rejects(cli.stage(invocation, sourcePath), { code: "stage_owner_mismatch" });
@@ -81,6 +86,7 @@ test("staged receipt and accepted operation cannot substitute host, provider, na
   await assert.rejects(cli.install(invocation, await cli.stage(invocation, sourcePath)), {
     code: "operation_owner_mismatch",
   });
+  await assert.rejects(cli.stage({ ...invocation }, sourcePath), { code: "stage_owner_mismatch" });
 });
 
 test("host package topology rejects links, directories and unreadable/missing files before CLI", async (t) => {

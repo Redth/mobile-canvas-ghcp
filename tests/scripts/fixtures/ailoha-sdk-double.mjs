@@ -6,6 +6,7 @@ import { createCatalogModel } from "./ailoha-catalog-creation.mjs";
 export const scenario = {
   calls: [], leases: new Map(), videos: new Map(), operations: new Map(), status: "running", geometryRevision: 13,
   catalog: null, createdTargets: new Map(), creationGate: null, appResponses: false,
+  targets: new Map(), providerId: "synthetic-provider", nativeId: "native-deployment-not-opaque-target",
   connectionRef: {
     schema: "ailoha.target-host.connection/v1", serviceId: "synthetic-service", pid: 12345,
     startedAt: "2026-10-09T23:00:00Z", processStartedAt: "2026-10-09T22:59:59Z",
@@ -17,7 +18,7 @@ const surfaceId = "opaque/surface";
 const packetRoot = new URL("../../web/fixtures/ailoha-baseline/", import.meta.url);
 const fixture = JSON.parse(readFileSync(new URL("manifest.json", packetRoot), "utf8"));
 const captures = [
-  { id: "target.lifecycle", version: 1, features: ["listTargets", "getTarget", "getTargetCapabilities", "startTarget", "stopTarget", "rebootTarget"] },
+  { id: "target.lifecycle", version: 1, features: ["listTargets", "getTarget", "getTargetCapabilities", "startTarget", "stopTarget", "rebootTarget", "resetTarget", "deleteTarget"] },
   { id: "target.surfaces", version: 1, features: ["listTargetSurfaces", "getTargetSurface"] },
   { id: "surface.capture", version: 1, features: ["captureTargetScreenshot", "createLiveVideoSession", "getLiveVideoSession", "stopLiveVideoSession"] },
   { id: "surface.input", version: 1, features: ["tapTargetElement", "performTargetGesture"] },
@@ -51,16 +52,16 @@ function mergedCapabilities(values) {
 function providerRecords() {
   const features = scenario.appResponses ? [...captures, ...appCapabilities] : captures;
   return [{
-    providerId: "synthetic-provider", name: "Synthetic provider", version: "synthetic", state: "ready", capabilities: features,
+    providerId: scenario.providerId, name: "Synthetic provider", version: "synthetic", state: "ready", capabilities: features,
   }, ...(scenario.catalog?.providers ?? []).map((provider) => ({
     ...provider, capabilities: mergedCapabilities([...provider.capabilities, ...features]),
   }))];
 }
 function target() {
   return {
-    targetId, providerId: "synthetic-provider", targetTypeId: "opaque/type", name: "Synthetic device",
+    targetId, providerId: scenario.providerId, targetTypeId: "opaque/type", name: "Synthetic device",
     status: scenario.status, surfaces: scenario.status === "running" ? [{ ...surface, geometryRevision: scenario.geometryRevision }] : [],
-    nativeIdentity: { platform: "ios", nativeId: "native-deployment-not-opaque-target", isVirtual: true },
+    nativeIdentity: { platform: "ios", nativeId: scenario.nativeId, isVirtual: true },
   };
 }
 function createdTarget(id) {
@@ -123,9 +124,15 @@ export async function openTargetHostTransport(leaseId) {
     async response(path, options = {}) {
       const body = options.body === undefined || typeof options.body === "string"
         ? options.body : Buffer.from(options.body).toString("utf8");
-      scenario.calls.push({ path, method: options.method ?? "GET", body });
+      if (scenario.beforeMutationAdmission && (path.endsWith("/actions/reset")
+        || (options.method === "DELETE" && /^\/api\/v1\/targets\/[^/]+$/.test(path)))) {
+        await scenario.beforeMutationAdmission(path, options);
+      }
       if (closed) throw new Error("closed double");
-      if (options.signal?.aborted) throw new Error("aborted double");
+      if (options.signal?.aborted) {
+        throw Object.assign(new Error("synthetic queued transport aborted"), { name: "TargetHostTransportError", code: "cancelled" });
+      }
+      scenario.calls.push({ path, method: options.method ?? "GET", body });
       if (path === "/api/v1/host/status") return reply({
         hostId: "synthetic-host", profile: "ailoha.target-host/v1", version: "synthetic",
         state: "ready", capabilities: mergedCapabilities([
@@ -171,7 +178,10 @@ export async function openTargetHostTransport(leaseId) {
         if (scenario.creationAcceptance === "unknown") return reply({}, 202);
         return reply(operation, 202, `/api/v1/operations/${encodeURIComponent(operationId)}`);
       }
-      if (path === "/api/v1/targets") return reply([target(), ...[...scenario.createdTargets.keys()].map(createdTarget)]);
+      if (path === "/api/v1/targets") return reply([
+        ...(scenario.targets.size ? [...scenario.targets.values()] : scenario.deleted ? [] : [target()]),
+        ...[...scenario.createdTargets.keys()].map(createdTarget),
+      ]);
       const appRoute = /^\/api\/v1\/targets\/([^/]+)\/(apps|app-ops)(?:\/([^/]+))?(?:\/actions\/(launch|terminate))?(?:\?(.*))?$/.exec(path);
       if (appRoute && scenario.appResponses) {
         const appTargetId = decodeURIComponent(appRoute[1]);
@@ -216,20 +226,39 @@ export async function openTargetHostTransport(leaseId) {
       }
       const targetRoute = /^\/api\/v1\/targets\/([^/]+)(?:\/(capabilities|surfaces))?$/.exec(path);
       const selectedId = targetRoute ? decodeURIComponent(targetRoute[1]) : undefined;
-      const selected = selectedId === targetId ? target() : createdTarget(selectedId);
+      const selected = scenario.targets.get(selectedId)
+        ?? (selectedId === targetId && !scenario.deleted ? target() : createdTarget(selectedId));
       if (targetRoute) {
-        if (!selected) throw new Error("Unknown synthetic target");
+        if (!selected) return reply({ status: 404, title: "Synthetic target not found" }, 404);
+        if (options.method === "DELETE") {
+          const operationId = randomUUID();
+          const operation = {
+            operationId, kind: "deleteTarget", targetId: selectedId, providerId: selected.providerId,
+            status: "queued", destructive: true, createdAt: "2026-10-09T23:00:00Z",
+          };
+          scenario.targets.delete(selectedId);
+          scenario.createdTargets.delete(selectedId);
+          if (selectedId === targetId) scenario.deleted = true;
+          scenario.operations.set(operationId, { ...operation, status: "succeeded",
+            startedAt: "2026-10-09T23:00:01Z", completedAt: "2026-10-09T23:00:02Z" });
+          return reply(operation, 202, `/api/v1/operations/${operationId}`);
+        }
         if (targetRoute[2] === "capabilities") return reply(providerRecords().find((provider) => provider.providerId === selected.providerId).capabilities);
         if (targetRoute[2] === "surfaces") return reply(selected.surfaces);
+        if (scenario.beforeTargetRead) await scenario.beforeTargetRead(selectedId);
         return reply(selected);
       }
-      if (/\/actions\/(start|stop|reboot)$/.test(path)) {
+      if (/\/actions\/(start|stop|reboot|reset)$/.test(path)) {
         const action = path.split("/").at(-1);
+        const id = decodeURIComponent(path.split("/").at(-3));
+        const record = scenario.targets.get(id) ?? scenario.createdTargets.get(id);
         const operationId = randomUUID();
-        scenario.status = action === "stop" ? "stopped" : "running";
+        const status = action === "stop" || action === "reset" ? "stopped" : "running";
+        if (record) record.status = status;
+        else scenario.status = status;
         const operation = {
-          operationId, kind: `${action}Target`, targetId, providerId: "synthetic-provider",
-          status: "queued", destructive: false, createdAt: "2026-10-09T23:00:00Z",
+          operationId, kind: `${action}Target`, targetId: id, providerId: scenario.providerId,
+          status: "queued", destructive: action === "reset", createdAt: "2026-10-09T23:00:00Z",
         };
         scenario.operations.set(operationId, {
           ...operation, status: "succeeded", startedAt: "2026-10-09T23:00:01Z", completedAt: "2026-10-09T23:00:02Z",
@@ -242,6 +271,9 @@ export async function openTargetHostTransport(leaseId) {
           throw new Error("Owned synthetic operation read failed before completion.");
         }
         if (id.startsWith("creation/") && scenario.creationGate) await scenario.creationGate.promise;
+        if (scenario.operationUnavailable) {
+          return reply({ status: 503, title: "Synthetic operation observation unavailable" }, 503);
+        }
         return reply(scenario.operations.get(id));
       }
       const surfaceRoute = /^\/api\/v1\/targets\/([^/]+)\/surfaces\/([^/]+)\/(.+)$/.exec(path);
