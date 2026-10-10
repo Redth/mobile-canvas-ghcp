@@ -58,7 +58,17 @@ test("App requires a selected native instance and never falls back after a canon
   assert.equal(failure.status, "error");
   assert.equal(failure.result, null);
   assert.equal(failure.error.code, "CanonicalCapabilityUnsupported");
-  assert.match(failure.error.message, /CanonicalCapabilityUnsupported/);
+  assert.equal(failure.error.message, "The selected owner does not support this canonical inspection capability.");
+  for (const text of ["private", "known-private"]) {
+    const privateFailure = await view.request("POST", JSON.stringify({ lens: "app", operation: "query", text }));
+    assert.equal(privateFailure.error.code, text === "private" ? "semantic_operation_failed" : "CanonicalCapabilityUnsupported");
+    assert.doesNotMatch(JSON.stringify(privateFailure.error), /private-secret|internal\.invalid|\/private\/owner/);
+  }
+  const transportFailure = await view.request("POST", JSON.stringify({
+    lens: "app", operation: "query", text: "transport-private",
+  }));
+  assert.equal(transportFailure.error.code, "semantic_mcp_transport_failed");
+  assert.doesNotMatch(JSON.stringify(transportFailure.error), /private-secret|\/private\/owner/);
 });
 
 test("canonical query uses literal bounded filters and keeps element IDs in their owning lens", async () => {
@@ -72,6 +82,10 @@ test("canonical query uses literal bounded filters and keeps element IDs in thei
   assert.equal(result.result.elements[0].id, "root");
   await assert.rejects(controller().request("POST", JSON.stringify({ lens: "system", operation: "query" })),
     { code: "semantic_invalid_request" });
+  const flood = await controller().request("POST", JSON.stringify({
+    lens: "system", operation: "query", text: "stderr-flood",
+  }));
+  assert.equal(flood.status, "complete");
 });
 
 test("context revision, cancellation and mismatched owner retire read results", async () => {

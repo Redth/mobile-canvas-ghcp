@@ -345,7 +345,13 @@ selected `verified-native-instance` in the named context and request
 `require-agent` routing. Each result checks captured context ref/epoch/revision,
 target, surface, owner and native runtime provenance before display; retired
 reads never project. The shared UI bounds depth, element count and text, and
-renders canonical element text literally. This source-only slice has no
+renders canonical element text literally. Changing a lens or operation retires
+the previous read without clearing typed query filters. Canonical MCP errors
+expose only a finite public capability code/message or a fixed failure message;
+native stderr, paths and error details are not forwarded to the renderer.
+The legacy .NET canvas serves the shared semantic module as a public embedded
+bootstrap asset, while its inspection API remains authenticated. This
+source-only slice has no
 workspace-application-to-native-agent mapping, binding control, or legacy
 `ui_*` compatibility claim. Both hosts bundle the exact-pinned MCP client
 graph, while the official Ailoha runtime pin remains a separate release gate.

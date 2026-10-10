@@ -23,6 +23,10 @@ export function createSemanticInspectionView({ element, request }) {
   let visible = true;
   let version = 0;
   let retiredGeneration = -1;
+  let retiring = false;
+  let chosenLens = null;
+  let chosenOperation = null;
+  const queryFilters = { type: "", automationId: "", text: "" };
 
   function render() {
     element.hidden = !active || !visible;
@@ -37,7 +41,7 @@ export function createSemanticInspectionView({ element, request }) {
       option.value = name;
       lens.append(option);
     }
-    lens.value = state?.lens ?? "system";
+    lens.value = chosenLens ?? state?.lens ?? "system";
     const operation = node("select", "");
     operation.setAttribute("aria-label", "Inspection operation");
     for (const name of ["tree", "query", "status"]) {
@@ -45,20 +49,22 @@ export function createSemanticInspectionView({ element, request }) {
       option.value = name;
       operation.append(option);
     }
-    operation.value = state?.operation ?? "tree";
+    operation.value = chosenOperation ?? state?.operation ?? "tree";
     const filters = node("div", "", "semantic-inspection-filters");
     const fields = Object.fromEntries(["type", "automationId", "text"].map((name) => {
       const input = node("input", "");
       input.placeholder = { type: "Type", automationId: "Automation ID", text: "Text" }[name];
       input.setAttribute("aria-label", input.placeholder);
       input.maxLength = 128;
+      input.value = queryFilters[name];
+      input.addEventListener("input", () => { queryFilters[name] = input.value; });
       return [name, input];
     }));
     filters.append(...Object.values(fields));
     const actions = node("div", "", "semantic-inspection-actions");
     const inspect = node("button", "Inspect", "button");
     inspect.type = "button";
-    inspect.disabled = state?.status === "reading" || state?.status === "suspended";
+    inspect.disabled = retiring || state?.status === "reading" || state?.status === "suspended";
     const cancel = node("button", "Cancel", "button");
     cancel.type = "button";
     cancel.hidden = state?.status !== "reading";
@@ -95,18 +101,26 @@ export function createSemanticInspectionView({ element, request }) {
       }
     }
     element.replaceChildren(header, lens, operation, filters, actions, status, output);
-    lens.addEventListener("change", () => {
-      state = { ...state, lens: lens.value, operation: operation.value, result: null, error: null };
+    function changeSelection() {
+      chosenLens = lens.value;
+      chosenOperation = operation.value;
+      if (state) retiredGeneration = Math.max(retiredGeneration, state.generation);
+      retiring = true;
+      if (state) state = { ...state, lens: chosenLens, operation: chosenOperation,
+        status: "ready", result: null, error: null };
       render();
+      void perform("DELETE");
+    }
+    lens.addEventListener("change", () => {
+      changeSelection();
     });
     operation.addEventListener("change", () => {
-      state = { ...state, operation: operation.value, lens: lens.value, result: null, error: null };
-      render();
+      changeSelection();
     });
     inspect.addEventListener("click", () => {
       const input = { lens: lens.value, operation: operation.value, maxDepth: 6 };
       if (input.operation === "query") {
-        for (const [key, field] of Object.entries(fields)) if (field.value.trim()) input[key] = field.value.trim();
+        for (const [key, value] of Object.entries(queryFilters)) if (value.trim()) input[key] = value.trim();
       }
       void perform("POST", input);
     });
@@ -119,7 +133,9 @@ export function createSemanticInspectionView({ element, request }) {
       || value.generation < state.generation)) return;
     if (value.generation <= retiredGeneration && value.status !== "suspended") return;
     if (!visible) return;
-    state = value;
+    state = { ...value, lens: chosenLens ?? value.lens, operation: chosenOperation ?? value.operation,
+      result: chosenLens && value.lens !== chosenLens || chosenOperation && value.operation !== chosenOperation
+        ? null : value.result };
     render();
   }
 
@@ -133,8 +149,13 @@ export function createSemanticInspectionView({ element, request }) {
     } catch (error) {
       if (current !== version || !visible) return;
       state = { ...state, result: null, status: "error",
-        error: { code: "semantic_request_failed", message: error instanceof Error ? error.message : "Semantic inspection failed." } };
+        error: { code: "semantic_request_failed", message: "Semantic inspection request failed." } };
       render();
+    } finally {
+      if (method === "DELETE" && current === version) {
+        retiring = false;
+        render();
+      }
     }
   }
 

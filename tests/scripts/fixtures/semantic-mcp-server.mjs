@@ -15,6 +15,15 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
 server.setRequestHandler(CallToolRequestSchema, async ({ params }) => {
   if (params.arguments?.text === "wait") return new Promise(() => {});
   if (params.arguments?.text === "error") return { isError: true, content: [{ type: "text", text: "CanonicalCapabilityUnsupported: no query owner" }] };
+  if (params.arguments?.text === "private") return { isError: true, content: [{ type: "text",
+    text: "PrivateTokenError: token=private-secret at file:///private/owner/workspace and https://internal.invalid/api?key=private-secret" }] };
+  if (params.arguments?.text === "known-private") return { isError: true, content: [{ type: "text",
+    text: "CanonicalCapabilityUnsupported: token=private-secret at /private/owner/workspace" }] };
+  if (params.arguments?.text === "stderr-flood") process.stderr.write("x".repeat(2 * 1024 * 1024));
+  if (params.arguments?.text === "transport-private") {
+    process.stderr.write("token=private-secret at file:///private/owner/workspace");
+    process.exit(2);
+  }
   const args = params.arguments;
   const route = {
     owner: args.route === "target-host" ? "target-host" : "agent",

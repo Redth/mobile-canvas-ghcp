@@ -69,3 +69,62 @@ test("shared semantic renderer displays literal UI text and only read controls",
   view.acceptState(state(0));
   assert.equal(element.textContent.includes("unsafe()"), false);
 });
+
+test("changing lens retires pending reads and retains query filters through events", async (t) => {
+  const previous = globalThis.document;
+  globalThis.document = { createElement: (tag) => new Element(tag) };
+  t.after(() => { globalThis.document = previous; });
+  const element = new Element("aside");
+  const requests = [];
+  let finishDelete;
+  const view = createSemanticInspectionView({
+    element, request(path, options) {
+      requests.push({ path, options });
+      if (options.method === "DELETE") return new Promise((resolve) => { finishDelete = resolve; });
+      return Promise.resolve({ ...state(4), lens: "app", operation: "query", result: null });
+    },
+  });
+  view.setActive(true);
+  view.acceptState({ ...state(2), operation: "query", status: "reading", result: null });
+  const text = find(element, (entry) => entry.attributes?.["aria-label"] === "Text");
+  text.value = "submit";
+  text.listeners.get("input")();
+  const lens = find(element, (entry) => entry.attributes?.["aria-label"] === "Inspection lens");
+  lens.value = "app";
+  lens.listeners.get("change")();
+  assert.equal(requests[0].options.method, "DELETE");
+  view.acceptState(state(2));
+  assert.doesNotMatch(element.textContent, /unsafe\(\)/);
+  assert.equal(find(element, (entry) => entry.attributes?.["aria-label"] === "Text").value, "submit");
+  finishDelete({ ...state(3), status: "ready", result: null });
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(find(element, (entry) => entry.attributes?.["aria-label"] === "Inspection lens").value, "app");
+  assert.equal(find(element, (entry) => entry.attributes?.["aria-label"] === "Text").value, "submit");
+  const inspect = find(element, (entry) => entry.tag === "button" && entry.textContent === "Inspect");
+  assert.equal(inspect.disabled, false);
+  inspect.listeners.get("click")();
+  assert.deepEqual(JSON.parse(requests[1].options.body), {
+    lens: "app", operation: "query", maxDepth: 6, text: "submit",
+  });
+  view.acceptState({ ...state(4), lens: "app", operation: "query", status: "complete", result: null });
+  assert.equal(find(element, (entry) => entry.attributes?.["aria-label"] === "Text").value, "submit");
+});
+
+test("changing operation retires the previous tree response", async (t) => {
+  const previous = globalThis.document;
+  globalThis.document = { createElement: (tag) => new Element(tag) };
+  t.after(() => { globalThis.document = previous; });
+  const element = new Element("aside");
+  const view = createSemanticInspectionView({
+    element, async request() { return { ...state(3), status: "ready", result: null }; },
+  });
+  view.setActive(true);
+  view.acceptState({ ...state(2), status: "reading", result: null });
+  const operation = find(element, (entry) => entry.attributes?.["aria-label"] === "Inspection operation");
+  operation.value = "status";
+  operation.listeners.get("change")();
+  view.acceptState(state(2));
+  assert.doesNotMatch(element.textContent, /unsafe\(\)/);
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(find(element, (entry) => entry.attributes?.["aria-label"] === "Inspection operation").value, "status");
+});
