@@ -22,6 +22,7 @@ writeFileSync(pin, JSON.stringify({ schema: "mobile-canvas.ailoha-runtime/v1", v
 const require = createRequire(import.meta.url);
 const vscode = require("vscode");
 const { getRuntimeContextBinding } = await import(pathToFileURL(join(product, "lib/ailoha/runtime-backend.mjs")).href);
+const { AilohaMobileBackend } = await import(pathToFileURL(join(product, "lib/ailoha/mobile-backend.mjs")).href);
 let canvas;
 if (kind === "github") {
   process.env.EXTENSION_PATH = join(scratch, "installed-plugins/mobile-canvas/extension.mjs");
@@ -66,7 +67,7 @@ async function open(name) {
     const cookie = bootstrap.headers.get("set-cookie").split(";", 1)[0];
     return {
       scope, opened,
-      action(name, input = {}) {
+      action(name, input = {}, { signal } = {}) {
         const action = canvas.actions.find((entry) => entry.name === name);
         if (action) return action.handler({ ...context, input });
         const paths = {
@@ -77,7 +78,7 @@ async function open(name) {
         assert.ok(route, `Unknown canvas action: ${name}`);
         return fetch(new URL(route[0], url), {
           method: route[1], headers: { "Content-Type": "application/json", Cookie: cookie },
-          body: JSON.stringify(input),
+          body: JSON.stringify(input), signal,
         }).then(async (response) => {
           const value = await response.json();
           if (!response.ok) throw Object.assign(new Error(value.message), value);
@@ -99,7 +100,7 @@ async function open(name) {
   await bridge.handleMessage({ type: "ready" });
   return {
     scope, opened: await host.openCanvas(),
-    async action(name, input = {}) {
+    async action(name, input = {}, { signal } = {}) {
       const id = randomUUID();
       const paths = {
         erase_device: [`/api/v1/devices/${encodeURIComponent(input.deviceId)}/erase`, "POST"],
@@ -109,9 +110,16 @@ async function open(name) {
         set_app_op: [`/api/v1/devices/${encodeURIComponent(input.deviceId)}/app-ops`, "POST"],
       };
       const [path, method] = paths[name];
-      await bridge.handleMessage({ type: "api", id, path, method, body: JSON.stringify(input) });
+      const abort = () => { void bridge.handleMessage({ type: "api-cancel", id }); };
+      signal?.addEventListener("abort", abort, { once: true });
+      try {
+        await bridge.handleMessage({ type: "api", id, path, method, body: JSON.stringify(input) });
+      } finally {
+        signal?.removeEventListener("abort", abort);
+      }
       const result = messages.find((message) => message.id === id);
       if (!result) throw new Error("The retired VS Code bridge did not return an API result.");
+      if (result.type === "api-error") throw new Error(result.message);
       assert.equal(result.type, "api-result");
       const value = JSON.parse(new TextDecoder().decode(result.body));
       if (result.status >= 400) throw Object.assign(new Error(value.message), value);
@@ -142,6 +150,65 @@ async function promptFor() {
 async function close() {
   if (current) { await current.close(); current = undefined; }
   await waitFor(() => scenario.leases.size === 0);
+}
+
+async function checkAcceptedAppPeer(name, input, expectedOperation) {
+  current = await open(`accepted-peer-${name}`);
+  let releasePoll;
+  const originalRequest = AilohaMobileBackend.prototype.request;
+  try {
+    await current.action("select_device", { deviceId: "opaque/target" });
+    const recordPath = `${process.env.AILOHA_TEST_CONTEXT_STATE}.fenced`;
+    const capturesPath = `${process.env.AILOHA_TEST_CONTEXT_STATE}.captures`;
+    const before = JSON.parse(readFileSync(recordPath, "utf8")).length;
+    const captures = readFileSync(capturesPath, "utf8");
+    let enteredPoll;
+    const entered = new Promise((resolve) => { enteredPoll = resolve; });
+    const gate = new Promise((resolve) => { releasePoll = resolve; });
+    let gated = false;
+    let seen = 0;
+    let peerEntered;
+    const peerEntry = new Promise((resolve) => { peerEntered = resolve; });
+    const route = name === "uninstall_app" ? "/uninstall?" : "/app-ops";
+    AilohaMobileBackend.prototype.request = function (path, options) {
+      const pending = originalRequest.call(this, path, options);
+      if (options?.method === "POST" && path.includes(route) && ++seen === 2) peerEntered();
+      return pending;
+    };
+    scenario.beforeOperationRead = async () => {
+      if (!gated) {
+        gated = true;
+        enteredPoll();
+        await gate;
+      }
+    };
+    const controller = new AbortController();
+    const first = current.action(name, input, { signal: controller.signal });
+    const firstResult = first.then((value) => ({ value }), (error) => ({ error }));
+    (await promptFor()).answer("approve");
+    await entered;
+    const peer = current.action(name, input);
+    await peerEntry;
+    controller.abort();
+    const cancelled = await firstResult;
+    assert.ok(cancelled.error, `${kind} ${name} first caller must be cancelled`);
+    assert.match(`${cancelled.error.name} ${cancelled.error.message}`, /cancel|abort/i);
+    releasePoll();
+    const result = await peer;
+    assert.equal(result.operation, expectedOperation);
+    assert.equal(result.success, true);
+    assert.equal(JSON.parse(readFileSync(recordPath, "utf8")).length, before + 1,
+      `${kind} ${name} peer must not submit a second native action`);
+    assert.equal(readFileSync(capturesPath, "utf8").trim().split("\n").length,
+      captures.trim().split("\n").length + 1, `${kind} ${name} peer must not recapture`);
+    assert.equal(kind === "github" ? copilotUi.pending.size : vscode.testUi.pickers.filter((picker) => picker.visible).length, 0);
+    evidence.cases.push(`accepted-peer-${name}`);
+  } finally {
+    AilohaMobileBackend.prototype.request = originalRequest;
+    releasePoll?.();
+    scenario.beforeOperationRead = undefined;
+    await close();
+  }
 }
 
 try {
@@ -720,6 +787,13 @@ try {
       await close();
     }
   }
+  await checkAcceptedAppPeer("uninstall_app", {
+    deviceId: "opaque/target", bundleId: "com.example.native", confirm: true,
+  }, "uninstall");
+  await checkAcceptedAppPeer("set_app_op", {
+    deviceId: "opaque/target", bundleId: "com.example.native",
+    operation: "CAMERA", mode: "allow",
+  }, "CAMERA");
   evidence.leaseCountAfterClose = scenario.leases.size;
   evidence.pendingHumanPrompts = kind === "github" ? copilotUi.pending.size
     : vscode.testUi.pickers.filter((picker) => !picker.disposed).length;

@@ -35,6 +35,7 @@ for (const [host, product] of [
         "fenced-android-app-op-effective-mismatch",
         "fenced-android-app-op-denial",
         "fenced-app-op-known-id-unicode", "fenced-app-op-known-id-long-ascii",
+        "accepted-peer-uninstall_app", "accepted-peer-set_app_op",
       ]);
       assert.equal(evidence.synthetic, true);
       assert.equal(evidence.realDeviceMutation, false);

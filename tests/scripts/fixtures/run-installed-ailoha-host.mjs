@@ -28,6 +28,7 @@ const { createAilohaVideoReceiver } = await import(pathToFileURL(join(root, "web
 const { createAilohaMcpDispatcher } = await import(pathToFileURL(join(root, "lib", "ailoha", "mcp-host.mjs")).href);
 const { createRuntimeCanvasHost, createRuntimeMobileBackend, getRuntimeContextBinding } =
   await import(pathToFileURL(join(root, "lib", "ailoha", "runtime-backend.mjs")).href);
+const { AilohaMobileBackend } = await import(pathToFileURL(join(root, "lib", "ailoha", "mobile-backend.mjs")).href);
 const { ARTIFACT_FEATURE_GATES } = await import(pathToFileURL(join(root, "lib", "ailoha", "artifact-features.mjs")).href);
 let release;
 let receiver;
@@ -167,9 +168,12 @@ async function checkSourceConditionalFeatures(selected, androidId) {
       async postMessage(message) { messages.push(message); return true; },
     }, { appendLine() {} }, undefined, sourceHost);
     await bridge.handleMessage({ type: "ready" });
-    api = async (path, { method = "GET", body } = {}) => {
+    api = async (path, { method = "GET", body, signal } = {}) => {
       const id = randomUUID();
-      await bridge.handleMessage({ type: "api", id, path, method, body });
+      const abort = () => { void bridge.handleMessage({ type: "api-cancel", id }); };
+      signal?.addEventListener("abort", abort, { once: true });
+      try { await bridge.handleMessage({ type: "api", id, path, method, body }); }
+      finally { signal?.removeEventListener("abort", abort); }
       const result = messages.find((message) => message.id === id);
       if (result.type === "api-error") throw new Error(result.message);
       assert.equal(result.type, "api-result");
@@ -243,6 +247,53 @@ async function checkSourceConditionalFeatures(selected, androidId) {
       scenario.beforeFeatureRead = null;
     }
   }
+  async function verifyAcceptedFeaturePeer() {
+    const originalRequest = AilohaMobileBackend.prototype.request;
+    let releasePoll;
+    try {
+      let enteredPoll;
+      const entered = new Promise((resolve) => { enteredPoll = resolve; });
+      const gate = new Promise((resolve) => { releasePoll = resolve; });
+      let gated = false;
+      scenario.beforeOperationRead = async () => {
+        if (!gated) { gated = true; enteredPoll(); await gate; }
+      };
+      let seen = 0;
+      let peerEntered;
+      const peerEntry = new Promise((resolve) => { peerEntered = resolve; });
+      AilohaMobileBackend.prototype.request = function (path, options) {
+        const pending = originalRequest.call(this, path, options);
+        if (options?.method === "POST" && path.endsWith("/sms") && ++seen === 2) peerEntered();
+        return pending;
+      };
+      const before = scenario.calls.filter((entry) => entry.method === "POST"
+        && entry.path?.endsWith("/telephony/sms")).length;
+      const controller = new AbortController();
+      const request = {
+        method: "POST", body: JSON.stringify({ from: "+123", body: "accepted peer" }),
+      };
+      const route = `/api/v1/devices/${encodeURIComponent(ios)}/sms`;
+      const first = api(route, { ...request, signal: controller.signal });
+      const firstResult = first.then((response) => ({ response }), (error) => ({ error }));
+      await entered;
+      const peer = api(route, request);
+      await peerEntry;
+      controller.abort();
+      const cancelled = await firstResult;
+      assert.ok(cancelled.error, `${host} cancelled feature caller cannot return success`);
+      assert.match(`${cancelled.error.name} ${cancelled.error.message}`, /cancel|abort/i);
+      releasePoll();
+      const response = await peer;
+      assert.equal(response.status, 200);
+      assert.equal((await response.json()).operation, "sms-send");
+      assert.equal(scenario.calls.filter((entry) => entry.method === "POST"
+        && entry.path?.endsWith("/telephony/sms")).length, before + 1);
+    } finally {
+      AilohaMobileBackend.prototype.request = originalRequest;
+      releasePoll?.();
+      scenario.beforeOperationRead = null;
+    }
+  }
   const cases = [
     ["hardware_get", ios, "hardware", "GET", {}, "batteryLevel", 80],
     ["battery_set", ios, "hardware/battery", "POST", { level: 75 }, "batteryLevel", 75],
@@ -276,6 +327,7 @@ async function checkSourceConditionalFeatures(selected, androidId) {
   try {
     await verifyCancelledCapture("api");
     await verifyCancelledCapture("mcp");
+    await verifyAcceptedFeaturePeer();
     for (const [name, id, path, method, input, field, value] of cases) {
       const route = `/api/v1/devices/${encodeURIComponent(id)}/${path}`;
       const response = await api(route, {

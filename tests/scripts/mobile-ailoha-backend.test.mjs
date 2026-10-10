@@ -832,6 +832,105 @@ async function waitForFencedEvent(events, kind) {
   assert.equal(events.some(([event]) => event === kind), true, `Expected captured ${kind} event.`);
 }
 
+test("parent: cancelling an accepted app-action waiter cannot poison its live peer", async (t) => {
+  const entered = deferred();
+  const finished = deferred();
+  const caller = new AbortController();
+  const state = fencedFixture(t);
+  state.client.waitForOperation = async (operationId, options = {}) => {
+    state.events.push(["wait", operationId]);
+    entered.resolve();
+    return new Promise((resolve, reject) => {
+      const onAbort = () => reject(new AilohaProtocolError("cancelled", { operationId }));
+      options.signal?.addEventListener("abort", onAbort, { once: true });
+      if (options.signal?.aborted) onAbort();
+      finished.promise.then(() => {
+        options.signal?.removeEventListener("abort", onAbort);
+        resolve({
+          operationId, kind: "uninstallFencedTargetApp", targetId: "one",
+          providerId: "provider", status: "succeeded", destructive: true,
+          createdAt: "2026-10-09T23:00:00Z", completedAt: "2026-10-09T23:00:02Z",
+        });
+      });
+    });
+  };
+  const cancelled = state.backend.uninstallApp("one", "com.example.native", true, { signal: caller.signal });
+  const cancelledResult = assert.rejects(cancelled, { code: "cancelled" });
+  await entered.promise;
+  const peer = state.backend.uninstallApp("one", "com.example.native", true);
+  const peerResult = peer.then((value) => ({ ok: true, value }), (error) => ({ ok: false, error }));
+  caller.abort();
+  finished.resolve();
+  await cancelledResult;
+  const result = await peerResult;
+  assert.equal(result.ok, true, "The live peer must not inherit another caller's cancellation.");
+  assert.equal(result.value.success, true);
+  assert.equal(state.events.filter(([event]) => event === "uninstall").length, 1);
+  assert.equal(state.events.filter(([event]) => event === "prompt").length, 1);
+});
+
+test("accepted app-op confirmation stays receipt-owned when its first caller cancels", async (t) => {
+  const entered = deferred();
+  const finished = deferred();
+  const caller = new AbortController();
+  const state = fencedFixture(t);
+  state.targets.get("one").nativeIdentity.platform = "android";
+  state.client.waitForOperation = async (operationId, options = {}) => {
+    state.events.push(["wait", operationId]);
+    entered.resolve();
+    await finished.promise;
+    assert.notEqual(options.signal, caller.signal);
+    assert.equal(options.signal?.aborted, false);
+    return {
+      operationId, kind: "updateFencedTargetAppOp", targetId: "one",
+      providerId: "provider", status: "succeeded", destructive: false,
+      createdAt: "2026-10-09T23:00:00Z", completedAt: "2026-10-09T23:00:02Z",
+    };
+  };
+  const input = ["one", "com.example.native", "camera", "allow"];
+  const cancelled = state.backend.setAppOp(...input, { signal: caller.signal });
+  const cancelledResult = assert.rejects(cancelled, { code: "cancelled" });
+  await entered.promise;
+  const peer = state.backend.setAppOp(...input);
+  caller.abort();
+  await cancelledResult;
+  finished.resolve();
+  assert.deepEqual(await peer, {
+    schemaVersion: "1.0", success: true, deviceId: "one",
+    bundleId: "com.example.native", operation: "CAMERA", mode: "allow",
+  });
+  assert.equal(state.events.filter(([event]) => event === "set-app-op").length, 1);
+  assert.equal(state.events.filter(([event]) => event === "prompt").length, 1);
+  assert.deepEqual(state.events.filter(([event]) => event === "wait").length, 1);
+});
+
+test("parent: accepted feature cancellation stays local and cannot return late success", async (t) => {
+  const entered = deferred();
+  const finished = deferred();
+  const caller = new AbortController();
+  const state = featureFixture();
+  t.after(() => state.backend.dispose());
+  state.client.waitForOperation = async (operationId) => {
+    entered.resolve();
+    await finished.promise;
+    return {
+      operationId, kind: "simulateTargetSms", targetId: "one", providerId: "provider",
+      status: "succeeded", destructive: false,
+      createdAt: "2026-10-09T23:00:00Z", completedAt: "2026-10-09T23:00:02Z",
+    };
+  };
+  const input = { from: "+123", body: "original message" };
+  const cancelled = state.backend.deviceFeature("sms_send", "one", input, { signal: caller.signal });
+  const cancelledResult = assert.rejects(cancelled, { code: "cancelled" });
+  await entered.promise;
+  const peer = state.backend.deviceFeature("sms_send", "one", input);
+  caller.abort();
+  finished.resolve();
+  await cancelledResult;
+  assert.equal((await peer).success, true);
+  assert.equal(state.wire.filter((request) => request.method === "POST").length, 1);
+});
+
 test("fenced uninstall captures a private native receipt before the genuine prompt and never uses ordinary DELETE", async (t) => {
   const decision = deferred();
   const state = fencedFixture(t, { answer: () => decision.promise });
@@ -2361,9 +2460,12 @@ test("caller cancellation after feature submission does not abandon its captured
     await new Promise((resolve) => setImmediate(resolve));
   }
   assert.equal(state.wire.filter(({ method }) => method === "POST").length, 1);
+  const recovery = state.backend.invokeAction("send_sms", input);
+  const cancelled = assert.rejects(pending, { code: "cancelled" });
   caller.abort();
   state.releaseSms();
-  assert.equal((await pending).operation, "sms-send");
+  await cancelled;
+  assert.equal((await recovery).operation, "sms-send");
   assert.equal(state.wire.filter(({ method }) => method === "POST").length, 1);
 });
 
