@@ -8,6 +8,7 @@ import {
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { assertDarwinHelperEntries } from "../lib/runtime-assets.mjs";
+import { verifyPreparedAilohaGraph } from "./prepare-ailoha-graph.mjs";
 
 const scriptRoot = join(dirname(fileURLToPath(import.meta.url)), "..");
 const root = resolve(process.argv[2] ?? scriptRoot);
@@ -32,6 +33,7 @@ const fail = (message) => {
 
 try {
   assertDarwinHelperEntries(runtimeManifest, { context: "Copilot plugin runtime manifest" });
+  if (root !== scriptRoot) verifyPreparedAilohaGraph(root);
 } catch (error) {
   fail(error.message);
 }

@@ -215,6 +215,9 @@ small launcher graph is staged. Until the owner supplies verified anonymous
 artifacts, the opt-in reports `ailoha_runtime_unavailable`. Normal installs must
 not require a private source checkout, another worktree, PATH-installed CLI,
 install hooks or end-user `npm install`.
+Malformed provenance reports `ailoha_runtime_pin_invalid`; a read failure reports
+`ailoha_runtime_pin_unreadable`. Neither is silently classified as a missing SDK
+or allowed to start the legacy engine.
 
 The approved SDK entry is `@ailoha/cli/runtime`. Acquisition calls
 `getRuntimePin`, `ensureTargetHost`, and `openTargetHostTransport`. The official
@@ -226,7 +229,13 @@ preparers, with tarball/integrity and license notices retained. Its dependencies
 must be bundled within the pinned launcher; hoisted checkout dependencies cannot
 substitute for an incomplete installed graph. The complete bundled tree,
 including transitive dependencies, is retained without native optional packages
-or symlinks. Required native RIDs and public pins remain upstream release
+or symlinks. Both archive verifiers compare the complete staged tree with its
+deterministic byte fingerprint and require matching package/runtime source pins,
+dependency versions and notices. A receipt checks staged-byte consistency; it
+does not establish anonymous publication of the upstream tarball. VSIX validation
+permits upstream source maps only inside that verified pinned graph, preserving
+the publisher's bundled bytes; Mobile Canvas source, tests and generated maps
+remain excluded. Required native RIDs and public pins remain upstream release
 evidence, not consumer assumptions.
 
 `connectTargetHostTransport` applies the same strict validators and bounded
