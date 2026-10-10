@@ -449,7 +449,7 @@ test("a failed or cancelled recording never reports a completed stop even with a
         if (action === "status") return JSON.stringify(active ? record() : null);
         if (action === "start") { active = true; return JSON.stringify(record()); }
         if (action === "recover") return JSON.stringify({
-          ...unresolved("failed", record(state)), code: "RecordingStopFailed",
+          ...unresolved("failed", record(state)), code: "RecordingTerminalFailed",
         });
         if (action === "stop") {
           stops += 1;
@@ -463,6 +463,30 @@ test("a failed or cancelled recording never reports a completed stop even with a
     assert.equal(coordinator.tracked, true);
     assert.equal(stops, 1);
   }
+});
+
+test("a failed stop response can recover a later proven completed recording without another stop", async () => {
+  let stops = 0;
+  let ready = false;
+  const { coordinator } = fixture({
+    run(action) {
+      if (action === "status") return "null";
+      if (action === "start") return JSON.stringify(record());
+      if (action === "stop") {
+        stops += 1;
+        return JSON.stringify({ ...record("failed"), artifactId: "artifact-one" });
+      }
+      if (action === "recover") return JSON.stringify(ready
+        ? recovery() : { ...unresolved("pending"), code: "RecordingOperationPending" });
+    },
+  });
+  await coordinator.start(invocation);
+  await assert.rejects(coordinator.stop("target-one"), { code: "recording_not_finalized" });
+  await assert.rejects(coordinator.finalize(), { code: "recording_recovery_pending" });
+  ready = true;
+  await coordinator.finalize();
+  assert.equal(stops, 1);
+  assert.equal(coordinator.tracked, false);
 });
 
 test("same-key concurrent starts submit exactly one native start and release a bounded slot", async () => {
