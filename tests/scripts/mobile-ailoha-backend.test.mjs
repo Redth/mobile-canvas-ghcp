@@ -216,7 +216,8 @@ function featureFixture(options = {}) {
           targetId: "one", platform: "ios", batteryLevel: 0.57, batteryState: "charging",
           downloadBitsPerSecond: null, uploadBitsPerSecond: null, latencyMs: null,
           networkIsIndicatorOnly: true, unreadable: ["location"],
-          "x-ailoha-target-host": options.wrongOwner ? { ...context, providerId: "other" } : context,
+          "x-ailoha-target-host": options.wrongOwner ? { ...context, providerId: "other" }
+            : options.nullOwner ? { ...context, providerId: null } : context,
         });
       }
       if (path.endsWith("/clipboard")) return reply({
@@ -382,6 +383,9 @@ test("feature results require original provider and resolved native package cann
   const wrong = featureFixture({ wrongOwner: true });
   t.after(() => wrong.backend.dispose());
   await assert.rejects(wrong.backend.deviceFeature("hardware_get", "one"), { code: "invalid_feature_response" });
+  const malformed = featureFixture({ nullOwner: true });
+  t.after(() => malformed.backend.dispose());
+  await assert.rejects(malformed.backend.deviceFeature("hardware_get", "one"), { code: "invalid_feature_response" });
   const appGate = deferred();
   const state = featureFixture({ appGate });
   t.after(() => state.backend.dispose());
