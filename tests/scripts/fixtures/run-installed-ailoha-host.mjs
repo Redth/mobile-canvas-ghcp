@@ -44,6 +44,7 @@ async function waitFor(condition) {
 function returnedBinding(selection) {
   assert.deepEqual(selection.scope, scope);
   assert.equal(selection.contextBinding.ownerProcessId, process.pid);
+  assert.equal(typeof selection.contextBinding.processStartedAt, "string");
   assert.equal(typeof selection.contextBinding.contextRef, "string");
   assert.equal(typeof selection.contextBinding.scopeEpoch, "string");
   assert.match(selection.contextBinding.revision, /^(0|[1-9][0-9]*)$/);
@@ -113,13 +114,49 @@ try {
     scenario.ensureFailureCode = undefined;
     await locked.closeCanvas();
   }
+  const officialEvidence = scenario.connectionRef;
+  function assertPrivateConnectionRefAbsent(value) {
+    const serialized = JSON.stringify(value);
+    assert.equal(serialized.includes("connectionRef"), false);
+    assert.equal(serialized.includes(officialEvidence.serviceId), false);
+    assert.equal(serialized.includes(officialEvidence.processStartedAt), false);
+  }
+  const missingEvidence = createRuntimeCanvasHost({ scope });
+  scenario.connectionRef = undefined;
+  const beforeInvalidEvidence = scenario.calls.length;
+  try {
+    await assert.rejects(missingEvidence.openCanvas(), { code: "runtime_connection_ref_invalid", status: 503 });
+    assert.equal(scenario.leases.size, 0);
+    assert.equal(scenario.calls.slice(beforeInvalidEvidence).some((call) => call.path || call.websocket), false);
+  } finally {
+    scenario.connectionRef = officialEvidence;
+    await missingEvidence.closeCanvas();
+  }
+  const trustedHost = createRuntimeCanvasHost({ scope });
+  try {
+    await trustedHost.openCanvas();
+    const captured = trustedHost.connectionRef;
+    assert.deepEqual(captured, officialEvidence);
+    assert.equal(Object.isFrozen(captured), true);
+    officialEvidence.pid += 1;
+    assert.notEqual(trustedHost.connectionRef.pid, officialEvidence.pid);
+    officialEvidence.pid -= 1;
+    assert.equal(JSON.stringify(trustedHost).includes("connectionRef"), false);
+    const selected = await trustedHost.invokeAction("get_selected_device", {});
+    assertPrivateConnectionRefAbsent(selected);
+  } finally {
+    await trustedHost.closeCanvas();
+  }
   if (host === "github") {
     process.env.EXTENSION_PATH = join(scratch, "installed-plugins", "mobile-canvas", "extension.mjs");
     await import(pathToFileURL(join(root, "extensions", "mobile-canvas", "extension.mjs")).href);
     const registration = globalThis.ailohaTestCanvasRegistration;
     const canvas = registration.canvases[0];
     assert.equal(canvas.id, "mobile-device");
-    assert.equal(canvas.actions.length, 24);
+    assert.equal(canvas.actions.length, 25);
+    assert.equal(canvas.actions.at(-1).name, "workspace_inspect");
+    const baseline = JSON.parse(readFileSync(join(source, "tests/scripts/ailoha-compatibility-baseline.json"), "utf8"));
+    assert.deepEqual(canvas.actions.slice(0, 24).map((entry) => entry.name).sort(), baseline.canvasActions);
     const context = { sessionId: scope.sessionId, instanceId: scope.viewId };
     const action = (name, input = {}) => canvas.actions.find((entry) => entry.name === name).handler({ ...context, input });
     readCatalog = () => action("get_device_catalog");
@@ -139,6 +176,7 @@ try {
     const selected = await action("get_selected_device");
     selectedContext = selected;
     assert.equal(selected.device.id, "opaque/target");
+    assertPrivateConnectionRefAbsent(selected);
     returnedBinding(selected);
     assert.equal((await action("shutdown_device", { deviceId: "opaque/target" })).state, "shutdown");
     assert.equal((await action("boot_device", { deviceId: "opaque/target" })).state, "booted");
@@ -237,6 +275,9 @@ try {
     bridge = new HostBridge(undefined, scope.sessionId, scope.viewId, sink, { appendLine: (line) => logs.push(line) }, undefined, hostAdapter);
     release = async () => { bridge.dispose(); await bridge.closed(); };
     await bridge.handleMessage({ type: "ready" });
+    assert.deepEqual(bridge.connectionRef, officialEvidence);
+    assert.equal(bridge.connectionRef, hostAdapter.connectionRef);
+    assert.equal(Object.isFrozen(bridge.connectionRef), true);
     async function api(path, method = "GET", body) {
       const id = randomUUID();
       await bridge.handleMessage({ type: "api", id, path, method, body: body === undefined ? undefined : JSON.stringify(body) });
@@ -291,6 +332,7 @@ try {
     await api("/api/v1/catalog");
     assert.equal((await bridge.getSelectedDeviceContext()).deviceId, "opaque/target");
     assert.equal(messages.some((message) => JSON.stringify(message).includes("controlCredential")), false);
+    assertPrivateConnectionRefAbsent(messages);
   } else throw new Error("Unknown installed host test.");
   enableCatalogCreation();
   const creationCatalog = await readCatalog();
@@ -438,6 +480,7 @@ try {
       selectionApplied: record.selectionApplied, operationId: record.acceptedOperation.operationId,
     })),
     createPosts: creationCalls.length, noSeparateBootPost: true,
+    connectionRefCapturedInternally: true, connectionRefNotSerialized: true,
   }));
 } finally {
   await dispatcher?.dispose();

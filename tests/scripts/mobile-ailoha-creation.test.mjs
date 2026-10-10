@@ -62,13 +62,20 @@ async function fixture(t, options = {}) {
   });
   const operationState = new Map();
   const backends = [];
-  async function makeBackend() {
+  const connectionRef = {
+    schema: "ailoha.target-host.connection/v1", serviceId: "owned-creation-service", pid: 12345,
+    startedAt: "2026-10-10T03:00:00Z", processStartedAt: "2026-10-10T02:59:59Z",
+  };
+  async function makeBackend(ownerConnectionRef = connectionRef) {
     const client = await connectTargetHost(host.connection);
     const wait = client.waitForOperation.bind(client);
     client.waitForOperation = (id, options) => wait(id, { ...options, timeoutMs: state.waitMs ?? 1000, pollIntervalMs: 1 });
     const backend = new AilohaMobileBackend({
       scope, client, selectionStore: store, operationState, onEvent: (event) => events.push(event),
-      owner: { hostId: host.connection.hostId, registerCleanup: () => () => {}, release: async () => {} },
+      owner: {
+        hostId: host.connection.hostId, connectionRef: ownerConnectionRef,
+        registerCleanup: () => () => {}, release: async () => {},
+      },
     });
     backends.push(backend);
     return { backend, client };
@@ -569,6 +576,107 @@ test("accepted creation resumes under a replacement owner after hide without rep
   assert.equal(created.invocation.executionContext.scopeEpoch, "original-epoch");
   assert.equal(posts(state.state).length, 1);
   assert.equal(state.document.selection.targetId, created.id);
+});
+
+test("creation captures the official frozen incarnation privately without putting it in public success or errors", async (t) => {
+  const state = await fixture(t);
+  state.state.terminal = "running";
+  state.state.waitMs = 10;
+  const input = inputFor(await state.backend.catalog());
+  let failure;
+  await assert.rejects(state.backend.create(input), (error) => { failure = mobileErrorResult(error); return true; });
+  const receipt = state.operationState.values().next().value;
+  assert.equal(receipt.invocation.connectionRef, state.backend.connectionRef);
+  assert.equal(Object.isFrozen(receipt.invocation.connectionRef), true);
+  assert.equal(Object.getOwnPropertyDescriptor(receipt.invocation, "connectionRef").enumerable, false);
+  assert.equal(JSON.stringify(failure).includes("connectionRef"), false);
+  assert.equal(JSON.stringify(failure).includes(state.backend.connectionRef.serviceId), false);
+  state.state.operations.values().next().value.status = "succeeded";
+  const created = await state.backend.create(input);
+  assert.equal(Object.hasOwn(created.invocation, "connectionRef"), false);
+  assert.equal(JSON.stringify(created).includes(state.backend.connectionRef.serviceId), false);
+  assert.equal(posts(state.state).length, 1);
+});
+
+for (const changed of [
+  { serviceId: "replacement-creation-service" }, { pid: 54321 },
+  { startedAt: "2026-10-10T03:00:01Z" }, { processStartedAt: "2026-10-10T03:00:00Z" },
+]) {
+  for (const outcome of ["unknown", "pending", "completed"]) {
+    test(`${Object.keys(changed)[0]} replacement cannot continue an ${outcome} creation receipt before any GET/POST`, async (t) => {
+      const state = await fixture(t);
+      const input = inputFor(await state.backend.catalog());
+      if (outcome === "unknown") state.state.acceptance = "unknown";
+      if (outcome === "pending") { state.state.terminal = "running"; state.state.waitMs = 10; }
+      if (outcome === "completed") state.state.targetStatus = "stopped";
+      await assert.rejects(state.backend.create(input));
+      const receipt = state.operationState.values().next().value;
+      const capturedIncarnation = state.backend.connectionRef;
+      if (outcome === "pending") state.state.operations.values().next().value.status = "succeeded";
+      if (outcome === "completed") {
+        assert.equal(receipt.completed.status, "succeeded");
+        state.state.targets.values().next().value.status = "running";
+      }
+      await state.backend.dispose();
+      const replacement = await state.makeBackend({ ...capturedIncarnation, ...changed });
+      const before = state.state.calls.length;
+      const contextReads = state.contextCommands.length;
+      await assert.rejects(replacement.backend.create(input), { code: "runtime_incarnation_changed" });
+      assert.equal(state.state.calls.length, before);
+      assert.equal(state.contextCommands.length, contextReads);
+      assert.equal(state.operationState.values().next().value, receipt);
+      assert.equal(state.operationState.size, 1);
+      assert.equal(receipt.invocation.connectionRef, capturedIncarnation);
+      assert.equal(posts(state.state).length, 1);
+      assert.equal(state.state.calls.some((call) => call.method === "DELETE" || /\/actions\/start$/.test(call.path)), false);
+    });
+  }
+}
+
+for (const outcome of ["unknown", "pending", "completed"]) {
+  test(`a replacement discovery host cannot rekey an ${outcome} intent encoded in the original catalog choices`, async (t) => {
+    const state = await fixture(t);
+    const input = inputFor(await state.backend.catalog());
+    if (outcome === "unknown") state.state.acceptance = "unknown";
+    if (outcome === "pending") { state.state.terminal = "running"; state.state.waitMs = 10; }
+    if (outcome === "completed") state.state.targetStatus = "stopped";
+    await assert.rejects(state.backend.create(input));
+    const key = state.operationState.keys().next().value;
+    const receipt = state.operationState.get(key);
+    const original = state.backend.connectionRef;
+    await state.backend.dispose();
+    state.connection.hostId = "replacement-discovery-host";
+    state.state.model.status.hostId = state.connection.hostId;
+    const replacement = await state.makeBackend({ ...original, serviceId: "replacement-service" });
+    const before = state.state.calls.length;
+    const reads = state.contextCommands.length;
+    await assert.rejects(replacement.backend.create(input), { code: "runtime_incarnation_changed" });
+    assert.equal(state.state.calls.length, before);
+    assert.equal(state.contextCommands.length, reads);
+    assert.equal(state.operationState.size, 1);
+    assert.equal(state.operationState.get(key), receipt);
+    assert.equal(posts(state.state).length, 1);
+  });
+}
+
+test("a concurrent replacement cannot join the original owner's accepted creation or change its eventual result", async (t) => {
+  const entered = deferred();
+  const release = deferred();
+  const state = await fixture(t, { beforePoll: async () => { entered.resolve(); await release.promise; } });
+  const input = inputFor(await state.backend.catalog());
+  const original = state.backend.create(input);
+  await entered.promise;
+  const receipt = state.operationState.values().next().value;
+  const originalConnectionRef = state.backend.connectionRef;
+  const replacement = await state.makeBackend({ ...originalConnectionRef, pid: 54321 });
+  const before = state.state.calls.length;
+  await assert.rejects(replacement.backend.create(input), { code: "runtime_incarnation_changed" });
+  assert.equal(state.state.calls.length, before);
+  release.resolve();
+  const created = await original;
+  assert.equal(created.state, "booted");
+  assert.equal(receipt.invocation.connectionRef, originalConnectionRef);
+  assert.equal(posts(state.state).length, 1);
 });
 
 test("replacement owners do not mistake a local generation reset for a changed canonical view selection", async (t) => {

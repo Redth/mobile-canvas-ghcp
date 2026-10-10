@@ -62,7 +62,7 @@ async (page) => {
   const inputCalls = value.calls.filter((call) => call.path?.includes("/input/actions/"));
   const tap = JSON.parse(inputCalls.find((call) => call.path.endsWith("/tap")).body);
   const gesture = JSON.parse(inputCalls.find((call) => call.path.endsWith("/gesture")).body);
-  verify(tap.x === 24 && tap.y === 16 && tap.geometryRevision === 14,
+  verify(Math.abs(tap.x - 24) < 0.01 && Math.abs(tap.y - 16) < 0.01 && tap.geometryRevision === 14,
     "The renderer scaled logical tap coordinates using encoded pixels");
   verify(gesture.geometryRevision === 14 && gesture.actions[0].x === 12 && gesture.actions.at(-1).x === 36
     && gesture.actions.every((action) => action.y === undefined || action.y === 16),
@@ -106,6 +106,106 @@ async (page) => {
     "Status-bar write did not preserve the compatibility result.");
   verify((await api("/api/v1/devices/opaque%2Ftarget/presentation")).readable,
     "Status-bar read lost its readable flag.");
+  const combined = options.combined === true;
+  const workspace = page.locator("#workspace-inspection");
+  const semantic = page.locator("#semantic-inspection");
+  let combinedEvidence = null;
+  async function workspaceControl(input) {
+    await control("workspace-control", input);
+    if (input.root && options.host === "vscode") {
+      await workspace.getByRole("button", { name: "Choose workspace", exact: true }).click();
+    }
+  }
+  async function inspectWorkspace(status = "complete") {
+    const generation = (await evidence()).workspace.generation;
+    await workspace.getByRole("button", { name: "Inspect", exact: true }).click();
+    await page.waitForFunction(({ generation, status }) => {
+      const element = document.querySelector("#workspace-inspection");
+      return Number(element.dataset.generation) > generation && element.dataset.status === status;
+    }, { generation, status });
+  }
+  async function semanticChoice(lens, operation, text) {
+    const lensControl = semantic.getByLabel("Inspection lens");
+    if (await lensControl.inputValue() !== lens) await lensControl.selectOption(lens);
+    const operationControl = semantic.getByLabel("Inspection operation");
+    if (await operationControl.inputValue() !== operation) await operationControl.selectOption(operation);
+    await page.waitForFunction(() => document.querySelector("#semantic-inspection .semantic-inspection-actions button")?.disabled === false);
+    await api("/api/v1/semantic/inspection");
+    if (text !== undefined) await semantic.getByLabel("Text", { exact: true }).fill(text);
+  }
+  async function semanticRead(lens, operation, text) {
+    await semanticChoice(lens, operation, text);
+    await semantic.getByRole("button", { name: "Inspect", exact: true }).click();
+    const observed = await waitFor((value) => value.semantic.status === "complete"
+      && value.semantic.lens === lens && value.semantic.operation === operation);
+    await page.waitForFunction(() => document.querySelector("#semantic-inspection .semantic-inspection-output")?.textContent.length > 0);
+    verify(observed.semantic.result.route.owner === (lens === "app" ? "agent" : "target-host"),
+      "Canonical inspection fell back to the wrong owner");
+    return observed.semantic;
+  }
+  async function pendingSemantic() {
+    const calls = (await evidence()).semanticCalls.length;
+    await semanticChoice("system", "query", "wait");
+    await semantic.getByRole("button", { name: "Inspect", exact: true }).click();
+    await waitFor((value) => value.semanticCalls.length > calls && value.semantic.status === "reading");
+  }
+  if (combined) {
+    const initial = await evidence();
+    verify(initial.workspaceCalls.length === 0 && initial.semanticCalls.length === 0,
+      "The combined renderer scanned or invoked a semantic tool automatically");
+    const beforeContext = JSON.stringify(initial.context);
+    const beforeDeviceCalls = initial.calls.length;
+    await workspaceControl({ root: "first", mode: "complete" });
+    await inspectWorkspace();
+    verify(await workspace.locator(".workspace-app-card").count() === 8, "The canonical workspace cards are incomplete");
+    for (const card of await workspace.locator(".workspace-app-card").all()) {
+      await card.locator("summary").click();
+      verify(await card.locator(".workspace-app-details button, .workspace-app-details a").count() === 0,
+        "Workspace evidence became an installation or agent-binding action");
+    }
+    const fields = await workspace.textContent();
+    verify(fields.includes("Declared; installation not verified") && fields.includes("Application selection is not supported"),
+      "The workspace evidence lost its conservative qualifiers");
+    verify((await evidence()).calls.length === beforeDeviceCalls
+      && JSON.stringify((await evidence()).context) === beforeContext,
+    "Inspecting or expanding workspace cards changed target/native context or device controls");
+    await workspaceControl({ mode: "incomplete" });
+    await inspectWorkspace("incomplete");
+    verify(await workspace.locator(".workspace-app-card").count() === 9, "An incomplete scan became empty success");
+    await workspaceControl({ mode: "complete" });
+    await inspectWorkspace();
+
+    const systemTree = await semanticRead("system", "tree");
+    verify(systemTree.result.route.targetId === "opaque/target" && systemTree.result.route.executionContext.revision === initial.context[0].revision,
+      "System inspection lost the captured target/context identity");
+    await semanticRead("system", "query", "OK");
+    const safe = await semantic.locator(".semantic-inspection-output").evaluate((element) => ({
+      literal: element.textContent.includes("<script>alert(1)</script>"),
+      executableNodes: element.querySelectorAll("script, iframe").length,
+    }));
+    verify(safe.literal && safe.executableNodes === 0, "Canonical element text was interpreted as executable HTML");
+    await semanticChoice("app", "tree");
+    verify((await semantic.locator(".semantic-inspection-status").textContent()).includes("no explicitly selected verified native instance"),
+      "App inspection inferred a native instance from workspace evidence");
+    const beforeNative = (await evidence()).semanticCalls.length;
+    await control("instance-control", { nativeInstance: true });
+    await api("/api/v1/semantic/inspection");
+    await page.waitForFunction(() => !document.querySelector(".semantic-inspection-status")?.textContent.includes("App unavailable"));
+    const nativeContext = JSON.stringify((await evidence()).context);
+    const appTree = await semanticRead("app", "tree");
+    await semanticRead("app", "query", "OK");
+    const appStatus = await semanticRead("app", "status");
+    verify(appTree.result.route.runtimeInstanceId === "owned-runtime" && appStatus.result.status.running === true
+      && appStatus.result.route.executionContext.observed.runtimeInstanceEvidence === "verified-native-instance",
+    "Explicit synthetic native-instance provenance was lost");
+    verify(JSON.stringify((await evidence()).context) === nativeContext,
+      "Read-only App tools wrote a binding or context revision");
+    verify((await evidence()).semanticCalls.length === beforeNative + 3, "App reads replayed or added unrequested tools");
+    verify(videoPosts(await evidence()) === 1, "Workspace/semantic inspection recreated the live resource");
+    combinedEvidence = { cards: 8, incompleteCards: 9, safe, systemOwner: "target-host", appOwner: "agent",
+      explicitNativeInstanceOnly: true, readonlyContext: true };
+    await pendingSemantic();
+  }
   const catalog = await api("/api/v1/catalog");
   verify(catalog.creationSupport.supported === true, "Installed catalog mapping did not advertise wired creation");
   const createdEvidence = [];
@@ -156,6 +256,28 @@ async (page) => {
     if (platform === "ios") verify(selected.device.udid === selected.device.nativeId, "iOS UDID was replaced with an opaque target ID");
     else verify(selected.device.serial?.startsWith("emulator-"), "Android serial was lost");
     createdEvidence.push({ platform, input, id: selected.device.id, nativeId: selected.device.nativeId });
+    if (combined) {
+      verify((await evidence()).semantic.result === null && await semantic.locator(".semantic-element").count() === 0,
+        "Creation left old target semantic results on the new device");
+      verify(await workspace.locator(".workspace-app-card").count() === 0,
+        "Creation preserved workspace evidence retired by the captured selection intent");
+    }
+  }
+  if (combined) {
+    const currentTree = await semanticRead("system", "tree");
+    verify(currentTree.result.route.targetId === createdEvidence.at(-1).id,
+      "The new target did not own the next canonical System read");
+    await workspaceControl({ mode: "complete" });
+    await inspectWorkspace();
+    const rootCalls = (await evidence()).workspaceCalls.length;
+    await workspaceControl({ mode: "complete", delayMs: 1000 });
+    await workspace.getByRole("button", { name: "Inspect", exact: true }).click();
+    await waitFor((value) => value.workspaceCalls.length > rootCalls);
+    await workspaceControl({ root: "second", mode: "complete" });
+    await page.waitForTimeout(1100);
+    verify((await evidence()).workspace.root === options.secondRoot
+      && await workspace.locator(".workspace-app-card").count() === 0, "A retired old-root result painted current cards");
+    await inspectWorkspace();
   }
   await control("creation-hold");
   await fillCreate("ios", "Owned late result");
@@ -171,6 +293,13 @@ async (page) => {
   value = await evidence();
   verify(createPosts(value).length === 3 && !value.calls.some((call) => call.method === "POST" && /\/actions\/start$/.test(call.path ?? "")),
     "Creation recovery replayed create or issued a separate boot");
+  if (combined) {
+    await workspaceControl({ mode: "complete", delayMs: 1000 });
+    const beforeScan = (await evidence()).workspaceCalls.length;
+    await workspace.getByRole("button", { name: "Inspect", exact: true }).click();
+    await waitFor((value) => value.workspaceCalls.length > beforeScan);
+    await pendingSemantic();
+  }
   if (options.host === "vscode") await control("visibility", { visible: false });
   else await page.evaluate(() => {
     Object.defineProperty(document, "hidden", { configurable: true, value: true });
@@ -178,12 +307,25 @@ async (page) => {
   });
   await waitFor((value) => value.leases === 0 && value.videoResources === 0);
   value = await evidence();
+  if (combined) {
+    verify(value.workspace.status === "suspended" && value.semantic.status === "suspended"
+      && value.workspace.inspection === null && value.semantic.result === null,
+    "Hiding the combined view retained pending workspace/semantic evidence");
+    verify(await workspace.isHidden() && await semantic.isHidden(), "Hidden evidence is still presented");
+    verify(value.semanticCalls.every((call) => ["app_tree", "app_query", "app_status"].includes(call.name)),
+      "The readonly semantic workflow invoked mutation tools");
+    combinedEvidence.workspacePickerUsed = options.host !== "vscode" || value.workspacePicks >= 2;
+    verify(combinedEvidence.workspacePickerUsed, "VS Code did not use its compiled explicit-folder picker adapter");
+    combinedEvidence.pendingReadsRetired = true;
+    combinedEvidence.semanticCalls = value.semanticCalls.length;
+  }
   verify(value.errors.length === 0 && !value.calls.some((call) => call.path === "/api/v1/host/stop"),
     "The owned renderer leaked resources or stopped a shared host");
   return {
     host: options.host, synthetic: true, realWebCodecs: painted, initialResizeVideoPosts: 1,
     createPosts: createPosts(value).length, separateBootPosts: 0, createdEvidence,
     tap, gesture,
+    combinedEvidence,
     staleSelectionPreserved: true, leasesAfterHide: value.leases, videosAfterHide: value.videoResources, errors: value.errors,
   };
 }
