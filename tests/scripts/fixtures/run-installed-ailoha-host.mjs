@@ -33,6 +33,7 @@ let selectedContext;
 let readCatalog;
 let createFromHost;
 let selectedFromHost;
+let presentationApi;
 const logs = [];
 const units = [];
 
@@ -202,6 +203,11 @@ try {
     });
     assert.equal(bootstrap.status, 204);
     const cookie = bootstrap.headers.get("set-cookie").split(";", 1)[0];
+    presentationApi = (deviceId, method = "GET", input) => fetch(
+      new URL(`/api/v1/devices/${encodeURIComponent(deviceId)}/presentation`, url), {
+        method, headers: { Cookie: cookie, "Content-Type": "application/json" },
+        ...(input === undefined ? {} : { body: JSON.stringify(input) }),
+      });
     const presentationRoute = new URL("/api/v1/devices/opaque%2Ftarget/presentation", url);
     const updateStatus = await fetch(presentationRoute, {
       method: "POST", headers: { Cookie: cookie, "Content-Type": "application/json" },
@@ -286,6 +292,8 @@ try {
       assert.equal(result.type, "api-result");
       return new Response(result.body, { status: result.status, headers: result.headers });
     }
+    presentationApi = (deviceId, method = "GET", input) =>
+      api(`/api/v1/devices/${encodeURIComponent(deviceId)}/presentation`, method, input);
     readCatalog = async () => (await api("/api/v1/catalog")).json();
     createFromHost = async (input) => {
       const response = await api("/api/v1/devices", "POST", input);
@@ -363,6 +371,23 @@ try {
   }
   const rawMcp = await createAilohaMcpDispatcher({ version: "synthetic-only", binding: returnedBinding(selectedContext) });
   try {
+    const androidDeviceId = selectedContext.device.id;
+    const androidUnfixed = {
+      schemaVersion: "1.0", deviceId: androidDeviceId, platform: "android",
+      enabled: false, readable: false, overrides: [],
+    };
+    const androidFixed = { ...androidUnfixed, enabled: true };
+    const androidRead = await presentationApi(androidDeviceId);
+    assert.equal(androidRead.status, 200);
+    assert.deepEqual(await androidRead.json(), androidUnfixed);
+    const androidWrite = await presentationApi(androidDeviceId, "POST", {
+      enabled: true, time: "09:41", batteryLevel: 75,
+    });
+    assert.equal(androidWrite.status, 200);
+    assert.deepEqual(await androidWrite.json(), androidFixed);
+    const androidReadback = await presentationApi(androidDeviceId);
+    assert.equal(androidReadback.status, 200);
+    assert.deepEqual(await androidReadback.json(), androidFixed);
     const button = await rawMcp.handle(mcpCall("mobile_device_press_button",
       { deviceId: selectedContext.device.id, button: "VolumeUp" }));
     assert.equal(button.result.structuredContent.operation, "press-button");
@@ -372,7 +397,20 @@ try {
     if (focusedText) assert.equal(typed.result.structuredContent.operation, "type-text");
     const presentation = await rawMcp.handle(mcpCall("mobile_device_presentation_get",
       { deviceId: selectedContext.device.id }));
-    assert.equal(presentation.result.structuredContent.readable, true);
+    assert.deepEqual(presentation.result.structuredContent, androidFixed);
+    const restored = await rawMcp.handle(mcpCall("mobile_device_presentation_set",
+      { deviceId: androidDeviceId, enabled: false }));
+    assert.deepEqual(restored.result.structuredContent, androidUnfixed);
+    const restoredRead = await presentationApi(androidDeviceId);
+    assert.equal(restoredRead.status, 200);
+    assert.deepEqual(await restoredRead.json(), androidUnfixed);
+    const androidSettingsPath = `/api/v1/targets/${encodeURIComponent(androidDeviceId)}/settings/status-bar`;
+    const androidSettingsCalls = scenario.calls.filter((call) => call.path === androidSettingsPath);
+    assert.deepEqual(androidSettingsCalls.map((call) => call.method), ["GET", "PATCH", "GET", "GET", "PATCH", "GET"]);
+    assert.deepEqual(JSON.parse(androidSettingsCalls[1].body), {
+      values: { enabled: true, time: "09:41", batteryLevel: 75 },
+    });
+    assert.deepEqual(JSON.parse(androidSettingsCalls[4].body), { values: { enabled: false } });
     const created = await rawMcp.handle({
       ...mcpCall("mobile_device_create"),
       params: { name: "mobile_device_create", arguments: inputFor("ios", "Owned installed raw MCP") },

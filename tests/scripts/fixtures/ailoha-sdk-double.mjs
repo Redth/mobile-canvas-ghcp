@@ -6,6 +6,7 @@ import { createCatalogModel } from "./ailoha-catalog-creation.mjs";
 export const scenario = {
   calls: [], leases: new Map(), videos: new Map(), operations: new Map(), status: "running", geometryRevision: 13,
   orientation: "landscape", statusBar: { enabled: false, readable: true },
+  androidStatusBars: new Map(),
   catalog: null, createdTargets: new Map(), creationGate: null,
   focusedText: false,
   targets: new Map(), providerId: "synthetic-provider", nativeId: "native-deployment-not-opaque-target",
@@ -274,6 +275,17 @@ export async function openTargetHostTransport(leaseId) {
       if (settingsRoute) {
         const selectedTargetId = decodeURIComponent(settingsRoute[1]);
         if (selectedTargetId !== targetId && !scenario.createdTargets.has(selectedTargetId)) throw new Error("Unknown synthetic settings target");
+        if (scenario.createdTargets.get(selectedTargetId)?.nativeIdentity.platform === "android") {
+          if (options.method === "PATCH") {
+            const { enabled } = JSON.parse(body).values;
+            if (enabled !== undefined) scenario.androidStatusBars.set(selectedTargetId, enabled);
+          }
+          return reply({
+            namespace: "status-bar",
+            values: { enabled: scenario.androidStatusBars.get(selectedTargetId) ?? false, readable: false },
+            "x-ailoha-target-host": { targetId: selectedTargetId },
+          });
+        }
         if (options.method === "PATCH") Object.assign(scenario.statusBar, JSON.parse(body).values);
         return reply({ namespace: "status-bar", values: {
           ...scenario.statusBar,
