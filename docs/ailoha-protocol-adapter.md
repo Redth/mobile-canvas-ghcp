@@ -398,8 +398,8 @@ remains visible and prevents the canvas lease from releasing. The canonical
 CLI's recover-only operation is required after even a successful legacy stop:
 Mobile Canvas releases the owner only after a matching durable downloaded
 receipt proves the original context, host incarnation, recording and stop
-identities, artifact and output. A lost or failed stop/download response retries
-only captured recovery, never a second stop. Pending, failed and unknown
+identities, nonempty landed artifact and output. A lost or failed stop/download
+response retries only captured recovery, never a second stop. Pending, failed and unknown
 recovery outcomes retain the owner and block lease release or another start;
 a file at the output path alone never proves completion. A pending start may
 have no recording ID; only the first authoritatively known ID is pinned.

@@ -390,7 +390,7 @@ test("a downloaded receipt must match every pinned owner and stop identity", asy
   for (const invalid of [
     { state: "failed" }, { state: "cancelled" }, { artifactId: undefined },
     { stopOperationId: undefined }, { stopRequestId: undefined },
-    { downloadedAt: undefined }, { downloadedLength: -1 },
+    { downloadedAt: undefined }, { downloadedLength: -1 }, { downloadedLength: 0 },
   ]) {
     let stops = 0;
     const { coordinator } = fixture({
