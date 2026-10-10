@@ -1739,7 +1739,7 @@ async function followSelection(deviceId) {
     // A device the agent created moments ago is not in the catalog this panel loaded.
     await loadCatalog();
     // A later announcement overtook this one while the catalog loaded; that one wins.
-    if (state.followTarget !== deviceId) return;
+    if (state.followTarget !== deviceId || state.selectionTarget === deviceId || state.selected?.id === deviceId) return;
     device = state.catalog?.devices?.find((entry) => entry.id === deviceId);
   }
   if (device) await selectDevice(device, false);
@@ -2390,11 +2390,15 @@ elements.createForm.addEventListener("submit", (event) => {
       }),
     });
     const created = await response.json();
-    if (!state.detached && selectionVersion === state.selectionVersion && created.selectionApplied !== false) {
-      state.selected = created;
-    }
+    const applySelection = !state.detached && selectionVersion === state.selectionVersion && created.selectionApplied !== false;
     elements.createDialog.close();
-    await refresh();
+    if (created.backend === "ailoha") {
+      if (applySelection) await selectDevice(created, false);
+      await loadCatalog();
+    } else {
+      if (applySelection) state.selected = created;
+      await refresh();
+    }
     showToast(`${created.name} created and started${created.selectionApplied === false ? "; current selection unchanged" : ""}`);
   }).catch(showError);
 });

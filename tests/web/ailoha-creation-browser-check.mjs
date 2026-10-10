@@ -78,12 +78,17 @@ async (page) => {
   for (const platform of ["ios", "android"]) {
     const name = `Owned browser ${platform}`;
     const pair = await fillCreate(platform, name);
-    const before = createPosts(await evidence()).length;
+    const beforeState = await evidence();
+    const before = createPosts(beforeState).length;
+    const beforeVideos = videoPosts(beforeState);
     await page.locator("#create-submit").click();
     await page.locator("#create-dialog").waitFor({ state: "hidden" });
-    await page.waitForFunction((name) => document.querySelector("#device-name")?.textContent === name, name);
+    await page.waitForFunction((name) => document.querySelector("#selector-name")?.textContent === name, name);
     const selected = await api("/api/v1/selection");
-    value = await waitFor((value) => value.videoResources === 1 && value.errors.length === 0);
+    value = await waitFor((value) => videoPosts(value) >= beforeVideos + 1 && value.videoResources === 1 && value.errors.length === 0);
+    await page.waitForTimeout(500);
+    value = await evidence();
+    verify(videoPosts(value) === beforeVideos + 1, "The creation result and its selection echo recreated the same owned video session");
     const requests = createPosts(value);
     verify(requests.length === before + 1, "One create submission emitted more than one create POST");
     const input = JSON.parse(requests.at(-1).body);
@@ -101,8 +106,9 @@ async (page) => {
   await page.locator("#create-submit").click();
   await waitFor((value) => createPosts(value).length === 3);
   await page.locator("#create-cancel").click();
+  await page.locator("#device-selector").click();
   await page.getByRole("button", { name: /Synthetic device/ }).click();
-  await page.waitForFunction(() => document.querySelector("#device-name")?.textContent === "Synthetic device");
+  await page.waitForFunction(() => document.querySelector("#selector-name")?.textContent === "Synthetic device");
   await control("creation-release");
   await page.waitForFunction(() => document.querySelector("#toast")?.textContent.includes("current selection unchanged"));
   verify((await api("/api/v1/selection")).device.id === "opaque/target", "A late creation result overwrote the user's new selection");

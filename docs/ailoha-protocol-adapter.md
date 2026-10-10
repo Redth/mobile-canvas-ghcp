@@ -424,7 +424,8 @@ only the browser's stand-in for native webview IPC uses a test-only HTTP/SSE shi
 Run `ailoha-creation-browser-check.mjs` in Playwright with
 `window.ailohaBrowserTestOptions` set to the emitted options. It verifies enabled
 compatible create controls, both-platform payload/native IDs, real WebCodecs
-resize/idle behavior, stale-selection protection and zero leases/videos after hide.
+resize/idle behavior, one video per creation handoff despite its selection echo,
+stale-selection protection and zero leases/videos after hide.
 Stop the helper to restore/remove its explicitly synthetic prepared pin.
 
 ```sh

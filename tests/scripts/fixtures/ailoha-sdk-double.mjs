@@ -102,7 +102,9 @@ export async function openTargetHostTransport(leaseId) {
   const transport = Object.freeze({
     get closed() { return closed; },
     async response(path, options = {}) {
-      scenario.calls.push({ path, method: options.method ?? "GET", body: options.body });
+      const body = options.body === undefined || typeof options.body === "string"
+        ? options.body : Buffer.from(options.body).toString("utf8");
+      scenario.calls.push({ path, method: options.method ?? "GET", body });
       if (closed) throw new Error("closed double");
       if (options.signal?.aborted) throw new Error("aborted double");
       if (path === "/api/v1/host/status") return reply({
@@ -118,7 +120,7 @@ export async function openTargetHostTransport(leaseId) {
       }
       if (path === "/api/v1/targets" && options.method === "POST") {
         if (!scenario.catalog) throw new Error("Synthetic creation is disabled");
-        const input = JSON.parse(options.body);
+        const input = JSON.parse(body);
         const provider = scenario.catalog.providerCatalogs.find((entry) => entry.providerId === input.providerId);
         const type = provider?.targetTypes.find((entry) => entry.targetTypeId === input.targetTypeId);
         if (!type) throw new Error("Unknown exact synthetic provider/type");
