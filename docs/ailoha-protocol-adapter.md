@@ -340,6 +340,9 @@ read's revision or epoch. Known superseded snapshots reject undispatched work;
 display observations retain the same captured identity. Already accepted
 lifecycle receipts keep their original target and context metadata through later
 reads or a trusted authority reopen, without resubmission or relabeling.
+Direct target reads use the same snapshot guard without changing selection;
+an external tombstone is checked before target-host reads, not inferred from a
+previously cached open state.
 
 Input captures one view/host/target/surface tuple and observed logical bounds,
 coordinate space and geometry revision. Additive `surfaceId`, `coordinate` and
