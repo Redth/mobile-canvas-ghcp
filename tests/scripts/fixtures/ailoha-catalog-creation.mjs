@@ -142,6 +142,12 @@ export async function startCatalogHost(t, { model = createCatalogModel(), before
           return;
         }
         if (state.acceptance === "cross-origin") return reply(response, accepted, 202, `http://127.0.0.1:1${location}`);
+        if (state.acceptance === "mismatched-body") {
+          return reply(response, { ...accepted, operationId: "foreign/operation", targetId: "foreign/target" }, 202, location);
+        }
+        if (state.acceptance === "wrong-provider-body") {
+          return reply(response, { ...accepted, providerId: "foreign/provider", targetId: "foreign/target" }, 202, location);
+        }
         if (state.acceptance === "lost-body") {
           response.writeHead(202, { "Content-Type": "application/json", Location: location });
           response.flushHeaders();

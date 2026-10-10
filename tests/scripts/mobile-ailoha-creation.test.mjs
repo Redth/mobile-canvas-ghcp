@@ -340,6 +340,18 @@ for (const kind of ["action", "api", "mcp", "vscode-mcp"]) {
   });
 }
 
+test("invalid accepted bodies cannot poison the validated Location receipt or relabel its created target", async (t) => {
+  for (const acceptance of ["mismatched-body", "wrong-provider-body"]) {
+    const state = await fixture(t);
+    state.state.acceptance = acceptance;
+    const created = await state.backend.create(inputFor(await state.backend.catalog()));
+    assert.equal(created.id, "created/opaque-1%2F");
+    assert.equal(created.nativeId, "owned-udid-1");
+    assert.equal(created.acceptedOperation.operationId, "creation/operation-1%2F");
+    assert.equal(posts(state.state).length, 1);
+  }
+});
+
 test("invalid/mixed/opaque native inputs, extra fields and unsupported platform choices cause zero POSTs", async (t) => {
   const state = await fixture(t);
   const catalog = await state.backend.catalog();
@@ -479,6 +491,29 @@ test("wrong completion kind/provider/target correlation retains accepted intent 
     assert.equal(posts(state.state).length, 1);
     assert.equal(state.document.selection, null);
   }
+});
+
+test("a foreign failed operation cannot evict or terminal-cache the original creation receipt", async (t) => {
+  let corrupt = true;
+  const state = await fixture(t, { beforePoll: (operation) => {
+    if (corrupt) {
+      operation.operationId = "foreign/operation";
+      operation.status = "failed";
+      operation.kind = "createTarget";
+    }
+  } });
+  const input = inputFor(await state.backend.catalog());
+  await assert.rejects(state.backend.create(input), (error) => {
+    assert.equal(error.code, "operation_identity_mismatch");
+    assert.equal(Object.hasOwn(error, "createdTargetId"), false);
+    return true;
+  });
+  corrupt = false;
+  const operation = state.state.operations.values().next().value;
+  operation.operationId = "creation/operation-1%2F";
+  operation.status = "succeeded";
+  assert.equal((await state.backend.create(input)).state, "booted");
+  assert.equal(posts(state.state).length, 1);
 });
 
 test("external context change during catalog reads rejects the undispatched immutable intent", async (t) => {
