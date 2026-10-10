@@ -422,6 +422,32 @@ fixture also creates both platforms through the actual GitHub registration and
 compiled VS Code bridge, and exercises the compatibility MCP dispatcher.
 All provider mutations are original synthetic fixtures, not native-device acceptance.
 
+Agentless controls in the opt-in use the captured Target Host selection and
+per-target/per-surface capability evidence, without an app agent: `pressTargetKey`
+for numeric USB HID keys and physical button names, `getTargetUiTree` plus
+`fillTargetElement` for exactly one observed focused field, and
+`updateTargetPresentation` for portrait/landscape rotation. The legacy
+`/presentation` API and MCP identity mean **status-bar overrides**, not
+Target Host display presentation: they map to `getTargetSettings` and
+`updateTargetSettings` in the `status-bar` namespace, preserving
+`enabled`/`readable`/`overrides` semantics. Missing focus, capability, or
+directional rotation support is explicit unsupported/error, never a fallback.
+The Target Host only guarantees generic landscape and portrait; requests for
+landscape-right or portrait-upside-down are not silently approximated.
+Changes to orientation invalidate observed logical geometry; new pointer input
+needs a fresh display observation. The existing ALHV resource stays owned
+through rotation, while view hide/resume releases only its own resource.
+These are synchronous canonical actions; uncertain delivery is not retried.
+Both hosts share the control adapter and renderer; neither gains native
+commands or credentials in the webview.
+
+The pinned Target Host `fill` implementation taps the field center before
+typing, even when it was already focused. Unlike legacy `TypeTextAsync`,
+successive character events or a paste can therefore move an existing caret.
+This source-only draft does not establish cursor-preserving text-entry parity;
+the canonical contract/provider needs a focused-text operation without that
+tap before this behavior can be considered equivalent or released.
+
 `ailoha-creation-browser-server.mjs <prepared-root> <github|vscode> <context-file>`
 serves the complete shared renderer with synthetic catalogs/creation. Its VS Code
 mode uses the actual compiled HTML builder, theme/transport scripts and HostBridge;

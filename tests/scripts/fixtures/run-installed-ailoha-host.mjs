@@ -142,6 +142,10 @@ try {
     assert.equal((await action("boot_device", { deviceId: "opaque/target" })).state, "booted");
     const geometry = await action("get_display_geometry", { deviceId: "opaque/target" });
     await action("tap_device", { deviceId: "opaque/target", x: 12, y: 10, geometryRevision: geometry.geometryRevision });
+    assert.equal((await action("press_key", { deviceId: "opaque/target", keyCode: 40 })).operation, "press-key");
+    assert.equal((await action("press_button", { deviceId: "opaque/target", button: "home" })).operation, "press-button");
+    assert.equal((await action("type_text", { deviceId: "opaque/target", text: "literal \u2603" })).operation, "type-text");
+    assert.equal((await action("rotate_device", { deviceId: "opaque/target", orientation: "portrait" })).operation, "rotate");
     const screenshot = await action("take_screenshot", { deviceId: "opaque/target", output: join(scratch, "screen.png") });
     assert.equal(screenshot.mimeType, "image/png");
     assert.equal(readFileSync(screenshot.path).length, screenshot.bytes);
@@ -154,6 +158,15 @@ try {
     });
     assert.equal(bootstrap.status, 204);
     const cookie = bootstrap.headers.get("set-cookie").split(";", 1)[0];
+    const presentationRoute = new URL("/api/v1/devices/opaque%2Ftarget/presentation", url);
+    const updateStatus = await fetch(presentationRoute, {
+      method: "POST", headers: { Cookie: cookie, "Content-Type": "application/json" },
+      body: JSON.stringify({ enabled: true, time: "09:41" }),
+    });
+    assert.equal(updateStatus.status, 200);
+    assert.equal((await updateStatus.json()).enabled, true);
+    const readStatus = await fetch(presentationRoute, { headers: { Cookie: cookie } });
+    assert.equal((await readStatus.json()).overrides[0].value, "09:41");
     const socketUrl = new URL("/ws/video?deviceId=opaque%2Ftarget", url);
     socketUrl.protocol = "ws:";
     const socket = new WebSocket(socketUrl, "ailoha.video.v1", { headers: { Cookie: cookie } });
@@ -247,6 +260,17 @@ try {
     assert.equal((await api("/api/v1/devices/opaque%2Ftarget/boot", "POST")).status, 200);
     const display = await (await api("/api/v1/devices/opaque%2Ftarget/display")).json();
     await api("/api/v1/devices/opaque%2Ftarget/input/tap", "POST", { x: 12, y: 10, geometryRevision: display.geometryRevision });
+    for (const [kind, input] of [
+      ["key", { keyCode: 40 }], ["button", { button: "home" }], ["text", { text: "literal \u2603" }],
+      ["rotate", { orientation: "portrait" }],
+    ]) {
+      assert.equal((await api(`/api/v1/devices/opaque%2Ftarget/input/${kind}`, "POST", input)).status, 200);
+    }
+    const changedStatus = await api("/api/v1/devices/opaque%2Ftarget/presentation", "POST",
+      { enabled: true, time: "09:41" });
+    assert.equal((await changedStatus.json()).enabled, true);
+    const readStatus = await api("/api/v1/devices/opaque%2Ftarget/presentation");
+    assert.equal((await readStatus.json()).overrides[0].value, "09:41");
     assert.equal((await api("/api/v1/devices/opaque%2Ftarget/recording")).status, 501);
     await bridge.handleMessage({ type: "socket-open", id: "video", channel: "video", query: "deviceId=opaque%2Ftarget" });
     await waitFor(() => receiver?.lastAcknowledgedSequence === 5);
@@ -287,6 +311,12 @@ try {
   }
   const rawMcp = await createAilohaMcpDispatcher({ version: "synthetic-only", binding: returnedBinding(selectedContext) });
   try {
+    const button = await rawMcp.handle(mcpCall("mobile_device_press_button",
+      { deviceId: selectedContext.device.id, button: "home" }));
+    assert.equal(button.result.structuredContent.operation, "press-button");
+    const presentation = await rawMcp.handle(mcpCall("mobile_device_presentation_get",
+      { deviceId: selectedContext.device.id }));
+    assert.equal(presentation.result.structuredContent.readable, true);
     const created = await rawMcp.handle({
       ...mcpCall("mobile_device_create"),
       params: { name: "mobile_device_create", arguments: inputFor("ios", "Owned installed raw MCP") },
@@ -312,7 +342,8 @@ try {
       creationRecords.push(created.result.structuredContent);
     } finally { await followedMcp.dispose(); }
   }
-  const creationCalls = scenario.calls.slice(callsBeforeCreate).filter((call) => call.method === "POST");
+  const creationCalls = scenario.calls.slice(callsBeforeCreate).filter((call) =>
+    call.method === "POST" && call.path === "/api/v1/targets");
   assert.equal(creationCalls.length, creationRecords.length);
   assert.equal(creationCalls.every((call) => call.path === "/api/v1/targets" && JSON.parse(call.body).start === true), true);
   assert.equal(creationCalls.every((call) => {
@@ -328,6 +359,11 @@ try {
   assert.equal(scenario.calls.some((call) => call.path === "/api/v1/host/stop"), false);
   const body = scenario.calls.find((call) => call.path?.endsWith("/input/actions/tap")).body;
   assert.equal(JSON.parse(body).geometryRevision, 13);
+  assert.equal(scenario.calls.filter((call) => call.path?.endsWith("/input/actions/key")).length >= 3, true);
+  assert.equal(scenario.calls.some((call) => call.path?.endsWith("/input/actions/fill")
+    && JSON.parse(call.body).text === "literal \u2603"), true);
+  assert.equal(scenario.calls.some((call) => call.method === "PATCH" && call.path?.endsWith("/presentation")), true);
+  assert.equal(scenario.calls.some((call) => call.method === "PATCH" && call.path?.endsWith("/settings/status-bar")), true);
   assert.equal(scenario.calls.filter((call) => call.path?.startsWith("/api/v1/operations/")).length >= 3, true);
   const contextCommands = JSON.parse(readFileSync(process.env.AILOHA_TEST_CONTEXT_STATE, "utf8"));
   assert.equal(contextCommands.length, 1);

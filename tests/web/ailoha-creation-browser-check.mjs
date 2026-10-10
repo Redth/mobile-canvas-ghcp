@@ -24,12 +24,13 @@ async (page) => {
     }
     throw new Error("The real renderer did not reach its expected owned creation state");
   };
-  const api = async (path) => page.evaluate(async (path) => {
+  const api = async (path, init = {}) => page.evaluate(async ({ path, init }) => {
     const response = window.mobileCanvasTransport
-      ? await window.mobileCanvasTransport.api(path) : await fetch(path, { credentials: "include" });
+      ? await window.mobileCanvasTransport.api(path, init)
+      : await fetch(path, { credentials: "include", ...init });
     if (!response.ok) throw new Error(`Owned renderer API failed: ${response.status}`);
     return response.json();
-  }, path);
+  }, { path, init });
   const videoPosts = (value) => value.calls.filter((call) => call.method === "POST" && call.path?.endsWith("/video/sessions")).length;
   const createPosts = (value) => value.calls.filter((call) => call.method === "POST" && call.path === "/api/v1/targets");
   await evidence();
@@ -66,6 +67,30 @@ async (page) => {
   verify(gesture.geometryRevision === 14 && gesture.actions[0].x === 12 && gesture.actions.at(-1).x === 36
     && gesture.actions.every((action) => action.y === undefined || action.y === 16),
   "The renderer lost captured logical swipe geometry");
+  await page.locator('[data-action="home"]').click();
+  await page.locator("#device-screen").focus();
+  await page.keyboard.press("Enter");
+  await page.keyboard.type("A");
+  value = await waitFor((entry) => entry.calls.filter((item) => item.path?.endsWith("/input/actions/key")).length >= 2
+    && entry.calls.some((item) => item.path?.endsWith("/input/actions/fill")));
+  verify(value.calls.some((item) => item.path?.endsWith("/input/actions/key")
+    && JSON.parse(item.body).key === "home")
+    && value.calls.some((item) => item.path?.endsWith("/input/actions/key")
+      && JSON.parse(item.body).key === "40")
+    && value.calls.some((item) => item.path?.endsWith("/input/actions/fill")
+      && JSON.parse(item.body).text === "A"),
+  "The prepared renderer did not preserve button/key/focused-text event transport.");
+  await page.locator('[data-action="rotate"]').click();
+  value = await waitFor((entry) => entry.calls.some((item) =>
+    item.path?.endsWith("/presentation") && item.method === "PATCH"));
+  verify(videoPosts(value) === 1, "The shared renderer recreated the live video on rotation.");
+  const status = await api("/api/v1/devices/opaque%2Ftarget/presentation", {
+    method: "POST", body: JSON.stringify({ enabled: true, time: "09:41" }),
+  });
+  verify(status.enabled && status.overrides.some((item) => item.name === "time" && item.value === "09:41"),
+    "Status-bar write did not preserve the compatibility result.");
+  verify((await api("/api/v1/devices/opaque%2Ftarget/presentation")).readable,
+    "Status-bar read lost its readable flag.");
   const catalog = await api("/api/v1/catalog");
   verify(catalog.creationSupport.supported === true, "Installed catalog mapping did not advertise wired creation");
   const createdEvidence = [];

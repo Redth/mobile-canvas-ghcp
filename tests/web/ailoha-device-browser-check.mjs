@@ -67,6 +67,45 @@ async (page) => {
   verify(view.painted && view.width === 96 && view.height === 64 && view.createDisabled && view.recordHidden,
     "The consumed UI did not paint real WebCodecs frames or gate unsupported controls.");
 
+  await page.locator('[data-action="home"]').click();
+  await page.locator("#device-screen").focus();
+  await page.keyboard.press("Enter");
+  await page.keyboard.type("A");
+  await page.evaluate(() => {
+    const event = new Event("paste", { bubbles: true, cancelable: true });
+    Object.defineProperty(event, "clipboardData", { value: { getData: () => "literal text" } });
+    document.querySelector("#device-screen").dispatchEvent(event);
+  });
+  observed = await waitFor((result) => result.calls.filter((call) =>
+    call.path?.endsWith("/input/actions/key")).length >= 2
+    && result.calls.filter((call) => call.path?.endsWith("/input/actions/fill")).length >= 2);
+  const keys = observed.calls.filter((call) => call.path?.endsWith("/input/actions/key"))
+    .map((call) => JSON.parse(call.body).key);
+  verify(keys.includes("home") && keys.includes("40")
+    && ["A", "literal text"].every((value) => observed.calls.some((call) =>
+      call.path?.endsWith("/input/actions/fill") && JSON.parse(call.body).text === value)),
+  "The real toolbar/keyboard did not use structured canonical button, key and focused-text actions.");
+  await page.locator('[data-action="rotate"]').click();
+  observed = await waitFor((result) => result.calls.some((call) =>
+    call.path?.endsWith("/presentation") && call.method === "PATCH"));
+  verify(videoPosts(observed) === 1 && videoDeletes(observed) === 0,
+    "Rotation recreated or deleted the owned Ailoha live video resource.");
+  const orientation = JSON.parse(observed.calls.find((call) =>
+    call.path?.endsWith("/presentation") && call.method === "PATCH").body);
+  verify(["portrait", "landscape"].includes(orientation.orientation),
+    "Rotation did not send a canonical orientation.");
+  const statusBar = await page.evaluate(async () => {
+    const route = "/api/v1/devices/opaque%2Ftarget/presentation";
+    const set = await fetch(route, { method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ enabled: true, time: "09:41" }) });
+    const get = await fetch(route);
+    return { setStatus: set.status, getStatus: get.status, body: await get.json() };
+  });
+  verify(statusBar.setStatus === 200 && statusBar.getStatus === 200
+    && statusBar.body.enabled === true && statusBar.body.overrides.some((value) =>
+      value.name === "time" && value.value === "09:41"),
+  "Status-bar presentation did not preserve the compatibility read/write shape.");
+
   await page.evaluate(() => {
     Object.defineProperty(document, "hidden", { configurable: true, value: true });
     document.dispatchEvent(new Event("visibilitychange"));

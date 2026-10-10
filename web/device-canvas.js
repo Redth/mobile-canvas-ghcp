@@ -1596,29 +1596,53 @@ function sendInput(kind, payload, label = formatAction(kind), captured) {
 }
 
 async function rotateDevice() {
+  const invocation = captureCanvasInvocation(state);
+  const stillSelected = () => state.selected?.id === invocation.deviceId
+    && state.selectionVersion === invocation.selectionVersion
+    && (invocation.backend !== "ailoha"
+      || (state.selected.targetHostId === invocation.targetHostId
+        && state.display?.surfaceId === invocation.surfaceId));
   const target = state.display?.orientation?.startsWith("landscape")
     ? "portrait"
     : "landscape-left";
-  const deviceId = state.selected.id;
+  const deviceId = invocation.deviceId;
 
   await sendInput("rotate", { orientation: target }, "Rotate");
 
   // Both platforms acknowledge the rotation request before their display geometry changes. Wait for
   // the new orientation so the replacement stream and pointer mapping start with the right dimensions.
-  for (let attempt = 0; attempt < 20 && state.selected?.id === deviceId; attempt++) {
+  let settledRotation = false;
+  for (let attempt = 0; attempt < 20 && stillSelected(); attempt++) {
     const response = await api(`/api/v1/devices/${encodeURIComponent(deviceId)}/display`);
     const display = await response.json();
-    state.display = display;
-    elements.geometry.value =
-      `${display.pointWidth}x${display.pointHeight} pt @${display.scale}x`;
-
+    if (invocation.backend === "ailoha" && !stillSelected()) return;
     const settled = target === "portrait"
       ? display.orientation === "portrait"
       : display.orientation?.startsWith("landscape");
-    if (settled) break;
+    if (invocation.backend === "ailoha" && !settled) {
+      await new Promise((resolve) => setTimeout(resolve, 100));
+      continue;
+    }
+    if (invocation.backend === "ailoha") cancelPointer();
+    state.display = display;
+    elements.geometry.value =
+      invocation.backend === "ailoha"
+        ? `${display.pointWidth}x${display.pointHeight} pt (${display.coordinate}, revision ${display.geometryRevision})`
+        : `${display.pointWidth}x${display.pointHeight} pt @${display.scale}x`;
+
+    if (settled) {
+      settledRotation = true;
+      break;
+    }
     await new Promise((resolve) => setTimeout(resolve, 100));
   }
 
+  if (invocation.backend === "ailoha") {
+    if (!stillSelected()) return;
+    if (!settledRotation) throw new Error("Ailoha did not report the rotated display geometry.");
+    if (stillSelected()) fitDeviceScreen();
+    return;
+  }
   startStream();
   fitDeviceScreen();
 }
@@ -2164,18 +2188,19 @@ const keyCodes = {
 
 elements.canvas.addEventListener("keydown", (event) => {
   if (event.isComposing || event.metaKey || event.ctrlKey || event.altKey) return;
-  if (state.selected?.backend === "ailoha") {
-    if (keyCodes[event.key] || event.key.length === 1) {
-      showError(new Error("Keyboard and text input are not enabled in this Ailoha opt-in."));
-    }
-    return;
-  }
-
   if (keyCodes[event.key]) {
     event.preventDefault();
+    if (state.selected?.capabilities?.key === false) {
+      showError(new Error("This target does not advertise keyboard input."));
+      return;
+    }
     sendInput("key", { keyCode: keyCodes[event.key] }, event.key).catch(showError);
   } else if (event.key.length === 1) {
     event.preventDefault();
+    if (state.selected?.capabilities?.text === false) {
+      showError(new Error("This target does not advertise focused text input."));
+      return;
+    }
     sendInput("text", { text: event.key }, "Type").catch(showError);
   }
 });
@@ -2184,8 +2209,8 @@ elements.canvas.addEventListener("paste", (event) => {
   const text = event.clipboardData?.getData("text");
   if (!text) return;
   event.preventDefault();
-  if (state.selected?.backend === "ailoha") {
-    showError(new Error("Text input is not enabled in this Ailoha opt-in."));
+  if (state.selected?.capabilities?.text === false) {
+    showError(new Error("This target does not advertise focused text input."));
     return;
   }
   sendInput("text", { text }, "Paste").catch(showError);
