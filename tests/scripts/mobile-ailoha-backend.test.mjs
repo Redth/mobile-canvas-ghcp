@@ -38,8 +38,11 @@ function fixture(options = {}) {
   if (options.app) {
     capabilities.push({ id: "target.apps", version: 1,
       features: ["listTargetApps", "launchTargetApp", "terminateTargetApp",
-        "uninstallTargetApp", "installStagedTargetApp"] });
-    capabilities.push({ id: "target.app-ops", version: 1, features: ["listTargetAppOps", "updateTargetAppOp"] });
+        "uninstallTargetApp", "installStagedTargetApp",
+        ...(options.fencedCapabilities ? ["captureFencedTargetAppAction", "uninstallFencedTargetApp"] : [])] });
+    capabilities.push({ id: "target.app-ops", version: 1,
+      features: ["listTargetAppOps", "updateTargetAppOp",
+        ...(options.fencedCapabilities ? ["updateFencedTargetAppOp"] : [])] });
   }
   const client = {
     async getHostStatus() { return { hostId: "host", profile: "ailoha.target-host/v1", version: "test", state: "ready",
@@ -147,6 +150,7 @@ function fixture(options = {}) {
     client, media, owner, selectionStore,
     confirmDestructive: options.confirmDestructive,
     stagedApps: options.stagedApps,
+    fencedApps: options.fencedApps,
     allowHostPackage: options.allowHostPackage,
     saveScreenshot: options.saveScreenshot,
     operationState: options.operationState,
@@ -706,6 +710,7 @@ test("install, destructive uninstall and Android app-op mutation remain explicit
   assert.deepEqual(await state.backend.listAppOps("one", "com.example.native"), {
     schemaVersion: "1.0", deviceId: "one", platform: "android", bundleId: "com.example.native", operations: [], total: 0,
   });
+
   assert.deepEqual(state.calls.filter(([name]) => name === "app-op-list").at(-1), ["app-op-list", "one", "opaque-app"]);
   state.client.listTargetAppOps = async () => [{ appOpId: "SYSTEM_ALERT_WINDOW", appId: "com.example.native", mode: "allow" }];
   await assert.rejects(state.backend.listAppOps("one", "com.example.native"), { code: "capability_not_supported" });
@@ -724,6 +729,26 @@ test("install, destructive uninstall and Android app-op mutation remain explicit
     { appOpId: "SYSTEM_ALERT_WINDOW", appId: "opaque-app", mode: "foreground", uidScoped: true },
   ];
   await assert.rejects(state.backend.listAppOps("one", "com.example.native"), { code: "capability_not_supported" });
+});
+
+test("ordinary app mutations or fenced feature claims without a trusted CLI never advertise destructive parity", async (t) => {
+  for (const options of [
+    { app: true, fencedApps: {} },
+    { app: true, fencedCapabilities: true, confirmDestructive: async () => true },
+    { app: true, fencedCapabilities: true, fencedApps: {}, confirmDestructive: async () => true },
+  ]) {
+    const state = fixture(options);
+    t.after(() => state.backend.dispose());
+    for (const target of state.targets.values()) target.nativeIdentity.platform = "android";
+    const device = await state.backend.getDevice("one");
+    assert.equal(device.capabilities.appUninstall, false);
+    assert.equal(device.capabilities.appOpSet, false);
+    await assert.rejects(state.backend.uninstallApp("one", "com.example.native", true),
+      { code: "capability_not_supported" });
+    await assert.rejects(state.backend.setAppOp("one", "com.example.native", "SYSTEM_ALERT_WINDOW"),
+      { code: "capability_not_supported" });
+    assert.equal(state.calls.some(([name]) => ["app-uninstall", "app-op-set"].includes(name)), false);
+  }
 });
 
 async function stagedFixture(t, overrides = {}) {
