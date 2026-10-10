@@ -95,9 +95,10 @@ async function fixture(t, options = {}) {
 }
 
 async function entrypoint(state, kind, selectCreated = false) {
-  if (kind === "action") return (input) => state.backend.invokeAction("create_device", input);
-  if (kind === "api") return async (input) => {
-    const response = await state.backend.request("/api/v1/devices", { method: "POST", body: JSON.stringify(input) });
+  if (kind === "direct") return (input, options) => state.backend.create(input, { selectCreated, ...options });
+  if (kind === "action") return (input, options) => state.backend.invokeAction("create_device", input, options);
+  if (kind === "api") return async (input, options) => {
+    const response = await state.backend.request("/api/v1/devices", { method: "POST", body: JSON.stringify(input), ...options });
     const result = await response.json();
     if (!response.ok) throw Object.assign(new Error(result.message), result);
     return result;
@@ -109,10 +110,10 @@ async function entrypoint(state, kind, selectCreated = false) {
     },
     createBackend: async () => state.backend,
   });
-  return async (input) => {
+  return async (input, options) => {
     const reply = await dispatcher.handle({
       jsonrpc: "2.0", id: randomUUID(), method: "tools/call", params: { name: "mobile_device_create", arguments: input },
-    });
+    }, options);
     if (reply.result.isError) {
       const error = JSON.parse(reply.result.content[0].text);
       throw Object.assign(new Error(error.message), error);
@@ -120,6 +121,107 @@ async function entrypoint(state, kind, selectCreated = false) {
     assert.deepEqual(JSON.parse(reply.result.content[0].text), reply.result.structuredContent);
     return reply.result.structuredContent;
   };
+}
+
+test("parent regression: caller cancellation during catalog preparation cannot submit creation", async (t) => {
+  const state = await fixture(t);
+  const input = inputFor(await state.backend.catalog());
+  const listProviders = state.client.listProviders.bind(state.client);
+  const entered = deferred();
+  const release = deferred();
+  state.client.listProviders = async (...args) => {
+    entered.resolve();
+    await release.promise;
+    return listProviders(...args);
+  };
+  const controller = new AbortController();
+  const result = state.backend.invokeAction("create_device", input, { signal: controller.signal }).then(
+    (value) => ({ status: "fulfilled", value }),
+    (error) => ({ status: "rejected", error }),
+  );
+  await Promise.race([entered.promise, result]);
+  controller.abort();
+  release.resolve();
+  const outcome = await result;
+
+  assert.equal(posts(state.state).length, 0,
+    "A caller-cancelled creation must not POST after its asynchronous catalog preparation.");
+  assert.equal(outcome.status, "rejected");
+});
+
+for (const kind of ["direct", "action", "api", "mcp", "vscode-mcp"]) {
+  test(`${kind} an already cancelled create caller performs no preparation or mutation IO`, async (t) => {
+    const state = await fixture(t);
+    const create = await entrypoint(state, kind, kind === "vscode-mcp");
+    const input = inputFor(await state.backend.catalog());
+    const controller = new AbortController();
+    controller.abort();
+    const reads = state.state.calls.length;
+    const contextReads = state.contextCommands.length;
+    await assert.rejects(create(input, { signal: controller.signal }), { code: "cancelled" });
+    assert.equal(state.state.calls.length, reads);
+    assert.equal(state.contextCommands.length, contextReads);
+    assert.equal(posts(state.state).length, 0);
+    assert.equal(state.operationState.size, 0);
+  });
+
+  test(`${kind} cancellation during preparation cannot dispatch or select after the held read settles`, async (t) => {
+    const state = await fixture(t);
+    const create = await entrypoint(state, kind, kind === "vscode-mcp");
+    const input = inputFor(await state.backend.catalog());
+    const entered = deferred();
+    const release = deferred();
+    const listProviders = state.client.listProviders.bind(state.client);
+    state.client.listProviders = async (...args) => {
+      entered.resolve();
+      await release.promise;
+      return listProviders(...args);
+    };
+    const controller = new AbortController();
+    const result = create(input, { signal: controller.signal }).then(
+      (value) => ({ status: "fulfilled", value }),
+      (error) => ({ status: "rejected", error }),
+    );
+    await Promise.race([entered.promise, result]);
+    controller.abort();
+    release.resolve();
+    const outcome = await result;
+    await new Promise((resolve) => setImmediate(resolve));
+    assert.equal(outcome.status, "rejected");
+    assert.equal(outcome.error.code, "cancelled");
+    assert.equal(posts(state.state).length, 0);
+    assert.equal(state.operationState.size, 0);
+    assert.equal(state.document.selection, null);
+  });
+
+  test(`${kind} cancelling one same-key preparation caller does not cancel another active caller`, async (t) => {
+    const state = await fixture(t);
+    const create = await entrypoint(state, kind, kind === "vscode-mcp");
+    const input = inputFor(await state.backend.catalog());
+    const entered = deferred();
+    const release = deferred();
+    const listProviders = state.client.listProviders.bind(state.client);
+    state.client.listProviders = async (...args) => {
+      entered.resolve();
+      await release.promise;
+      return listProviders(...args);
+    };
+    const controller = new AbortController();
+    const cancelled = create(input, { signal: controller.signal }).then(
+      (value) => ({ status: "fulfilled", value }),
+      (error) => ({ status: "rejected", error }),
+    );
+    await Promise.race([entered.promise, cancelled]);
+    const active = create(input);
+    controller.abort();
+    release.resolve();
+    const rejected = await cancelled;
+    assert.equal(rejected.status, "rejected");
+    assert.equal(rejected.error.code, "cancelled");
+    assert.equal((await active).state, "booted");
+    assert.equal(posts(state.state).length, 1);
+    assert.equal(state.operationState.size, 0);
+  });
 }
 
 test("read-only complete catalog uses reversible host/provider IDs, exact constraints and genuine diagnostics", async (t) => {
@@ -919,3 +1021,264 @@ for (const kind of ["action", "api", "mcp", "vscode-mcp"]) {
     }
   });
 }
+
+for (const kind of ["direct", "action", "api", "mcp", "vscode-mcp"]) {
+  test(`${kind} a cancelled accepted caller retains its original operation and does not apply a late selection`, async (t) => {
+    const entered = deferred();
+    const release = deferred();
+    const state = await fixture(t, { beforePoll: async () => { entered.resolve(); await release.promise; } });
+    t.after(() => release.resolve());
+    const create = await entrypoint(state, kind, kind === "vscode-mcp");
+    const input = inputFor(await state.backend.catalog());
+    const controller = new AbortController();
+    const result = create(input, { signal: controller.signal }).then(
+      (value) => ({ status: "fulfilled", value }),
+      (error) => ({ status: "rejected", error }),
+    );
+    await Promise.race([entered.promise, result]);
+    const receipt = [...state.operationState.values()][0];
+    const confirming = receipt.confirming;
+    assert.equal(receipt.operationId, "creation/operation-1%2F");
+    controller.abort();
+    const cancelled = await result;
+    assert.equal(cancelled.status, "rejected");
+    assert.equal(cancelled.error.code, "cancelled");
+    assert.equal(cancelled.error.operationId, receipt.operationId);
+    assert.equal(state.operationState.values().next().value, receipt);
+    release.resolve();
+    await confirming;
+    assert.equal(state.document.selection, null);
+    assert.equal(state.operationState.values().next().value, receipt);
+    const recovered = await create(input);
+    assert.equal(recovered.acceptedOperation.operationId, receipt.operationId);
+    assert.equal(recovered.state, "booted");
+    assert.equal(posts(state.state).length, 1);
+    assert.equal(state.state.calls.filter((call) => call.path.startsWith("/api/v1/operations/")).length, 1);
+    assert.equal(state.operationState.size, 0);
+  });
+
+  test(`${kind} cancelling one accepted caller cannot retire another caller's shared confirmation`, async (t) => {
+    const entered = deferred();
+    const release = deferred();
+    const state = await fixture(t, { beforePoll: async () => { entered.resolve(); await release.promise; } });
+    t.after(() => release.resolve());
+    const create = await entrypoint(state, kind, kind === "vscode-mcp");
+    const input = inputFor(await state.backend.catalog());
+    const controller = new AbortController();
+    const cancelled = create(input, { signal: controller.signal }).then(
+      (value) => ({ status: "fulfilled", value }),
+      (error) => ({ status: "rejected", error }),
+    );
+    await Promise.race([entered.promise, cancelled]);
+    const receipt = state.operationState.values().next().value;
+    const confirming = receipt.confirming;
+    const active = create(input);
+    controller.abort();
+    release.resolve();
+    const outcome = await cancelled;
+    assert.equal(outcome.status, "rejected");
+    assert.equal(outcome.error.code, "cancelled");
+    const completed = await active;
+    assert.equal(completed.acceptedOperation.operationId, receipt.operationId);
+    assert.equal(confirming, receipt.confirming);
+    assert.equal(posts(state.state).length, 1);
+    assert.equal(state.state.calls.filter((call) => call.path.startsWith("/api/v1/operations/")).length, 1);
+    assert.equal(state.operationState.size, 0);
+  });
+
+  for (const outcome of ["accepted", "unknown"]) {
+    test(`${kind} cancelled submission keeps a late ${outcome} receipt without submitting a fresh intent`, async (t) => {
+      const state = await fixture(t);
+      const create = await entrypoint(state, kind, kind === "vscode-mcp");
+      const input = inputFor(await state.backend.catalog());
+      const entered = deferred();
+      const release = deferred();
+      t.after(() => release.resolve());
+      const submit = state.client.createTarget.bind(state.client);
+      state.client.createTarget = async (...args) => {
+        const accepted = await submit(...args);
+        entered.resolve();
+        await release.promise;
+        if (outcome === "unknown") throw new AilohaProtocolError("transport_error");
+        return accepted;
+      };
+      const controller = new AbortController();
+      const result = create(input, { signal: controller.signal }).then(
+        (value) => ({ status: "fulfilled", value }),
+        (error) => ({ status: "rejected", error }),
+      );
+      await Promise.race([entered.promise, result]);
+      const receipt = state.operationState.values().next().value;
+      controller.abort();
+      const cancelled = await result;
+      assert.equal(cancelled.status, "rejected");
+      assert.equal(cancelled.error.code, "cancelled");
+      assert.equal(state.operationState.values().next().value, receipt);
+      release.resolve();
+      if (outcome === "unknown") {
+        await assert.rejects(receipt.submitted, { code: "transport_error" });
+        await assert.rejects(create(input), { code: "creation_outcome_uncertain" });
+        assert.equal(state.operationState.values().next().value, receipt);
+      } else {
+        await receipt.submitted;
+        const recovered = await create(input);
+        assert.equal(recovered.acceptedOperation.operationId, receipt.operationId);
+        assert.equal(state.operationState.size, 0);
+      }
+      assert.equal(posts(state.state).length, 1);
+      assert.equal(state.state.calls.some((call) => call.method === "DELETE" || /\/actions\/start$/.test(call.path)), false);
+    });
+  }
+}
+
+test("an abandoned preparation cannot dispatch or evict a new same-key accepted intent", async (t) => {
+  const state = await fixture(t);
+  const input = inputFor(await state.backend.catalog());
+  const entered = deferred();
+  const release = deferred();
+  t.after(() => release.resolve());
+  const providers = state.client.listProviders.bind(state.client);
+  let held = true;
+  state.client.listProviders = async (...args) => {
+    if (held) { held = false; entered.resolve(); await release.promise; }
+    return providers(...args);
+  };
+  const controller = new AbortController();
+  const cancelled = state.backend.create(input, { signal: controller.signal }).then(
+    (value) => ({ status: "fulfilled", value }),
+    (error) => ({ status: "rejected", error }),
+  );
+  await Promise.race([entered.promise, cancelled]);
+  controller.abort();
+  const rejected = await cancelled;
+  assert.equal(rejected.error.code, "cancelled");
+  state.state.terminal = "running";
+  state.state.waitMs = 10;
+  await assert.rejects(state.backend.create(input), { code: "timeout" });
+  const receipt = state.operationState.values().next().value;
+  release.resolve();
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(state.operationState.values().next().value, receipt);
+  assert.equal(posts(state.state).length, 1);
+  state.state.operations.values().next().value.status = "succeeded";
+  assert.equal((await state.backend.create(input)).acceptedOperation.operationId, receipt.operationId);
+  assert.equal(posts(state.state).length, 1);
+});
+
+test("64 cancelled preparations release admission without creating devices or poisoning a fresh intent", async (t) => {
+  const state = await fixture(t);
+  const input = inputFor(await state.backend.catalog());
+  const release = deferred();
+  t.after(() => release.resolve());
+  const providers = state.client.listProviders.bind(state.client);
+  let entered;
+  state.client.listProviders = async (...args) => {
+    const result = await providers(...args);
+    entered.resolve();
+    await release.promise;
+    return result;
+  };
+  const controllers = [];
+  const pending = [];
+  for (let index = 0; index < 64; index += 1) {
+    const controller = new AbortController();
+    controllers.push(controller);
+    entered = deferred();
+    const result = state.backend.create({ ...input, name: `Cancelled ${index}` }, { signal: controller.signal }).then(
+      (value) => ({ status: "fulfilled", value }),
+      (error) => ({ status: "rejected", error }),
+    );
+    pending.push(result);
+    await Promise.race([entered.promise, result]);
+  }
+  await assert.rejects(state.backend.create({ ...input, name: "Unadmitted 65" }), { code: "operation_receipt_limit" });
+  for (const controller of controllers) controller.abort();
+  release.resolve();
+  for (const result of await Promise.all(pending)) {
+    assert.equal(result.status, "rejected");
+    assert.equal(result.error.code, "cancelled");
+  }
+  assert.equal(posts(state.state).length, 0);
+  assert.equal(state.operationState.size, 0);
+  state.client.listProviders = providers;
+  assert.equal((await state.backend.create({ ...input, name: "Cancelled 0" })).state, "booted");
+  assert.equal(posts(state.state).length, 1);
+});
+
+for (const kind of ["direct", "action", "api", "mcp", "vscode-mcp"]) {
+  test(`${kind} cancellation with actual HTTP202 headers keeps the accepted Location for GET-only recovery`, async (t) => {
+    const entered = deferred();
+    const release = deferred();
+    const state = await fixture(t, { beforeAcceptedBody: async () => { entered.resolve(); await release.promise; } });
+    t.after(() => release.resolve());
+    const create = await entrypoint(state, kind, kind === "vscode-mcp");
+    const input = inputFor(await state.backend.catalog());
+    const controller = new AbortController();
+    const result = create(input, { signal: controller.signal }).then(
+      (value) => ({ status: "fulfilled", value }), (error) => ({ status: "rejected", error }));
+    await Promise.race([entered.promise, result]);
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    const receipt = state.operationState.values().next().value;
+    controller.abort();
+    assert.equal((await result).error.code, "cancelled");
+    await receipt.submitted;
+    assert.equal(receipt.operationId, "creation/operation-1%2F");
+    assert.equal(receipt.uncertain, false);
+    release.resolve();
+    assert.equal((await create(input)).acceptedOperation.operationId, receipt.operationId);
+    assert.equal(posts(state.state).length, 1);
+  });
+}
+
+test("a cancelled independently prepared same-incarnation caller cannot abort the original owner's shared submission", async (t) => {
+  const state = await fixture(t);
+  const input = inputFor(await state.backend.catalog());
+  const second = await state.makeBackend();
+  const firstEntered = deferred();
+  const secondEntered = deferred();
+  const firstRead = deferred();
+  const secondRead = deferred();
+  const submitted = deferred();
+  const submission = deferred();
+  t.after(() => { firstRead.resolve(); secondRead.resolve(); submission.resolve(); });
+  const firstProviders = state.client.listProviders.bind(state.client);
+  state.client.listProviders = async (...args) => { firstEntered.resolve(); await firstRead.promise; return firstProviders(...args); };
+  const secondProviders = second.client.listProviders.bind(second.client);
+  second.client.listProviders = async (...args) => { secondEntered.resolve(); await secondRead.promise; return secondProviders(...args); };
+  const submit = state.client.createTarget.bind(state.client);
+  let originalSignal;
+  state.client.createTarget = async (request, options) => {
+    originalSignal = options.signal;
+    submitted.resolve();
+    await submission.promise;
+    return submit(request, options);
+  };
+  const original = state.backend.create(input).then(
+    (value) => ({ status: "fulfilled", value }), (error) => ({ status: "rejected", error }));
+  await firstEntered.promise;
+  const controller = new AbortController();
+  const cancelled = second.backend.create(input, { signal: controller.signal }).then(
+    (value) => ({ status: "fulfilled", value }), (error) => ({ status: "rejected", error }));
+  await secondEntered.promise;
+  firstRead.resolve();
+  await submitted.promise;
+  const receipt = state.operationState.values().next().value;
+  const joined = deferred();
+  const get = state.operationState.get.bind(state.operationState);
+  state.operationState.get = (key) => {
+    const value = get(key);
+    if (value === receipt) joined.resolve();
+    return value;
+  };
+  secondRead.resolve();
+  await joined.promise;
+  controller.abort();
+  assert.equal((await cancelled).error.code, "cancelled");
+  assert.equal(originalSignal.aborted, false);
+  submission.resolve();
+  const completed = await original;
+  assert.equal(completed.status, "fulfilled");
+  assert.equal(completed.value.state, "booted");
+  assert.equal(posts(state.state).length, 1);
+  assert.equal(state.operationState.size, 0);
+});

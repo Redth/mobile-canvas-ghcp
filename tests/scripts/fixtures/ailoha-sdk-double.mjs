@@ -155,9 +155,13 @@ export async function openTargetHostTransport(leaseId) {
           ...captures, ...(scenario.appResponses ? appCapabilities : []), ...(scenario.catalog?.status.capabilities ?? []),
         ]),
       });
-      if (path === "/api/v1/providers") return reply(providerRecords());
+      if (path === "/api/v1/providers") {
+        if (scenario.beforeCatalogRead) await scenario.beforeCatalogRead(path, options);
+        return reply(providerRecords());
+      }
       const catalogRoute = /^\/api\/v1\/providers\/([^/]+)\/(catalogs|runtimes|target-types|templates)$/.exec(path);
       if (catalogRoute) {
+        if (scenario.beforeCatalogRead) await scenario.beforeCatalogRead(path, options);
         const entry = scenario.catalog?.providerCatalogs.find((entry) => entry.providerId === decodeURIComponent(catalogRoute[1]));
         if (!entry) throw new Error("Unadvertised synthetic catalog");
         return reply(entry[catalogRoute[2] === "target-types" ? "targetTypes" : catalogRoute[2]]);
@@ -286,6 +290,7 @@ export async function openTargetHostTransport(leaseId) {
         return reply(operation, 202, `/api/v1/operations/${operationId}`);
       }
       if (path.startsWith("/api/v1/operations/")) {
+        if (scenario.beforeOperationRead) await scenario.beforeOperationRead(path, options);
         if (scenario.operationUnavailable) return reply({ status: 503, title: "Synthetic operation observation unavailable" }, 503);
         const id = decodeURIComponent(path.split("/").at(-1));
         if (id.startsWith("creation/") && scenario.creationPollFailure) {

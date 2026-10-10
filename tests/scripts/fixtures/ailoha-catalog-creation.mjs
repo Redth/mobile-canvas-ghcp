@@ -66,7 +66,7 @@ export function createCatalogModel({ templates = false, runtimeConstraints = tru
   };
 }
 
-export async function startCatalogHost(t, { model = createCatalogModel(), beforeRead, beforePoll, beforeTarget } = {}) {
+export async function startCatalogHost(t, { model = createCatalogModel(), beforeRead, beforePoll, beforeTarget, beforeAcceptedBody } = {}) {
   const calls = [];
   const errors = [];
   const targets = new Map();
@@ -139,6 +139,14 @@ export async function startCatalogHost(t, { model = createCatalogModel(), before
         };
         operations.set(operationId, operation);
         const location = `/api/v1/operations/${encodeURIComponent(operationId)}`;
+        if (beforeAcceptedBody) {
+          response.writeHead(202, { "Content-Type": "application/json", Location: location });
+          response.flushHeaders();
+          response.write("{");
+          await beforeAcceptedBody();
+          response.end(JSON.stringify(accepted).slice(1));
+          return;
+        }
         if (state.acceptance === "unknown") {
           response.writeHead(202, { "Content-Type": "application/json" });
           response.end("{}");
