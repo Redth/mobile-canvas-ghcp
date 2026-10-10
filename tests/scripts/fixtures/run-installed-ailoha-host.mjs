@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { randomUUID } from "node:crypto";
@@ -57,6 +57,7 @@ async function checkEmptyContext(selection) {
   assert.equal(Object.hasOwn(selection, "device"), false);
   const binding = returnedBinding(selection);
   const callsBeforeDiscovery = scenario.calls.length;
+  const contextWrittenAt = statSync(process.env.AILOHA_TEST_CONTEXT_STATE, { bigint: true }).mtimeNs;
   assert.deepEqual(await getRuntimeContextBinding(scope), {
     contextRef: binding.contextRef, scopeEpoch: binding.scopeEpoch, scope: binding.scope, ownerProcessId: binding.ownerProcessId,
   });
@@ -75,6 +76,7 @@ async function checkEmptyContext(selection) {
     assert.equal(inventory.result.structuredContent.result[0].id, "opaque/target");
     assert.deepEqual(JSON.parse(inventory.result.content[0].text), inventory.result.structuredContent);
     assert.equal(scenario.calls.some((call) => call.method === "POST" || call.method === "DELETE"), false);
+    assert.equal(statSync(process.env.AILOHA_TEST_CONTEXT_STATE, { bigint: true }).mtimeNs, contextWrittenAt);
   } finally {
     await emptyDispatcher.dispose();
   }
