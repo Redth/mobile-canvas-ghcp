@@ -215,6 +215,9 @@ small launcher graph is staged. Until the owner supplies verified anonymous
 artifacts, the opt-in reports `ailoha_runtime_unavailable`. Normal installs must
 not require a private source checkout, another worktree, PATH-installed CLI,
 install hooks or end-user `npm install`.
+Malformed provenance reports `ailoha_runtime_pin_invalid`; a read failure reports
+`ailoha_runtime_pin_unreadable`. Neither is silently classified as a missing SDK
+or allowed to start the legacy engine.
 
 The approved SDK entry is `@ailoha/cli/runtime`. Acquisition calls
 `getRuntimePin`, `ensureTargetHost`, and `openTargetHostTransport`. The official
