@@ -139,6 +139,9 @@ reports the typed failure with its opaque original operation ID on that call.
 A later explicit same-key request can GET a known ID without another capture,
 approval or submission; the terminal operation must still match the original
 action, target and provider. Malformed IDs cannot create acceptance or permit replay.
+After admission, receipt-owned confirmation is independent of each caller's
+cancellation. A completed result stays on the original receipt until a live
+caller returns it; only then can a new same-key action be submitted.
 Its `retryable:false` field is not
 evidence of failed delivery. Missing native installation evidence reports
 `unsupported-capability` rather than manufacturing a native identity.
@@ -485,6 +488,9 @@ non-destructive effect, target, and provider before releasing its receipt;
 conflicting completion is rejected while the original ID remains recoverable.
 Caller cancellation before feature admission blocks a new submission after app
 lookup or target verification; it does not discard already submitted work.
+Accepted confirmation is shared and caller cancellation stays local. A
+completed result remains recoverable without another POST until a live caller
+returns it, after which a new explicit mutation can proceed.
 The MCP names, request fields, and legacy output envelopes remain unchanged.
 
 | Existing identity | Opt-in delivery | Canonical contract / gate |

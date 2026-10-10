@@ -152,8 +152,8 @@ async function close() {
   await waitFor(() => scenario.leases.size === 0);
 }
 
-async function checkAcceptedAppPeer(name, input, expectedOperation) {
-  current = await open(`accepted-peer-${name}`);
+async function checkAcceptedAppPeer(name, input, expectedOperation, { sole = false } = {}) {
+  current = await open(`accepted-${sole ? "sole" : "peer"}-${name}`);
   let releasePoll;
   const originalRequest = AilohaMobileBackend.prototype.request;
   try {
@@ -167,12 +167,16 @@ async function checkAcceptedAppPeer(name, input, expectedOperation) {
     const gate = new Promise((resolve) => { releasePoll = resolve; });
     let gated = false;
     let seen = 0;
+    let firstSignal;
     let peerEntered;
     const peerEntry = new Promise((resolve) => { peerEntered = resolve; });
     const route = name === "uninstall_app" ? "/uninstall?" : "/app-ops";
     AilohaMobileBackend.prototype.request = function (path, options) {
       const pending = originalRequest.call(this, path, options);
-      if (options?.method === "POST" && path.includes(route) && ++seen === 2) peerEntered();
+      if (options?.method === "POST" && path.includes(route)) {
+        if (++seen === 1) firstSignal = options.signal;
+        if (seen === 2) peerEntered();
+      }
       return pending;
     };
     scenario.beforeOperationRead = async () => {
@@ -187,22 +191,24 @@ async function checkAcceptedAppPeer(name, input, expectedOperation) {
     const firstResult = first.then((value) => ({ value }), (error) => ({ error }));
     (await promptFor()).answer("approve");
     await entered;
-    const peer = current.action(name, input);
-    await peerEntry;
+    const peer = sole ? null : current.action(name, input);
+    if (peer) await peerEntry;
     controller.abort();
     const cancelled = await firstResult;
     assert.ok(cancelled.error, `${kind} ${name} first caller must be cancelled`);
     assert.match(`${cancelled.error.name} ${cancelled.error.message}`, /cancel|abort/i);
+    if (sole) await waitFor(() => firstSignal?.aborted === true);
     releasePoll();
-    const result = await peer;
+    if (sole) await new Promise((resolve) => setImmediate(resolve));
+    const result = await (peer ?? current.action(name, input));
     assert.equal(result.operation, expectedOperation);
     assert.equal(result.success, true);
     assert.equal(JSON.parse(readFileSync(recordPath, "utf8")).length, before + 1,
-      `${kind} ${name} peer must not submit a second native action`);
+      `${kind} ${name} recovery must not submit a second native action`);
     assert.equal(readFileSync(capturesPath, "utf8").trim().split("\n").length,
-      captures.trim().split("\n").length + 1, `${kind} ${name} peer must not recapture`);
+      captures.trim().split("\n").length + 1, `${kind} ${name} recovery must not recapture`);
     assert.equal(kind === "github" ? copilotUi.pending.size : vscode.testUi.pickers.filter((picker) => picker.visible).length, 0);
-    evidence.cases.push(`accepted-peer-${name}`);
+    evidence.cases.push(`accepted-${sole ? "sole" : "peer"}-${name}`);
   } finally {
     AilohaMobileBackend.prototype.request = originalRequest;
     releasePoll?.();
@@ -794,6 +800,13 @@ try {
     deviceId: "opaque/target", bundleId: "com.example.native",
     operation: "CAMERA", mode: "allow",
   }, "CAMERA");
+  await checkAcceptedAppPeer("uninstall_app", {
+    deviceId: "opaque/target", bundleId: "com.example.native", confirm: true,
+  }, "uninstall", { sole: true });
+  await checkAcceptedAppPeer("set_app_op", {
+    deviceId: "opaque/target", bundleId: "com.example.native",
+    operation: "CAMERA", mode: "allow",
+  }, "CAMERA", { sole: true });
   evidence.leaseCountAfterClose = scenario.leases.size;
   evidence.pendingHumanPrompts = kind === "github" ? copilotUi.pending.size
     : vscode.testUi.pickers.filter((picker) => !picker.disposed).length;

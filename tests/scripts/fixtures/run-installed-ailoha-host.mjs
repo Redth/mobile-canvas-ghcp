@@ -247,7 +247,7 @@ async function checkSourceConditionalFeatures(selected, androidId) {
       scenario.beforeFeatureRead = null;
     }
   }
-  async function verifyAcceptedFeaturePeer() {
+  async function verifyAcceptedFeaturePeer({ sole = false } = {}) {
     const originalRequest = AilohaMobileBackend.prototype.request;
     let releasePoll;
     try {
@@ -259,11 +259,15 @@ async function checkSourceConditionalFeatures(selected, androidId) {
         if (!gated) { gated = true; enteredPoll(); await gate; }
       };
       let seen = 0;
+      let firstSignal;
       let peerEntered;
       const peerEntry = new Promise((resolve) => { peerEntered = resolve; });
       AilohaMobileBackend.prototype.request = function (path, options) {
         const pending = originalRequest.call(this, path, options);
-        if (options?.method === "POST" && path.endsWith("/sms") && ++seen === 2) peerEntered();
+        if (options?.method === "POST" && path.endsWith("/sms")) {
+          if (++seen === 1) firstSignal = options.signal;
+          if (seen === 2) peerEntered();
+        }
         return pending;
       };
       const before = scenario.calls.filter((entry) => entry.method === "POST"
@@ -276,14 +280,16 @@ async function checkSourceConditionalFeatures(selected, androidId) {
       const first = api(route, { ...request, signal: controller.signal });
       const firstResult = first.then((response) => ({ response }), (error) => ({ error }));
       await entered;
-      const peer = api(route, request);
-      await peerEntry;
+      const peer = sole ? null : api(route, request);
+      if (peer) await peerEntry;
       controller.abort();
       const cancelled = await firstResult;
       assert.ok(cancelled.error, `${host} cancelled feature caller cannot return success`);
       assert.match(`${cancelled.error.name} ${cancelled.error.message}`, /cancel|abort/i);
+      if (sole) await waitFor(() => firstSignal?.aborted === true);
       releasePoll();
-      const response = await peer;
+      if (sole) await new Promise((resolve) => setImmediate(resolve));
+      const response = await (peer ?? api(route, request));
       assert.equal(response.status, 200);
       assert.equal((await response.json()).operation, "sms-send");
       assert.equal(scenario.calls.filter((entry) => entry.method === "POST"
@@ -328,6 +334,7 @@ async function checkSourceConditionalFeatures(selected, androidId) {
     await verifyCancelledCapture("api");
     await verifyCancelledCapture("mcp");
     await verifyAcceptedFeaturePeer();
+    await verifyAcceptedFeaturePeer({ sole: true });
     for (const [name, id, path, method, input, field, value] of cases) {
       const route = `/api/v1/devices/${encodeURIComponent(id)}/${path}`;
       const response = await api(route, {

@@ -774,7 +774,7 @@ test("ordinary app mutations or fenced feature claims without a trusted CLI neve
   }
 });
 
-function fencedFixture(t, { answer = async () => true, capture, submit, readback, wait } = {}) {
+function fencedFixture(t, { answer = async () => true, capture, submit, readback, wait, operationState } = {}) {
   const events = [];
   const fencedApps = {
     async capture(invocation, request) {
@@ -803,7 +803,7 @@ function fencedFixture(t, { answer = async () => true, capture, submit, readback
     },
   };
   const state = canonicalFixture({
-    app: true, fencedCapabilities: true, fencedApps,
+    app: true, fencedCapabilities: true, fencedApps, operationState,
     confirmDestructive: async (request) => {
       events.push(["prompt", request]);
       return answer(request);
@@ -929,6 +929,93 @@ test("parent: accepted feature cancellation stays local and cannot return late s
   await cancelledResult;
   assert.equal((await peer).success, true);
   assert.equal(state.wire.filter((request) => request.method === "POST").length, 1);
+});
+
+test("parent: a sole cancelled app caller retains the original completed receipt for later retry", async (t) => {
+  const entered = deferred();
+  const finished = deferred();
+  const operationState = new Map();
+  const caller = new AbortController();
+  const state = fencedFixture(t, {
+    operationState,
+    async wait(operationId) {
+      entered.resolve();
+      await finished.promise;
+      return {
+        operationId, kind: "uninstallFencedTargetApp", targetId: "one", providerId: "provider",
+        status: "succeeded", destructive: true,
+        createdAt: "2026-10-09T23:00:00Z", completedAt: "2026-10-09T23:00:02Z",
+      };
+    },
+  });
+  const cancelled = state.backend.uninstallApp("one", "com.example.native", true, { signal: caller.signal });
+  const cancelledResult = assert.rejects(cancelled, { code: "cancelled" });
+  await entered.promise;
+  const progress = [...operationState.values()].find((value) => value.confirming);
+  assert.ok(progress);
+  const ownerCompletion = progress.confirming;
+  caller.abort();
+  await cancelledResult;
+  finished.resolve();
+  await ownerCompletion;
+
+  const result = await state.backend.uninstallApp("one", "com.example.native", true);
+
+  assert.equal(result.success, true);
+  for (const event of ["capture", "prompt", "uninstall"]) {
+    assert.equal(state.events.filter(([kind]) => kind === event).length, 1);
+  }
+});
+
+test("parent: a sole cancelled feature caller retains the original completion without another POST", async (t) => {
+  const entered = deferred();
+  const finished = deferred();
+  const featureState = new Map();
+  const caller = new AbortController();
+  const state = featureFixture({ featureState });
+  t.after(() => state.backend.dispose());
+  state.client.waitForOperation = async (operationId) => {
+    entered.resolve();
+    await finished.promise;
+    return {
+      operationId, kind: "simulateTargetSms", targetId: "one", providerId: "provider",
+      status: "succeeded", destructive: false,
+      createdAt: "2026-10-09T23:00:00Z", completedAt: "2026-10-09T23:00:02Z",
+    };
+  };
+  const input = { from: "+123", body: "original message" };
+  const cancelled = state.backend.deviceFeature("sms_send", "one", input, { signal: caller.signal });
+  const cancelledResult = assert.rejects(cancelled, { code: "cancelled" });
+  await entered.promise;
+  const receipt = [...featureState.values()][0];
+  assert.ok(receipt.confirming);
+  const ownerCompletion = receipt.confirming;
+  caller.abort();
+  await cancelledResult;
+  finished.resolve();
+  await ownerCompletion;
+
+  const result = await state.backend.deviceFeature("sms_send", "one", input);
+
+  assert.equal(result.success, true);
+  assert.equal(state.wire.filter((request) => request.method === "POST").length, 1);
+});
+
+test("acknowledged app and feature successes permit a new explicit same-key action", async (t) => {
+  const app = fencedFixture(t);
+  for (let attempt = 0; attempt < 2; attempt++) {
+    assert.equal((await app.backend.uninstallApp("one", "com.example.native", true)).success, true);
+  }
+  assert.equal(app.events.filter(([event]) => event === "capture").length, 2);
+  assert.equal(app.events.filter(([event]) => event === "prompt").length, 2);
+  assert.equal(app.events.filter(([event]) => event === "uninstall").length, 2);
+
+  const feature = featureFixture();
+  t.after(() => feature.backend.dispose());
+  for (let attempt = 0; attempt < 2; attempt++) {
+    assert.equal((await feature.backend.deviceFeature("sms_send", "one", { from: "+123", body: "hello" })).success, true);
+  }
+  assert.equal(feature.wire.filter((request) => request.method === "POST").length, 2);
 });
 
 test("fenced uninstall captures a private native receipt before the genuine prompt and never uses ordinary DELETE", async (t) => {
