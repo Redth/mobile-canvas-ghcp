@@ -94,9 +94,10 @@ async function fixture(t, options = {}) {
 }
 
 async function entrypoint(state, kind, selectCreated = false) {
-  if (kind === "action") return (input) => state.backend.invokeAction("create_device", input);
-  if (kind === "api") return async (input) => {
-    const response = await state.backend.request("/api/v1/devices", { method: "POST", body: JSON.stringify(input) });
+  if (kind === "direct") return (input, options) => state.backend.create(input, { selectCreated, ...options });
+  if (kind === "action") return (input, options) => state.backend.invokeAction("create_device", input, options);
+  if (kind === "api") return async (input, options) => {
+    const response = await state.backend.request("/api/v1/devices", { method: "POST", body: JSON.stringify(input), ...options });
     const result = await response.json();
     if (!response.ok) throw Object.assign(new Error(result.message), result);
     return result;
@@ -108,10 +109,10 @@ async function entrypoint(state, kind, selectCreated = false) {
     },
     createBackend: async () => state.backend,
   });
-  return async (input) => {
+  return async (input, options) => {
     const reply = await dispatcher.handle({
       jsonrpc: "2.0", id: randomUUID(), method: "tools/call", params: { name: "mobile_device_create", arguments: input },
-    });
+    }, options);
     if (reply.result.isError) {
       const error = JSON.parse(reply.result.content[0].text);
       throw Object.assign(new Error(error.message), error);
@@ -121,6 +122,106 @@ async function entrypoint(state, kind, selectCreated = false) {
   };
 }
 
+test("parent regression: caller cancellation during catalog preparation cannot submit creation", async (t) => {
+      const state = await fixture(t);
+      const input = inputFor(await state.backend.catalog());
+      const listProviders = state.client.listProviders.bind(state.client);
+      const entered = deferred();
+      const release = deferred();
+      state.client.listProviders = async (...args) => {
+        entered.resolve();
+        await release.promise;
+        return listProviders(...args);
+      };
+      const controller = new AbortController();
+      const result = state.backend.invokeAction("create_device", input, { signal: controller.signal }).then(
+        (value) => ({ status: "fulfilled", value }),
+        (error) => ({ status: "rejected", error }),
+      );
+      await Promise.race([entered.promise, result]);
+      controller.abort();
+      release.resolve();
+      const outcome = await result;
+
+      assert.equal(posts(state.state).length, 0,
+        "A caller-cancelled creation must not POST after its asynchronous catalog preparation.");
+      assert.equal(outcome.status, "rejected");
+    });
+
+    for (const kind of ["direct", "action", "api", "mcp", "vscode-mcp"]) {
+      test(`${kind} an already cancelled create caller performs no preparation or mutation IO`, async (t) => {
+        const state = await fixture(t);
+        const create = await entrypoint(state, kind, kind === "vscode-mcp");
+        const input = inputFor(await state.backend.catalog());
+        const controller = new AbortController();
+        controller.abort();
+        const reads = state.state.calls.length;
+        const contextReads = state.contextCommands.length;
+        await assert.rejects(create(input, { signal: controller.signal }), { code: "cancelled" });
+        assert.equal(state.state.calls.length, reads);
+        assert.equal(state.contextCommands.length, contextReads);
+        assert.equal(posts(state.state).length, 0);
+        assert.equal(state.operationState.size, 0);
+      });
+
+      test(`${kind} cancellation during preparation cannot dispatch or select after the held read settles`, async (t) => {
+        const state = await fixture(t);
+        const create = await entrypoint(state, kind, kind === "vscode-mcp");
+        const input = inputFor(await state.backend.catalog());
+        const entered = deferred();
+        const release = deferred();
+        const listProviders = state.client.listProviders.bind(state.client);
+        state.client.listProviders = async (...args) => {
+          entered.resolve();
+          await release.promise;
+          return listProviders(...args);
+        };
+        const controller = new AbortController();
+        const result = create(input, { signal: controller.signal }).then(
+          (value) => ({ status: "fulfilled", value }),
+          (error) => ({ status: "rejected", error }),
+        );
+        await Promise.race([entered.promise, result]);
+        controller.abort();
+        release.resolve();
+        const outcome = await result;
+        await new Promise((resolve) => setImmediate(resolve));
+        assert.equal(outcome.status, "rejected");
+        assert.equal(outcome.error.code, "cancelled");
+        assert.equal(posts(state.state).length, 0);
+        assert.equal(state.operationState.size, 0);
+        assert.equal(state.document.selection, null);
+      });
+
+      test(`${kind} cancelling one same-key preparation caller does not cancel another active caller`, async (t) => {
+        const state = await fixture(t);
+        const create = await entrypoint(state, kind, kind === "vscode-mcp");
+        const input = inputFor(await state.backend.catalog());
+        const entered = deferred();
+        const release = deferred();
+        const listProviders = state.client.listProviders.bind(state.client);
+        state.client.listProviders = async (...args) => {
+          entered.resolve();
+          await release.promise;
+          return listProviders(...args);
+        };
+        const controller = new AbortController();
+        const cancelled = create(input, { signal: controller.signal }).then(
+          (value) => ({ status: "fulfilled", value }),
+          (error) => ({ status: "rejected", error }),
+        );
+        await Promise.race([entered.promise, cancelled]);
+        const active = create(input);
+        controller.abort();
+        release.resolve();
+        const rejected = await cancelled;
+        assert.equal(rejected.status, "rejected");
+        assert.equal(rejected.error.code, "cancelled");
+        assert.equal((await active).state, "booted");
+        assert.equal(posts(state.state).length, 1);
+        assert.equal(state.operationState.size, 0);
+      });
+    }
 test("read-only complete catalog uses reversible host/provider IDs, exact constraints and genuine diagnostics", async (t) => {
   const state = await fixture(t);
   const catalog = await state.backend.catalog();
