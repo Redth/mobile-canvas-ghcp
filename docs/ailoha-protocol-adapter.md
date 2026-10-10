@@ -171,9 +171,9 @@ The explicit/default polling interval remains the wait policy; server
 Operation errors retain `operationId`, the latest validated `operation` when
 available, and sanitized primary Problem Details. HTTP errors remain `http_error`
 (including explicit `501` unsupported-capability evidence); cancellation and
-cleanup problems remain separate in the operation DTO. A valid accepted
-`Location` retains the recovery ID even if the body later times out or truncates,
-without claiming completion or replaying the mutation. A mismatched body cannot
+cleanup problems remain separate in the operation DTO. An observed, validated
+accepted `Location` retains the recovery ID even if the body later times out or
+truncates, without claiming completion or replaying the mutation. A mismatched body cannot
 replace that recovery ID; a caller-selected operation ID takes precedence over
 both response sources. Operation results and
 identities containing protected connection data are rejected; nested Problem
@@ -231,10 +231,15 @@ evidence, not consumer assumptions.
 
 `connectTargetHostTransport` applies the same strict validators and bounded
 operation waits to the factory's `response()` metadata without requiring or
-projecting an origin/credential. Accepted `Location` evidence remains recoverable
-when a body truncates, times out or disagrees. JSON failures use failure HTTP
-statuses at the product boundary even when the upstream malformed response was
-201/202; accepted is never presented as completed.
+projecting an origin/credential. Caller abort signals the owner immediately,
+then permits typed response/error settlement within the original request budget;
+it does not assume a one-event-loop-tick handoff or reset/extend the deadline.
+Delivered, validated `Location` evidence remains recoverable when a body
+truncates, times out or disagrees. If the owner withholds metadata past that
+deadline, cancellation remains bounded and the outcome is explicitly unknown,
+not a guarantee of universal abort-Location retention or grounds for replay.
+JSON failures use failure HTTP statuses at the product boundary even when the
+upstream malformed response was 201/202; accepted is never presented as completed.
 
 ### Selection, input and cleanup
 
