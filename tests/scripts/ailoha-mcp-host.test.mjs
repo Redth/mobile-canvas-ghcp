@@ -17,6 +17,9 @@ test("MCP preserves all61 installed identities and advertises broader opt-in lim
   assert.deepEqual(catalog.map((tool) => tool.name).sort(), baseline.mcpTools);
   assert.equal(catalog.length, 61);
   assert.equal(catalog.find((tool) => tool.name === "mobile_device_app_launch").description.includes("positively unsupported"), true);
+  assert.equal(catalog.find((tool) => tool.name === "mobile_device_recording_start").description.includes("positively unsupported"), false);
+  assert.equal(catalog.find((tool) => tool.name === "mobile_device_recording_status").description.includes("positively unsupported"), false);
+  assert.equal(catalog.find((tool) => tool.name === "mobile_device_recording_stop").description.includes("positively unsupported"), false);
   assert.equal(catalog.every((tool) => tool.execution.taskSupport === "forbidden"), true);
   assert.equal(catalog.find((tool) => tool.name === "mobile_device_tap").inputSchema.properties.geometryRevision.maximum, 0xffffffff);
   const selected = catalog.find((tool) => tool.name === "mobile_device_get_selected");
@@ -60,6 +63,43 @@ test("actual dispatch uses the bound context with original tool meanings and cap
   const screenshot = await dispatcher.handle(call("mobile_device_screenshot", { deviceId: "opaque-target" }));
   assert.equal(screenshot.result.content[1].type, "image");
   assert.equal(screenshot.result.content[1].mimeType, "image/png");
+  for (const [tool, action] of [
+    ["mobile_device_recording_start", "start_recording"],
+    ["mobile_device_recording_status", "get_recording_status"],
+    ["mobile_device_recording_stop", "stop_recording"],
+  ]) {
+    const result = await dispatcher.handle(call(tool, { deviceId: "opaque-target" }));
+    assert.equal(result.result.structuredContent.operation, action);
+  }
+});
+
+test("recording MCP arguments retain the original selector and options while backend initialization waits", async (t) => {
+  let ready;
+  const pending = new Promise((resolve) => { ready = resolve; });
+  let submitted;
+  const dispatcher = await createAilohaMcpDispatcher({
+    binding, version: "test",
+    createBackend: () => pending,
+  });
+  t.after(() => dispatcher.dispose());
+  const input = { deviceId: "original-target", timeoutSeconds: 180, outputPath: "/owned/original.mp4" };
+  const response = dispatcher.handle(call("mobile_device_recording_start", input));
+  input.deviceId = "replacement-target";
+  input.timeoutSeconds = 1;
+  input.outputPath = "/owned/replacement.mp4";
+  ready({
+    async invokeAction(action, args) {
+      assert.equal(action, "start_recording");
+      submitted = args;
+      return { deviceId: args.deviceId, isRecording: true, outputPath: args.outputPath, timeoutSeconds: args.timeoutSeconds };
+    },
+    async dispose() {},
+  });
+  const result = await response;
+  assert.equal(result.result.isError, undefined);
+  assert.deepEqual(submitted, {
+    deviceId: "original-target", timeoutSeconds: 180, outputPath: "/owned/original.mp4",
+  });
 });
 
 test("unsupported/invalid/cross-scope calls are positive failures before any runtime resolution", async (t) => {
@@ -72,6 +112,8 @@ test("unsupported/invalid/cross-scope calls are positive failures before any run
     call("mobile_device_app_launch", { deviceId: "target", bundleId: "app" }),
     call("mobile_device_tap", { deviceId: "target", x: "bad", y: 1 }),
     call("mobile_device_select", { deviceId: "target", sessionId: "other" }),
+    call("mobile_device_recording_start", { deviceId: "target", timeoutSeconds: 0 }),
+    call("mobile_device_recording_start", { deviceId: "target", outputPath: "relative.mp4" }),
   ]) {
     const result = await dispatcher.handle(request);
     assert.equal(result.result.isError, true);
@@ -98,6 +140,9 @@ test("bound empty-context inventory retains the installed MCP list output envelo
   const catalog = await dispatcher.handle(message("tools/list"));
   const schema = catalog.result.tools.find((tool) => tool.name === "mobile_device_list").outputSchema;
   assert.deepEqual(schema.required, ["result"]);
+  const recordingStatus = catalog.result.tools.find((tool) => tool.name === "mobile_device_recording_status");
+  assert.equal(recordingStatus.annotations.readOnlyHint, false);
+  assert.equal(recordingStatus.annotations.destructiveHint, false);
   const result = await dispatcher.handle(call("mobile_device_list", {}));
   assert.notEqual(result.result.isError, true);
   assert.deepEqual(result.result.structuredContent, { result: devices });

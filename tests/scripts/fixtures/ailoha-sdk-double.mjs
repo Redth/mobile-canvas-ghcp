@@ -6,6 +6,7 @@ import { createCatalogModel } from "./ailoha-catalog-creation.mjs";
 export const scenario = {
   calls: [], leases: new Map(), videos: new Map(), operations: new Map(), status: "running", geometryRevision: 13,
   catalog: null, createdTargets: new Map(), creationGate: null,
+  recordingEnabled: false,
   targets: new Map(), providerId: "synthetic-provider", nativeId: "native-deployment-not-opaque-target",
   connectionRef: {
     schema: "ailoha.target-host.connection/v1", serviceId: "synthetic-service", pid: 12345,
@@ -52,10 +53,13 @@ function mergedCapabilities(values) {
   return [...groups.values()];
 }
 function providerRecords() {
+  const capabilities = scenario.recordingEnabled
+    ? mergedCapabilities([...captures, { id: "surface.capture", version: 1,
+      features: ["startTargetRecording", "getTargetRecording", "stopTargetRecording"] }]) : captures;
   return [{
-    providerId: scenario.providerId, name: "Synthetic provider", version: "synthetic", state: "ready", capabilities: captures,
+    providerId: scenario.providerId, name: "Synthetic provider", version: "synthetic", state: "ready", capabilities,
   }, ...(scenario.catalog?.providers ?? []).map((provider) => ({
-    ...provider, capabilities: mergedCapabilities([...provider.capabilities, ...captures]),
+    ...provider, capabilities: mergedCapabilities([...provider.capabilities, ...capabilities]),
   }))];
 }
 function target() {
@@ -142,6 +146,11 @@ export async function openTargetHostTransport(leaseId) {
       if (path === "/api/v1/providers") {
         if (scenario.beforeCatalogRead) await scenario.beforeCatalogRead(path, options);
         return reply(providerRecords());
+      }
+      if (path === "/api/v1/providers/synthetic-provider/target-types" && scenario.recordingEnabled) {
+        if (scenario.beforeCatalogRead) await scenario.beforeCatalogRead(path, options);
+        return reply([{ targetTypeId: "opaque/type", providerId: "synthetic-provider",
+          kind: "simulator", platform: "ios", name: "Fixture simulator" }]);
       }
       const catalogRoute = /^\/api\/v1\/providers\/([^/]+)\/(catalogs|runtimes|target-types|templates)$/.exec(path);
       if (catalogRoute) {
