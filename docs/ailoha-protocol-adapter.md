@@ -168,8 +168,11 @@ idle delays: by default the client's request timeout, configurable from 1 to
 60,000 ms; each poll also honors the client's shorter request timeout. Poll
 intervals are bounded from 1 to 60,000 ms. Timeout, caller abort, and disposal
 stop local reads/timers only; they never cancel the external operation.
-The explicit/default polling interval remains the wait policy; server
-`Retry-After` hints cannot override or extend the caller's total deadline.
+The explicit/default polling interval remains the wait policy. A subsequent
+poll is scheduled only when its full interval leaves time before the absolute
+deadline; otherwise the existing deadline timer ends the wait. Intervals are not
+shortened into deadline-boundary reads, and server `Retry-After` hints cannot
+override or extend the caller's total deadline.
 
 Operation errors retain `operationId`, the latest validated `operation` when
 available, and sanitized primary Problem Details. HTTP errors remain `http_error`
@@ -325,6 +328,44 @@ trusted view opens it reports `context_not_bound`, and a retired view reports
 `context_retired`. The first slice is target-only; app/agent/runtime-instance
 selectors are not adopted as native package identity.
 
+### Internal host incarnation evidence
+
+`targetHostId` is a persistent discovery identity, not a process incarnation.
+The trusted backend captures the official lease's full `connectionRef`
+(`serviceId`, `pid`, `startedAt`, `processStartedAt`, and `schema` when supplied)
+as a frozen value before opening its transport. Trusted backend/canvas/VS Code
+bridge adapters expose `connectionRef`; `captureInvocation` retains the same
+frozen value in a non-enumerable host-only property after public capture.
+`captureConnectionRef` and `sameConnectionRef` are the shared capture/comparison
+helpers; no derived `hostInstanceId` or private metadata lookup is used.
+
+Creation captures that same frozen connection evidence in its non-enumerable
+private invocation before submission. Every same-key retry checks it before
+catalog/context/operation/target reads, including unknown acceptance, pending
+operations and succeeded operations awaiting output confirmation. A replacement
+service ID, PID, service start or process start cannot join an old owner's
+confirmation promise or resume its receipt. Receipt keys use the original
+compatibility choice tuple, not the replacement owner's discovery/incarnation
+identity, so that mismatch never authorizes new catalog reads or another create
+or boot.
+Original-owner accepted work and cleanup keep their original captured transport;
+public creation results and error envelopes deliberately omit this private tuple.
+
+Spreading, structured-cloning or publicly projecting an invocation deliberately
+drops that internal property. Trusted adapters that extend an invocation must
+retain its `connectionRef` separately with their private receipt/progress, not
+recover it from renderer/MCP output. A changed tuple rejects same-key lifecycle
+recovery or unknown video-create replay as `runtime_incarnation_changed`; it
+does not discard the old receipt or attach cleanup to the replacement transport.
+New unrelated explicit actions remain independent.
+
+This evidence is not an atomic request-time process fence. The official SDK
+validates owner/process/pin/metadata when a transport is opened; its HTTP socket
+and credential remain captured afterward. Managed credential rotation can close
+or reject that old transport, while reused external credentials leave a
+request-time race. Mobile Canvas neither refreshes/replays mutations across
+changed evidence nor claims that comparing a precheck eliminates that race.
+
 `get_selected_device`/`mobile_device_get_selected` include a non-secret
 `contextBinding` projection when backed by the canonical authority:
 `contextRef`, `scopeEpoch`, string `revision` and the actual product
@@ -422,11 +463,42 @@ tooling is not a ready-shaped empty inventory.
 
 Implemented: authoritative advertised catalogs and compatible create+boot,
 inventory/select, advertised start/stop/reboot, PNG screenshot,
-basic geometry-bound pointer gestures, shared ALHV WebCodecs display and
-target-host recording through the official scoped CLI.
+basic geometry-bound pointer gestures, shared ALHV WebCodecs display,
+target-host recording through the verified scoped CLI when it advertises
+canonical recovery,
+[read-only explicit-root workspace/application evidence](ailoha-workspace-inspection.md),
+plus read-only canonical composed `app_tree`, `app_query` and `app_status`
+through the host-owned MCP client. System reads require the selected Target
+Host target and request `target-host` routing; App reads require an explicitly
+selected `verified-native-instance` in the named context and request
+`require-agent` routing. Each result checks captured context ref/epoch/revision,
+target, surface, owner and native runtime provenance before display; retired
+reads never project. The shared UI bounds depth, element count and text, and
+renders canonical element text literally. Changing a lens or operation retires
+the previous read without clearing typed query filters. Canonical MCP errors
+expose only a finite public capability code/message or a fixed failure message;
+native stderr, paths and error details are not forwarded to the renderer.
+The official JS MCP SDK's full tool-list validator rejects native C# tool
+metadata such as a valid boolean JSON Schema `true` at
+`outputSchema.properties.result` (for example `target_file_mkdir`);
+discovery validates only bounded advertised tool names
+through that SDK, then validates the actual composed result against captured
+route and provenance. The stdio child receives only named context/broker
+configuration from the host environment, never ambient target/agent selectors.
+The legacy .NET canvas serves the shared semantic module as a public embedded
+bootstrap asset, while its inspection API remains authenticated. This
+source-only slice has no
+workspace-application-to-native-agent mapping, binding control, or legacy
+`ui_*` compatibility claim. Both hosts bundle the exact-pinned MCP client
+graph, while the official Ailoha runtime pin remains a separate release gate.
+Controlled native development CLI proof exercised System and explicitly bound
+App tree/query/status through both prepared host clients against the real
+canonical broker and mock Target Host/Core-MAUI agents, including stale-context
+and missing-Agent failures. This does not qualify a public package, normal
+installation, native platform matrix or real-device acceptance.
 Unsupported: configuration-dependent creation, reveal/rotation/keyboard/buttons,
-reset/delete without scoped consent, app/system semantic trees, app deployment,
-broader settings/diagnostics/file/hardware operations. No claim of
+reset/delete without scoped consent, app deployment, and broader
+settings/diagnostics/file/hardware operations. No claim of
 device or full feature parity is made.
 
 Tests exercise actual prepared GitHub entrypoints and compiled VS Code bridge

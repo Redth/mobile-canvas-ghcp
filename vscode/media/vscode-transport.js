@@ -9,6 +9,10 @@
   let visibilityHandler = null;
   let refreshHandler = null;
   let automationHandler = null;
+  let inspectionHandler = null;
+  let inspectionState = null;
+  let semanticHandler = null;
+  let semanticState = null;
   let refreshPending = false;
   const queuedAutomation = [];
 
@@ -119,6 +123,14 @@
   window.addEventListener("message", (event) => {
     const message = event.data;
     switch (message.type) {
+      case "workspace-inspection":
+        inspectionState = message.state;
+        inspectionHandler?.(inspectionState);
+        break;
+      case "semantic-inspection":
+        semanticState = message.state;
+        semanticHandler?.(semanticState);
+        break;
       case "context":
         context = { sessionId: message.sessionId, instanceId: message.instanceId };
         resolveContext?.(context);
@@ -224,6 +236,16 @@
 
     onVisibilityChanged(handler) {
       visibilityHandler = handler;
+    },
+
+    onWorkspaceInspectionChanged(handler) {
+      inspectionHandler = handler;
+      if (inspectionState) inspectionHandler(inspectionState);
+    },
+
+    onSemanticInspectionChanged(handler) {
+      semanticHandler = handler;
+      if (semanticState) semanticHandler(semanticState);
     },
 
     onRefreshRequested(handler) {

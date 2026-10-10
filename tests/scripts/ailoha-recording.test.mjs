@@ -840,7 +840,7 @@ test("verified CLI preserves only typed nonzero recording recovery stdout", asyn
   const timer = setTimeout(() => controller.abort(), 150);
   try {
     await assert.rejects(aborted(["recording", "recover", "--json"], { signal: controller.signal }),
-      { code: "ailoha_cli_failed" });
+      { code: "ailoha_cli_cancelled" });
   } finally {
     clearTimeout(timer);
   }

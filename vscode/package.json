@@ -58,7 +58,7 @@
           "enum": ["legacy", "ailoha"],
           "default": "legacy",
           "scope": "application",
-          "markdownDescription": "Use the production legacy engine (default) or explicitly opt into the pinned official Ailoha Target Host. Reload the VS Code window after changing. Ailoha does not fall back after errors; app inspection and broader controls remain unsupported."
+          "markdownDescription": "Use the production legacy engine (default) or explicitly opt into the pinned official Ailoha Target Host. Reload the VS Code window after changing. Read-only workspace evidence requires an explicitly chosen trusted local folder. Canonical read-only System inspection uses the selected target; App inspection requires an explicitly verified native instance in the named context. No workspace application mapping or silent fallback is available. Recording requires verified CLI recovery; broader controls remain unsupported."
         }
       }
     },
@@ -165,6 +165,7 @@
     "package:targets": "npm run compile && npm run check:web && npm run check:scripts && node ../scripts/package-vscode-targets.mjs"
   },
   "dependencies": {
+    "@modelcontextprotocol/sdk": "1.32.0",
     "ws": "8.22.0"
   },
   "devDependencies": {

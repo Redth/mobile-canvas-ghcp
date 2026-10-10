@@ -2,11 +2,18 @@
 
 **Ailoha source preview:** the application setting `mobileCanvas.backend`
 defaults to `legacy`. Setting it to `ailoha` and reloading the window opts into
-the shared target-only adapter once the reviewed package contains its approved
+the shared Target Host adapter once the reviewed package contains its approved
 public SDK graph. Missing pins/packages report unavailable; errors never fall
 back. Inventory/selection, advertised lifecycle, PNG, geometry-bound pointer
-gestures, ALHV display and target-host recording are wired. App/system inspection,
-keyboard/buttons and broader controls remain unsupported. Public SDK and
+gestures, ALHV display and scoped recording are wired. Recording starts only
+when the verified CLI advertises recovery. Read-only workspace evidence uses
+an explicit native folder choice in a trusted local workspace; it does not
+install instrumentation, verify a running agent or select an application.
+Remote/non-file inspection roots are unsupported. Read-only System inspection
+uses the selected Target Host target; App inspection requires a verified native
+instance explicitly selected in the canonical named context, never a workspace
+application guess. Keyboard/buttons and broader controls remain unsupported.
+Public SDK and
 refreshed native embedded-web artifacts are still release gates; this is not a
 Marketplace release. The feature list below describes the production default.
 
