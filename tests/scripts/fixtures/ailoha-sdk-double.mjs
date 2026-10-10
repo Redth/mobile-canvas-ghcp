@@ -44,6 +44,11 @@ export async function getVerifiedCliLaunch({ expectedVersion }) {
 }
 export async function ensureTargetHost(options) {
   scenario.calls.push({ ensure: structuredClone(options) });
+  if (scenario.ensureFailureCode) {
+    const error = new Error("synthetic private runtime diagnostic");
+    Object.assign(error, { name: "RuntimeDeliveryError", code: scenario.ensureFailureCode });
+    throw error;
+  }
   const leaseId = randomUUID();
   scenario.leases.set(leaseId, []);
   return {
