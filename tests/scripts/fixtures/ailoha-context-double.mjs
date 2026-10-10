@@ -66,7 +66,17 @@ if (args[0] === "recording") {
     if (completed.contextRef !== contextRef || completed.scopeEpoch !== scopeEpoch) {
       throw new Error("The synthetic completed recording belongs to another scoped authority.");
     }
-    process.stdout.write(JSON.stringify(completed));
+    if (process.env.AILOHA_TEST_RECORDING_REPLACED_HOST) {
+      process.stdout.write(JSON.stringify({ ...completed, hostInstanceId: "instance-replaced" }));
+    } else if (process.env.AILOHA_TEST_RECORDING_DOWNLOAD_FAILED) {
+      process.stdout.write(JSON.stringify({
+        ...completed, outcome: "downloadFailed", code: "RecordingDownloadFailed",
+        downloadedAt: undefined, downloadedLength: undefined,
+      }));
+      process.exit(1);
+    } else {
+      process.stdout.write(JSON.stringify(completed));
+    }
   } else throw new Error("Unexpected synthetic recording command.");
   process.exit(0);
 }

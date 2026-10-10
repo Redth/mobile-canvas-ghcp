@@ -449,6 +449,9 @@ roots; the compiled VS Code HostBridge is exercised by the separate installed
 entrypoint fixture. Combine `--recording --lost-start` to lose the first
 accepted start response: the renderer must offer captured resolution rather
 than replay start, then finalize one recording and land its MP4.
+The installed entrypoint fixture also rejects a changed host incarnation and a
+nonzero typed download failure before retrying only the captured recovery;
+each host submits one stop for that recording.
 Prepared VS Code shared renderer checks use the same host adapter; the separately
 tested compiled extension/webview bridge is not replaced by a browser-only proxy
 claim.

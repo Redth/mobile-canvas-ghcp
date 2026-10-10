@@ -413,6 +413,44 @@ try {
   assert.equal(recordingCommands.filter((command) => command === "start").length, 3);
   assert.equal(recordingCommands.filter((command) => command === "stop").length, 3);
   assert.equal(recordingCommands.filter((command) => command === "recover").length, 3);
+  const recoveringMcp = await createAilohaMcpDispatcher({
+    version: "synthetic-only", binding: returnedBinding(selectedContext),
+  });
+  try {
+    const pendingOutput = join(scratch, "owned-recover.mp4");
+    const started = await recoveringMcp.handle(mcpCall("mobile_device_recording_start", {
+      deviceId: selectedContext.device.id, outputPath: pendingOutput,
+    }));
+    assert.notEqual(started.result.isError, true);
+    process.env.AILOHA_TEST_RECORDING_REPLACED_HOST = "1";
+    const wrongHost = await recoveringMcp.handle(mcpCall("mobile_device_recording_stop", {
+      deviceId: selectedContext.device.id,
+    }));
+    assert.equal(wrongHost.result.isError, true);
+    assert.equal(JSON.parse(wrongHost.result.content[0].text).code, "recording_owner_mismatch");
+    delete process.env.AILOHA_TEST_RECORDING_REPLACED_HOST;
+    process.env.AILOHA_TEST_RECORDING_DOWNLOAD_FAILED = "1";
+    const failedDownload = await recoveringMcp.handle(mcpCall("mobile_device_recording_stop", {
+      deviceId: selectedContext.device.id,
+    }));
+    assert.equal(failedDownload.result.isError, true);
+    assert.equal(JSON.parse(failedDownload.result.content[0].text).code, "recording_recovery_download_failed");
+    delete process.env.AILOHA_TEST_RECORDING_DOWNLOAD_FAILED;
+    const recovered = await recoveringMcp.handle(mcpCall("mobile_device_recording_stop", {
+      deviceId: selectedContext.device.id,
+    }));
+    assert.notEqual(recovered.result.isError, true);
+    assert.equal(recovered.result.structuredContent.outputPath, pendingOutput);
+    assert.equal(existsSync(pendingOutput), true);
+  } finally {
+    delete process.env.AILOHA_TEST_RECORDING_REPLACED_HOST;
+    delete process.env.AILOHA_TEST_RECORDING_DOWNLOAD_FAILED;
+    await recoveringMcp.dispose();
+  }
+  recordingCommands = readFileSync(`${process.env.AILOHA_TEST_CONTEXT_STATE}.recording-calls`, "utf8").trim().split("\n");
+  assert.equal(recordingCommands.filter((command) => command === "start").length, 4);
+  assert.equal(recordingCommands.filter((command) => command === "stop").length, 4);
+  assert.equal(recordingCommands.filter((command) => command === "recover").length, 6);
   scenario.recordingEnabled = false;
   contextCommands[0] = {
     ...contextCommands[0], state: "detached", selection: null, observed: null,
