@@ -343,6 +343,9 @@ settings readback; an unknown submission cannot be replayed as a new mutation.
 The shared typed HTTP rejection policy evicts only proven pre-admission 403
 responses; 408 and responses carrying accepted operation evidence retain the
 original receipt without replay.
+Terminal feature completion must retain the accepted operation ID, kind,
+non-destructive effect, target, and provider before releasing its receipt;
+conflicting completion is rejected while the original ID remains recoverable.
 Caller cancellation before feature admission blocks a new submission after app
 lookup or target verification; it does not discard already submitted work.
 The MCP names, request fields, and legacy output envelopes remain unchanged.

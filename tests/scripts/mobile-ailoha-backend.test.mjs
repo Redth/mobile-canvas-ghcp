@@ -656,6 +656,36 @@ test("draft permission lookup and accepted call retain original target and proce
   assert.equal(accepted.wire.filter(({ method }) => method === "POST").length, 1);
 });
 
+test("feature completion preserves the accepted operation ID and non-destructive effect before releasing its receipt", async (t) => {
+  for (const change of [
+    (operation) => ({ ...operation, operationId: "another-operation" }),
+    (operation) => ({ ...operation, destructive: true }),
+  ]) {
+    const featureState = new Map();
+    const state = featureFixture({ featureState });
+    t.after(() => state.backend.dispose());
+    const wait = state.client.waitForOperation;
+    let mismatched = true;
+    let waitedId;
+    state.client.waitForOperation = async (id, options) => {
+      waitedId = id;
+      const operation = await wait(id, options);
+      return mismatched ? change(operation) : operation;
+    };
+    const input = { deviceId: "one", from: "+123", body: "hello" };
+    await assert.rejects(state.backend.invokeAction("send_sms", input), { code: "operation_owner_mismatch" });
+    const receipt = [...featureState.values()][0];
+    assert.equal(receipt.operationId, "op-simulateTargetSms");
+    assert.equal(waitedId, receipt.operationId);
+    assert.equal(receipt.completed, null);
+    assert.equal(state.wire.filter(({ method }) => method === "POST").length, 1);
+    mismatched = false;
+    assert.equal((await state.backend.invokeAction("send_sms", input)).operation, "sms-send");
+    assert.equal(featureState.size, 0);
+    assert.equal(state.wire.filter(({ method }) => method === "POST").length, 1);
+  }
+});
+
 test("source-conditional official PUT routes preserve all four legacy setter outputs and readback", async (t) => {
   const state = featureFixture({ platform: "android", allowPut: true });
   t.after(() => state.backend.dispose());
