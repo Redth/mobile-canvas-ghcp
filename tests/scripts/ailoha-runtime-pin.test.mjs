@@ -8,6 +8,7 @@ import { productModule } from "../ailoha-test-module.mjs";
 const root = join(dirname(fileURLToPath(import.meta.url)), "../..");
 const product = fileURLToPath(new URL("../../", productModule("lib/ailoha/runtime-sdk.mjs")));
 const { createVerifiedAilohaCli } = await import(productModule("lib/ailoha/runtime-sdk.mjs"));
+const { MobileAilohaError } = await import(productModule("lib/ailoha/mobile-projection.mjs"));
 
 function fixture(t, content, directory = false) {
   const parent = join(root, ".build");
@@ -120,4 +121,39 @@ test("verified CLI reserves the longer total budget only for canonical recording
   await assert.rejects(cli(["recording", "recover"], { timeoutMs: 120_001 }), { code: "ailoha_cli_budget_invalid" });
   await assert.rejects(cli(["workspace", "inspect"], { timeoutMs: 30_001 }), { code: "ailoha_cli_budget_invalid" });
   await assert.rejects(cli(["recording", "unknown"], { timeoutMs: 30_001 }), { code: "ailoha_cli_budget_invalid" });
+});
+
+test("verified CLI rechecks a cancelled new recording intent after launch, before spawning", async (t) => {
+  const parent = join(root, ".build");
+  mkdirSync(parent, { recursive: true });
+  const scratch = mkdtempSync(join(parent, "ailoha-recording-admission-"));
+  t.after(() => rmSync(scratch, { recursive: true }));
+  const wire = join(scratch, "spawned");
+  const pin = { version: "synthetic-only", sourceSha: "a".repeat(40) };
+  let resolveLaunch;
+  let launchRequested;
+  const launching = new Promise((resolve) => { launchRequested = resolve; });
+  const cli = createVerifiedAilohaCli({ pin, sdk: {
+    getVerifiedCliLaunch() {
+      launchRequested();
+      return new Promise((resolve) => { resolveLaunch = resolve; });
+    },
+  } });
+  const caller = new AbortController();
+  const pending = cli(["recording", "start", wire], {
+    timeoutMs: 120_000,
+    beforeDispatch() {
+      if (caller.signal.aborted) {
+        throw new MobileAilohaError("request_cancelled", "Recording start was cancelled before dispatch.", 409);
+      }
+    },
+  });
+  await launching;
+  caller.abort();
+  resolveLaunch({
+    ...pin, file: process.execPath,
+    args: [join(root, "tests/scripts/fixtures/ailoha-cli-budget-target.mjs")],
+  });
+  await assert.rejects(pending, { code: "request_cancelled" });
+  assert.equal(existsSync(wire), false);
 });

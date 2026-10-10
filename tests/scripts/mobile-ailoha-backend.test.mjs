@@ -299,6 +299,37 @@ test("shared recording API and action identifiers preserve legacy outputs and ca
   assert.equal(state.calls.some((call) => call[0] === "stop"), false);
 });
 
+test("cancelled recording API and action intents cannot start after target preparation", async () => {
+  const entered = deferred();
+  const targetReady = deferred();
+  let starts = 0;
+  const state = fixture({
+    recording: { async start() { starts++; } },
+  });
+  state.capabilities.push({ id: "surface.capture", version: 1,
+    features: ["startTargetRecording", "getTargetRecording", "stopTargetRecording"] });
+  const getTarget = state.client.getTarget.bind(state.client);
+  state.client.getTarget = async (id) => {
+    entered.resolve();
+    await targetReady.promise;
+    return getTarget(id);
+  };
+  const caller = new AbortController();
+  const pending = state.backend.request("/api/v1/devices/one/recording/start", {
+    method: "POST", signal: caller.signal,
+  });
+  await entered.promise;
+  caller.abort();
+  targetReady.resolve();
+  const response = await pending;
+  assert.equal(response.status, 409);
+  assert.equal((await response.json()).code, "request_cancelled");
+  await assert.rejects(state.backend.invokeAction("start_recording", { deviceId: "one" },
+    { signal: caller.signal }), { code: "request_cancelled" });
+  assert.equal(starts, 0);
+  await state.backend.dispose();
+});
+
 test("unavailable recovery hides recording despite capture support and rejects starts", async () => {
   let starts = 0;
   const state = fixture({
@@ -382,11 +413,12 @@ test("view close waits for a concurrent accepted recording start before releasin
   });
   const recording = new AilohaRecordingCoordinator({
     output: async () => "/host/record.mp4",
-    async run(args) {
+    async run(args, options) {
       const action = args[1];
       calls.push(action);
       if (action === "status") return JSON.stringify(active ? record() : null);
       if (action === "start") {
+        options.beforeDispatch();
         entered.resolve();
         await accepted.promise;
         active = true;
@@ -418,6 +450,38 @@ test("view close waits for a concurrent accepted recording start before releasin
   assert.deepEqual(calls, ["status", "start", "status", "stop", "recover"]);
   assert.equal(state.calls.filter((call) => call[0] === "release-end").length, 1);
   assert.equal(recording.tracked, false);
+});
+
+test("cancelled recording start after canonical status never dispatches or retains an unaccepted owner", async () => {
+  const entered = deferred();
+  const statusReady = deferred();
+  const commands = [];
+  const recording = new AilohaRecordingCoordinator({
+    output: async () => "/host/record.mp4",
+    async run(args) {
+      commands.push(args[1]);
+      if (args[1] !== "status") throw new Error("Cancelled intent submitted recording start.");
+      entered.resolve();
+      await statusReady.promise;
+      return "null";
+    },
+  });
+  const state = canonicalFixture({ recording });
+  state.capabilities.push({ id: "surface.capture", version: 1,
+    features: ["startTargetRecording", "getTargetRecording", "stopTargetRecording"] });
+  const caller = new AbortController();
+  const pending = state.backend.request("/api/v1/devices/one/recording/start", {
+    method: "POST", signal: caller.signal,
+  });
+  await entered.promise;
+  caller.abort();
+  statusReady.resolve();
+  const response = await pending;
+  assert.equal(response.status, 409);
+  assert.equal((await response.json()).code, "request_cancelled");
+  assert.deepEqual(commands, ["status"]);
+  assert.equal(recording.tracked, false);
+  await state.backend.dispose();
 });
 
 test("remote and non-virtual targets advertise no recording even when capture methods exist", async (t) => {

@@ -525,7 +525,9 @@ CLI's scoped recording coordinator owns cross-process acceptance markers,
 operation reconciliation, stop and bounded artifact download; Mobile Canvas
 does not implement provider recording or forward a credential to the renderer.
 Start captures the context ref/epoch/revision and host/target/surface; a lost
-start response is not submitted twice. The view retains that captured owner
+start response is not submitted twice. Caller cancellation or view retirement
+before CLI dispatch blocks a new start; cancellation after dispatch does not
+abort or retarget an accepted recording. The view retains that captured owner
 across runtime lease replacement and selection changes. Stop uses the original
 bound owner even after selecting another target; failed finalization/download
 remains visible and prevents the canvas lease from releasing. The canonical
