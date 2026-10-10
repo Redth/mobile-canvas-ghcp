@@ -1,4 +1,4 @@
-import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { createServer } from "node:http";
 import { randomUUID } from "node:crypto";
 import { dirname, join, resolve } from "node:path";
@@ -11,9 +11,11 @@ const contextPath = resolve(process.argv[3]);
 const recording = process.argv.includes("--recording");
 const recordingLostStart = process.argv.includes("--lost-start");
 if (recordingLostStart && !recording) throw new Error("Lost-start proof requires --recording.");
+let recordingHome;
 if (recording) {
   mkdirSync(dirname(contextPath), { recursive: true });
-  process.env.HOME = dirname(contextPath);
+  recordingHome = mkdtempSync(join(dirname(contextPath), ".ailoha-browser-home-"));
+  process.env.HOME = recordingHome;
   scenario.recordingEnabled = true;
   if (recordingLostStart) process.env.AILOHA_TEST_RECORDING_LOST_ACK = "1";
 }
@@ -32,7 +34,7 @@ const host = createPreparedHost({
 const opened = await host.openCanvas();
 await host.invokeAction("select_device", { deviceId: "opaque/target" });
 const evidence = createServer((_request, response) => {
-  const recordingDirectory = join(dirname(contextPath), ".mobile-canvas", "artifacts", "recordings");
+  const recordingDirectory = join(recordingHome ?? dirname(contextPath), ".mobile-canvas", "artifacts", "recordings");
   response.writeHead(200, { "Content-Type": "application/json" });
   response.end(JSON.stringify({
     synthetic: true, errors, targetStatus: scenario.status,
@@ -61,7 +63,7 @@ async function close() {
     if (recording) {
       rmSync(`${contextPath}.recording-calls`, { force: true });
       rmSync(`${contextPath}.lost-start`, { force: true });
-      rmSync(join(dirname(contextPath), ".mobile-canvas"), { recursive: true, force: true });
+      rmSync(recordingHome, { recursive: true, force: true });
     }
   })();
   return closing;
