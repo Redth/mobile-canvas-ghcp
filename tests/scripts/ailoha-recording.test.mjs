@@ -267,6 +267,35 @@ test("an ambiguous failed stop cannot submit a second CLI stop even after a term
   assert.equal(coordinator.tracked, true);
 });
 
+test("a known failed or unattempted stop remains owned without resubmission", async () => {
+  for (const [outcome, code] of [
+    ["failed", "RecordingStopFailed"],
+    ["notAttempted", "RecordingStopNotAttempted"],
+  ]) {
+    let stops = 0;
+    const { coordinator } = fixture({
+      run(action) {
+        if (action === "status") return "null";
+        if (action === "start") return JSON.stringify(record());
+        if (action === "stop") {
+          stops += 1;
+          throw new Error("original stop outcome unavailable");
+        }
+        if (action === "recover") return JSON.stringify({
+          ...unresolved(outcome, record("failed")), code,
+        });
+      },
+    });
+    await coordinator.start(invocation);
+    await assert.rejects(coordinator.stop("target-one"), /outcome unavailable/);
+    const expected = `recording_recovery_${outcome === "notAttempted" ? "not_attempted" : outcome}`;
+    await assert.rejects(coordinator.stop("target-one"), { code: expected });
+    await assert.rejects(coordinator.finalize(), { code: expected });
+    assert.equal(coordinator.tracked, true);
+    assert.equal(stops, 1);
+  }
+});
+
 test("failed artifact download retries only captured recovery after active pointer deletion", async () => {
   let outcome = "downloadFailed";
   let stops = 0;
@@ -419,7 +448,9 @@ test("a failed or cancelled recording never reports a completed stop even with a
       run(action) {
         if (action === "status") return JSON.stringify(active ? record() : null);
         if (action === "start") { active = true; return JSON.stringify(record()); }
-        if (action === "recover") return JSON.stringify(unresolved());
+        if (action === "recover") return JSON.stringify({
+          ...unresolved("failed", record(state)), code: "RecordingStopFailed",
+        });
         if (action === "stop") {
           stops += 1;
           return JSON.stringify({ ...record(state), artifactId: "artifact-needs-verification" });
@@ -428,7 +459,7 @@ test("a failed or cancelled recording never reports a completed stop even with a
     });
     await coordinator.start(invocation);
     await assert.rejects(coordinator.stop("target-one"), { code: "recording_not_finalized" });
-    await assert.rejects(coordinator.finalize(), { code: "recording_recovery_pending" });
+    await assert.rejects(coordinator.finalize(), { code: "recording_recovery_failed" });
     assert.equal(coordinator.tracked, true);
     assert.equal(stops, 1);
   }
