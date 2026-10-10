@@ -77,7 +77,7 @@ execFileSync("tar", [
   "-C",
   join(root, ".build", packageDirectory),
   "mobile-canvas",
-]);
+], { env: { ...process.env, COPYFILE_DISABLE: "1" } });
 
 console.log(`prepared Copilot plugin artifact in ${output}`);
 console.log(`packed Copilot plugin artifact as ${archive}`);

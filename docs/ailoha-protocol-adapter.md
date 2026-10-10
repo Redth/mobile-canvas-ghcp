@@ -1109,6 +1109,10 @@ node scripts/test-prepared-ailoha.mjs
 node tests/web/ailoha-player-browser-server.mjs
 ```
 
+The GitHub plugin tar disables macOS copyfile metadata for that archive command
+only; its actual-archive test rejects AppleDouble entries and verifies
+representative shared source bytes and executable modes.
+
 Native binaries embed `web/`, so native source fingerprints include those bytes,
 not just `.csproj` changes. Existing published payloads are not re-stamped to
 pretend they contain new assets. Build review-only payloads from the reviewed
