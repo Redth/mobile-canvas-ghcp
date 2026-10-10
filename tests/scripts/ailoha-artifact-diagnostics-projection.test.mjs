@@ -84,4 +84,10 @@ test("missing totals and raw fields cannot become normalized diagnostic successe
   }
   assert.throws(() => projectDeviceCrashReport({ deviceId: "target", result: report }),
     { code: "invalid_artifact_diagnostics", status: 502 });
+  assert.throws(() => projectDeviceCrashReport({
+    deviceId: "target", result: { ...report, content: "é".repeat(524289) },
+  }), { code: "invalid_artifact_diagnostics", status: 502 });
+  assert.equal(projectDeviceCrashReport({
+    deviceId: "target", result: { ...report, content: "a".repeat(1024 * 1024) },
+  }).content.length, 1024 * 1024);
 });
