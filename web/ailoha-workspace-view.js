@@ -88,6 +88,32 @@ function applicationCard(application) {
   for (const profile of application.launchProfiles) {
     details.append(node("p", "", `Launch profile: ${profile.name} (${source(profile.source, profile.location)}). Not evaluated; workspace trust required.`));
   }
+  if (application.missingSteps.length) {
+    const guidance = node("section", "workspace-review-guidance");
+    guidance.append(node("h4", "", "Setup review suggestions"));
+    guidance.append(node("p", "workspace-inspection-note", "Scanner-provided suggestions. Approval and workspace mutation required; no changes are applied."));
+    const steps = node("ul", "workspace-evidence-list");
+    for (const step of application.missingSteps) {
+      const entry = node("li");
+      entry.append(node("strong", "", step.code), node("span", "", step.description));
+      steps.append(entry);
+    }
+    guidance.append(steps);
+    details.append(guidance);
+  }
+  if (application.recommendedSkillIds.length) {
+    const guidance = node("section", "workspace-skill-guidance");
+    guidance.append(node("h4", "", "Review skill IDs"));
+    guidance.append(node("p", "workspace-inspection-note", "Informational IDs only; availability and installation are not verified."));
+    const skills = node("ul", "workspace-evidence-list");
+    for (const id of application.recommendedSkillIds) {
+      const entry = node("li");
+      entry.append(node("code", "", id));
+      skills.append(entry);
+    }
+    guidance.append(skills);
+    details.append(guidance);
+  }
   card.append(details);
   return card;
 }

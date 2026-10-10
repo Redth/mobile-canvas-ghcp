@@ -11,6 +11,9 @@ export function workspaceInspectionFixture(root, mode = "complete") {
     value.applications[0].evidence[0].observation = payload;
     value.diagnostics[0].message = payload;
     value.diagnostics[0].path = `relative/${payload}.json`;
+    const application = value.applications.find((entry) => entry.variant === "bare");
+    application.missingSteps[0].description = payload;
+    application.recommendedSkillIds.push(`skill-${payload}`);
   }
   return value;
 }

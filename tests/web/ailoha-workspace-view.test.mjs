@@ -75,6 +75,34 @@ test("shared app evidence uses semantic local details/text and never creates a s
   assert.equal(projectionSource.includes('name: "workspace_inspect"'), true);
 });
 
+for (const mode of ["complete", "incomplete"]) {
+  test(`${mode} scanner missing-step descriptions and skill IDs are preserved as approval-required read-only details`, (t) => {
+    const { element, view, requests } = fixture(t);
+    const value = state(1, "/first-root", mode);
+    view.acceptState(value);
+    for (const application of value.inspection.applications) {
+      const card = find(element, (node) => node.tag === "article" && node.dataset.applicationId === application.applicationId);
+      const details = find(card, (node) => node.tag === "details");
+      const suggestions = find(details, (node) => node.className === "workspace-review-guidance");
+      const skills = find(details, (node) => node.className === "workspace-skill-guidance");
+      assert.equal(Boolean(suggestions), application.missingSteps.length > 0);
+      assert.equal(Boolean(skills), application.recommendedSkillIds.length > 0);
+      for (const step of application.missingSteps) {
+        assert.equal(suggestions.textContent.includes(step.description), true);
+        assert.equal(suggestions.textContent.includes(step.code), true);
+        assert.match(suggestions.textContent, /Approval and workspace mutation required; no changes are applied/);
+      }
+      for (const id of application.recommendedSkillIds) {
+        assert.equal(skills.textContent.includes(id), true);
+        assert.match(skills.textContent, /Informational IDs only; availability and installation are not verified/);
+      }
+      assert.equal(find(details, (node) => ["button", "a"].includes(node.tag)), undefined);
+    }
+    assert.equal(requests.length, 0);
+    if (mode === "incomplete") assert.match(element.textContent, /Incomplete scan. Missing evidence remains unknown/);
+  });
+}
+
 test("renderer ignores other view/older-root results and clears old cards on hide/resume", (t) => {
   const { element, view } = fixture(t);
   view.acceptState(state(10));
@@ -132,6 +160,10 @@ test("complete/incomplete/empty and XSS strings remain truthful plain-text evide
   assert.match(element.textContent, /No application candidates found/);
   view.acceptState(state(3, "/first-root", "xss"));
   assert.match(element.textContent, /<img src=x onerror=/);
+  const suggestions = find(element, (node) => node.className === "workspace-review-guidance");
+  const skills = find(element, (node) => node.className === "workspace-skill-guidance" && node.textContent.includes("skill-<img"));
+  assert.equal(suggestions.textContent.includes('<img src=x onerror="window.workspaceXss=true">'), true);
+  assert.equal(skills.textContent.includes('skill-<img src=x onerror="window.workspaceXss=true">'), true);
   assert.equal(find(element, (node) => ["img", "script", "iframe"].includes(node.tag)), undefined);
   assert.throws(() => view.acceptState({ ...state(4), schema: "unknown" }), /Invalid workspace inspection response/);
 });

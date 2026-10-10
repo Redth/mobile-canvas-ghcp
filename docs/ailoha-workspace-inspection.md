@@ -42,6 +42,13 @@ evaluation, SwiftPM GUI classification, xcconfig/includes and dynamic wrapper
 ownership are not inferred. An incomplete scan is not a successful empty
 result or proof of absent instrumentation.
 
+Expanded evidence details retain the scanner's concrete `missingSteps` codes
+and explanations as read-only setup review suggestions, explicitly requiring
+approval and workspace mutation before any change. `recommendedSkillIds` are
+informational text only: they are not install commands, buttons, verified
+availability or public package claims. No missing step or skill ID is inferred
+for an application, library, unknown role or incomplete scan.
+
 ## Root authority and lifecycle
 
 | Host | Explicit root policy |

@@ -36,6 +36,35 @@ async (page) => {
       return Number(element.dataset.generation) > generation && element.dataset.status === expectedStatus;
     }, { generation, expectedStatus });
   };
+  const guidance = async (applications) => {
+    let steps = 0;
+    let skills = 0;
+    for (const application of applications) {
+      const card = page.locator(".workspace-app-card").filter({
+        has: page.locator(".workspace-evidence-fields dd").filter({ hasText: application.applicationId }),
+      });
+      const details = card.locator(".workspace-app-details");
+      if (!await details.evaluate((element) => element.open)) await details.locator("summary").click();
+      assert(await details.locator("button, a").count() === 0, "Scanner guidance became an installation command or action.");
+      assert(await details.locator(".workspace-review-guidance").count() === (application.missingSteps.length ? 1 : 0),
+        "Missing-step guidance was inferred or discarded for this role.");
+      assert(await details.locator(".workspace-skill-guidance").count() === (application.recommendedSkillIds.length ? 1 : 0),
+        "Scanner skill IDs were inferred or discarded.");
+      for (const step of application.missingSteps) {
+        const text = await details.locator(".workspace-review-guidance").textContent();
+        assert(text.includes(step.code) && text.includes(step.description) && text.includes("Approval and workspace mutation required; no changes are applied"),
+          "Scanner missing-step explanation or approval/mutation qualification is absent.");
+        steps += 1;
+      }
+      for (const id of application.recommendedSkillIds) {
+        const text = await details.locator(".workspace-skill-guidance").textContent();
+        assert(text.includes(id) && text.includes("Informational IDs only; availability and installation are not verified"),
+          "Scanner skill ID was omitted or represented as verified installation guidance.");
+        skills += 1;
+      }
+    }
+    return { steps, skills, readOnly: true };
+  };
   const errors = [];
   const onError = (error) => errors.push(error.message);
   page.on("pageerror", onError);
@@ -69,6 +98,8 @@ async (page) => {
     for (const card of await page.locator(".workspace-app-card").all()) {
       if (!await card.locator("details").evaluate((details) => details.open)) await card.locator("summary").click();
     }
+    const canonicalGuidance = await guidance((await evidence()).workspace.inspection.applications);
+    assert(canonicalGuidance.steps === 2 && canonicalGuidance.skills === 6, "Canonical fixture guidance was not fully rendered.");
     assert((await evidence()).calls.length === deviceCalls, "Viewing app evidence invoked a target, agent or runtime action.");
     assert(JSON.stringify((await evidence()).context) === capturedContext, "Viewing app details changed the captured target-only context/revision.");
 
@@ -78,6 +109,8 @@ async (page) => {
     assert(await page.locator(".workspace-app-card").count() === 9, "Incomplete candidates were replaced with a success-shaped empty state.");
     await page.locator(".workspace-scan-details > summary").click();
     assert((await page.locator(".workspace-scan-details").textContent()).includes("malformed-json"), "Incomplete diagnostics were hidden or discarded.");
+    const incompleteGuidance = await guidance((await evidence()).workspace.inspection.applications);
+    assert(incompleteGuidance.steps === 2, "Incomplete scan lost its scanner-provided review explanations.");
 
     await control({ type: "mode", mode: "unknown-schema" });
     await inspect("error");
@@ -91,12 +124,16 @@ async (page) => {
     await control({ type: "mode", mode: "xss" });
     await inspect("complete");
     await status("Static scan complete");
+    await guidance((await evidence()).workspace.inspection.applications);
     const safe = await page.locator("#workspace-inspection").evaluate((element) => ({
       containsText: element.textContent.includes('<img src=x onerror="window.workspaceXss=true">'),
       injectedElements: element.querySelectorAll("img, script, iframe").length,
       executed: window.workspaceXss === true,
+      guidanceDescriptionText: element.querySelector(".workspace-review-guidance")?.textContent.includes('<img src=x onerror="window.workspaceXss=true">'),
+      skillIdText: [...element.querySelectorAll(".workspace-skill-guidance")].some((guidance) => guidance.textContent.includes('skill-<img src=x onerror="window.workspaceXss=true">')),
     }));
-    assert(safe.containsText && safe.injectedElements === 0 && !safe.executed, "Application/file/diagnostic text was interpreted as HTML.");
+    assert(safe.containsText && safe.guidanceDescriptionText && safe.skillIdText && safe.injectedElements === 0 && !safe.executed,
+      "Application/file/diagnostic/guidance text was omitted or interpreted as HTML.");
 
     await control({ type: "mode", mode: "complete", delayMs: 1000 });
     const beforeRootChange = (await evidence()).inspectionCalls.length;
@@ -154,6 +191,7 @@ async (page) => {
       explicitRootShown: true, rootChangeRetiredOldResult: true, cancellationRetiredOldResult: true,
       hideResumeRetiredOldResult: true, contextAndTargetUnchangedByCards: true,
       incompleteDiagnostics: true, unknownSchemaRejected: true, emptyScanExplicit: true, xssTextSafe: safe,
+      canonicalGuidance, incompleteGuidance,
       initialVideoPosts: posts(initial), initialVideoDeletes: deletes(initial),
       beforeHideVideoPosts: posts(beforeHide), beforeHideVideoDeletes: deletes(beforeHide),
       afterResumeVideoPosts: posts(resumed), afterResumeVideoDeletes: deletes(resumed), errors,
