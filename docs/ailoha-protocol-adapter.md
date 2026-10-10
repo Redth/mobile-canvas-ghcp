@@ -461,7 +461,7 @@ advertises `typeFocusedText` **and** the selected surface's `surface.input`
 advertises `text`. Otherwise plain typing and paste return unsupported with
 no input POST; the shared adapter retains `fillElement` only for an explicitly
 named, observed editable element. The conditional source mapping follows
-reviewed Ailoha #73: synchronous `POST
+reviewed [microsoft/ailoha#73](https://github.com/microsoft/ailoha/pull/73): synchronous `POST
 /api/v1/targets/{targetId}/surfaces/{surfaceId}/input/actions/type-focused-text`
 with literal JSON `{ "text": "..." }`, no tap/refocus/clear, 1..4096 strict
 UTF-8 bytes, valid Unicode and no NUL. The owner receipt must match the
