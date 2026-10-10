@@ -633,6 +633,32 @@ for (const changed of [
   }
 }
 
+for (const outcome of ["unknown", "pending", "completed"]) {
+  test(`a replacement discovery host cannot rekey an ${outcome} intent encoded in the original catalog choices`, async (t) => {
+    const state = await fixture(t);
+    const input = inputFor(await state.backend.catalog());
+    if (outcome === "unknown") state.state.acceptance = "unknown";
+    if (outcome === "pending") { state.state.terminal = "running"; state.state.waitMs = 10; }
+    if (outcome === "completed") state.state.targetStatus = "stopped";
+    await assert.rejects(state.backend.create(input));
+    const key = state.operationState.keys().next().value;
+    const receipt = state.operationState.get(key);
+    const original = state.backend.connectionRef;
+    await state.backend.dispose();
+    state.connection.hostId = "replacement-discovery-host";
+    state.state.model.status.hostId = state.connection.hostId;
+    const replacement = await state.makeBackend({ ...original, serviceId: "replacement-service" });
+    const before = state.state.calls.length;
+    const reads = state.contextCommands.length;
+    await assert.rejects(replacement.backend.create(input), { code: "runtime_incarnation_changed" });
+    assert.equal(state.state.calls.length, before);
+    assert.equal(state.contextCommands.length, reads);
+    assert.equal(state.operationState.size, 1);
+    assert.equal(state.operationState.get(key), receipt);
+    assert.equal(posts(state.state).length, 1);
+  });
+}
+
 test("a concurrent replacement cannot join the original owner's accepted creation or change its eventual result", async (t) => {
   const entered = deferred();
   const release = deferred();

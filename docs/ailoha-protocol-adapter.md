@@ -344,8 +344,10 @@ private invocation before submission. Every same-key retry checks it before
 catalog/context/operation/target reads, including unknown acceptance, pending
 operations and succeeded operations awaiting output confirmation. A replacement
 service ID, PID, service start or process start cannot join an old owner's
-confirmation promise or resume its receipt. Receipt keys are not changed to
-include incarnation, so that mismatch never authorizes another create or boot.
+confirmation promise or resume its receipt. Receipt keys use the original
+compatibility choice tuple, not the replacement owner's discovery/incarnation
+identity, so that mismatch never authorizes new catalog reads or another create
+or boot.
 Original-owner accepted work and cleanup keep their original captured transport;
 public creation results and error envelopes deliberately omit this private tuple.
 
