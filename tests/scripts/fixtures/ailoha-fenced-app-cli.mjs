@@ -74,7 +74,9 @@ export function runFencedAppCli(args) {
   const completed = {
     ...operation, status: "succeeded", startedAt: "2026-10-10T00:01:01Z", completedAt: "2026-10-10T00:01:02Z",
     ...(args[2] === "set-app-op-fenced" ? { result: {
-      appId, appOpId: receipt.appOpId, mode: receipt.requestedMode, uidScoped: true,
+      appId, appOpId: receipt.appOpId,
+      mode: process.env.AILOHA_TEST_FENCED_EFFECTIVE_MODE ?? receipt.requestedMode,
+      uidScoped: true,
       "x-ailoha-target-host": { targetId, providerId: "synthetic-provider" },
     } } : {}),
   };

@@ -549,6 +549,30 @@ try {
     evidence.cases.push("fenced-android-app-op");
     await close();
   }
+  current = await open("fenced-android-app-op-effective-mismatch");
+  {
+    await current.action("select_device", { deviceId: "opaque/target" });
+    process.env.AILOHA_TEST_FENCED_EFFECTIVE_MODE = "deny";
+    try {
+      const input = {
+        deviceId: "opaque/target", bundleId: "com.example.native",
+        operation: "SYSTEM_ALERT_WINDOW", mode: "ignore",
+      };
+      const work = current.action("set_app_op", input);
+      const rejected = assert.rejects(work, { code: "app_action_readback_mismatch" });
+      const prompt = await promptFor();
+      prompt.answer("approve");
+      await rejected;
+      const recordPath = `${process.env.AILOHA_TEST_CONTEXT_STATE}.fenced`;
+      assert.equal(JSON.parse(readFileSync(recordPath, "utf8")).length, 4);
+      await assert.rejects(current.action("set_app_op", input), { code: "app_action_readback_mismatch" });
+      assert.equal(JSON.parse(readFileSync(recordPath, "utf8")).length, 4);
+      evidence.cases.push("fenced-android-app-op-effective-mismatch");
+    } finally {
+      delete process.env.AILOHA_TEST_FENCED_EFFECTIVE_MODE;
+      await close();
+    }
+  }
   current = await open("fenced-android-app-op-denial");
   {
     await current.action("select_device", { deviceId: "opaque/target" });
@@ -560,7 +584,7 @@ try {
     const prompt = await promptFor();
     prompt.answer("deny");
     await rejected;
-    assert.equal(JSON.parse(readFileSync(`${process.env.AILOHA_TEST_CONTEXT_STATE}.fenced`, "utf8")).length, 3);
+    assert.equal(JSON.parse(readFileSync(`${process.env.AILOHA_TEST_CONTEXT_STATE}.fenced`, "utf8")).length, 4);
     evidence.cases.push("fenced-android-app-op-denial");
     await close();
   }

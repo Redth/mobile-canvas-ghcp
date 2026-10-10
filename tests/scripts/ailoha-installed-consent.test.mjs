@@ -28,7 +28,8 @@ for (const [host, product] of [
         "fenced-uninstall-denial", "fenced-uninstall-deadline", "fenced-uninstall-owner",
         "fenced-uninstall-queued-deadline", "fenced-uninstall-queued-owner",
         "fenced-uninstall-approved", "fenced-uninstall-accepted-nonzero",
-        "fenced-android-app-op", "fenced-android-app-op-denial",
+        "fenced-android-app-op", "fenced-android-app-op-effective-mismatch",
+        "fenced-android-app-op-denial",
       ]);
       assert.equal(evidence.synthetic, true);
       assert.equal(evidence.realDeviceMutation, false);
