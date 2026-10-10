@@ -103,6 +103,11 @@ allows Android app-op results only when every operation reports effective UID
 scope and a legacy-compatible mode; otherwise the result is explicitly
 unsupported. Source-conditional uninstall and Android app-op mutation use
 distinct positively advertised fenced capabilities plus the verified CLI.
+The Mobile producer's Android package inventory reads optional numeric UID
+alongside the APK path using the existing package manager; if UID listing is
+unavailable, the ordinary inventory still works but UID stays null. Missing or
+invalid UID cannot be inferred from the package name or APK path to fabricate
+Android native installation evidence.
 Before a host approval prompt, `target app action-capture` must return one
 v2 private receipt matching the original named ref/epoch/revision,
 literal process owner, host incarnation, provider/native target, installed
