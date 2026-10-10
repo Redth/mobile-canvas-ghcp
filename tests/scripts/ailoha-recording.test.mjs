@@ -1,11 +1,14 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { randomUUID } from "node:crypto";
 import { join } from "node:path";
 import { productModule } from "../ailoha-test-module.mjs";
+import * as sdkDouble from "./fixtures/ailoha-sdk-double.mjs";
 
 const { AilohaRecordingCoordinator } = await import(productModule("lib/ailoha/recording-coordinator.mjs"));
 const { recordingOutputPath } = await import(productModule("lib/ailoha/recording-artifact.mjs"));
+const { createRuntimeMobileBackend } = await import(productModule("lib/ailoha/runtime-backend.mjs"));
 
 const invocation = Object.freeze({
   targetHostId: "host-one", targetId: "target-one", surfaceId: "surface-one", providerId: "provider-one",
@@ -253,6 +256,48 @@ test("an externally finalized recording clears only after its captured output ex
     await assert.rejects(recordingOutputPath(outputFile, "ios"), { code: "recording_output_exists" });
     assert.equal(calls.filter((call) => call.action === "stop").length, 0);
   } finally {
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
+test("a replacement runtime lease retains the original view's recording owner", async () => {
+  await mkdir(join(process.cwd(), ".build"), { recursive: true });
+  const directory = await mkdtemp(join(process.cwd(), ".build", "recording-lease-"));
+  const previousContext = process.env.AILOHA_TEST_CONTEXT_STATE;
+  const recordingState = {};
+  const scope = { sessionId: randomUUID(), viewId: randomUUID() };
+  const outputPath = join(directory, "original.mp4");
+  process.env.AILOHA_TEST_CONTEXT_STATE = join(directory, "context.json");
+  sdkDouble.scenario.recordingEnabled = true;
+  const create = () => createRuntimeMobileBackend({
+    scope, recordingState,
+    runtime: async () => ({
+      sdk: sdkDouble, pin: { version: "synthetic-only", sourceSha: sdkDouble.sourceSha },
+    }),
+  });
+  let first;
+  let replacement;
+  try {
+    first = await create();
+    await first.select("opaque/target");
+    assert.equal((await first.recordingStart("opaque/target", { outputPath })).isRecording, true);
+    const captured = recordingState.coordinator;
+    assert.equal(captured.tracked, true);
+    await first.dispose();
+    replacement = await create();
+    assert.equal(recordingState.coordinator, captured);
+    assert.equal((await replacement.recordingStatus("opaque/target")).outputPath, outputPath);
+    assert.equal((await replacement.recordingStop("opaque/target")).isRecording, false);
+    assert.equal((await readFile(outputPath, "utf8")), "synthetic-mp4-fixture");
+    const commands = (await readFile(`${process.env.AILOHA_TEST_CONTEXT_STATE}.recording-calls`, "utf8")).trim().split("\n");
+    assert.equal(commands.filter((action) => action === "start").length, 1);
+    assert.equal(commands.filter((action) => action === "stop").length, 1);
+  } finally {
+    await replacement?.dispose();
+    await first?.dispose();
+    sdkDouble.scenario.recordingEnabled = false;
+    if (previousContext === undefined) delete process.env.AILOHA_TEST_CONTEXT_STATE;
+    else process.env.AILOHA_TEST_CONTEXT_STATE = previousContext;
     await rm(directory, { recursive: true, force: true });
   }
 });
