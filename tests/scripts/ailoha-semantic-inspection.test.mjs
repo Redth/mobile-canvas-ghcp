@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { join } from "node:path";
 import { test } from "node:test";
 import { fileURLToPath } from "node:url";
+import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { productModule } from "../ailoha-test-module.mjs";
 
 const { createSemanticInspectionController } = await import(productModule("lib/ailoha/semantic-inspection.mjs"));
@@ -86,6 +87,26 @@ test("canonical query uses literal bounded filters and keeps element IDs in thei
     lens: "system", operation: "query", text: "stderr-flood",
   }));
   assert.equal(flood.status, "complete");
+});
+
+test("cleanup failure preserves a canonical primary error and hides private close diagnostics", async () => {
+  current = { ...selection, agentId: "agent-1", runtimeInstanceId: "runtime-1" };
+  const originalClose = Client.prototype.close;
+  Client.prototype.close = async function () {
+    await originalClose.call(this);
+    throw new Error("token=private-cleanup-secret");
+  };
+  try {
+    const view = controller();
+    const primary = await view.request("POST", JSON.stringify({ lens: "app", operation: "query", text: "error" }));
+    assert.equal(primary.error.code, "CanonicalCapabilityUnsupported");
+    assert.doesNotMatch(JSON.stringify(primary.error), /private-cleanup-secret/);
+    const cleanup = await view.request("POST", JSON.stringify({ lens: "app", operation: "status" }));
+    assert.equal(cleanup.error.code, "semantic_mcp_transport_failed");
+    assert.doesNotMatch(JSON.stringify(cleanup.error), /private-cleanup-secret/);
+  } finally {
+    Client.prototype.close = originalClose;
+  }
 });
 
 test("context revision, cancellation and mismatched owner retire read results", async () => {
