@@ -140,7 +140,7 @@ test("canonical owner birth is captured privately with the same snapshot and can
   assert.equal(Object.isFrozen(snapshot.contextOwner), true);
   assert.equal(Object.keys(snapshot).includes("contextOwner"), false);
   assert.equal(Object.hasOwn(structuredClone(snapshot), "contextOwner"), false);
-  assert.equal(snapshot.contextProjection.processStartedAt, document.owner.processStartedAt);
+  assert.equal(JSON.stringify(snapshot).includes('"contextOwner"'), false);
   let changed = 0;
   const unsubscribe = state.store.onChange(() => { changed += 1; });
   state.externalOwnerBirth("2026-10-10T00:36:44.610199+00:00");

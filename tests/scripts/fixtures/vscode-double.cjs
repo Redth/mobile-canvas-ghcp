@@ -28,7 +28,6 @@ function createQuickPick() {
   };
   return picker;
 }
-
 module.exports = {
   testUi,
   env: { clipboard: { async writeText() {} }, remoteName: undefined },

@@ -5,10 +5,10 @@ import { productModule } from "../ailoha-test-module.mjs";
 const { ScopedDestructiveConsent, destructiveConsentResult } = await import(productModule("lib/ailoha/destructive-consent.mjs"));
 const { captureInvocation } = await import(productModule("lib/ailoha/mobile-projection.mjs"));
 
-const invocation = () => captureInvocation({
+const invocation = (platform = "ios") => captureInvocation({
   scope: { sessionId: "consent-session", viewId: "consent-view" }, selectionGeneration: 1,
   device: { targetHostId: "host", targetId: "opaque/target", provider: "provider", nativeIdentity: {
-    platform: "ios", nativeId: "native-target",
+    platform, nativeId: "native-target",
   } },
   context: { contextRef: "ctx-consent", scopeEpoch: "epoch", revision: "3", ownerProcessId: 1234 },
   contextOwner: { processId: 1234, processStartedAt: "2026-10-10T00:00:00.1234567+00:00" },
@@ -50,6 +50,91 @@ test("one private approval retains the original frozen incarnation and cannot be
   assert.throws(() => approval.consume(structuredClone(original)), { code: "consent_capture_mismatch" });
   approval.consume(original);
   assert.throws(() => approval.consume(original), { code: "consent_already_consumed" });
+});
+
+test("uninstall approval binds one native package and rejects substituted app action details", async (t) => {
+  const owner = new AbortController();
+  let request;
+  const authority = new ScopedDestructiveConsent(async (value) => { request = value; return true; }, owner.signal);
+  t.after(() => authority.dispose());
+  const captured = invocation();
+  const appAction = {
+    appId: "app-one", packageId: "com.example.one",
+    receipt: { schema: "synthetic-app-action/v1", proof: "original" },
+  };
+  const approval = authority.begin("uninstall", captured, { appAction });
+  await approval.approved;
+  assert.match(request.title, /com\.example\.one/);
+  assert.match(request.message, /Native package: com\.example\.one/);
+  assert.equal(JSON.stringify(request).includes("appId"), false);
+  assert.equal(Object.isFrozen(request.appAction), true);
+  assert.equal(Object.isFrozen(request.appAction.receipt), true);
+  assert.throws(() => approval.consume(captured, { ...appAction, appId: "app-two" }), {
+    code: "consent_capture_mismatch",
+  });
+  approval.consume(captured, appAction);
+});
+
+test("Android app-op approval names effective UID scope, mode transition and exact native operation", async (t) => {
+  const owner = new AbortController();
+  let request;
+  const authority = new ScopedDestructiveConsent(async (value) => { request = value; return true; }, owner.signal);
+  t.after(() => authority.dispose());
+  const captured = invocation("android");
+  const appAction = {
+    appId: "app-one", packageId: "com.example.one", operation: "SYSTEM_ALERT_WINDOW",
+    currentMode: "deny", requestedMode: "allow", uidScoped: true,
+    receipt: { schema: "synthetic-app-action/v1", proof: "original" },
+  };
+  const approval = authority.begin("app-op", captured, { appAction });
+  await approval.approved;
+  assert.match(request.message, /SYSTEM_ALERT_WINDOW/);
+  assert.match(request.message, /deny \(whole UID scope\)/);
+  assert.match(request.message, /Requested package mode: allow/);
+  assert.match(request.message, /whole-UID mode overrides/);
+  assert.throws(() => approval.consume(captured, { ...appAction, requestedMode: "deny" }), {
+    code: "consent_capture_mismatch",
+  });
+  approval.consume(captured, appAction);
+});
+
+test("app approval rejects incomplete, untrusted, or cross-platform action proof before prompting", (t) => {
+  const owner = new AbortController();
+  let prompts = 0;
+  const authority = new ScopedDestructiveConsent(() => { prompts++; return true; }, owner.signal);
+  t.after(() => authority.dispose());
+  const captured = invocation();
+  for (const appAction of [undefined, { appId: "one" },
+    { appId: "one", packageId: "com.one", receipt: { schema: "synthetic/v1" }, sourcePath: "/private/package" },
+    { appId: "one", packageId: "com.one\nApprove", receipt: { schema: "synthetic/v1" } },
+    { appId: "one", packageId: "a".repeat(256), receipt: { schema: "synthetic/v1" } },
+    { appId: "one", packageId: "com.one", receipt: null }]) {
+    assert.throws(() => authority.begin("uninstall", captured, { appAction }), {
+      code: "consent_app_action_invalid",
+    });
+  }
+  assert.throws(() => authority.begin("app-op", captured, { appAction: {
+    appId: "one", packageId: "com.one", operation: "SYSTEM_ALERT_WINDOW",
+    currentMode: "deny", requestedMode: "allow", uidScoped: false,
+    receipt: { schema: "synthetic/v1" },
+  } }), { code: "consent_app_action_invalid" });
+  assert.equal(prompts, 0);
+});
+
+test("app approval refuses receipts exceeding the native UTF-8 byte budget before prompting", (t) => {
+  const authority = new ScopedDestructiveConsent(() => {
+    throw Error("Oversized app proof reached the human prompt.");
+  }, new AbortController().signal);
+  t.after(() => authority.dispose());
+  const appAction = {
+    appId: "app-one", packageId: "com.example.one",
+    receipt: { schema: "ailoha.target-app-action/v2", version: "é".repeat(33_000) },
+  };
+  assert.ok(JSON.stringify(appAction.receipt).length < 64 * 1024);
+  assert.ok(Buffer.byteLength(JSON.stringify(appAction.receipt), "utf8") > 64 * 1024);
+  assert.throws(() => authority.begin("uninstall", invocation(), { appAction }), {
+    code: "consent_app_action_invalid",
+  });
 });
 
 for (const result of [false, "cancel"]) {

@@ -28,6 +28,8 @@ for (const [host, product] of [
     assert.equal(evidence.retiredDirectTargetReadRejected, true);
     assert.equal(evidence.connectionRefCapturedInternally, true);
     assert.equal(evidence.connectionRefNotSerialized, true);
+    assert.equal(evidence.installedAppRoutes, true);
+    assert.equal(evidence.noUnsupportedAppMutations, true);
     assert.equal(evidence.videoResourcesAfterClose, 0);
     assert.equal(evidence.leaseCountAfterClose, 0);
     assert.equal(evidence.noHostStop, true);

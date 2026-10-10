@@ -9,6 +9,9 @@ if (args[0] === "--fixture-state") {
 }
 if (args[0] === "mcp-serve") {
   await import("./semantic-mcp-server.mjs");
+} else if (args[0] === "target" && args[1] === "app") {
+  const { runFencedAppCli } = await import("./ailoha-fenced-app-cli.mjs");
+  process.exitCode = runFencedAppCli(args);
 } else {
 if (args[0] === "workspace") {
   const { runWorkspaceDouble } = await import("./ailoha-workspace-double.mjs");

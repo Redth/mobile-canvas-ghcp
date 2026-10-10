@@ -1,4 +1,4 @@
-import { readFileSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import { randomUUID } from "node:crypto";
 import { fileURLToPath } from "node:url";
 import { createCatalogModel } from "./ailoha-catalog-creation.mjs";
@@ -6,6 +6,9 @@ import { createCatalogModel } from "./ailoha-catalog-creation.mjs";
 export const scenario = {
   calls: [], leases: new Map(), videos: new Map(), operations: new Map(), status: "running", geometryRevision: 13,
   catalog: null, createdTargets: new Map(), creationGate: null,
+  appResponses: process.env.AILOHA_TEST_APP_RESPONSES === "1",
+  fencedAppResponses: process.env.AILOHA_TEST_FENCED_APP_RESPONSES === "1",
+  platform: process.env.AILOHA_TEST_APP_PLATFORM ?? "ios",
   targets: new Map(), providerId: "synthetic-provider", nativeId: "native-deployment-not-opaque-target",
   connectionRef: {
     schema: "ailoha.target-host.connection/v1", serviceId: "synthetic-service", pid: 12345,
@@ -30,6 +33,11 @@ const captures = [
   { id: "surface.capture", version: 1, features: ["captureTargetScreenshot", "createLiveVideoSession", "getLiveVideoSession", "stopLiveVideoSession"] },
   { id: "surface.input", version: 1, features: ["tapTargetElement", "performTargetGesture"] },
 ];
+const appCapabilities = [
+  { id: "target.apps", version: 1,
+    features: ["listTargetApps", "launchTargetApp", "terminateTargetApp", "uninstallTargetApp"] },
+  { id: "target.app-ops", version: 1, features: ["listTargetAppOps"] },
+];
 const surface = {
   surfaceId, kind: "display", bounds: { x: 0, y: 0, width: 48, height: 32 },
   geometryRevision: initialGeometryRevision, pixelDensity: 2, orientation: "landscape",
@@ -52,17 +60,23 @@ function mergedCapabilities(values) {
   return [...groups.values()];
 }
 function providerRecords() {
+  const fencedFeatures = scenario.fencedAppResponses ? [
+    { id: "target.apps", version: 1, features: ["captureFencedTargetAppAction", "uninstallFencedTargetApp"] },
+    { id: "target.app-ops", version: 1, features: ["updateFencedTargetAppOp"] },
+  ] : [];
+  const features = mergedCapabilities(scenario.appResponses
+    ? [...captures, ...appCapabilities, ...fencedFeatures] : captures);
   return [{
-    providerId: scenario.providerId, name: "Synthetic provider", version: "synthetic", state: "ready", capabilities: captures,
+    providerId: scenario.providerId, name: "Synthetic provider", version: "synthetic", state: "ready", capabilities: features,
   }, ...(scenario.catalog?.providers ?? []).map((provider) => ({
-    ...provider, capabilities: mergedCapabilities([...provider.capabilities, ...captures]),
+    ...provider, capabilities: mergedCapabilities([...provider.capabilities, ...features]),
   }))];
 }
 function target() {
   return {
     targetId, providerId: scenario.providerId, targetTypeId: "opaque/type", name: "Synthetic device",
     status: scenario.status, surfaces: scenario.status === "running" ? [{ ...surface, geometryRevision: scenario.geometryRevision }] : [],
-    nativeIdentity: { platform: "ios", nativeId: scenario.nativeId, isVirtual: true },
+    nativeIdentity: { platform: scenario.platform, nativeId: scenario.nativeId, isVirtual: true },
   };
 }
 function createdTarget(id) {
@@ -79,7 +93,7 @@ export async function getRuntimePin({ expectedVersion }) {
   return Object.freeze({ version: expectedVersion, rid: "synthetic", sourceSha, manifestSha512: "synthetic-only" });
 }
 export async function getVerifiedCliLaunch({ expectedVersion }) {
-  if (scenario.beforeCliLaunch) await scenario.beforeCliLaunch();
+  await scenario.beforeCliLaunch?.();
   return {
     file: process.execPath,
     args: [
@@ -137,7 +151,9 @@ export async function openTargetHostTransport(leaseId) {
       scenario.calls.push({ path, method: options.method ?? "GET", body });
       if (path === "/api/v1/host/status") return reply({
         hostId: "synthetic-host", profile: "ailoha.target-host/v1", version: "synthetic",
-        state: "ready", capabilities: mergedCapabilities([...captures, ...(scenario.catalog?.status.capabilities ?? [])]),
+        state: "ready", capabilities: mergedCapabilities([
+          ...captures, ...(scenario.appResponses ? appCapabilities : []), ...(scenario.catalog?.status.capabilities ?? []),
+        ]),
       });
       if (path === "/api/v1/providers") {
         if (scenario.beforeCatalogRead) await scenario.beforeCatalogRead(path, options);
@@ -191,6 +207,48 @@ export async function openTargetHostTransport(leaseId) {
         ...(scenario.targets.size ? [...scenario.targets.values()] : scenario.deleted ? [] : [target()]),
         ...[...scenario.createdTargets.keys()].map(createdTarget),
       ]);
+      const appRoute = /^\/api\/v1\/targets\/([^/]+)\/(apps|app-ops)(?:\/([^/]+))?(?:\/actions\/(launch|terminate))?(?:\?(.*))?$/.exec(path);
+      if (appRoute && scenario.appResponses) {
+        const appTargetId = decodeURIComponent(appRoute[1]);
+        const appTarget = appTargetId === targetId ? target() : createdTarget(appTargetId);
+        if (!appTarget) throw new Error("Unknown synthetic app target");
+        const app = {
+          appId: "synthetic/app%id", packageId: "com.example.native", state: "running",
+          name: "Synthetic native app", version: "1", buildNumber: "2",
+          kind: "user", processId: 4321, path: "/apps/example.app", dataContainer: "/containers/example",
+        };
+        const appId = appRoute[3] === undefined ? undefined : decodeURIComponent(appRoute[3]);
+        if (appId !== undefined && appId !== app.appId) throw new Error("Unknown synthetic native app");
+        if (appRoute[2] === "apps" && appId === undefined && options.method !== "POST") {
+          if (!["includeSystem=false", "includeSystem=true"].includes(appRoute[5])) {
+            throw new Error("Unexpected synthetic inventory filter");
+          }
+          return reply([app]);
+        }
+        if (appRoute[2] === "apps" && appId && !appRoute[4] && options.method !== "DELETE") return reply(app);
+        if (appRoute[2] === "app-ops" && appId === undefined) {
+          if (appRoute[5] !== `appId=${encodeURIComponent(app.appId)}`) throw new Error("Unexpected synthetic app-op identity");
+          return reply([{ appOpId: "SYSTEM_ALERT_WINDOW", appId: app.appId, mode: "default", uidScoped: true }]);
+        }
+        if (appRoute[4] && options.method === "POST") {
+          if (appRoute[4] === "launch" && body !== "{}") {
+            throw new Error("Unexpected synthetic launch request");
+          }
+          const operationId = `synthetic-app-${scenario.operations.size}`;
+          const kind = appRoute[4] === "launch" ? "launchTargetApp" : "terminateTargetApp";
+          const operation = {
+            operationId, kind, targetId: appTargetId, providerId: appTarget.providerId,
+            status: "queued", destructive: false, createdAt: "2026-10-09T23:00:00Z",
+          };
+          scenario.operations.set(operationId, {
+            ...operation, status: "succeeded", startedAt: "2026-10-09T23:00:01Z",
+            completedAt: "2026-10-09T23:00:02Z",
+            ...(kind === "launchTargetApp" ? { result: { processId: 4321, detail: "com.example.native/.Main" } } : {}),
+          });
+          return reply(operation, 202, `/api/v1/operations/${operationId}`);
+        }
+        throw new Error("Unexpected synthetic app route");
+      }
       const targetRoute = /^\/api\/v1\/targets\/([^/]+)(?:\/(capabilities|surfaces))?$/.exec(path);
       const selectedId = targetRoute ? decodeURIComponent(targetRoute[1]) : undefined;
       const selected = scenario.targets.get(selectedId)
@@ -235,10 +293,21 @@ export async function openTargetHostTransport(leaseId) {
         if (scenario.beforeOperationRead) await scenario.beforeOperationRead(path, options);
         if (scenario.operationUnavailable) return reply({ status: 503, title: "Synthetic operation observation unavailable" }, 503);
         const id = decodeURIComponent(path.split("/").at(-1));
+        const fencedPath = `${process.env.AILOHA_TEST_CONTEXT_STATE}.fenced`;
+        const fenced = scenario.fencedAppResponses && existsSync(fencedPath)
+          ? JSON.parse(readFileSync(fencedPath, "utf8")).find((entry) => entry.operationId === id) : undefined;
+        if (scenario.fencedPollFailureOnce && fenced) {
+          scenario.fencedPollFailureOnce = false;
+          throw new Error("The owned synthetic app operation read failed.");
+        }
         if (id.startsWith("creation/") && scenario.creationPollFailure) {
           throw new Error("Owned synthetic operation read failed before completion.");
         }
         if (id.startsWith("creation/") && scenario.creationGate) await scenario.creationGate.promise;
+        if (scenario.operationUnavailable) {
+          return reply({ status: 503, title: "Synthetic operation observation unavailable" }, 503);
+        }
+        if (fenced) return reply(fenced);
         return reply(scenario.operations.get(id));
       }
       const surfaceRoute = /^\/api\/v1\/targets\/([^/]+)\/surfaces\/([^/]+)\/(.+)$/.exec(path);

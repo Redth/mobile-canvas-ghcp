@@ -10,7 +10,8 @@ const { projectMobileCatalog, captureCreateInput, resolveCreateChoice } = await 
 const { catalogChoiceId, readCatalogChoiceId } = await import(productModule("lib/ailoha/mobile-projection.mjs"));
 const { createAilohaContextStore } = await import(productModule("lib/ailoha/context-adapter.mjs"));
 const { createAilohaMcpDispatcher } = await import(productModule("lib/ailoha/mcp-host.mjs"));
-const { submitOperationReceipt } = await import(productModule("lib/ailoha/operation-receipts.mjs"));
+const { submitOperationReceipt, waitForOperationReceipt } =
+  await import(productModule("lib/ailoha/operation-receipts.mjs"));
 const { creatablePlatforms, createOptions } = await import(productModule("web/create-device-options.js"));
 
 const project = (model) => projectMobileCatalog({ hostId: model.status.hostId, ...model });
@@ -919,6 +920,45 @@ test("pool admission is rechecked after asynchronous catalog validation and cann
   rejected.resolve();
   await assert.rejects(receipt.submitted, { code: "http_error" });
   assert.equal(map.get(key), newer);
+});
+
+test("shared submission receipts retain original ownership for HTTP 408/499 and disposed-client uncertainty", async () => {
+  for (const [code, status] of [["http_error", 408], ["http_error", 499],
+    ["client_disposed", undefined], ["client_disposed", 403], ["invalid_options", 408]]) {
+    const state = new Map();
+    const invocation = Object.freeze({ targetId: "original", providerId: "original-provider" });
+    let submissions = 0;
+    const original = submitOperationReceipt({
+      state, key: "captured", kind: "installTargetApp", invocation, requireCurrent() {},
+      async submit() {
+        submissions += 1;
+        throw new AilohaProtocolError(code, { status });
+      },
+    });
+    await assert.rejects(original.submitted, { code });
+    assert.equal(state.get("captured"), original);
+    assert.equal(original.invocation, invocation);
+    assert.equal(original.uncertain, true);
+    const resumed = submitOperationReceipt({
+      state, key: "captured", kind: "installTargetApp", invocation: { targetId: "replacement" },
+      requireCurrent() { throw Error("The original receipt must win before a fresh owner is checked."); },
+      submit() { submissions += 1; throw Error("Must not repeat the captured POST."); },
+    });
+    assert.equal(resumed, original);
+    await assert.rejects(waitForOperationReceipt({
+      state, key: "captured", receipt: resumed,
+      client: { async waitForOperation() { throw Error("No accepted ID exists for GET."); } },
+      outcome: "app_install",
+    }), { code: "app_install_outcome_uncertain" });
+    assert.equal(submissions, 1);
+  }
+  const state = new Map();
+  const rejected = submitOperationReceipt({
+    state, key: "definitive", invocation: {}, requireCurrent() {},
+    async submit() { throw new AilohaProtocolError("http_error", { status: 403 }); },
+  });
+  await assert.rejects(rejected.submitted, { status: 403 });
+  assert.equal(state.has("definitive"), false);
 });
 
 test("64 staggered creation submissions remain admissible while waiting for acceptance", async (t) => {
