@@ -44,8 +44,8 @@ function returnedBinding(selection) {
   return { ...selection.contextBinding, scope: selection.scope };
 }
 
-const mcpCall = (name) => ({
-  jsonrpc: "2.0", id: randomUUID(), method: "tools/call", params: { name, arguments: {} },
+const mcpCall = (name, input = {}) => ({
+  jsonrpc: "2.0", id: randomUUID(), method: "tools/call", params: { name, arguments: input },
 });
 
 async function checkEmptyContext(selection) {
@@ -274,6 +274,10 @@ try {
   };
   writeFileSync(process.env.AILOHA_TEST_CONTEXT_STATE, JSON.stringify(contextCommands));
   const callsBeforeRetirement = scenario.calls.length;
+  const retiredTarget = await dispatcher.handle(mcpCall("mobile_device_get", { deviceId: "opaque/target" }));
+  assert.equal(retiredTarget.result.isError, true);
+  assert.equal(JSON.parse(retiredTarget.result.content[0].text).code, "view_closed");
+  assert.equal(scenario.calls.length, callsBeforeRetirement);
   const retired = await dispatcher.handle(mcpCall("mobile_device_get_selected"));
   assert.equal(retired.result.isError, true);
   assert.equal(JSON.parse(retired.result.content[0].text).code, "view_closed");
@@ -289,7 +293,7 @@ try {
     videoResourcesAfterClose: scenario.videos.size, operationPolls: scenario.calls.filter((call) => call.path?.startsWith("/api/v1/operations/")).length,
     nativeIdentityPreserved: true, returnedBindingConsumed: true, emptyContextInventory: true,
     externalRetirementRejected: true, readOnlyDiscovery: true, missingPublicPinRejected: true,
-    runtimeLockFailureRejected: true, noHostStop: true, logs,
+    runtimeLockFailureRejected: true, retiredDirectTargetReadRejected: true, noHostStop: true, logs,
   }));
 } finally {
   await dispatcher?.dispose();

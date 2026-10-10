@@ -25,6 +25,7 @@ for (const [host, product] of [
     assert.equal(evidence.readOnlyDiscovery, true);
     assert.equal(evidence.missingPublicPinRejected, true);
     assert.equal(evidence.runtimeLockFailureRejected, true);
+    assert.equal(evidence.retiredDirectTargetReadRejected, true);
     assert.equal(evidence.videoResourcesAfterClose, 0);
     assert.equal(evidence.leaseCountAfterClose, 0);
     assert.equal(evidence.noHostStop, true);
