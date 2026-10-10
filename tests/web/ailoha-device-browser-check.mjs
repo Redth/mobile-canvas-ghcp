@@ -1,5 +1,6 @@
 async (page) => {
-  const { url, evidenceUrl, recording, recordingLostStart } = await page.evaluate(() => window.ailohaBrowserTestOptions);
+  const { url, evidenceUrl, recording, recordingAvailable = recording, recordingLostStart } = await page.evaluate(
+    () => window.ailohaBrowserTestOptions);
   const verify = (condition, message) => {
     if (!condition) throw new Error(message);
   };
@@ -64,10 +65,11 @@ async (page) => {
       recordHidden: document.querySelector("#record-button").hidden,
     };
   });
-  verify(view.painted && view.width === 96 && view.height === 64 && view.createDisabled && view.recordHidden === !recording,
+  verify(view.painted && view.width === 96 && view.height === 64 && view.createDisabled
+    && view.recordHidden === !recordingAvailable,
     "The consumed UI did not paint real WebCodecs frames or gate unsupported controls.");
 
-  if (recording) {
+  if (recordingAvailable) {
     const recordButton = page.locator("#record-button");
     await recordButton.click();
     await page.waitForFunction((lost) =>
@@ -99,10 +101,13 @@ async (page) => {
     && hidden.errors.length === (recordingLostStart ? 1 : 0)
     && (!recordingLostStart || hidden.errors[0].code === "ailoha_cli_failed"),
     "Hiding the real shared renderer did not retire exactly its owned video/lease.");
-  if (recording) verify(hidden.recordingCommands.filter((action) => action === "stop").length === 2
+  if (recordingAvailable) verify(hidden.recordingCommands.filter((action) => action === "stop").length === 2
     && hidden.recordingCommands.filter((action) => action === "recover").length === 2
     && hidden.recordingFiles === 2,
     "Hiding the view did not finalize its captured recording before lease release.");
+  if (recording && !recordingAvailable) verify(hidden.recordingCommands.every((action) => action === "status")
+    && hidden.recordingFiles === 0,
+    "A capture-capable host without verified recovery started recording.");
   await page.evaluate(() => {
     Object.defineProperty(document, "hidden", { configurable: true, value: false });
     document.dispatchEvent(new Event("visibilitychange"));
@@ -122,6 +127,7 @@ async (page) => {
     hidden: { leases: hidden.leases, videoResources: hidden.videoResources },
     resumed: { leases: resumed.leases, videoResources: resumed.videoResources, videoPosts: videoPosts(settled), videoDeletes: videoDeletes(settled) },
     errors: settled.errors,
-    ...(recording ? { recordingStarts: 2, recordingStops: 2, recordingLostStart: Boolean(recordingLostStart) } : {}),
+    ...(recordingAvailable ? { recordingStarts: 2, recordingStops: 2, recordingLostStart: Boolean(recordingLostStart) }
+      : recording ? { recordingStarts: 0, recordingStops: 0, recordingAvailable: false } : {}),
   };
 }

@@ -36,6 +36,7 @@ for (const [host, product] of [
     assert.deepEqual(evidence.recordingCommands.filter((action) => action === "recover"),
       ["recover", "recover", "recover", "recover", "recover", "recover"]);
     assert.equal(evidence.recordingFinalizedOnClose, true);
+    assert.equal(evidence.recordingWithoutRecoveryRejected, true);
     assert.equal(evidence.creationRecords[0].platform, "ios");
     assert.equal(evidence.creationRecords[1].platform, "android");
     assert.equal(evidence.creationRecords.every((record) => record.state === "booted" && record.nativeId !== record.id), true);

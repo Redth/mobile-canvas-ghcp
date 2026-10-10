@@ -118,6 +118,7 @@ function fixture(options = {}) {
     confirmDestructive: options.confirmDestructive,
     saveScreenshot: options.saveScreenshot,
     recording: options.recording,
+    recordingAvailable: options.recordingAvailable,
     finalizeRecordings: options.finalizeRecordings,
     operationState: options.operationState,
   });
@@ -230,6 +231,24 @@ test("shared recording API and action identifiers preserve legacy outputs and ca
   assert.ok(state.calls.findIndex((call) => call[0] === "client-dispose")
     > state.calls.findIndex((call) => call[0] === "release-end"));
   assert.equal(state.calls.some((call) => call[0] === "stop"), false);
+});
+
+test("unavailable recovery hides recording despite capture support and rejects starts", async () => {
+  let starts = 0;
+  const state = fixture({
+    recordingAvailable: false,
+    recording: {
+      async start() { starts++; },
+      async status() { return { deviceId: "one", isRecording: false }; },
+    },
+  });
+  state.capabilities.push({ id: "surface.capture", version: 1,
+    features: ["startTargetRecording", "getTargetRecording", "stopTargetRecording"] });
+  await state.backend.select("one");
+  assert.equal((await state.backend.getDevice("one")).capabilities.recording, false);
+  await assert.rejects(state.backend.recordingStart("one"), { code: "capability_not_supported" });
+  assert.equal(starts, 0);
+  await state.backend.dispose();
 });
 
 test("recording finalization failure prevents lease release and retry stays on original target", async () => {

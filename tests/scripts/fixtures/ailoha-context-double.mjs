@@ -5,6 +5,20 @@ import { isAbsolute } from "node:path";
 const args = process.argv.slice(2);
 const path = process.env.AILOHA_TEST_CONTEXT_STATE;
 if (!path) throw new Error("The synthetic CLI is only available in an isolated test.");
+if (args[0] === "commands" && args[1] === "--json") {
+  const mode = process.env.AILOHA_TEST_RECOVERY_COMMANDS;
+  if (mode === "fail") throw new Error("Synthetic command discovery failed.");
+  if (mode === "malformed") process.stdout.write('{"commands":null}');
+  else {
+    const descriptors = ["start", "status", "stop", ...(mode === "missing" ? [] : ["recover"])]
+      .map((action) => ({
+        command: `recording ${action}`, description: `Synthetic recording ${action}`,
+        mutating: action !== "status",
+      }));
+    process.stdout.write(JSON.stringify(descriptors));
+  }
+  process.exit(0);
+}
 let contexts;
 try { contexts = JSON.parse(readFileSync(path, "utf8")); }
 catch (error) { if (error.code !== "ENOENT") throw error; contexts = []; }

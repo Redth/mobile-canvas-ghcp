@@ -9,7 +9,7 @@ import * as sdkDouble from "./fixtures/ailoha-sdk-double.mjs";
 const { AilohaRecordingCoordinator } = await import(productModule("lib/ailoha/recording-coordinator.mjs"));
 const { recordingOutputPath } = await import(productModule("lib/ailoha/recording-artifact.mjs"));
 const { createRuntimeMobileBackend } = await import(productModule("lib/ailoha/runtime-backend.mjs"));
-const { createVerifiedAilohaCli } = await import(productModule("lib/ailoha/runtime-sdk.mjs"));
+const { createVerifiedAilohaCli, hasVerifiedRecordingRecovery } = await import(productModule("lib/ailoha/runtime-sdk.mjs"));
 
 const invocation = Object.freeze({
   targetHostId: "host-one", targetId: "target-one", surfaceId: "surface-one", providerId: "provider-one",
@@ -708,8 +708,12 @@ test("a replacement runtime lease retains the original view's recording owner", 
     const captured = recordingState.coordinator;
     assert.equal(captured.tracked, true);
     await first.dispose();
+    process.env.AILOHA_TEST_RECOVERY_COMMANDS = "missing";
     replacement = await create();
     assert.equal(recordingState.coordinator, captured);
+    assert.equal((await replacement.getDevice("opaque/target")).capabilities.recording, false);
+    await assert.rejects(replacement.recordingStart("opaque/target", { outputPath: join(directory, "new.mp4") }),
+      { code: "capability_not_supported" });
     assert.equal((await replacement.recordingStatus("opaque/target")).outputPath, outputPath);
     assert.equal((await replacement.recordingStop("opaque/target")).isRecording, false);
     assert.equal((await readFile(outputPath, "utf8")), "synthetic-mp4-fixture");
@@ -720,9 +724,70 @@ test("a replacement runtime lease retains the original view's recording owner", 
     await replacement?.dispose();
     await first?.dispose();
     sdkDouble.scenario.recordingEnabled = false;
+    delete process.env.AILOHA_TEST_RECOVERY_COMMANDS;
     if (previousContext === undefined) delete process.env.AILOHA_TEST_CONTEXT_STATE;
     else process.env.AILOHA_TEST_CONTEXT_STATE = previousContext;
     await rm(directory, { recursive: true, force: true });
+  }
+});
+
+test("verified offline command discovery gates new recording without touching the target", async () => {
+  await mkdir(join(process.cwd(), ".build"), { recursive: true });
+  const directory = await mkdtemp(join(process.cwd(), ".build", "recording-commands-"));
+  const previousContext = process.env.AILOHA_TEST_CONTEXT_STATE;
+  process.env.AILOHA_TEST_CONTEXT_STATE = join(directory, "context.json");
+  sdkDouble.scenario.recordingEnabled = true;
+  const scope = { sessionId: randomUUID(), viewId: randomUUID() };
+  const create = () => createRuntimeMobileBackend({
+    scope, recordingState: {},
+    runtime: async () => ({
+      sdk: sdkDouble, pin: { version: "synthetic-only", sourceSha: sdkDouble.sourceSha },
+    }),
+  });
+  let backend;
+  try {
+    process.env.AILOHA_TEST_RECOVERY_COMMANDS = "missing";
+    backend = await create();
+    await backend.select("opaque/target");
+    assert.equal((await backend.getDevice("opaque/target")).capabilities.recording, false);
+    const blocked = await backend.request("/api/v1/devices/opaque%2Ftarget/recording/start", {
+      method: "POST", body: JSON.stringify({ outputPath: join(directory, "blocked.mp4") }),
+    });
+    assert.equal(blocked.status, 501);
+    assert.equal((await blocked.json()).code, "capability_not_supported");
+    assert.equal((await backend.recordingStatus("opaque/target")).isRecording, false);
+    assert.deepEqual((await readFile(`${process.env.AILOHA_TEST_CONTEXT_STATE}.recording-calls`, "utf8")).trim().split("\n"),
+      ["status"]);
+    await backend.dispose();
+    backend = null;
+    for (const mode of ["malformed", "fail"]) {
+      process.env.AILOHA_TEST_RECOVERY_COMMANDS = mode;
+      await assert.rejects(create(), { code: mode === "malformed" ? "ailoha_commands_invalid" : "ailoha_cli_failed" });
+    }
+  } finally {
+    await backend?.dispose();
+    sdkDouble.scenario.recordingEnabled = false;
+    delete process.env.AILOHA_TEST_RECOVERY_COMMANDS;
+    if (previousContext === undefined) delete process.env.AILOHA_TEST_CONTEXT_STATE;
+    else process.env.AILOHA_TEST_CONTEXT_STATE = previousContext;
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
+test("recording recovery requires one honest bounded command descriptor", async () => {
+  const descriptors = [
+    { command: "recording start", description: "Start", mutating: true },
+    { command: "recording recover", description: "Download", mutating: true },
+  ];
+  const probe = (value) => hasVerifiedRecordingRecovery(async (args) => {
+    assert.deepEqual(args, ["commands", "--json"]);
+    return typeof value === "string" ? value : JSON.stringify(value);
+  });
+  assert.equal(await probe(descriptors), true);
+  assert.equal(await probe(descriptors.slice(0, 1)), false);
+  for (const invalid of [[], {}, "not-json", [{ command: "recording recover", mutating: true }],
+    [{ ...descriptors[1], mutating: false }], [...descriptors, descriptors[1]], " ".repeat(512 * 1024 + 1)]) {
+    await assert.rejects(probe(invalid), { code: "ailoha_commands_invalid" });
   }
 });
 

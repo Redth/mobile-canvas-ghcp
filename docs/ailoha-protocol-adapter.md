@@ -377,7 +377,16 @@ automatically create a replacement on close/reopen.
 Recording preserves the Mobile Canvas `recording/start`, `recording` status and
 `recording/stop` API paths and the three MCP tool identifiers/output fields.
 Only a booted virtual iOS simulator or Android emulator whose exact target type
-and surface advertise start/get/stop recording is enabled. The verified Ailoha
+and surface advertise start/get/stop recording is eligible. Recording is enabled
+only if the pinned, verified CLI additionally advertises exactly one
+`recording recover` entry marked `mutating: true` in its bounded offline
+`commands --json` metadata. Missing support disables new recording and its
+capability projection (including when a first target-only SDK advertises capture);
+invalid or unreadable metadata is an explicit error, not a silent fallback.
+The renderer can still read canonical recording status for its selected device;
+the missing recovery capability never authorizes a new start.
+An already-owned recording remains finalizable through its captured coordinator
+even if a replacement backend cannot advertise new recording. The verified Ailoha
 CLI's scoped recording coordinator owns cross-process acceptance markers,
 operation reconciliation, stop and bounded artifact download; Mobile Canvas
 does not implement provider recording or forward a credential to the renderer.

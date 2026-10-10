@@ -22,7 +22,8 @@ process.env.MOBILE_CANVAS_BACKEND = "ailoha";
 const scope = { sessionId: `live-test-session-${process.pid}`, viewId: `${host}-view` };
 const { createAilohaVideoReceiver } = await import(pathToFileURL(join(root, "web", "ailoha-video-receiver.js")).href);
 const { createAilohaMcpDispatcher } = await import(pathToFileURL(join(root, "lib", "ailoha", "mcp-host.mjs")).href);
-const { createRuntimeCanvasHost, getRuntimeContextBinding } = await import(pathToFileURL(join(root, "lib", "ailoha", "runtime-backend.mjs")).href);
+const { createRuntimeCanvasHost, createRuntimeMobileBackend, getRuntimeContextBinding } = await import(
+  pathToFileURL(join(root, "lib", "ailoha", "runtime-backend.mjs")).href);
 let release;
 let receiver;
 let dispatcher;
@@ -451,6 +452,35 @@ try {
   assert.equal(recordingCommands.filter((command) => command === "start").length, 4);
   assert.equal(recordingCommands.filter((command) => command === "stop").length, 4);
   assert.equal(recordingCommands.filter((command) => command === "recover").length, 6);
+  process.env.AILOHA_TEST_RECOVERY_COMMANDS = "missing";
+  let withoutRecovery;
+  try {
+    withoutRecovery = await createRuntimeMobileBackend({
+      scope: { sessionId: scope.sessionId, viewId: `${scope.viewId}-without-recovery` },
+    });
+    await withoutRecovery.select("opaque/target");
+    assert.equal((await withoutRecovery.getDevice("opaque/target")).capabilities.recording, false);
+    const blocked = await withoutRecovery.request("/api/v1/devices/opaque%2Ftarget/recording/start", {
+      method: "POST", body: JSON.stringify({ outputPath: join(scratch, "unsupported.mp4") }),
+    });
+    assert.equal(blocked.status, 501);
+    assert.equal((await blocked.json()).code, "capability_not_supported");
+    assert.equal(readFileSync(`${process.env.AILOHA_TEST_CONTEXT_STATE}.recording-calls`, "utf8").trim().split("\n").length,
+      recordingCommands.length);
+  } finally {
+    await withoutRecovery?.dispose();
+    delete process.env.AILOHA_TEST_RECOVERY_COMMANDS;
+  }
+  for (const mode of ["malformed", "fail"]) {
+    process.env.AILOHA_TEST_RECOVERY_COMMANDS = mode;
+    try {
+      await assert.rejects(createRuntimeMobileBackend({
+        scope: { sessionId: scope.sessionId, viewId: `${scope.viewId}-${mode}-recovery` },
+      }), { code: mode === "malformed" ? "ailoha_commands_invalid" : "ailoha_cli_failed" });
+    } finally {
+      delete process.env.AILOHA_TEST_RECOVERY_COMMANDS;
+    }
+  }
   scenario.recordingEnabled = false;
   contextCommands[0] = {
     ...contextCommands[0], state: "detached", selection: null, observed: null,
@@ -483,7 +513,7 @@ try {
       selectionApplied: record.selectionApplied, operationId: record.acceptedOperation.operationId,
     })),
     createPosts: creationCalls.length, noSeparateBootPost: true,
-    recordingCommands, recordingFinalizedOnClose: true,
+    recordingCommands, recordingFinalizedOnClose: true, recordingWithoutRecoveryRejected: true,
   }));
 } finally {
   await dispatcher?.dispose();
