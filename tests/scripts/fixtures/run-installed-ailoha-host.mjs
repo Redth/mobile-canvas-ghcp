@@ -8,6 +8,7 @@ import { WebSocket } from "ws";
 import { enableCatalogCreation, scenario, sourceSha } from "./ailoha-sdk-double.mjs";
 import { catalogIds } from "./ailoha-catalog-creation.mjs";
 import { stageEvents } from "./ailoha-native-stage-double.mjs";
+import { guardedEvents } from "./ailoha-native-file-double.mjs";
 import { copilotUi } from "./copilot-sdk-double.mjs";
 
 const root = resolve(process.argv[2]);
@@ -21,6 +22,7 @@ try { previousPin = readFileSync(pinPath); }
 catch (error) { if (error.code !== "ENOENT") throw error; }
 process.env.AILOHA_TEST_CONTEXT_STATE = join(scratch, "context.json");
 process.env.AILOHA_TEST_STAGE_JOURNAL = join(scratch, "native-stage.jsonl");
+process.env.AILOHA_TEST_GUARDED_JOURNAL = join(scratch, "native-file.jsonl");
 process.env.MOBILE_CANVAS_BACKEND = "ailoha";
 const scope = { sessionId: `live-test-session-${process.pid}`, viewId: `${host}-view` };
 process.env.AILOHA_TEST_SESSION_ID = scope.sessionId;
@@ -85,8 +87,6 @@ async function checkEmptyContext(selection) {
     const callsBeforeGates = scenario.calls.length;
     for (const [name, input] of Object.entries({
       mobile_device_file_pull: { deviceId: "opaque/target", path: "empty", output: "/owned/output" },
-      mobile_device_file_delete: { deviceId: "opaque/target", path: "/directory", recursive: false },
-      mobile_device_file_mkdir: { deviceId: "opaque/target", path: "/directory" },
     })) {
       const result = await emptyDispatcher.handle(mcpCall(name, input));
       assert.deepEqual(JSON.parse(result.result.content[0].text), {
@@ -104,8 +104,6 @@ async function checkArtifactApi(api) {
   const callsBefore = scenario.calls.length;
   for (const [name, method, suffix] of [
     ["mobile_device_file_pull", "POST", "/files/pull"],
-    ["mobile_device_file_delete", "POST", "/files/delete"],
-    ["mobile_device_file_mkdir", "POST", "/files/mkdir"],
   ]) {
     const response = await api(`/api/v1/devices/opaque%2Ftarget${suffix}`, method,
       method === "POST" ? { path: "/directory" } : undefined);
@@ -115,6 +113,66 @@ async function checkArtifactApi(api) {
     });
   }
   assert.equal(scenario.calls.length, callsBefore);
+}
+
+async function checkGuardedFiles(api, selection, { answerConsent }) {
+  scenario.artifactGuarded = true;
+  const target = "/api/v1/devices/opaque%2Ftarget";
+  const before = guardedEvents().length;
+  const mkdir = await api(`${target}/files/mkdir`, "POST", { path: "/Documents/owned" });
+  const mkdirBody = await mkdir.json();
+  assert.equal(mkdir.status, 200, JSON.stringify(mkdirBody));
+  assert.deepEqual(mkdirBody, {
+    schemaVersion: "1.0", success: true, deviceId: "opaque/target", platform: "ios",
+    path: "/Documents/owned", operation: "mkdir",
+  });
+  const deletion = api(`${target}/files/delete`, "POST", { path: "/Documents/owned", recursive: true });
+  await answerConsent();
+  const removed = await deletion;
+  assert.equal(removed.status, 200);
+  assert.equal((await removed.json()).path, "/Documents/owned");
+  assert.deepEqual(guardedEvents().slice(before).map((event) => event.action),
+    ["prepare", "continue", "recover", "prepare", "continue", "recover"]);
+
+  const dispatcher = await createAilohaMcpDispatcher({
+    version: "synthetic-only", binding: returnedBinding(selection),
+    async requestElicitation() { return { action: "accept", content: { decision: "approve" } }; },
+  });
+  try {
+    await dispatcher.handle({
+      jsonrpc: "2.0", id: 1, method: "initialize",
+      params: { protocolVersion: "2025-11-25", capabilities: { elicitation: { form: {} } } },
+    });
+    const created = await dispatcher.handle(mcpCall("mobile_device_file_mkdir",
+      { deviceId: "opaque/target", path: "/Documents/from-mcp" }));
+    assert.equal(created.result.isError, undefined);
+    assert.equal(created.result.structuredContent.path, "/Documents/from-mcp");
+    const deleted = await dispatcher.handle(mcpCall("mobile_device_file_delete",
+      { deviceId: "opaque/target", path: "/Documents/from-mcp", recursive: false }));
+    assert.equal(deleted.result.isError, undefined);
+    assert.equal(deleted.result.structuredContent.path, "/Documents/from-mcp");
+  } finally {
+    await dispatcher.dispose();
+  }
+  assert.deepEqual(guardedEvents().slice(before).map((event) => event.action),
+    Array(4).fill(["prepare", "continue", "recover"]).flat());
+  const noElicitation = await createAilohaMcpDispatcher({
+    version: "synthetic-only", binding: returnedBinding(selection),
+  });
+  try {
+    await noElicitation.handle({
+      jsonrpc: "2.0", id: 2, method: "initialize",
+      params: { protocolVersion: "2025-11-25", capabilities: {} },
+    });
+    const blocked = await noElicitation.handle(mcpCall("mobile_device_file_delete",
+      { deviceId: "opaque/target", path: "/Documents/without-consent" }));
+    assert.equal(blocked.result.isError, true);
+    assert.equal(JSON.parse(blocked.result.content[0].text).code, "consent_not_supported");
+  } finally {
+    await noElicitation.dispose();
+  }
+  assert.deepEqual(guardedEvents().slice(before + 12), []);
+  return { mutations: 4, submissions: 4, readbacks: 4 };
 }
 
 async function checkArtifactReads(api, selection) {
@@ -407,6 +465,19 @@ try {
           { action: "accept", content: { decision: "approve" } }), true);
       },
     });
+    var guardedEvidence = await checkGuardedFiles((path, method, body) => fetch(new URL(path, url), {
+      method, headers: { Cookie: cookie, ...(method === "POST" ? { "Content-Type": "application/json" } : {}) },
+      ...(method === "POST" ? { body: JSON.stringify(body) } : {}),
+    }), selected, {
+      async answerConsent() {
+        const count = copilotUi.prompts.length;
+        await waitFor(() => copilotUi.prompts.length > count);
+        const prompt = copilotUi.prompts.at(-1);
+        assert.match(prompt.message, /Documents\/owned/);
+        assert.equal(copilotUi.respond(prompt.requestId,
+          { action: "accept", content: { decision: "approve" } }), true);
+      },
+    });
     const socketUrl = new URL("/ws/video?deviceId=opaque%2Ftarget", url);
     socketUrl.protocol = "ws:";
     const socket = new WebSocket(socketUrl, "ailoha.video.v1", { headers: { Cookie: cookie } });
@@ -509,6 +580,15 @@ try {
         await waitFor(() => vscode.testUi.pickers.length > count);
         const picker = vscode.testUi.pickers.at(-1);
         assert.match(picker.items[1].detail, /Documents\/empty\.txt/);
+        assert.equal(picker.answer(true), true);
+      },
+    });
+    guardedEvidence = await checkGuardedFiles(api, selected.selection, {
+      async answerConsent() {
+        const count = vscode.testUi.pickers.length;
+        await waitFor(() => vscode.testUi.pickers.length > count);
+        const picker = vscode.testUi.pickers.at(-1);
+        assert.match(picker.items[1].detail, /Documents\/owned/);
         assert.equal(picker.answer(true), true);
       },
     });
@@ -649,7 +729,7 @@ try {
       selectionApplied: record.selectionApplied, operationId: record.acceptedOperation.operationId,
     })),
     createPosts: creationCalls.length, noSeparateBootPost: true,
-    stagedEvidence,
+    stagedEvidence, guardedEvidence,
     connectionRefCapturedInternally: true, connectionRefNotSerialized: true,
   }));
 } finally {
@@ -661,6 +741,7 @@ try {
   rmSync(join(scratch, "screen.png"), { force: true });
   rmSync(join(scratch, "context.json"), { force: true });
   rmSync(join(scratch, "native-stage.jsonl"), { force: true });
+  rmSync(join(scratch, "native-file.jsonl"), { force: true });
   for (const name of ["empty.txt", "contact.vcf", "image.png"]) rmSync(join(scratch, name), { force: true });
   rmSync(scratch, { recursive: true, force: true });
 }

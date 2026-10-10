@@ -80,7 +80,7 @@ test("unsupported/invalid/cross-scope calls are positive failures before any run
   assert.equal(backendCalls, 0);
 });
 
-test("three direct mutations remain gated while staged and read identities retain installed MCP schemas", async (t) => {
+test("pull remains gated while guarded mkdir and delete retain installed MCP schemas", async (t) => {
   let backendCalls = 0;
   const dispatcher = await createAilohaMcpDispatcher({
     binding, version: "test", createBackend() {
@@ -90,6 +90,9 @@ test("three direct mutations remain gated while staged and read identities retai
           return { schemaVersion: "1.0", deviceId: input.deviceId, operation: name };
         },
         async stageArtifact(name, input) {
+          return { schemaVersion: "1.0", deviceId: input.deviceId, operation: name };
+        },
+        async guardedFile(name, input) {
           return { schemaVersion: "1.0", deviceId: input.deviceId, operation: name };
         },
         async dispose() {},
@@ -111,9 +114,9 @@ test("three direct mutations remain gated while staged and read identities retai
     mobile_device_crash_report: { deviceId: "target", crashId: "report-id" },
   };
   for (const [name, input] of Object.entries(inputs)) {
-    const readable = ["mobile_device_file_list", "mobile_device_log",
-      "mobile_device_crashes", "mobile_device_crash_report", "mobile_device_media_add"].includes(name);
-    const gated = ["mobile_device_file_pull", "mobile_device_file_delete", "mobile_device_file_mkdir"].includes(name);
+    const readable = ["mobile_device_file_list", "mobile_device_log", "mobile_device_crashes",
+      "mobile_device_crash_report", "mobile_device_media_add", "mobile_device_file_mkdir"].includes(name);
+    const gated = name === "mobile_device_file_pull";
     const tool = tools.find((entry) => entry.name === name);
     assert.ok(tool);
     assert.equal(tool.description.includes(ARTIFACT_FEATURE_GATES[name]), gated);
@@ -123,7 +126,7 @@ test("three direct mutations remain gated while staged and read identities retai
     assert.equal(result.result.isError === true, !readable, name);
     assert.deepEqual(JSON.parse(result.result.content[0].text), readable
       ? { schemaVersion: "1.0", deviceId: input.deviceId, operation: name }
-      : name === "mobile_device_file_push"
+      : ["mobile_device_file_push", "mobile_device_file_delete"].includes(name)
         ? {
           code: "consent_not_supported",
           message: "This MCP client cannot request genuine captured form approval; confirm=true is not authorization.",

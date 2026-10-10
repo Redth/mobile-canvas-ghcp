@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { createHash } from "node:crypto";
-import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { basename, join, relative, resolve } from "node:path";
 import { productModule } from "../ailoha-test-module.mjs";
 const { AilohaMobileBackend } = await import(productModule("lib/ailoha/mobile-backend.mjs"));
@@ -239,6 +239,383 @@ function stagedCleanup(receipt) {
     operation: last.operation, cleanupArtifacts,
   });
 }
+
+function guardedFixture(kind, path, owner, options = {}) {
+  const date = "2026-10-10T00:00:00Z";
+  const ticks = (value) => (BigInt(Date.parse(value)) + 62135596800000n) * 10000n;
+  const connection = owner.connectionRef;
+  return {
+    kind, path, targetHostId: "host", attemptId: "0123456789abcdef0123456789abcdef",
+    owner: {
+      hostInstanceId: `host-${stageHash(`${connection.serviceId}\0${connection.pid}\0${ticks(connection.startedAt)}\0${ticks(connection.processStartedAt)}`)}`,
+      targetId: "one", providerId: "provider",
+      registrationEpoch: "01234567-89ab-cdef-0123-456789abcdef",
+      nativeIdentity: { platform: "ios", nativeId: "real-native-one", isVirtual: true },
+    },
+    contextRef: "ctx-canonical-snapshot", scopeEpoch: "original-epoch", revision: "1",
+    ownerProcessId: 1234, ownerStartedAt: date,
+    appId: null, recursive: kind === "delete" ? options.recursive ?? false : false,
+    destinationPath: kind === "export" ? options.destinationPath : null,
+    overwrite: kind === "export", maximumBytes: 512 * 1024 * 1024,
+  };
+}
+
+function guardedOperation(kind, receipt, status = "queued") {
+  return {
+    operationId: "guarded-operation", requestId: receipt.attemptId,
+    targetId: "one", providerId: "provider",
+    kind: { export: "exportTargetFile", delete: "deleteTargetFileWithOptions",
+      mkdir: "createTargetDirectory" }[kind],
+    status, destructive: kind === "delete", createdAt: "2026-10-10T00:00:00Z",
+  };
+}
+
+test("local guarded delete uses original scoped consent and backend-confirmed mutation path", async (t) => {
+  let prompts = 0;
+  let receipt;
+  const actions = [];
+  const state = canonicalFixture({
+    confirmDestructive: async (request) => {
+      prompts += 1;
+      assert.equal(request.action, "file_delete");
+      assert.match(request.message, /app:\/\/com.example.app\/Documents\/fixture/);
+      return true;
+    },
+    client: {
+      async getTargetCapabilities() {
+        return [{ id: "target.files", version: 1, features: ["deleteTargetFileWithOptions"] },
+          { id: "target.apps", version: 1, features: ["listTargetApps"] }];
+      },
+      async listTargetApps() {
+        return [{ appId: "com.example.app", packageId: "com.example.app",
+          "x-ailoha-target-host": { targetId: "one", providerId: "provider" } }];
+      },
+    },
+    async runCli(args) {
+      const action = args[args.indexOf("native-file") + 1];
+      actions.push(action);
+      if (action === "prepare") {
+        assert.equal(args[args.indexOf("--path") + 1], "app://com.example.app/Documents/fixture");
+        assert.ok(args.includes("--recursive"));
+        receipt = guardedFixture("delete", "app://com.example.app/Documents/fixture", state.owner,
+          { recursive: true });
+        return JSON.stringify({ status: "prepared", receipt });
+      }
+      assert.equal(args[args.indexOf("--guarded") + 1], JSON.stringify(receipt));
+      const operation = guardedOperation("delete", receipt, action === "continue" ? "queued" : "succeeded");
+      return JSON.stringify({ status: action === "continue" ? "accepted" : "succeeded",
+        receipt, operationId: operation.operationId, operation,
+        ...(action === "recover" ? { mutation: { path: "Documents/fixture" } } : {}) });
+    },
+  });
+  t.after(() => state.backend.dispose());
+  const result = await state.backend.guardedFile("mobile_device_file_delete",
+    { deviceId: "one", path: "Documents/fixture", bundleId: "com.example.app", recursive: true });
+  assert.equal(result.path, "Documents/fixture");
+  assert.equal(result.operation, "delete");
+  assert.equal(prompts, 1);
+  assert.deepEqual(actions, ["prepare", "continue", "recover"]);
+});
+
+test("local guarded mkdir retains accepted original receipt after failed GET and recovers without a second submission", async (t) => {
+  let receipt;
+  let recovery = 0;
+  const actions = [];
+  const state = canonicalFixture({
+    client: {
+      async getTargetCapabilities() {
+        return [{ id: "target.files", version: 1, features: ["createTargetDirectory"] }];
+      },
+    },
+    async runCli(args) {
+      const action = args[args.indexOf("native-file") + 1];
+      actions.push(action);
+      if (action === "prepare") {
+        receipt = guardedFixture("mkdir", "/Documents/new", state.owner);
+        return JSON.stringify({ status: "prepared", receipt });
+      }
+      const operation = guardedOperation("mkdir", receipt, action === "continue" ? "queued" : "succeeded");
+      if (action === "recover" && ++recovery === 1) {
+        throw Object.assign(new Error("Original GET was unavailable"), { code: "owned_get_failed" });
+      }
+      return JSON.stringify({ status: action === "continue" ? "accepted" : "succeeded",
+        receipt, operationId: operation.operationId, operation,
+        ...(action === "recover" ? { mutation: { path: "/Documents/new" } } : {}) });
+    },
+  });
+  t.after(() => state.backend.dispose());
+  const input = { deviceId: "one", path: "/Documents/new" };
+  await assert.rejects(state.backend.guardedFile("mobile_device_file_mkdir", input), { code: "owned_get_failed" });
+  const result = await state.backend.guardedFile("mobile_device_file_mkdir", input);
+  assert.equal(result.path, "/Documents/new");
+  assert.equal(result.operation, "mkdir");
+  assert.deepEqual(actions, ["prepare", "continue", "recover", "recover"]);
+});
+
+test("guarded readback rejects another operation ID, retaining the original GET-only recovery", async (t) => {
+  let receipt;
+  let wrongReadback = true;
+  const actions = [];
+  const state = canonicalFixture({
+    client: {
+      async getTargetCapabilities() {
+        return [{ id: "target.files", version: 1, features: ["createTargetDirectory"] }];
+      },
+    },
+    async runCli(args) {
+      const action = args[args.indexOf("native-file") + 1];
+      actions.push(action);
+      if (action === "prepare") {
+        receipt = guardedFixture("mkdir", "/Documents/owned", state.owner);
+        return JSON.stringify({ status: "prepared", receipt });
+      }
+      const operation = guardedOperation("mkdir", receipt, action === "continue" ? "queued" : "succeeded");
+      if (action === "recover" && wrongReadback) operation.operationId = "another-operation";
+      return JSON.stringify({ status: action === "continue" ? "accepted" : "succeeded",
+        receipt, operationId: operation.operationId, operation,
+        ...(action === "recover" ? { mutation: { path: "/Documents/owned" } } : {}) });
+    },
+  });
+  t.after(() => state.backend.dispose());
+  const input = { deviceId: "one", path: "/Documents/owned" };
+  await assert.rejects(state.backend.guardedFile("mobile_device_file_mkdir", input),
+    { code: "guarded_file_operation_mismatch" });
+  wrongReadback = false;
+  assert.equal((await state.backend.guardedFile("mobile_device_file_mkdir", input)).path, input.path);
+  assert.deepEqual(actions, ["prepare", "continue", "recover", "recover"]);
+});
+
+test("guarded input and original revision are captured before asynchronous capability lookup", async (t) => {
+  const input = { deviceId: "one", path: "/Documents/original" };
+  let prepared = false;
+  const state = canonicalFixture({
+    client: {
+      async getTargetCapabilities() {
+        input.path = "/Documents/replacement";
+        return [{ id: "target.files", version: 1, features: ["createTargetDirectory"] }];
+      },
+    },
+    async runCli(args) {
+      prepared = true;
+      assert.equal(args[args.indexOf("--path") + 1], "/Documents/original");
+      assert.equal(args[args.indexOf("--context-revision") + 1], "1");
+      throw Object.assign(new Error("Owned probe stops before admission."), { code: "probe_stopped" });
+    },
+  });
+  t.after(() => state.backend.dispose());
+  await assert.rejects(state.backend.guardedFile("mobile_device_file_mkdir", input), { code: "probe_stopped" });
+  assert.equal(prepared, true);
+  await assert.rejects(state.backend.guardedFile("mobile_device_file_mkdir",
+    { deviceId: "one", path: "/Documents/original" }), { code: "guarded_file_prepare_unknown" });
+});
+
+test("guarded prepare stops when its original view revision changes before device admission", async (t) => {
+  let prepared = false;
+  let state;
+  state = canonicalFixture({
+    client: {
+      async getTargetCapabilities() {
+        await state.advanceSelection();
+        return [{ id: "target.files", version: 1, features: ["createTargetDirectory"] }];
+      },
+    },
+    async runCli() { prepared = true; throw new Error("stale view admitted device IO"); },
+  });
+  t.after(() => state.backend.dispose());
+  await assert.rejects(state.backend.guardedFile("mobile_device_file_mkdir",
+    { deviceId: "one", path: "/Documents/original" }), { code: "context_snapshot_superseded" });
+  assert.equal(prepared, false);
+});
+
+test("guarded delete requires scoped approval and never admits a denied mutation", async (t) => {
+  let receipt;
+  const actions = [];
+  const state = canonicalFixture({
+    confirmDestructive: async (request) => {
+      assert.equal(request.action, "file_delete");
+      assert.match(request.message, /Documents\/owned/);
+      return false;
+    },
+    client: {
+      async getTargetCapabilities() {
+        return [{ id: "target.files", version: 1, features: ["deleteTargetFileWithOptions"] }];
+      },
+    },
+    async runCli(args) {
+      const action = args[args.indexOf("native-file") + 1];
+      actions.push(action);
+      assert.equal(action, "prepare");
+      receipt = guardedFixture("delete", "/Documents/owned", state.owner);
+      return JSON.stringify({ status: "prepared", receipt });
+    },
+  });
+  t.after(() => state.backend.dispose());
+  await assert.rejects(state.backend.guardedFile("mobile_device_file_delete",
+    { deviceId: "one", path: "/Documents/owned" }), { code: "consent_denied" });
+  assert.deepEqual(actions, ["prepare"]);
+});
+
+test("guarded failed native mutation is terminal, retaining its original receipt without replay", async (t) => {
+  let receipt;
+  const actions = [];
+  const state = canonicalFixture({
+    client: {
+      async getTargetCapabilities() {
+        return [{ id: "target.files", version: 1, features: ["createTargetDirectory"] }];
+      },
+    },
+    async runCli(args) {
+      const action = args[args.indexOf("native-file") + 1];
+      actions.push(action);
+      if (action === "prepare") {
+        receipt = guardedFixture("mkdir", "/Documents/failure", state.owner);
+        return JSON.stringify({ status: "prepared", receipt });
+      }
+      const operation = guardedOperation("mkdir", receipt, action === "continue" ? "queued" : "failed");
+      return JSON.stringify({ status: action === "continue" ? "accepted" : "failed",
+        receipt, operationId: operation.operationId, operation,
+        ...(action === "recover" ? { errorCode: "DeviceDirectoryAlreadyFile" } : {}) });
+    },
+  });
+  t.after(() => state.backend.dispose());
+  const input = { deviceId: "one", path: "/Documents/failure" };
+  for (let attempt = 0; attempt < 2; attempt += 1) {
+    await assert.rejects(state.backend.guardedFile("mobile_device_file_mkdir", input),
+      { code: "DeviceDirectoryAlreadyFile" });
+  }
+  assert.deepEqual(actions, ["prepare", "continue", "recover", "recover"]);
+});
+
+test("guarded unknown acceptance retries original recovery without another device submission", async (t) => {
+  let receipt;
+  let reads = 0;
+  const actions = [];
+  const state = canonicalFixture({
+    client: {
+      async getTargetCapabilities() {
+        return [{ id: "target.files", version: 1, features: ["createTargetDirectory"] }];
+      },
+    },
+    async runCli(args) {
+      const action = args[args.indexOf("native-file") + 1];
+      actions.push(action);
+      if (action === "prepare") {
+        receipt = guardedFixture("mkdir", "/Documents/uncertain", state.owner);
+        return JSON.stringify({ status: "prepared", receipt });
+      }
+      if (action === "continue") {
+        return JSON.stringify({ status: "acceptanceUnknown", receipt,
+          errorCode: "GuardedAcceptanceUnknown" });
+      }
+      if (++reads === 1) {
+        return JSON.stringify({ status: "readbackUnconfirmed", receipt,
+          errorCode: "GuardedReadbackUnconfirmed" });
+      }
+      const operation = guardedOperation("mkdir", receipt, "succeeded");
+      return JSON.stringify({ status: "succeeded", receipt,
+        operationId: operation.operationId, operation, mutation: { path: "/Documents/uncertain" } });
+    },
+  });
+  t.after(() => state.backend.dispose());
+  const input = { deviceId: "one", path: "/Documents/uncertain" };
+  await assert.rejects(state.backend.guardedFile("mobile_device_file_mkdir", input),
+    { code: "GuardedReadbackUnconfirmed" });
+  assert.equal((await state.backend.guardedFile("mobile_device_file_mkdir", input)).path, input.path);
+  assert.deepEqual(actions, ["prepare", "continue", "recover", "recover"]);
+});
+
+test("local guarded export uses backend-confirmed source path and verified zero/nonzero native readback", async (t) => {
+  for (const bytes of [0, 5]) {
+    const directory = await mkdtemp(join(process.cwd(), "tests/scripts/fixtures/export-owned-"));
+    t.after(() => rm(directory, { recursive: true, force: true }));
+    const destination = join(directory, "payload");
+    const content = Buffer.alloc(bytes, 65);
+    const input = { deviceId: "one", bundleId: "native-app", path: "Documents/payload", output: directory };
+    const actions = [];
+    let approvals = 0;
+    let receipt;
+    let recoveries = 0;
+    const state = canonicalFixture({
+      confirmDestructive: async (request) => {
+        approvals += 1;
+        assert.equal(request.action, "file_pull");
+        assert.match(request.message, /Host destination: /);
+        assert.match(request.message, /payload/);
+        return true;
+      },
+      client: {
+        async getTargetCapabilities() {
+          input.path = "Documents/replaced";
+          input.output = "/wrong/destination";
+          return [{ id: "target.files", version: 1, features: ["exportTargetFile"] },
+            { id: "target.apps", version: 1, features: ["listTargetApps"] }];
+        },
+        async listTargetApps() {
+          return [{ appId: "native-app", packageId: "com.example.app",
+            "x-ailoha-target-host": { targetId: "one", providerId: "provider" } }];
+        },
+      },
+      async runCli(args) {
+        const action = args[args.indexOf("native-file") + 1];
+        actions.push(action);
+        if (action === "prepare") {
+          assert.equal(args[args.indexOf("--path") + 1], "app://com.example.app/Documents/payload");
+          assert.equal(args[args.indexOf("--destination") + 1], resolve(directory));
+          assert.ok(args.includes("--overwrite"));
+          receipt = guardedFixture("export", "app://com.example.app/Documents/payload", state.owner,
+            { destinationPath: destination });
+          return JSON.stringify({ status: "prepared", receipt });
+        }
+        const operation = {
+          ...guardedOperation("export", receipt, action === "continue" ? "queued" : "succeeded"),
+          artifactIds: ["owned-artifact"],
+          ...(action === "recover" ? { result: { artifactId: "owned-artifact", devicePath: "Documents/payload" } } : {}),
+        };
+        if (action === "recover" && ++recoveries === 1) {
+          await writeFile(destination, content);
+          throw Object.assign(new Error("Original native GET reply was lost"), { code: "owned_get_failed" });
+        }
+        const artifact = {
+          artifactId: "owned-artifact", kind: "file", status: "ready",
+          contentType: "application/octet-stream", createdAt: "2026-10-10T00:00:00Z",
+          targetId: "one", operationId: operation.operationId, fileName: "payload",
+          size: bytes, sha256: stageHash(content),
+        };
+        if (action === "recover") assert.deepEqual(await readFile(destination), content);
+        return JSON.stringify({ status: action === "continue" ? "accepted" : "downloaded",
+          receipt, operationId: operation.operationId, operation,
+          ...(action === "recover" ? { artifact, downloadedBytes: bytes, devicePath: "Documents/payload" } : {}) });
+      },
+    });
+    t.after(() => state.backend.dispose());
+    await assert.rejects(state.backend.guardedFile("mobile_device_file_pull", input), { code: "owned_get_failed" });
+    const result = await state.backend.guardedFile("mobile_device_file_pull", {
+      deviceId: "one", bundleId: "native-app", path: "Documents/payload", output: directory,
+    });
+    assert.deepEqual(result, {
+      schemaVersion: "1.0", success: true, deviceId: "one",
+      devicePath: "Documents/payload", hostPath: destination, size: bytes, operation: "pull",
+    });
+    assert.deepEqual(actions, ["prepare", "continue", "recover", "recover"]);
+    assert.equal(approvals, 1);
+  }
+});
+
+test("cancelled guarded input and publicly gated export never launch a device command", async (t) => {
+  let launched = 0;
+  const state = canonicalFixture({
+    async runCli() { launched += 1; throw new Error("device command was admitted"); },
+  });
+  t.after(() => state.backend.dispose());
+  const abort = new AbortController();
+  abort.abort();
+  await assert.rejects(state.backend.guardedFile("mobile_device_file_mkdir",
+    { deviceId: "one", path: "/Documents/new" }, { signal: abort.signal }), { code: "cancelled" });
+  await assert.rejects(state.backend.invokeAction("mobile_device_file_pull",
+    { deviceId: "one", path: "/Documents/new", output: "/owned/file" }),
+  { code: "artifact_contract_unavailable" });
+  assert.equal(launched, 0);
+});
 
 test("parent: file staging keeps the original destination across asynchronous capture", async (t) => {
   const input = {

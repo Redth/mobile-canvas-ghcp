@@ -63,6 +63,9 @@ function providerRecords() {
     { id: "target.files", version: 1, features: ["importStagedTargetFile"] },
     { id: "target.media", version: 1, features: ["importStagedTargetMediaBatch"] },
   );
+  if (scenario.artifactGuarded) readCapabilities.push(
+    { id: "target.files", version: 1, features: ["deleteTargetFileWithOptions", "createTargetDirectory"] },
+  );
   return [{
     providerId: scenario.providerId, name: "Synthetic provider", version: "synthetic", state: "ready",
     capabilities: [...captures, ...readCapabilities],
