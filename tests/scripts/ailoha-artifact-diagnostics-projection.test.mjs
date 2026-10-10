@@ -12,14 +12,14 @@ test("native logs retain complete pre-limit totals and original chronological/ra
       total: 8,
       entries: [
         {
-          timestamp: "2026-10-10T02:00:02Z", nativeTimestamp: "10-10 02:00:02.000",
-          level: "critical", nativeLevel: "fatal", source: "native", nativeSource: "AndroidRuntime",
-          message: "second", processId: 122, subsystem: null,
-        },
-        {
           timestamp: "2026-10-10T02:00:01Z", nativeTimestamp: "10-10 02:00:01.000",
           level: "trace", nativeLevel: "verbose", source: "native", nativeSource: "ActivityManager",
           message: "first", processId: null,
+        },
+        {
+          timestamp: "2026-10-10T02:00:02Z", nativeTimestamp: "10-10 02:00:02.000",
+          level: "critical", nativeLevel: "fatal", source: "native", nativeSource: "AndroidRuntime",
+          message: "second", processId: 122, subsystem: null,
         },
       ],
     },
