@@ -18,6 +18,56 @@ function deferred() {
   return { promise, resolve };
 }
 
+test("a closed MCP owner cannot dispatch when shared backend acquisition completes", async () => {
+  const entered = deferred();
+  const release = deferred();
+  let dispatched = 0;
+  let disposed = 0;
+  const dispatcher = await createAilohaMcpDispatcher({
+    binding, version: "test",
+    async createBackend() {
+      entered.resolve();
+      await release.promise;
+      return {
+        async invokeAction() { dispatched += 1; return { success: true }; },
+        async dispose() { disposed += 1; },
+      };
+    },
+  });
+  const pending = dispatcher.handle(call("mobile_device_boot", { deviceId: "original-target" }));
+  await entered.promise;
+  const closing = dispatcher.dispose();
+  release.resolve();
+  const [response] = await Promise.all([pending, closing]);
+  assert.equal(dispatched, 0);
+  assert.equal(disposed, 1);
+  assert.equal(response.id, 1);
+  assert.equal(response.result.isError, true);
+  assert.equal(JSON.parse(response.result.content[0].text).code, "mcp_closed");
+});
+
+test("a previously cancelled MCP caller does not acquire the shared backend", async () => {
+  const caller = new AbortController();
+  caller.abort();
+  let acquired = 0;
+  const dispatcher = await createAilohaMcpDispatcher({
+    binding, version: "test",
+    async createBackend() {
+      acquired += 1;
+      return { async invokeAction() { return { success: true }; }, async dispose() {} };
+    },
+  });
+  try {
+    const response = await dispatcher.handle(call("mobile_device_boot", { deviceId: "original-target" }),
+      { signal: caller.signal });
+    assert.equal(acquired, 0);
+    assert.equal(response.result.isError, true);
+    assert.equal(JSON.parse(response.result.content[0].text).code, "cancelled");
+  } finally {
+    await dispatcher.dispose();
+  }
+});
+
 for (const [name, original, replace] of [
   ["mobile_device_boot", { deviceId: "original-target" },
     (input) => { input.deviceId = "replacement-target"; }],

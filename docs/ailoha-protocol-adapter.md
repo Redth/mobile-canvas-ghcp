@@ -461,7 +461,10 @@ host request/action options keep caller cancellation separate from shared backen
 initialization and lease lifetime. VS Code API requests use a bounded per-request
 controller and `api-cancel` IPC message; its Ailoha adapter invokes the same
 trusted, scoped backend API directly rather than waiting for a later loopback
-disconnect. Legacy HTTP behavior is unchanged. HTTP cancellation tests observe
+disconnect. Named MCP tool calls reject a closed owner or already-cancelled caller
+before shared backend acquisition, and check again after acquisition before
+dispatch; one cancelled waiter cannot abort a live peer's acquisition.
+Legacy HTTP behavior is unchanged. HTTP cancellation tests observe
 the captured signal before releasing a held native read: a client-side abort and
 immediate fixture release cannot prove when a remote TCP disconnect was received.
 No event-loop delay, grace period or atomic remote-cancellation claim is added.
