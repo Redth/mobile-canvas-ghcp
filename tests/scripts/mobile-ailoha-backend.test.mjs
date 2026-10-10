@@ -30,7 +30,7 @@ function fixture(options = {}) {
     nativeIdentity: { platform: "ios", nativeId: `real-native-${id}`, isVirtual: true },
   }]));
   const providers = [{ providerId: "provider", name: "Provider", version: "1", state: "ready", capabilities: [] }];
-  const capabilities = [{ id: "target.lifecycle", version: 1, features: ["startTarget", "stopTarget", "rebootTarget", "resetTarget", "deleteTarget"] }];
+  const capabilities = [{ id: "target.lifecycle", version: 1, features: ["startTarget", "stopTarget", "rebootTarget", "resetTarget", "deleteTarget", ...(options.reveal ? ["revealTarget"] : [])] }];
   const client = {
     async getHostStatus() { return { hostId: "host", profile: "ailoha.target-host/v1", version: "test", state: "ready", capabilities: [] }; },
     async listProviders() { return providers; },
@@ -114,7 +114,7 @@ function fixture(options = {}) {
   };
   const backend = new AilohaMobileBackend({
     scope: { sessionId: "unique-session", viewId: "unique-view" },
-    client, media, owner, selectionStore,
+    client, media, owner, selectionStore, reveal: options.reveal, revealState: options.revealState,
     confirmDestructive: options.confirmDestructive,
     saveScreenshot: options.saveScreenshot,
     operationState: options.operationState,
@@ -217,7 +217,147 @@ test("real compatibility action paths project inventory/selection/native identit
   await assert.rejects(state.backend.invokeAction("start_recording", { deviceId: "one" }), { status: 501, code: "capability_not_supported" });
   const unsupported = await state.backend.request("/api/v1/devices/one/ui");
   assert.equal(unsupported.status, 501);
-  assert.equal((await unsupported.json()).code, "capability_not_supported");
+  assert.equal((await unsupported.json()).code, "ui_contract_unavailable");
+});
+
+test("System UI identities fail explicitly without a canonical lossless tree or selector", async (t) => {
+  const state = fixture();
+  t.after(() => state.backend.dispose());
+  for (const [action, path] of [
+    ["ui_dump", "/api/v1/devices/one/ui"],
+    ["ui_find", "/api/v1/devices/one/ui/find"],
+    ["ui_tap", "/api/v1/devices/one/ui/tap"],
+  ]) {
+    await assert.rejects(state.backend.invokeAction(action, { deviceId: "one" }), { code: "ui_contract_unavailable", status: 501 });
+    const response = await state.backend.request(path, { method: path.endsWith("/ui") ? "GET" : "POST", body: "{}" });
+    assert.equal(response.status, 501);
+    assert.equal((await response.json()).code, "ui_contract_unavailable");
+  }
+  const raw = await state.backend.request("/api/v1/devices/one/ui?raw=true");
+  assert.equal(raw.status, 501);
+  assert.equal((await raw.json()).code, "ui_contract_unavailable");
+  assert.equal(state.calls.some(([kind]) => kind === "tap"), false);
+});
+
+test("reveal projects the native target only when the selected provider advertises it", async (t) => {
+  const state = fixture({ reveal: {
+    async reveal(invocation) {
+      state.calls.push(["reveal", invocation]);
+      return state.targets.get(invocation.targetId);
+    },
+  } });
+  t.after(() => state.backend.dispose());
+  assert.equal((await state.backend.getDevice("one")).capabilities.reveal, true);
+  const result = await state.backend.reveal("one");
+  assert.equal(result.id, "one");
+  assert.equal(result.nativeId, "real-native-one");
+  assert.equal((await state.backend.getSelected()).hasSelection, false);
+  assert.equal(state.calls.find(([kind]) => kind === "reveal")[1].connectionRef, state.backend.connectionRef);
+  assert.equal(JSON.stringify(result).includes("connectionRef"), false);
+  const response = await state.backend.request("/api/v1/devices/one/reveal", { method: "POST", body: "{}" });
+  assert.equal(response.status, 200);
+  assert.equal((await state.backend.getSelected()).device.id, "one");
+  assert.equal((await response.json()).capabilities.reveal, true);
+});
+
+test("reveal requires a running capable provider and never invokes a native action otherwise", async (t) => {
+  const state = fixture({ reveal: { async reveal() { throw new Error("unexpected POST"); } } });
+  t.after(() => state.backend.dispose());
+  state.targets.get("one").status = "stopped";
+  await assert.rejects(state.backend.reveal("one"), { code: "capability_not_supported" });
+  state.targets.get("one").status = "running";
+  state.providers[0].state = "unavailable";
+  await assert.rejects(state.backend.reveal("one"), { code: "capability_not_supported" });
+  assert.equal(state.calls.some(([kind]) => kind === "reveal"), false);
+  const missing = fixture();
+  t.after(() => missing.backend.dispose());
+  assert.equal((await missing.backend.getDevice("one")).capabilities.reveal, false);
+  await assert.rejects(missing.backend.reveal("one"), { code: "capability_not_supported" });
+});
+
+test("reveal rejects stale context before POST and retains uncertain mutation under its original owner", async (t) => {
+  const entered = deferred();
+  const release = deferred();
+  const state = canonicalFixture({ reveal: {
+    async reveal(invocation) {
+      state.calls.push(["reveal", invocation]);
+      entered.resolve();
+      await release.promise;
+      throw new Error("transport outcome unknown");
+    },
+  } });
+  t.after(() => state.backend.dispose());
+  const pending = state.backend.reveal("one");
+  const failed = assert.rejects(pending, /transport outcome unknown/);
+  await entered.promise;
+  await state.retireAuthority();
+  await state.reopenAuthority();
+  release.resolve();
+  await failed;
+  await assert.rejects(state.backend.reveal("one"), { code: "reveal_outcome_uncertain" });
+  assert.equal(state.calls.filter(([kind]) => kind === "reveal").length, 1);
+  assert.equal(state.calls.find(([kind]) => kind === "reveal")[1].executionContext.scopeEpoch, "original-epoch");
+  assert.equal(state.calls.find(([kind]) => kind === "reveal")[1].connectionRef, state.backend.connectionRef);
+});
+
+for (const [field, replacement] of [
+  ["serviceId", "another-service"], ["pid", 9876],
+  ["startedAt", "2026-10-09T23:01:00Z"], ["processStartedAt", "2026-10-09T23:01:00Z"],
+]) {
+  test(`reveal refuses a changed ${field} even for the same persistent host ID`, async (t) => {
+    const retained = new Map();
+    const one = fixture({ revealState: retained, reveal: { async reveal() { throw new Error("unknown"); } } });
+    t.after(() => one.backend.dispose());
+    await assert.rejects(one.backend.reveal("one"), /unknown/);
+    const two = fixture({ revealState: retained, connectionRef: {
+      ...one.backend.connectionRef, [field]: replacement,
+    }, reveal: { async reveal() { throw new Error("must not submit"); } } });
+    t.after(() => two.backend.dispose());
+    await assert.rejects(two.backend.reveal("one"), { code: "runtime_incarnation_changed" });
+  });
+}
+
+test("concurrent reveal requests dispatch once and never borrow a later selection", async (t) => {
+  const entered = deferred();
+  const release = deferred();
+  const state = canonicalFixture({ reveal: {
+    async reveal(invocation) {
+      state.calls.push(["reveal", invocation]);
+      entered.resolve();
+      await release.promise;
+      return state.targets.get(invocation.targetId);
+    },
+  } });
+  t.after(() => state.backend.dispose());
+  const first = state.backend.reveal("one", { selectRevealed: true });
+  await entered.promise;
+  await assert.rejects(state.backend.reveal("one"), { code: "reveal_outcome_uncertain" });
+  await state.advanceSelection();
+  release.resolve();
+  await assert.rejects(first, { code: "context_snapshot_superseded" });
+  assert.equal((await state.backend.getSelected()).device.id, "two");
+  assert.equal(state.calls.filter(([kind]) => kind === "reveal").length, 1);
+  await assert.rejects(state.backend.reveal("one"), { code: "reveal_outcome_uncertain" });
+});
+
+test("reveal refuses authority changes during inventory before native dispatch", async (t) => {
+  const state = canonicalFixture({ reveal: { async reveal() { throw new Error("unexpected POST"); } } });
+  t.after(() => state.backend.dispose());
+  const entered = deferred();
+  const release = deferred();
+  const get = state.client.getTarget;
+  state.client.getTarget = async (...args) => {
+    entered.resolve();
+    await release.promise;
+    return get(...args);
+  };
+  const pending = state.backend.reveal("one");
+  const rejected = assert.rejects(pending, { code: "context_snapshot_superseded" });
+  await entered.promise;
+  await state.advanceSelection();
+  release.resolve();
+  await rejected;
+  assert.equal(state.calls.some(([kind]) => kind === "reveal"), false);
 });
 
 test("an open empty canonical view projects its verified binding without inferring a target", async (t) => {

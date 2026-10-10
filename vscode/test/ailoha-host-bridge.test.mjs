@@ -26,6 +26,15 @@ function fixture(options = {}) {
     createBackend: async () => ({
       async ready() {},
       async request(path) {
+        if (path === "/api/v1/devices/opaque%2Ftarget/reveal") {
+          calls.push(["reveal-api", path]);
+          return new Response(JSON.stringify({ id: "opaque/target", nativeId: "native-target" }),
+            { headers: { "content-type": "application/json" } });
+        }
+        if (/\/ui(?:\/|$)/.test(path)) {
+          return new Response(JSON.stringify({ code: "ui_contract_unavailable" }),
+            { status: 501, headers: { "content-type": "application/json" } });
+        }
         return new Response(JSON.stringify(path === "/api/v1/selection"
           ? { hasSelection: true, device: { id: "opaque/target", name: "Captured target" } }
           : { backend: "ailoha" }), { headers: { "content-type": "application/json" } });
@@ -80,6 +89,17 @@ test("compiled Ailoha bridge correlates actual control sends and retirement to i
   await state.bridge.handleMessage({ type: "socket-send", id: "video-one", requestId: "stale-send", data: '{"type":"ack","sequence":0}' });
   assert.equal(state.messages.find((message) => message.id === "stale-send").type, "operation-error");
   assert.equal(state.calls.filter(([name]) => name === "send").length, 1);
+});
+
+test("compiled VS Code bridge routes reveal and System UI negatives through the bound host API", async (t) => {
+  const state = fixture();
+  t.after(async () => { state.bridge.dispose(); await state.bridge.closed(); });
+  await state.bridge.handleMessage({ type: "ready" });
+  await state.bridge.handleMessage({ type: "api", id: "reveal", path: "/api/v1/devices/opaque%2Ftarget/reveal", method: "POST" });
+  await state.bridge.handleMessage({ type: "api", id: "ui", path: "/api/v1/devices/opaque%2Ftarget/ui" });
+  assert.equal(state.messages.find((message) => message.id === "reveal").status, 200);
+  assert.equal(state.messages.find((message) => message.id === "ui").status, 501);
+  assert.deepEqual(state.calls.filter(([kind]) => kind === "reveal-api").length, 1);
 });
 
 for (const kind of ["false", "throw", "reject"]) {

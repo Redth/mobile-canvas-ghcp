@@ -423,7 +423,8 @@ tooling is not a ready-shaped empty inventory.
 ### Scope and verification
 
 Implemented: authoritative advertised catalogs and compatible create+boot,
-inventory/select, advertised start/stop/reboot, PNG screenshot,
+inventory/select, advertised start/stop/reboot and provider-owned window reveal,
+PNG screenshot,
 basic geometry-bound pointer gestures, shared ALHV WebCodecs display, and
 [read-only explicit-root workspace/application evidence](ailoha-workspace-inspection.md),
 plus read-only canonical composed `app_tree`, `app_query` and `app_status`
@@ -447,15 +448,34 @@ configuration from the host environment, never ambient target/agent selectors.
 The legacy .NET canvas serves the shared semantic module as a public embedded
 bootstrap asset, while its inspection API remains authenticated. This
 source-only slice has no
-workspace-application-to-native-agent mapping, binding control, or legacy
-`ui_*` compatibility claim. Both hosts bundle the exact-pinned MCP client
+workspace-application-to-native-agent mapping or binding control. The three
+legacy `mobile_device_ui_dump/find/tap` identities are explicitly unavailable
+in the opt-in (`ui_contract_unavailable`, HTTP 501); the App/System semantic
+panels do not produce their legacy result shapes. The native
+`MobileCanvasUiAdapter.SnapshotAsync` always requests `includeRaw: false`;
+`Project` collapses a null frame into zero bounds, while native bounded query
+results have no complete total or legacy child-index path contract. A
+lossless System snapshot, optional untouched raw payload, complete query
+count/path and retained owner/geometry for the selected element across tap
+are prerequisites to enabling these tools. Neither host guesses the missing
+fields or routes UI taps via a different App/agent lens.
+
+Reveal requires advertised `target.lifecycle/revealTarget` and a running
+provider-owned target, then calls only the canonical Target Host
+`POST /api/v1/targets/{targetId}/actions/reveal`. The original named context,
+provider, native deployment and private full process-incarnation reference
+remain captured; a changed view cannot turn the result into a different
+selection. An uncertain POST is retained and never replayed, including across
+same-ID process replacement. This is a source-only compatibility path and
+depends on a matching released native runtime; it does not perform local
+window-manager automation. Both hosts bundle the exact-pinned MCP client
 graph, while the official Ailoha runtime pin remains a separate release gate.
 Controlled native development CLI proof exercised System and explicitly bound
 App tree/query/status through both prepared host clients against the real
 canonical broker and mock Target Host/Core-MAUI agents, including stale-context
 and missing-Agent failures. This does not qualify a public package, normal
 installation, native platform matrix or real-device acceptance.
-Unsupported: configuration-dependent creation, reveal/rotation/keyboard/buttons,
+Unsupported: configuration-dependent creation, rotation/keyboard/buttons,
 reset/delete without scoped consent, app deployment,
 recording and broader settings/diagnostics/file/hardware operations. No claim of
 device or full feature parity is made.
