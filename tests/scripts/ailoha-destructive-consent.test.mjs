@@ -100,7 +100,8 @@ test("app approval rejects incomplete, untrusted, or cross-platform action proof
   t.after(() => authority.dispose());
   const captured = invocation();
   for (const appAction of [undefined, { appId: "one" }, { appId: "one", packageId: "com.one\nApprove" },
-    { appId: "one", packageId: "com.one", sourcePath: "/private/package" }]) {
+    { appId: "one", packageId: "com.one", sourcePath: "/private/package" },
+    { appId: "one", packageId: "a".repeat(256) }]) {
     assert.throws(() => authority.begin("uninstall", captured, { appAction }), {
       code: "consent_app_action_invalid",
     });
