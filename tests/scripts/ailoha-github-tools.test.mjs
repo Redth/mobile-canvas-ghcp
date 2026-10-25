@@ -1,11 +1,15 @@
 import assert from "node:assert/strict";
 import { spawn, spawnSync } from "node:child_process";
+import { randomUUID } from "node:crypto";
 import { once } from "node:events";
+import { mkdirSync, mkdtempSync, rmSync } from "node:fs";
 import { join } from "node:path";
 import test from "node:test";
 import { fileURLToPath } from "node:url";
+import { productModule } from "../ailoha-test-module.mjs";
 import { createAilohaGithubTools } from "../../lib/ailoha/github-tools.mjs";
 import { withAilohaCanvas } from "../../lib/ailoha/github-adapter.mjs";
+import * as sdkDouble from "./fixtures/ailoha-sdk-double.mjs";
 
 const root = fileURLToPath(new URL("../..", import.meta.url));
 const descriptor = {
@@ -216,16 +220,19 @@ test("canvas close during an opening request never exposes a late owner as activ
   assert.deepEqual(registered, []);
 });
 
-test("canvas close retires its host before SDK lookup settles and a same-instance reopen owns a fresh host", async () => {
-  let release;
-  const gate = new Promise((resolve) => { release = resolve; });
+test("canvas close serializes a same-instance reopen behind SDK lookup and retains its host", async () => {
+  let releaseLookup;
+  const lookup = new Promise((resolve) => { releaseLookup = resolve; });
+  let releaseClose;
+  const closeGate = new Promise((resolve) => { releaseClose = resolve; });
   const closed = [];
   let created = 0;
+  let openings = 0;
   let reads = 0;
   const tools = createAilohaGithubTools({
     descriptors: [descriptor],
     async getBinding() {
-      if (++reads === 1) await gate;
+      if (++reads === 1) await lookup;
       return { owner: reads };
     },
     createDispatcher({ binding }) {
@@ -244,28 +251,122 @@ test("canvas close retires its host before SDK lookup settles and a same-instanc
     createHost() {
       const owner = ++created;
       return {
-        async openCanvas() { return { title: "Mobile", url: `http://127.0.0.1/${owner}` }; },
-        async closeCanvas() { closed.push(owner); },
+        async openCanvas() { return { title: "Mobile", url: `http://127.0.0.1/${owner}/${++openings}` }; },
+        async closeCanvas() { await closeGate; closed.push(owner); },
       };
     },
     onHostOpened: (selected) => tools.opened(selected),
     onHostClosing: (selected) => tools.closing(selected),
   });
   const context = { sessionId: "session", instanceId: "view" };
-  assert.equal((await canvas.open(context)).url, "http://127.0.0.1/1");
+  assert.equal((await canvas.open(context)).url, "http://127.0.0.1/1/1");
   const pending = tools.tools[0].handler(input("view"), invocation("session"));
   const closing = canvas.onClose(context);
-  assert.equal((await canvas.open(context)).url, "http://127.0.0.1/2");
-  release();
+  const reopening = canvas.open(context);
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(created, 1);
+  assert.equal(openings, 1);
+  releaseLookup();
   assert.equal((await pending).resultType, "failure");
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(openings, 1);
+  releaseClose();
   await closing;
+  assert.equal((await reopening).url, "http://127.0.0.1/1/2");
   assert.deepEqual(closed, [1]);
   const fresh = await tools.tools[0].handler(input("view"), invocation("session"));
   assert.equal(fresh.textResultForLlm, "2");
   assert.equal(fresh.resultType, "success");
   await canvas.onClose(context);
-  assert.deepEqual(closed, [1, 2]);
+  assert.deepEqual(closed, [1, 1]);
+  assert.equal(created, 1);
   await tools.closeAll();
+});
+
+test("idempotent SDK leases keep UI, MCP and peer views independent through suspend and receipt recovery", async (t) => {
+  const { createRuntimeCanvasHost, createRuntimeMobileBackend } =
+    await import(productModule("lib/ailoha/runtime-backend.mjs"));
+  const { createAilohaMcpDispatcher } = await import(productModule("lib/ailoha/mcp-host.mjs"));
+  mkdirSync(join(root, ".build"), { recursive: true });
+  const directory = mkdtempSync(join(root, ".build/idempotent-owners-"));
+  const previousContext = process.env.AILOHA_TEST_CONTEXT_STATE;
+  process.env.AILOHA_TEST_CONTEXT_STATE = join(directory, "context.json");
+  const scenario = sdkDouble.scenario;
+  scenario.calls.length = 0;
+  scenario.operations.clear();
+  scenario.idempotentLeases = true;
+  const runtime = async () => ({ sdk: sdkDouble, pin: { version: "synthetic-only", sourceSha: sdkDouble.sourceSha } });
+  const scope = { sessionId: randomUUID(), viewId: "shared" };
+  const peerScope = { sessionId: scope.sessionId, viewId: "external" };
+  const host = createRuntimeCanvasHost({ scope, runtime });
+  const peer = createRuntimeCanvasHost({ scope: peerScope, runtime });
+  let dispatcher;
+  t.after(async () => {
+    scenario.beforeOperationRead = undefined;
+    await dispatcher?.dispose();
+    await host.closeCanvas();
+    await peer.closeCanvas();
+    scenario.idempotentLeases = false;
+    scenario.leaseKeys.clear();
+    if (previousContext === undefined) delete process.env.AILOHA_TEST_CONTEXT_STATE;
+    else process.env.AILOHA_TEST_CONTEXT_STATE = previousContext;
+    rmSync(directory, { recursive: true });
+    assert.equal(scenario.leases.size, 0);
+  });
+  const opened = await host.openCanvas({ deviceId: "opaque/target" });
+  await peer.openCanvas();
+  const selected = await host.invokeAction("get_selected_device", {});
+  dispatcher = await createAilohaMcpDispatcher({
+    version: "synthetic-only", binding: { ...selected.contextBinding, scope },
+    createBackend: (options) => createRuntimeMobileBackend({ ...options, runtime, allowContextReopen: false }),
+  });
+  const call = (name) => dispatcher.handle({
+    jsonrpc: "2.0", id: randomUUID(), method: "tools/call", params: { name, arguments: {} },
+  });
+  assert.equal((await call("mobile_device_list")).result.isError, undefined);
+  const ensures = scenario.calls.filter((entry) => entry.ensure);
+  assert.equal(ensures.length, 3);
+  assert.equal(new Set(ensures.map(({ ensure }) => ensure.consumerId)).size, 3);
+  assert.equal(new Set(scenario.leaseKeys.values()).size, 3);
+
+  const url = new URL(opened.url);
+  const fragment = new URLSearchParams(url.hash.slice(1));
+  const bootstrap = await fetch(new URL("/api/v1/auth/bootstrap", url), {
+    method: "POST", headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      secret: fragment.get("bootstrap"), sessionId: scope.sessionId, instanceId: scope.viewId,
+    }),
+  });
+  assert.equal(bootstrap.status, 204);
+  const cookie = bootstrap.headers.get("set-cookie").split(";", 1)[0];
+  const panel = (action) => fetch(new URL(`/api/v1/canvas/${action}`, url), { method: "POST", headers: { Cookie: cookie } });
+  assert.equal((await panel("suspend")).status, 204);
+  assert.equal((await call("mobile_device_list")).result.isError, undefined);
+  assert.ok((await peer.invokeAction("get_device_catalog", {})).runtimes);
+  assert.equal((await panel("resume")).status, 204);
+
+  const sms = { deviceId: "opaque/target", from: "+123", body: "lease recovery" };
+  scenario.beforeOperationRead = async () => {
+    scenario.beforeOperationRead = undefined;
+    throw new Error("Synthetic accepted operation GET failed");
+  };
+  await assert.rejects(host.invokeAction("send_sms", sms));
+  const posts = () => scenario.calls.filter((entry) =>
+    entry.method === "POST" && entry.path === "/api/v1/targets/opaque%2Ftarget/telephony/sms");
+  assert.equal(posts().length, 1);
+  const closing = host.closeCanvas();
+  const reopening = host.openCanvas({ deviceId: "opaque/target" });
+  await closing;
+  assert.notEqual((await reopening).url, opened.url);
+  assert.equal((await call("mobile_device_list")).result.isError, undefined);
+  assert.equal((await host.invokeAction("send_sms", sms)).operation, "sms-send");
+  assert.equal(posts().length, 1);
+  assert.ok(scenario.calls.some((entry) => entry.method === "GET"
+    && entry.path.startsWith("/api/v1/operations/")));
+  await dispatcher.dispose();
+  dispatcher = null;
+  assert.ok((await host.invokeAction("get_device_catalog", {})).runtimes);
+  assert.ok((await peer.invokeAction("get_device_catalog", {})).runtimes);
 });
 
 test("normal unmodified plugin MCP entry registers no unbound Ailoha tools", async () => {

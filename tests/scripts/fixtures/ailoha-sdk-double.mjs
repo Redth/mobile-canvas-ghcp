@@ -6,6 +6,7 @@ import { stageEvents } from "./ailoha-native-stage-double.mjs";
 
 export const scenario = {
   calls: [], leases: new Map(), videos: new Map(), operations: new Map(), status: "running", geometryRevision: 13,
+  idempotentLeases: false, leaseKeys: new Map(),
   orientation: "landscape", statusBar: { enabled: false, readable: true },
   androidStatusBars: new Map(),
   catalog: null, createdTargets: new Map(), creationGate: null,
@@ -185,8 +186,18 @@ export async function ensureTargetHost(options) {
     Object.assign(error, { name: "RuntimeDeliveryError", code: scenario.ensureFailureCode });
     throw error;
   }
-  const leaseId = randomUUID();
+  const key = JSON.stringify([options.consumerId, options.scope]);
+  const existing = scenario.idempotentLeases ? scenario.leaseKeys.get(key) : undefined;
+  const leaseId = existing && scenario.leases.has(existing) ? existing : randomUUID();
+  if (existing && scenario.leases.has(existing)) {
+    return {
+      leaseId,
+      targetHost: { targetHostId: "synthetic-host", profile: "ailoha.target-host/v1", protocolVersion: "1" },
+      connectionRef: scenario.connectionRef,
+    };
+  }
   scenario.leases.set(leaseId, []);
+  if (scenario.idempotentLeases) scenario.leaseKeys.set(key, leaseId);
   return {
     leaseId,
     targetHost: { targetHostId: "synthetic-host", profile: "ailoha.target-host/v1", protocolVersion: "1" },
@@ -205,6 +216,9 @@ export async function releaseRuntimeLease(leaseId) {
   const callbacks = scenario.leases.get(leaseId);
   for (const callback of [...(callbacks ?? [])].reverse()) await callback();
   scenario.leases.delete(leaseId);
+  for (const [key, value] of scenario.leaseKeys) {
+    if (value === leaseId) scenario.leaseKeys.delete(key);
+  }
   scenario.calls.push({ release: leaseId });
   return Object.freeze({ schema: "ailoha.runtime.release-result/v1", leaseId, alreadyReleased: !callbacks, hostDisposition: "retained" });
 }

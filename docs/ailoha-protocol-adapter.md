@@ -572,8 +572,13 @@ dispatcher. The installed plugin contributes canonical `mobile_device_*` /
 `mobile_app_*` SDK names; a source-local extension inserts `_local` after
 `device` or `app` so both registrations coexist without duplicate tool names.
 Both forward to the same canonical dispatcher identities. Closing a view
-retires its requests and dispatcher without affecting another view. SDK tool
-results retain screenshot image bytes and failure status; absent genuine MCP
+retires its requests and dispatcher without affecting another view. SDK-tool
+and canvas backends use separate private lease consumers even for the same
+canonical context; releasing one cannot tear down the other's transport.
+A same-instance reopen waits for SDK request retirement and host closure, then
+reuses the view host's retained receipt/coordinator state for GET recovery.
+Neither lease ownership nor receipt state is projected into the tool result.
+SDK tool results retain screenshot image bytes and failure status; absent genuine MCP
 form elicitation, destructive MCP requests
 report `consent_not_supported`, not a simulated approval. Legacy launch and
 tools remain unchanged. VS Code supplies its actual window/view binding and
