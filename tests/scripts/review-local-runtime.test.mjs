@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import test from "node:test";
 import { gzipSync } from "node:zlib";
@@ -31,6 +31,20 @@ test("single-RID review packaging requires matching unpublished source and actua
   };
   assert.doesNotThrow(() => verifyLocalReviewRuntime(manifest, directory));
   writeFileSync(join(directory, "manifest.json"), JSON.stringify(manifest));
+  const dist = join(root, "vscode/dist");
+  const existingDist = existsSync(dist);
+  const marker = join(dist, ".review-thin-rejection-marker");
+  if (existingDist) {
+    writeFileSync(marker, "unchanged");
+    t.after(() => rmSync(marker, { force: true }));
+  }
+  const thinReview = spawnSync(process.execPath, [
+    join(root, "scripts/prepare-vscode.mjs"), "--review-local-rid", "--runtime-dir", directory, "--thin",
+  ], { cwd: root, encoding: "utf8" });
+  assert.equal(thinReview.status, 1);
+  assert.match(thinReview.stderr, /--review-local-rid cannot be combined with --thin/);
+  assert.equal(existsSync(dist), existingDist);
+  if (existingDist) assert.equal(readFileSync(marker, "utf8"), "unchanged");
   for (const script of ["prepare-plugin.mjs", "prepare-vscode.mjs"]) {
     const ordinary = spawnSync(process.execPath, [join(root, "scripts", script), "--runtime-dir", directory], {
       cwd: root, encoding: "utf8",

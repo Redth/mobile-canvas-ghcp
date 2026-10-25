@@ -336,7 +336,7 @@ test("GitHub adapter keeps legacy unchanged, ignores SDK working-directory hints
   assert.deepEqual(result.scope, scope);
   assert.equal(result.root, root);
   await wrapped.onClose(context);
-  await assert.rejects(action.handler({ ...context, input: { path: root } }), { code: "workspace_view_retired" });
+  await assert.rejects(action.handler({ ...context, input: { path: root } }), { code: "view_closed" });
 });
 
 test("verified one-shot process accepts only structured exit-2 scans and preserves cancellation/output/error bounds", async (t) => {

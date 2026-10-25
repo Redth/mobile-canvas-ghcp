@@ -15,6 +15,7 @@ const extensionRoot = join(root, "vscode");
 const output = join(extensionRoot, "dist");
 const runtimeDirectoryIndex = process.argv.indexOf("--runtime-dir");
 const reviewLocal = process.argv.includes("--review-local-rid");
+const thin = process.argv.includes("--thin");
 const runtimeDirectory = runtimeDirectoryIndex < 0 ? join(root, "runtimes")
   : resolve(process.argv[runtimeDirectoryIndex + 1] ?? "");
 if (runtimeDirectoryIndex >= 0 && !process.argv[runtimeDirectoryIndex + 1]) {
@@ -22,6 +23,9 @@ if (runtimeDirectoryIndex >= 0 && !process.argv[runtimeDirectoryIndex + 1]) {
 }
 if (reviewLocal && runtimeDirectoryIndex < 0) {
   throw new Error("--review-local-rid requires an isolated --runtime-dir.");
+}
+if (reviewLocal && thin) {
+  throw new Error("--review-local-rid cannot be combined with --thin.");
 }
 const extensionPackage = JSON.parse(readFileSync(join(extensionRoot, "package.json"), "utf8"));
 const productPackage = JSON.parse(readFileSync(join(root, "package.json"), "utf8"));
@@ -31,8 +35,6 @@ if (extensionPackage.dependencies["@modelcontextprotocol/sdk"] !== productPackag
 const runtimeManifest = JSON.parse(readFileSync(join(runtimeDirectory, "manifest.json"), "utf8"));
 const targetIndex = process.argv.indexOf("--target");
 const target = targetIndex >= 0 ? process.argv[targetIndex + 1] : null;
-const thin = process.argv.includes("--thin");
-
 if (reviewLocal) verifyLocalReviewRuntime(runtimeManifest, runtimeDirectory);
 else assertDarwinHelperEntries(runtimeManifest, { context: "VS Code runtime manifest" });
 

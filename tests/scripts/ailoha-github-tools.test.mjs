@@ -121,6 +121,73 @@ test("closing a view during binding cannot retarget its pending call to a reopen
   await tools.closeAll();
 });
 
+test("SDK tool captures nested input before an asynchronous binding lookup", async () => {
+  let release;
+  const gate = new Promise((resolve) => { release = resolve; });
+  const received = [];
+  const tools = createAilohaGithubTools({
+    descriptors: [descriptor],
+    async getBinding() { await gate; return { scope: scope("session", "view") }; },
+    createDispatcher() {
+      return {
+        async handle(message) {
+          received.push(message.params.arguments);
+          return { result: { content: [{ type: "text", text: "ok" }] } };
+        },
+        async dispose() {},
+      };
+    },
+  });
+  tools.opened(scope("session", "view"));
+  const request = {
+    ...input("view"),
+    paths: [{ relative: "original.txt", options: { overwrite: false } }],
+  };
+  const pending = tools.tools[0].handler(request, invocation("session"));
+  request.paths[0].relative = "changed.txt";
+  request.paths[0].options.overwrite = true;
+  request.paths.push({ relative: "extra.txt" });
+  release();
+  assert.equal((await pending).resultType, "success");
+  assert.deepEqual(received, [{
+    deviceId: "target", paths: [{ relative: "original.txt", options: { overwrite: false } }],
+  }]);
+  await tools.closeAll();
+});
+
+test("failed binding initialization is retried only by a new call, without replaying failed tool operations", async () => {
+  let bindings = 0;
+  let calls = 0;
+  const tools = createAilohaGithubTools({
+    descriptors: [descriptor],
+    async getBinding() {
+      if (++bindings === 1) throw new Error("context_read_superseded");
+      return { scope: scope("session", "view") };
+    },
+    createDispatcher() {
+      return {
+        async handle() {
+          calls += 1;
+          return { result: { isError: calls === 1, content: [{ type: "text", text: "operation result" }] } };
+        },
+        async dispose() {},
+      };
+    },
+  });
+  tools.opened(scope("session", "view"));
+  const tool = tools.tools[0];
+  assert.equal((await tool.handler(input("view"), invocation("session"))).resultType, "failure");
+  assert.equal(bindings, 1);
+  assert.equal(calls, 0);
+  assert.equal((await tool.handler(input("view"), invocation("session"))).resultType, "failure");
+  assert.equal(bindings, 2);
+  assert.equal(calls, 1);
+  assert.equal((await tool.handler(input("view"), invocation("session"))).resultType, "success");
+  assert.equal(bindings, 2);
+  assert.equal(calls, 2);
+  await tools.closeAll();
+});
+
 test("canvas close during an opening request never exposes a late owner as active", async () => {
   let finishOpen;
   let opened;
@@ -147,6 +214,58 @@ test("canvas close during an opening request never exposes a late owner as activ
   finishOpen();
   await assert.rejects(pending, { code: "view_closed" });
   assert.deepEqual(registered, []);
+});
+
+test("canvas close retires its host before SDK lookup settles and a same-instance reopen owns a fresh host", async () => {
+  let release;
+  const gate = new Promise((resolve) => { release = resolve; });
+  const closed = [];
+  let created = 0;
+  let reads = 0;
+  const tools = createAilohaGithubTools({
+    descriptors: [descriptor],
+    async getBinding() {
+      if (++reads === 1) await gate;
+      return { owner: reads };
+    },
+    createDispatcher({ binding }) {
+      return {
+        async handle() {
+          return { result: { content: [{ type: "text", text: String(binding.owner) }] } };
+        },
+        async dispose() {},
+      };
+    },
+  });
+  const canvas = withAilohaCanvas({
+    inputSchema: { type: "object", properties: {} }, actions: [],
+  }, {
+    backend: "ailoha",
+    createHost() {
+      const owner = ++created;
+      return {
+        async openCanvas() { return { title: "Mobile", url: `http://127.0.0.1/${owner}` }; },
+        async closeCanvas() { closed.push(owner); },
+      };
+    },
+    onHostOpened: (selected) => tools.opened(selected),
+    onHostClosing: (selected) => tools.closing(selected),
+  });
+  const context = { sessionId: "session", instanceId: "view" };
+  assert.equal((await canvas.open(context)).url, "http://127.0.0.1/1");
+  const pending = tools.tools[0].handler(input("view"), invocation("session"));
+  const closing = canvas.onClose(context);
+  assert.equal((await canvas.open(context)).url, "http://127.0.0.1/2");
+  release();
+  assert.equal((await pending).resultType, "failure");
+  await closing;
+  assert.deepEqual(closed, [1]);
+  const fresh = await tools.tools[0].handler(input("view"), invocation("session"));
+  assert.equal(fresh.textResultForLlm, "2");
+  assert.equal(fresh.resultType, "success");
+  await canvas.onClose(context);
+  assert.deepEqual(closed, [1, 2]);
+  await tools.closeAll();
 });
 
 test("normal unmodified plugin MCP entry registers no unbound Ailoha tools", async () => {

@@ -1244,7 +1244,8 @@ When only a local `osx-arm64` build is available, use a tag of the form
 `prepare-plugin.mjs --runtime-dir` and `prepare-vscode.mjs --runtime-dir`
 commands. This review-only mode verifies the current source fingerprint and
 both local archive byte hashes, and permits exactly one `darwin-arm64` entry;
-ordinary packaging still requires both macOS runtimes. Verify the resulting
+ordinary packaging still requires both macOS runtimes. Review-local-rid cannot
+be combined with thin packaging. Verify the resulting
 plugin with `node scripts/verify-plugin.mjs .build/copilot-plugin/mobile-canvas
 --review-local-rid`, and a locally packaged VSIX with
 `node scripts/verify-vsix.mjs <review.vsix> --review-local-rid`. Neither ordinary
