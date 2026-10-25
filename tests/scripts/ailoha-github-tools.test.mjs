@@ -416,10 +416,91 @@ test("canvas close during an opening request never exposes a late owner as activ
   const entered = new Promise((resolve) => { opened = resolve; });
   const pending = canvas.open(context);
   await entered;
-  await canvas.onClose(context);
+  const closing = canvas.onClose(context);
   finishOpen();
+  await closing;
   await assert.rejects(pending, { code: "view_closed" });
   assert.deepEqual(registered, []);
+});
+
+test("queued canvas open keeps the original scope and nested options", async () => {
+  const received = [];
+  const registered = [];
+  const canvas = withAilohaCanvas({
+    inputSchema: { type: "object", properties: {} }, actions: [],
+  }, {
+    backend: "ailoha",
+    createHost: () => ({
+      async openCanvas(input) {
+        received.push(input);
+        return { title: "Mobile", url: "http://127.0.0.1/" };
+      },
+      async closeCanvas() {},
+    }),
+    onHostOpened: (scope) => registered.push(scope),
+  });
+  const context = {
+    sessionId: "original-session", instanceId: "original-view",
+    input: { deviceId: "original-device", options: { orientation: "portrait" } },
+  };
+  const pending = canvas.open(context);
+  context.sessionId = "new-session";
+  context.instanceId = "new-view";
+  context.input.deviceId = "new-device";
+  context.input.options.orientation = "landscape";
+  await pending;
+  assert.deepEqual(received, [{ deviceId: "original-device", options: { orientation: "portrait" } }]);
+  assert.deepEqual(registered, [{ sessionId: "original-session", viewId: "original-view" }]);
+  await canvas.onClose({ sessionId: "original-session", instanceId: "original-view" });
+});
+
+test("close during a pending same-instance host reopen retires its new lease before SDK admission", async () => {
+  let releaseOpen;
+  let enteredOpen;
+  const gate = new Promise((resolve) => { releaseOpen = resolve; });
+  const entered = new Promise((resolve) => { enteredOpen = resolve; });
+  let opens = 0;
+  let closes = 0;
+  let leases = 0;
+  let admissions = 0;
+  const canvas = withAilohaCanvas({
+    inputSchema: { type: "object", properties: {} }, actions: [],
+  }, {
+    backend: "ailoha",
+    createHost: () => ({
+      async openCanvas() {
+        opens += 1;
+        leases += 1;
+        if (opens === 2) { enteredOpen(); await gate; }
+        return { title: "Mobile", url: `http://127.0.0.1/${opens}` };
+      },
+      async closeCanvas() { closes += 1; leases = 0; },
+    }),
+    onHostOpened: () => { admissions += 1; },
+    onHostClosing: () => {},
+  });
+  const context = { sessionId: "session", instanceId: "view" };
+  await canvas.open(context);
+  await canvas.onClose(context);
+  const pending = canvas.open(context);
+  await entered;
+  const closing = canvas.onClose(context);
+  let closed = false;
+  void closing.then(() => { closed = true; });
+  await Promise.resolve();
+  assert.equal(closed, false);
+  assert.equal(leases, 1);
+  assert.equal(admissions, 1);
+  releaseOpen();
+  await assert.rejects(pending, { code: "view_closed" });
+  await closing;
+  assert.equal(opens, 2);
+  assert.equal(closes, 2);
+  assert.equal(leases, 0);
+  assert.equal(admissions, 1);
+  assert.equal((await canvas.open(context)).url, "http://127.0.0.1/3");
+  await canvas.onClose(context);
+  assert.equal(closes, 3);
 });
 
 test("canvas close serializes a same-instance reopen behind SDK lookup and retains its host", async () => {
@@ -513,7 +594,22 @@ test("idempotent SDK leases keep UI, MCP and peer views independent through susp
   const runtime = async () => ({ sdk, pin: { version: "synthetic-only", sourceSha: sdkDouble.sourceSha } });
   const scope = { sessionId: randomUUID(), viewId: "shared" };
   const peerScope = { sessionId: scope.sessionId, viewId: "external" };
-  const host = createRuntimeCanvasHost({ scope, runtime });
+  const runtimeHost = createRuntimeCanvasHost({ scope, runtime });
+  let heldOpen;
+  let releaseHeldOpen;
+  const host = {
+    ...runtimeHost,
+    async openCanvas(input) {
+      const result = await runtimeHost.openCanvas(input);
+      if (heldOpen) {
+        const hold = heldOpen;
+        heldOpen = undefined;
+        hold.enter();
+        await hold.wait;
+      }
+      return result;
+    },
+  };
   const peer = createRuntimeCanvasHost({ scope: peerScope, runtime });
   let binding;
   const sdkTools = createAilohaGithubTools({
@@ -538,6 +634,7 @@ test("idempotent SDK leases keep UI, MCP and peer views independent through susp
   const context = { sessionId: scope.sessionId, instanceId: scope.viewId, input: { deviceId: "opaque/target" } };
   t.after(async () => {
     scenario.beforeOperationRead = undefined;
+    releaseHeldOpen?.();
     await canvas.onClose(context);
     await sdkTools.closeAll();
     await peer.closeCanvas();
@@ -619,6 +716,28 @@ test("idempotent SDK leases keep UI, MCP and peer views independent through susp
   assert.equal(recovered.resultType, "success");
   assert.equal(posts().length, 2);
   assert.ok(originalGets() > failedGets);
+
+  await canvas.onClose(context);
+  let enterHeldOpen;
+  const enteredHeldOpen = new Promise((resolve) => { enterHeldOpen = resolve; });
+  const heldGate = new Promise((resolve) => { releaseHeldOpen = resolve; });
+  heldOpen = { enter: enterHeldOpen, wait: heldGate };
+  const pendingReopen = canvas.open(context);
+  await enteredHeldOpen;
+  const newLeaseId = [...scenario.leaseKeys].find(([key]) =>
+    JSON.parse(key)[0].startsWith("mobile-canvas-canvas-") && JSON.parse(key)[1].viewId === scope.viewId)?.[1];
+  assert.ok(newLeaseId && scenario.leases.has(newLeaseId));
+  const pendingClose = canvas.onClose(context);
+  assert.equal((await call("mobile_device_list")).resultType, "failure");
+  releaseHeldOpen();
+  await assert.rejects(pendingReopen, { code: "view_closed" });
+  await pendingClose;
+  assert.equal(scenario.leases.has(newLeaseId), false);
+  assert.equal((await call("mobile_device_list")).resultType, "failure");
+  assert.ok((await peer.invokeAction("get_device_catalog", {})).runtimes);
+  await canvas.open(context);
+  assert.equal((await call("mobile_device_list")).resultType, "success");
+  assert.equal(posts().length, 2);
 
   const changedSms = { ...sms, body: "SDK incarnation refusal" };
   scenario.beforeOperationRead = async () => {

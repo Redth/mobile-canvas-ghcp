@@ -583,7 +583,10 @@ MCP operation also recovers by original-ID GET instead of another POST.
 Failed SDK lease cleanup keeps the retired view and dispatcher reachable; a
 new explicit same-instance open retries that cleanup once before reopening,
 and another failed retry leaves the view closed with its receipts intact.
-Neither in-flight close nor failed cleanup admits SDK tools.
+If that new host open is still acquiring its lease when the canvas closes
+again, close fences the pending result and waits for acquisition before
+releasing the lease; it cannot register a late SDK owner. Neither in-flight
+close nor failed cleanup admits SDK tools.
 VS Code similarly retains a failed retiring bridge. A new explicit view
 resolution retries that exact bridge's cleanup before admitting its replacement;
 overlapping retirement and stale resolutions cannot retry or replace it.
