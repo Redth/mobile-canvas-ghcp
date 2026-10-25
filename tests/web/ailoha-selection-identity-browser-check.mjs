@@ -21,6 +21,9 @@ async (page) => {
     await page.waitForFunction(() => document.querySelector("#toast")?.textContent
       ?.includes("changed Ailoha selection is not bound"));
   } else {
+    if ((await page.request.post(`${evidenceUrl}/defer-next-video-frame`)).status() !== 204) {
+      throw new Error("The synthetic same-ID frame was not held.");
+    }
     await page.locator("#device-selector").click();
     await page.locator(".device-card").first().click();
     await page.waitForFunction(() => document.querySelector("#input-status")?.textContent
