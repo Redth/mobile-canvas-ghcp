@@ -5,10 +5,14 @@ import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { assertDarwinHelperEntries } from "../lib/runtime-assets.mjs";
 import { verifyPreparedAilohaGraph } from "./prepare-ailoha-graph.mjs";
+import { verifyLocalReviewRuntime } from "./review-local-runtime.mjs";
 import { listFiles, verifyDevelopmentFiles, verifyPublishableImages, withVsix } from "./vsix.mjs";
 
 const root = join(dirname(fileURLToPath(import.meta.url)), "..");
-const vsix = resolve(process.argv[2] ?? join(root, ".build", "mobile-canvas-vscode.vsix"));
+const reviewLocal = process.argv.includes("--review-local-rid");
+const targets = process.argv.slice(2).filter((arg) => arg !== "--review-local-rid");
+if (targets.length > 1) throw new Error("Specify one VSIX to verify.");
+const vsix = resolve(targets[0] ?? join(root, ".build", "mobile-canvas-vscode.vsix"));
 
 if (!existsSync(vsix)) {
   throw new Error(`VSIX does not exist: ${vsix}`);
@@ -23,10 +27,16 @@ function verifyExtracted(directory) {
   const runtimeManifest = JSON.parse(
     readEntry("extension/dist/runtimes/manifest.json"),
   );
-  assertDarwinHelperEntries(runtimeManifest, {
-    context: "VSIX runtime manifest",
-    requireAll: Object.keys(runtimeManifest.runtimes ?? {}).length > 1,
-  });
+  if (reviewLocal) verifyLocalReviewRuntime(runtimeManifest, join(directory, "extension", "dist", "runtimes"));
+  else {
+    if (runtimeManifest.distribution?.tag?.startsWith("unpublished-review-")) {
+      throw new Error("An unpublished single-RID review bundle requires explicit --review-local-rid verification.");
+    }
+    assertDarwinHelperEntries(runtimeManifest, {
+      context: "VSIX runtime manifest",
+      requireAll: Object.keys(runtimeManifest.runtimes ?? {}).length > 1,
+    });
+  }
   const verifiedAilohaGraph = verifyPreparedAilohaGraph(join(directory, "extension", "dist"));
 
   for (const path of [

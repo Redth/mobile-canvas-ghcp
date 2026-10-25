@@ -8,15 +8,20 @@ import {
   remoteRuntimeManifest,
 } from "../lib/runtime-assets.mjs";
 import { prepareAilohaGraph, prepareSemanticGraph } from "./prepare-ailoha-graph.mjs";
+import { verifyLocalReviewRuntime } from "./review-local-runtime.mjs";
 
 const root = join(dirname(fileURLToPath(import.meta.url)), "..");
 const extensionRoot = join(root, "vscode");
 const output = join(extensionRoot, "dist");
 const runtimeDirectoryIndex = process.argv.indexOf("--runtime-dir");
+const reviewLocal = process.argv.includes("--review-local-rid");
 const runtimeDirectory = runtimeDirectoryIndex < 0 ? join(root, "runtimes")
   : resolve(process.argv[runtimeDirectoryIndex + 1] ?? "");
 if (runtimeDirectoryIndex >= 0 && !process.argv[runtimeDirectoryIndex + 1]) {
   throw new Error("--runtime-dir requires a directory.");
+}
+if (reviewLocal && runtimeDirectoryIndex < 0) {
+  throw new Error("--review-local-rid requires an isolated --runtime-dir.");
 }
 const extensionPackage = JSON.parse(readFileSync(join(extensionRoot, "package.json"), "utf8"));
 const productPackage = JSON.parse(readFileSync(join(root, "package.json"), "utf8"));
@@ -28,7 +33,8 @@ const targetIndex = process.argv.indexOf("--target");
 const target = targetIndex >= 0 ? process.argv[targetIndex + 1] : null;
 const thin = process.argv.includes("--thin");
 
-assertDarwinHelperEntries(runtimeManifest, { context: "VS Code runtime manifest" });
+if (reviewLocal) verifyLocalReviewRuntime(runtimeManifest, runtimeDirectory);
+else assertDarwinHelperEntries(runtimeManifest, { context: "VS Code runtime manifest" });
 
 if (target && thin) {
   throw new Error("--target and --thin cannot be combined");

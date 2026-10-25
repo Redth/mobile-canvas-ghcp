@@ -9,14 +9,19 @@ import {
   remoteRuntimeManifest,
 } from "../lib/runtime-assets.mjs";
 import { prepareAilohaGraph, prepareSemanticGraph } from "./prepare-ailoha-graph.mjs";
+import { verifyLocalReviewRuntime } from "./review-local-runtime.mjs";
 
 const root = join(dirname(fileURLToPath(import.meta.url)), "..");
 const thin = process.argv.includes("--thin");
+const reviewLocal = process.argv.includes("--review-local-rid");
 const runtimeDirectoryIndex = process.argv.indexOf("--runtime-dir");
 const runtimeDirectory = runtimeDirectoryIndex < 0 ? join(root, "runtimes")
   : resolve(process.argv[runtimeDirectoryIndex + 1] ?? "");
 if (runtimeDirectoryIndex >= 0 && (!process.argv[runtimeDirectoryIndex + 1] || thin)) {
   throw new Error("--runtime-dir requires a directory and bundled (not thin) packaging.");
+}
+if (reviewLocal && runtimeDirectoryIndex < 0) {
+  throw new Error("--review-local-rid requires an isolated --runtime-dir.");
 }
 const packageDirectory = thin ? "copilot-plugin-thin" : "copilot-plugin";
 const output = join(root, ".build", packageDirectory, "mobile-canvas");
@@ -28,7 +33,8 @@ const archive = join(
 );
 const runtimeManifest = JSON.parse(readFileSync(join(runtimeDirectory, "manifest.json"), "utf8"));
 
-assertDarwinHelperEntries(runtimeManifest, { context: "Copilot plugin runtime manifest" });
+if (reviewLocal) verifyLocalReviewRuntime(runtimeManifest, runtimeDirectory);
+else assertDarwinHelperEntries(runtimeManifest, { context: "Copilot plugin runtime manifest" });
 
 rmSync(output, { recursive: true, force: true });
 mkdirSync(output, { recursive: true });

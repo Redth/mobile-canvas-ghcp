@@ -1239,6 +1239,16 @@ node scripts/prepare-vscode.mjs --runtime-dir .build/review/runtimes
 ```
 
 These are pack-only artifacts, not published tags or normal-install manifests.
+When only a local `osx-arm64` build is available, use a tag of the form
+`unpublished-review-<short SHA>` and append `--review-local-rid` to the
+`prepare-plugin.mjs --runtime-dir` and `prepare-vscode.mjs --runtime-dir`
+commands. This review-only mode verifies the current source fingerprint and
+both local archive byte hashes, and permits exactly one `darwin-arm64` entry;
+ordinary packaging still requires both macOS runtimes. Verify the resulting
+plugin with `node scripts/verify-plugin.mjs .build/copilot-plugin/mobile-canvas
+--review-local-rid`, and a locally packaged VSIX with
+`node scripts/verify-vsix.mjs <review.vsix> --review-local-rid`. Neither ordinary
+verifier silently accepts an unpublished review bundle.
 Other native platforms, verified public SDK graph/pins, legal provenance and
 device parity remain release gates. No Ailoha implementation, UI, skill or schema
 source is vendored.

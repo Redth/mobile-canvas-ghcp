@@ -9,9 +9,13 @@ import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { assertDarwinHelperEntries } from "../lib/runtime-assets.mjs";
 import { verifyPreparedAilohaGraph } from "./prepare-ailoha-graph.mjs";
+import { verifyLocalReviewRuntime } from "./review-local-runtime.mjs";
 
 const scriptRoot = join(dirname(fileURLToPath(import.meta.url)), "..");
-const root = resolve(process.argv[2] ?? scriptRoot);
+const reviewLocal = process.argv.includes("--review-local-rid");
+const targets = process.argv.slice(2).filter((arg) => arg !== "--review-local-rid");
+if (targets.length > 1) throw new Error("Specify one plugin directory to verify.");
+const root = resolve(targets[0] ?? scriptRoot);
 const manifestPath = join(root, ".github", "plugin", "plugin.json");
 const manifest = JSON.parse(readFileSync(manifestPath, "utf8"));
 const marketplace = JSON.parse(
@@ -32,7 +36,13 @@ const fail = (message) => {
 };
 
 try {
-  assertDarwinHelperEntries(runtimeManifest, { context: "Copilot plugin runtime manifest" });
+  if (reviewLocal) verifyLocalReviewRuntime(runtimeManifest, join(root, "runtimes"));
+  else {
+    if (runtimeManifest.distribution?.tag?.startsWith("unpublished-review-")) {
+      throw new Error("An unpublished single-RID review bundle requires explicit --review-local-rid verification.");
+    }
+    assertDarwinHelperEntries(runtimeManifest, { context: "Copilot plugin runtime manifest" });
+  }
   if (root !== scriptRoot) verifyPreparedAilohaGraph(root);
 } catch (error) {
   fail(error.message);
