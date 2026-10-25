@@ -4,6 +4,7 @@ import test from "node:test";
 import "../../tests/scripts/fixtures/ailoha-installed-hooks.mjs";
 import { createSemanticInspectionController } from "../../lib/ailoha/semantic-inspection.mjs";
 import { createAilohaCanvasHost } from "../../lib/ailoha/canvas-host.mjs";
+import { createNativeBindingFixture, nativeAgent } from "../../tests/scripts/fixtures/ailoha-native-binding.mjs";
 
 const { HostBridge } = createRequire(import.meta.url)("../out/hostBridge.js");
 const scope = { sessionId: "compiled-semantic-session", viewId: "compiled-semantic-view" };
@@ -30,6 +31,7 @@ test("compiled VS Code bridge forwards only the named semantic route and retires
       };
     },
   });
+
   const host = createAilohaCanvasHost({
     scope, semanticInspection,
     createBackend() { throw new Error("A forwarded semantic read must not connect the device backend."); },
@@ -51,6 +53,53 @@ test("compiled VS Code bridge forwards only the named semantic route and retires
     await bridge.setVisible(false);
     assert.equal(semanticInspection.snapshot().status, "suspended");
     assert.equal(semanticInspection.snapshot().result, null);
+  } finally {
+    bridge.dispose();
+    await bridge.closed();
+  }
+});
+
+test("compiled VS Code bridge shares explicit candidate/bind/clear with the canonical MCP context", async () => {
+  const fixture = createNativeBindingFixture({ registrations: [nativeAgent("first"), nativeAgent("chosen")] });
+  const view = await fixture.createView("compiled-native-binding");
+  const host = createAilohaCanvasHost({
+    scope: view.scope, semanticInspection: view.controller,
+    createBackend() { throw new Error("Semantic binding must not acquire or mutate a device backend."); },
+  });
+  const messages = [];
+  const bridge = new HostBridge(undefined, view.scope.sessionId, view.scope.viewId,
+    { async postMessage(message) { messages.push(message); return true; } }, { appendLine() {} }, undefined, host);
+  let counter = 0;
+  const request = async (method, input) => {
+    const id = `native-binding-${++counter}`;
+    await bridge.handleMessage({ type: "api", id, path: "/api/v1/semantic/inspection", method,
+      ...(input ? { body: JSON.stringify(input) } : {}) });
+    const response = messages.find((message) => message.id === id);
+    assert.equal(response.status, 200);
+    return JSON.parse(new TextDecoder().decode(response.body));
+  };
+  try {
+    const initial = await request("GET");
+    const evidence = await request("POST", { operation: "candidates", bindingToken: initial.binding.token });
+    assert.equal(evidence.binding.candidates.length, 2);
+    assert.equal(evidence.appAvailable, false);
+    const selected = await request("POST", { operation: "bind", bindingToken: evidence.binding.token,
+      candidateToken: evidence.binding.candidates[1].token });
+    assert.equal(selected.selection.runtimeInstanceId, "chosen");
+    assert.equal((await view.mcpStore().readSnapshot()).selection.runtimeInstanceId, "chosen");
+    const app = await request("POST", { lens: "app", operation: "status" });
+    assert.equal(app.result.route.owner, "agent");
+    const cleared = await request("POST", { operation: "unbind", bindingToken: app.binding.token });
+    assert.equal(cleared.appAvailable, false);
+    assert.equal(cleared.selection.targetId, "target");
+    const latest = await request("POST", { operation: "candidates", bindingToken: cleared.binding.token });
+    await bridge.setVisible(false);
+    const hidden = await view.request({ operation: "bind", bindingToken: latest.binding.token,
+      candidateToken: latest.binding.candidates[0].token });
+    assert.equal(hidden.error.code, "semantic_view_suspended");
+    assert.equal(view.context.selection.runtimeInstanceId, null);
+    assert.equal(messages.some((message) => message.type === "semantic-inspection"
+      && message.state.selection?.runtimeInstanceId === "chosen"), true);
   } finally {
     bridge.dispose();
     await bridge.closed();

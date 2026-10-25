@@ -29,6 +29,14 @@ export interface SemanticInspectionState {
   status: string;
   selection: unknown;
   appAvailable: boolean;
+  binding?: {
+    token: string | null;
+    available: boolean;
+    discovery: "idle" | "complete" | "unavailable" | "error";
+    candidates: readonly { token: string; agentId: string; runtimeInstanceId: string;
+      registrationVersion: number; targetHostId: string; targetId: string }[] | null;
+    message: string;
+  };
   lens: string;
   operation: string | null;
   result: unknown;

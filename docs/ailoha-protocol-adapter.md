@@ -926,8 +926,42 @@ route and provenance. The stdio child receives only named context/broker
 configuration from the host environment, never ambient target/agent selectors.
 The legacy .NET canvas serves the shared semantic module as a public embedded
 bootstrap asset, while its inspection API remains authenticated. This
-source-only slice has no
-workspace-application-to-native-agent mapping or binding control. The three
+source-only slice provides optional explicit native-instance binding in the
+same shared semantic panel in both hosts. **Read registered candidates**
+uses only an advertised read-only `agent candidates` command, with the exact
+captured host/target pair. Its `ailoha.agent.candidates/v1` envelope must
+preserve that pair, explicit success/error, at most 256 canonical v2 IDs and
+global duplicate-runtime validation before filtering. A successful empty
+inventory is distinct from unavailable support or a failed read. Choose a
+candidate explicitly, even when there is only one, then **Verify selected
+candidate**. Advertisements are not live readiness or application mapping.
+Alternatively, enter exact canonical v2 `runtimeInstanceId` and `agentId`
+from trusted registration evidence and choose **Verify and bind**.
+A host-issued token captures this named view's
+context, epoch/revision, owner process, target pair and surface; Ailoha
+`context select` performs complete-tuple CAS with `applicationId:null`.
+Only a response preserving both IDs, the captured target/owner and
+`verified-native-instance` / null application evidence enables the App lens.
+**Clear native binding** performs target-only selection using the same CAS,
+leaving device-only System inspection available. Selection changes, view
+suspension and cancellation retire pending results and binding tokens.
+Canonical failures are explicit and never route to System as a fallback;
+uncertain binding writes are not replayed. **Read current binding** reads
+the same canonical context consumed by bound MCP operations.
+
+Older runtimes (including preview2) without the advertised command show
+candidate enumeration as explicitly **unavailable**, not an empty inventory.
+The runtime SDK has no read-only enumeration API; this command is a
+separate source-only engine prerequisite and requires an approved published
+pin before real acceptance. `agent list` may start the broker or scan the current workspace, and
+`broker status` / MCP human-text empty results cannot distinguish failed
+inventory from zero agents. This workflow never calls them, reads private
+broker configuration or credentials, guesses an endpoint, selects the first
+agent, or correlates package/path/name/port to a runtime. Candidate tokens are
+private to one captured view read; another view, a target/process change,
+suspension, or a newer candidate/inspection read cannot reuse them. There is no
+workspace-application-to-native-agent mapping.
+The three
 legacy `mobile_device_ui_dump/find/tap` identities remain installed. The
 source-only `microsoft/ailoha@5a99822fbbaa4780aa6cc196c9442496c89a06f6`
 contract qualifies the consumer mapping for review; it is not a shipping

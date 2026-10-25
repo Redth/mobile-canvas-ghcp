@@ -128,3 +128,106 @@ test("changing operation retires the previous tree response", async (t) => {
   await new Promise((resolve) => setImmediate(resolve));
   assert.equal(find(element, (entry) => entry.attributes?.["aria-label"] === "Inspection operation").value, "status");
 });
+
+function withBinding(generation = 1, count = 1) {
+  return { ...state(generation), status: "ready", result: null, binding: {
+    available: true, token: `binding-${generation}`, discovery: "complete",
+    message: "Advertisements only; no workspace application correlation.",
+    candidates: Array.from({ length: count }, (_, index) => ({
+      token: `candidate-${generation}-${index}`, runtimeInstanceId: `runtime-${index}`,
+      agentId: `agent-runtime-${index}`, registrationVersion: 2, targetHostId: "host", targetId: "target",
+    })),
+  } };
+}
+
+test("shared native picker never selects even a single advertisement; explicit choice sends captured tokens", async (t) => {
+  const previous = globalThis.document;
+  globalThis.document = { createElement: (tag) => new Element(tag) };
+  t.after(() => { globalThis.document = previous; });
+  for (const count of [0, 1, 2]) {
+    const element = new Element("aside");
+    const requests = [];
+    const view = createSemanticInspectionView({
+      element, async request(path, options) { requests.push({ path, options }); return withBinding(2); },
+    });
+    view.setActive(true);
+    view.acceptState(withBinding(1, count));
+    assert.equal(requests.length, 0);
+    assert.equal(find(element, (entry) => entry.tag === "details").textContent.includes("Clear native binding"), false);
+    const picker = find(element, (entry) => entry.attributes?.["aria-label"] === "Registered native instance");
+    const choose = find(element, (entry) => entry.tag === "button" && entry.textContent === "Verify selected candidate");
+    assert.equal(picker.value, "");
+    assert.equal(choose.disabled, true);
+    if (!count) continue;
+    picker.value = `candidate-1-${count - 1}`;
+    picker.listeners.get("change")();
+    assert.equal(choose.disabled, false);
+    choose.listeners.get("click")();
+    assert.deepEqual(JSON.parse(requests[0].options.body), {
+      operation: "bind", bindingToken: "binding-1", candidateToken: `candidate-1-${count - 1}`,
+    });
+    await new Promise((resolve) => setImmediate(resolve));
+    assert.equal(find(element, (entry) => entry.attributes?.["aria-label"] === "Registered native instance").value, "");
+    assert.match(element.textContent, /Workspace|workspace application correlation/);
+  }
+});
+
+test("manual exact-ID binding is labelled, bounded, optional and retired on target/token changes", async (t) => {
+  const previous = globalThis.document;
+  globalThis.document = { createElement: (tag) => new Element(tag) };
+  t.after(() => { globalThis.document = previous; });
+  const element = new Element("aside");
+  const requests = [];
+  const view = createSemanticInspectionView({
+    element, async request(path, options) { requests.push({ path, options }); return withBinding(2); },
+  });
+  view.setActive(true);
+  view.acceptState({ ...withBinding(), binding: {
+    ...withBinding().binding, discovery: "unavailable", candidates: null,
+    message: "Candidate discovery unavailable; enter exact v2 IDs.",
+  } });
+  assert.match(element.textContent, /device-only System inspection/);
+  const runtime = find(element, (entry) => entry.attributes?.["aria-label"] === "Runtime instance ID");
+  const agent = find(element, (entry) => entry.attributes?.["aria-label"] === "Agent ID");
+  const verify = find(element, (entry) => entry.tag === "button" && entry.textContent === "Verify and bind");
+  assert.equal(runtime.maxLength, 128);
+  assert.equal(agent.maxLength, 134);
+  assert.equal(verify.disabled, true);
+  runtime.value = "exact-runtime";
+  runtime.listeners.get("input")();
+  agent.value = "agent-different";
+  agent.listeners.get("input")();
+  assert.equal(verify.disabled, true);
+  agent.value = "agent-exact-runtime";
+  agent.listeners.get("input")();
+  assert.equal(verify.disabled, false);
+  verify.listeners.get("click")();
+  assert.deepEqual(JSON.parse(requests[0].options.body), {
+    operation: "bind", bindingToken: "binding-1",
+    runtimeInstanceId: "exact-runtime", agentId: "agent-exact-runtime",
+  });
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(find(element, (entry) => entry.attributes?.["aria-label"] === "Runtime instance ID").value, "");
+  view.setVisible(false);
+  view.setVisible(true);
+  assert.equal(find(element, (entry) => entry.tag === "button" && entry.textContent === "Verify and bind").disabled, true);
+});
+
+test("candidate failure is not rendered as empty success and never switches the App lens to System", async (t) => {
+  const previous = globalThis.document;
+  globalThis.document = { createElement: (tag) => new Element(tag) };
+  t.after(() => { globalThis.document = previous; });
+  const element = new Element("aside");
+  const view = createSemanticInspectionView({ element, async request() { throw new Error("synthetic transport"); } });
+  view.setActive(true);
+  view.acceptState({
+    ...withBinding(), lens: "app", status: "error", appAvailable: false,
+    binding: { ...withBinding().binding, discovery: "error", candidates: null, token: null,
+      message: "Inventory failed; this is not an empty registry." },
+    error: { code: "AgentCandidatesBrokerUnavailable", message: "Canonical inventory failed." },
+  });
+  assert.match(element.textContent, /not an empty registry/);
+  assert.match(element.textContent, /AgentCandidatesBrokerUnavailable/);
+  assert.equal(find(element, (entry) => entry.attributes?.["aria-label"] === "Inspection lens").value, "app");
+  assert.equal(find(element, (entry) => entry.attributes?.["aria-label"] === "Registered native instance").disabled, true);
+});

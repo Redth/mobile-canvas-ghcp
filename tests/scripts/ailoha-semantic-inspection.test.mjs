@@ -61,7 +61,7 @@ test("App requires a selected native instance and never falls back after a canon
   assert.equal(failure.error.code, "CanonicalCapabilityUnsupported");
   assert.equal(failure.error.message, "The selected owner does not support this canonical inspection capability.");
   for (const text of ["private", "known-private", "native-private"]) {
-    const privateFailure = await view.request("POST", JSON.stringify({ lens: "app", operation: "query", text }));
+    const privateFailure = await controller().request("POST", JSON.stringify({ lens: "app", operation: "query", text }));
     assert.equal(privateFailure.error.code, {
       private: "semantic_operation_failed",
       "known-private": "CanonicalCapabilityUnsupported",
@@ -69,7 +69,7 @@ test("App requires a selected native instance and never falls back after a canon
     }[text]);
     assert.doesNotMatch(JSON.stringify(privateFailure.error), /private-secret|internal\.invalid|\/private\/owner/);
   }
-  const transportFailure = await view.request("POST", JSON.stringify({
+  const transportFailure = await controller().request("POST", JSON.stringify({
     lens: "app", operation: "query", text: "transport-private",
   }));
   assert.equal(transportFailure.error.code, "semantic_mcp_transport_failed");
