@@ -59,8 +59,9 @@ test("compiled VS Code bridge forwards only the named semantic route and retires
   }
 });
 
-test("compiled VS Code bridge shares explicit candidate/bind/clear with the canonical MCP context", async () => {
-  const fixture = createNativeBindingFixture({ registrations: [nativeAgent("first"), nativeAgent("chosen")] });
+for (const registrationVersion of [2, 3]) test(`compiled VS Code bridge shares explicit native v${registrationVersion} candidate/bind/clear with the canonical MCP context`, async () => {
+  const fixture = createNativeBindingFixture({ registrations: [nativeAgent("first"),
+    nativeAgent("chosen", "target", { registrationVersion })] });
   const view = await fixture.createView("compiled-native-binding");
   const host = createAilohaCanvasHost({
     scope: view.scope, semanticInspection: view.controller,
@@ -70,26 +71,40 @@ test("compiled VS Code bridge shares explicit candidate/bind/clear with the cano
   const bridge = new HostBridge(undefined, view.scope.sessionId, view.scope.viewId,
     { async postMessage(message) { messages.push(message); return true; } }, { appendLine() {} }, undefined, host);
   let counter = 0;
-  const request = async (method, input) => {
+  const request = async (method, input, status = 200) => {
     const id = `native-binding-${++counter}`;
     await bridge.handleMessage({ type: "api", id, path: "/api/v1/semantic/inspection", method,
       ...(input ? { body: JSON.stringify(input) } : {}) });
     const response = messages.find((message) => message.id === id);
-    assert.equal(response.status, 200);
+    assert.equal(response.status, status);
     return JSON.parse(new TextDecoder().decode(response.body));
   };
   try {
     const initial = await request("GET");
     const evidence = await request("POST", { operation: "candidates", bindingToken: initial.binding.token });
     assert.equal(evidence.binding.candidates.length, 2);
+    assert.deepEqual(evidence.binding.candidates.map((candidate) => candidate.registrationVersion), [2, registrationVersion]);
     assert.equal(evidence.appAvailable, false);
     const selected = await request("POST", { operation: "bind", bindingToken: evidence.binding.token,
       candidateToken: evidence.binding.candidates[1].token });
     assert.equal(selected.selection.runtimeInstanceId, "chosen");
     assert.equal((await view.mcpStore().readSnapshot()).selection.runtimeInstanceId, "chosen");
-    const app = await request("POST", { lens: "app", operation: "status" });
-    assert.equal(app.result.route.owner, "agent");
-    const cleared = await request("POST", { operation: "unbind", bindingToken: app.binding.token });
+    let app;
+    for (const operation of ["tree", "query", "status"]) {
+      app = await request("POST", { lens: "app", operation, ...(operation === "query" ? { text: "OK" } : {}) });
+      assert.equal(app.result.route.owner, "agent");
+      assert.equal(app.result.route.runtimeInstanceId, "chosen");
+    }
+    fixture.model.registrations[1].transportError = "AgentTransportUnsupported";
+    const unsupported = await request("POST", { lens: "app", operation: "status" }, 501);
+    assert.equal(unsupported.error.code, "AgentTransportUnsupported");
+    assert.equal(unsupported.error.status, 501);
+    assert.equal(unsupported.appAvailable, false);
+    assert.equal(unsupported.result, null);
+    assert.equal(view.toolCalls.every((call) => call.arguments.route === "require-agent"), true);
+    const system = await request("POST", { lens: "system", operation: "tree" });
+    assert.equal(system.result.route.owner, "target-host");
+    const cleared = await request("POST", { operation: "unbind", bindingToken: system.binding.token });
     assert.equal(cleared.appAvailable, false);
     assert.equal(cleared.selection.targetId, "target");
     const latest = await request("POST", { operation: "candidates", bindingToken: cleared.binding.token });

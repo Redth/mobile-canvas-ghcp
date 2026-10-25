@@ -1,10 +1,14 @@
 import assert from "node:assert/strict";
-import { readFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { join } from "node:path";
 import test from "node:test";
+import { fileURLToPath } from "node:url";
 import { productModule } from "../ailoha-test-module.mjs";
 import { createNativeBindingFixture, nativeAgent } from "./fixtures/ailoha-native-binding.mjs";
 
 const { createAilohaMcpDispatcher, ailohaMcpCatalog, ailohaAppMcpCatalog } = await import(productModule("lib/ailoha/mcp-host.mjs"));
+const { createAilohaGithubTools } = await import(productModule("lib/ailoha/github-tools.mjs"));
+const { callSemanticTool } = await import(productModule("lib/ailoha/semantic-mcp.mjs"));
 const appNames = ["mobile_app_tree", "mobile_app_query", "mobile_app_status"];
 const call = (name, args = {}, extra = {}) => ({
   jsonrpc: "2.0", id: 1, method: "tools/call", params: { name, arguments: args, ...extra },
@@ -95,7 +99,8 @@ test("absent App binding fails all reads without acquiring a device backend; dev
 });
 
 test("App MCP reads use exactly the UI-selected native instance and canonical require-agent provenance", async (t) => {
-  const fixture = createNativeBindingFixture({ registrations: [nativeAgent("first"), nativeAgent("chosen")] });
+  const fixture = createNativeBindingFixture({ registrations: [nativeAgent("first"),
+    nativeAgent("chosen", "target", { registrationVersion: 3 })] });
   const view = await fixture.createView();
   const { dispatcher, deviceCalls } = await dispatcherFor(t, view);
   await bind(view, "chosen");
@@ -125,6 +130,87 @@ test("App MCP reads use exactly the UI-selected native instance and canonical re
   assert.deepEqual(deviceCalls, []);
 });
 
+test("v3 App reads cross SDK-owned named GitHub tools and real stdio MCP without transport selectors or fallback", async (t) => {
+  const root = fileURLToPath(new URL("../..", import.meta.url));
+  mkdirSync(join(root, ".build"), { recursive: true });
+  const scratch = mkdtempSync(join(root, ".build/v3-app-mcp-"));
+  t.after(() => rmSync(scratch, { recursive: true, force: true }));
+  const statePath = join(scratch, "contexts.json");
+  const pin = { version: "synthetic-only", sourceSha: "a".repeat(40) };
+  const sdk = { async getVerifiedCliLaunch() {
+    return { ...pin, file: process.execPath,
+      args: [join(root, "tests/scripts/fixtures/semantic-mcp-server.mjs"), "--fixture-state", statePath] };
+  } };
+  const fixture = createNativeBindingFixture({
+    registrations: [nativeAgent("rn", "android", { registrationVersion: 3 }), nativeAgent("ios", "ios")],
+    semanticTool: (request) => callSemanticTool({ ...request, sdk, pin }),
+  });
+  const android = await fixture.createView("android", "android");
+  const ios = await fixture.createView("ios", "ios");
+  await bind(android, "rn");
+  await bind(ios, "ios");
+  fixture.model.beforeTool = () => writeFileSync(statePath, JSON.stringify([...fixture.contexts.values()]));
+  const views = new Map([android, ios].map((view) => [view.scope.viewId, view]));
+  const tools = createAilohaGithubTools({
+    descriptors: ailohaAppMcpCatalog(),
+    async getBinding(scope) {
+      return { scope, contextRef: views.get(scope.viewId).context.contextRef,
+        scopeEpoch: views.get(scope.viewId).context.scopeEpoch, ownerProcessId: process.pid };
+    },
+    createDispatcher({ binding }) {
+      return createAilohaMcpDispatcher({
+        binding, version: pin.version,
+        createSemanticInspection: () => views.get(binding.scope.viewId).createInspection(),
+        createBackend() { throw new Error("App reads must never acquire a device backend."); },
+      });
+    },
+  });
+  t.after(() => tools.closeAll());
+  tools.opened(android.scope);
+  tools.opened(ios.scope);
+  const invoke = (name, view = android, extra = {}) => tools.tools.find((tool) => tool.name === name)
+    .handler({ instanceId: view.scope.viewId, ...(name === "mobile_app_query" ? { text: "OK" } : {}), ...extra },
+      { sessionId: view.scope.sessionId });
+  for (const name of appNames) {
+    const response = await invoke(name);
+    assert.equal(response.resultType, "success", response.error);
+    const result = JSON.parse(response.textResultForLlm);
+    assert.equal(result.selection.runtimeInstanceId, "rn");
+    assert.equal(result.result.route.agentId, "agent-rn");
+    assert.equal(result.result.route.owner, "agent");
+  }
+  for (const [code, status] of [["AgentTransportUnsupported", 501], ["unsupported-capability", 501],
+    ["AgentTransportStale", 409], ["AgentInstanceUnverified", 502]]) {
+    writeFileSync(`${statePath}.semantic-failures.json`, JSON.stringify({ [android.context.contextRef]: code }));
+    for (const name of appNames) {
+      const failed = await invoke(name);
+      assert.equal(failed.resultType, "failure");
+      const error = JSON.parse(failed.error);
+      assert.equal(error.code, code);
+      assert.equal(error.status, status);
+      assert.doesNotMatch(failed.error, /private-fixture-detail|token=|connectionRef|guestPort|endpointScope/);
+    }
+    assert.equal((await invoke("mobile_app_status", ios)).resultType, "success");
+  }
+  for (const key of ["transport", "connectionRef", "endpointScope", "guestPort", "registrationVersion"]) {
+    assert.equal(JSON.parse((await invoke("mobile_app_status", android, { [key]: "cannot-inject" })).error).code,
+      "invalid_request");
+  }
+  const calls = readFileSync(`${statePath}.semantic.jsonl`, "utf8").trim().split("\n").map((line) => JSON.parse(line));
+  assert.equal(calls.length, 19);
+  assert.equal(calls.every((entry) => entry.arguments.route === "require-agent"), true);
+  assert.equal(calls.filter((entry) => entry.arguments.targetId === "android").length, 15);
+  for (const entry of calls) {
+    assert.deepEqual(Object.keys(entry.arguments).sort(), [
+      "targetHostId", "targetId", "surfaceId", "contextRef", "contextEpoch", "contextRevision", "route",
+      ...(entry.name === "app_query" ? ["text"] : entry.name === "app_tree" ? ["maxDepth"] : []),
+    ].sort());
+  }
+  await tools.closing(android.scope);
+  assert.equal((await invoke("mobile_app_status")).resultType, "failure");
+  assert.equal((await invoke("mobile_app_status", ios)).resultType, "success");
+});
+
 test("App read arguments cannot replace scope, context, owner, target, agent, route or endpoints", async (t) => {
   const fixture = createNativeBindingFixture({ registrations: [nativeAgent("chosen")] });
   const view = await fixture.createView();
@@ -132,7 +218,8 @@ test("App read arguments cannot replace scope, context, owner, target, agent, ro
   for (const name of appNames) {
     for (const key of ["sessionId", "instanceId", "viewId", "scope", "contextRef", "scopeEpoch", "ownerProcessId",
       "targetHostId", "targetId", "deviceId", "surfaceId", "agentId", "runtimeInstanceId", "applicationId",
-      "agentPort", "port", "endpoint", "route", "lens", "operation"]) {
+      "agentPort", "port", "endpoint", "route", "lens", "operation", "transport", "connectionRef",
+      "endpointScope", "guestPort", "registrationVersion"]) {
       const args = { ...(name === "mobile_app_query" ? { text: "OK" } : {}), [key]: "cannot-inject" };
       assert.equal(errorCode(await dispatcher.handle(call(name, args))), "invalid_request");
     }

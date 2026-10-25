@@ -25,7 +25,7 @@ const modules = [
   "lib/ailoha/protocol.mjs", "lib/ailoha/mobile-catalog.mjs", "lib/ailoha/operation-receipts.mjs",
   "web/create-device-options.js",
   "lib/ailoha/workspace-inspection.mjs", "web/ailoha-workspace-view.js",
-  "lib/ailoha/semantic-inspection.mjs", "lib/ailoha/semantic-mcp.mjs", "web/ailoha-semantic-view.js",
+  "lib/ailoha/agent-candidates.mjs", "lib/ailoha/semantic-inspection.mjs", "lib/ailoha/semantic-mcp.mjs", "web/ailoha-semantic-view.js",
   "web/device-canvas.js", "web/device-canvas.css", "web/index.html",
 ];
 const tests = [

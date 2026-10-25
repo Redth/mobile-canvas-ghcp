@@ -5,6 +5,7 @@ import { productModule } from "../ailoha-test-module.mjs";
 
 const { createVerifiedAilohaCli } = await import(productModule("lib/ailoha/runtime-sdk.mjs"));
 const { createAilohaCanvasHost } = await import(productModule("lib/ailoha/canvas-host.mjs"));
+const { readNativeAgentCandidates } = await import(productModule("lib/ailoha/semantic-mcp.mjs"));
 
 async function discover(view) {
   const state = await view.controller.request("GET");
@@ -118,6 +119,202 @@ test("malformed, wrong-pair, duplicate, oversized or private candidate projectio
   }
 });
 
+test("v1 legacy2 and v2 native3/mixed candidates bind exact identities without projecting transport authority", async () => {
+  for (const versions of [[2], [3], [2, 3]]) {
+    const fixture = createNativeBindingFixture({ registrations: versions.map((version) =>
+      nativeAgent(`runtime-${version}`, "target", { registrationVersion: version,
+        endpointScope: "target-guest", port: 54321, connectionRef: { token: "must-not-project" } })) });
+    const view = await fixture.createView();
+    const evidence = await discover(view);
+    assert.equal(evidence.error, null);
+    assert.deepEqual(evidence.binding.candidates.map((candidate) => candidate.registrationVersion), versions);
+    assert.equal(evidence.appAvailable, false);
+    assert.match(evidence.binding.message, /advertisements only/i);
+    assert.doesNotMatch(JSON.stringify(evidence), /"(?:endpointScope|port|connectionRef)"|must-not-project/);
+    const selected = await bind(view, evidence, versions.length - 1);
+    assert.equal(selected.selection.agentId, `agent-runtime-${versions.at(-1)}`);
+    assert.equal(selected.appAvailable, true);
+    const write = fixture.calls.find((args) => args[1] === "select");
+    const intent = JSON.parse(write[write.indexOf("--request-json") + 1]);
+    assert.deepEqual(intent.selection, { workspaceId: null, applicationId: null,
+      targetHostId: "host", targetId: "target", surfaceId: "surface",
+      agentId: selected.selection.agentId, runtimeInstanceId: selected.selection.runtimeInstanceId });
+    assert.equal(Object.hasOwn(intent.selection, "registrationVersion"), false);
+  }
+});
+
+test("another target's v3 inventory does not change iOS/v2 or genuine empty selected-pair discovery", async () => {
+  const fixture = createNativeBindingFixture({ registrations: [
+    nativeAgent("ios", "ios"), nativeAgent("rn-android", "android", { registrationVersion: 3 }),
+  ] });
+  for (const [target, versions] of [["ios", [2]], ["android", [3]], ["empty", []]]) {
+    const view = await fixture.createView(target, target);
+    const result = await discover(view);
+    assert.equal(result.error, null);
+    assert.deepEqual(result.binding.candidates.map((candidate) => candidate.registrationVersion), versions);
+    assert.equal(result.appAvailable, false);
+  }
+  fixture.model.registrations.push(nativeAgent("rn-android", "another", { registrationVersion: 3 }));
+  const ios = await fixture.createView("ios-duplicate", "ios");
+  assert.equal((await discover(ios)).error.code, "AgentCandidatesAmbiguous");
+  fixture.model.registrations = [nativeAgent("future", "another", { registrationVersion: 4 })];
+  assert.equal((await discover(ios)).error.code, "AgentCandidatesInventoryInvalid");
+});
+
+test("candidate schemas reject future versions, mismatched envelopes, missing fields and private authority", async () => {
+  const fixture = createNativeBindingFixture({ registrations: [nativeAgent("native", "target", { registrationVersion: 3 })] });
+  const view = await fixture.createView();
+  for (const mutate of [
+    (value) => ({ ...value, schema: "ailoha.agent.candidates/v1" }),
+    (value) => ({ ...value, schema: "ailoha.agent.candidates/v3" }),
+    (value) => ({ ...value, candidates: [] }),
+    (value) => ({ ...value, candidates: [{ ...value.candidates[0], registrationVersion: 2 }] }),
+    (value) => ({ ...value, candidates: [{ ...value.candidates[0], registrationVersion: 4 }] }),
+    (value) => ({ ...value, candidates: [{ ...value.candidates[0], registrationVersion: "3" }] }),
+    (value) => ({ ...value, candidates: [{ ...value.candidates[0], targetHostId: "other" }] }),
+    (value) => ({ ...value, candidates: [{ ...value.candidates[0], targetId: "other" }] }),
+    (value) => ({ ...value, candidates: [{ ...value.candidates[0], agentId: "agent-another" }] }),
+    (value) => ({ ...value, candidates: [{ ...value.candidates[0], runtimeInstanceId: "x".repeat(129) }] }),
+    (value) => ({ ...value, candidates: [null] }),
+    (value) => ({ ...value, candidates: [value.candidates[0], value.candidates[0]] }),
+    (value) => ({ ...value, candidates: Array(257).fill(value.candidates[0]) }),
+    (value) => ({ ...value, error: undefined }),
+    ...["port", "currentPort", "endpointScope", "endpoint", "owner", "connectionRef", "serial", "transport"].map((key) =>
+      (value) => ({ ...value, candidates: [{ ...value.candidates[0], [key]: "must-not-project" }] })),
+    (value) => ({ ...value, owner: "must-not-project" }),
+  ]) {
+    fixture.model.mutateInventory = mutate;
+    const failed = await discover(view);
+    assert.equal(failed.error.code, "semantic_candidates_invalid");
+    assert.equal(failed.binding.candidates, null);
+    assert.equal(failed.appAvailable, false);
+    assert.doesNotMatch(JSON.stringify(failed), /must-not-project/);
+  }
+  assert.equal(fixture.calls.some((args) => args[1] === "select"), false);
+});
+
+test("raw duplicate and escaped-alias candidate/error properties cannot overwrite target, identity or version", async () => {
+  const fixture = createNativeBindingFixture({ registrations: [nativeAgent("native", "target", { registrationVersion: 3 })] });
+  const view = await fixture.createView();
+  for (const [key, alias, first, last] of [
+    ["schema", "sche\\u006da", "ailoha.agent.candidates/v1", "ailoha.agent.candidates/v2"],
+    ["targetId", "target\\u0049d", "other", "target"],
+    ["runtimeInstanceId", "runtimeInstance\\u0049d", "other", "native"],
+    ["registrationVersion", "registration\\u0056ersion", 4, 3],
+  ]) {
+    for (const wireKey of [key, alias]) {
+      fixture.model.mutateInventoryText = (raw) => raw.replace(
+        `${JSON.stringify(key)}:${JSON.stringify(last)}`,
+        `${JSON.stringify(key)}:${JSON.stringify(first)},"${wireKey}":${JSON.stringify(last)}`);
+      const failed = await discover(view);
+      assert.equal(failed.error.code, "semantic_candidates_invalid", wireKey);
+      assert.equal(failed.binding.candidates, null);
+    }
+  }
+  fixture.model.inventoryError = "AgentCandidatesBrokerUnavailable";
+  for (const wireKey of ["code", "co\\u0064e"]) {
+    fixture.model.mutateInventoryText = (raw) => raw.replace('"code":"AgentCandidatesBrokerUnavailable"',
+      `"code":"AgentCandidatesInventoryInvalid","${wireKey}":"AgentCandidatesBrokerUnavailable"`);
+    assert.equal((await discover(view)).error.code, "semantic_candidates_invalid");
+  }
+  fixture.model.inventoryError = null;
+  fixture.model.mutateInventoryText = (raw) => raw.replace('"error":null', '"error":{"a":{"b":{"c":null}}}');
+  assert.equal((await discover(view)).error.code, "semantic_candidates_invalid");
+  fixture.model.mutateInventoryText = (raw) => raw.replace('"error":null',
+    `"error":${"[".repeat(1024)}null${"]".repeat(1024)}`);
+  assert.equal((await discover(view)).error.code, "semantic_candidates_invalid");
+  fixture.model.mutateInventoryText = null;
+  assert.equal((await discover(view)).binding.candidates[0].registrationVersion, 3);
+  for (const number of ["3.0", "3e0"]) {
+    fixture.model.mutateInventoryText = (raw) => raw.replace('"registrationVersion":3', `"registrationVersion":${number}`);
+    assert.equal((await discover(view)).binding.candidates[0].registrationVersion, 3);
+  }
+  fixture.model.mutateInventoryText = null;
+  fixture.model.inventoryError = "AgentCandidatesBrokerUnavailable";
+  fixture.model.mutateInventory = (value) => ({ ...value, error: { ...value.error,
+    message: 'Literal {"code":1,"code":2}, escaped quote " and slash \\ are text, not property tokens.' } });
+  assert.equal((await discover(view)).error.code, "AgentCandidatesBrokerUnavailable");
+  assert.equal(fixture.calls.some((args) => args[1] === "select"), false);
+  assert.deepEqual(view.toolCalls, []);
+});
+
+test("candidate target/count/byte bounds are exact at the shared adapter boundary", async () => {
+  const targetHostId = "h".repeat(128);
+  const targetId = "t".repeat(128);
+  const result = { schema: "ailoha.agent.candidates/v2", ok: true, targetHostId, targetId, error: null,
+    candidates: Array.from({ length: 256 }, (_, i) => ({
+      agentId: `agent-${String(i).padStart(128, "r")}`, runtimeInstanceId: String(i).padStart(128, "r"),
+      registrationVersion: i === 255 ? 3 : 2, targetHostId, targetId,
+    })) };
+  let raw = JSON.stringify(result);
+  const read = (selection = { targetHostId, targetId }) => readNativeAgentCandidates({
+    snapshot: { selection }, runCli: async (args) => args[0] === "commands"
+      ? JSON.stringify([{ command: "agent candidates", description: "Synthetic", mutating: false }]) : raw,
+  });
+  assert.equal((await read()).candidates.length, 256);
+  const bounded = raw;
+  raw = bounded.padEnd(512 * 1024, " ");
+  assert.equal((await read()).candidates.length, 256);
+  raw += " ";
+  await assert.rejects(read(), { code: "semantic_candidates_invalid" });
+  for (const invalidId of ["", ".", "..", " ", "h".repeat(129), "bad\u0000host", "bad\u0085host", "\ud800"]) {
+    raw = JSON.stringify({ ...result, schema: "ailoha.agent.candidates/v1", targetHostId: invalidId, candidates: [] });
+    await assert.rejects(read({ targetHostId: invalidId, targetId }), { code: "semantic_candidates_invalid" });
+  }
+  raw = `${bounded}${" ".repeat(512 * 1024)}`;
+  await assert.rejects(read(), { code: "semantic_candidates_invalid" });
+  raw = "{";
+  await assert.rejects(read(), { code: "semantic_candidates_invalid" });
+});
+
+test("both candidate success schemas keep failures v1 and never turn malformed errors into empty discovery", async () => {
+  for (const registrationVersion of [2, 3]) {
+    const fixture = createNativeBindingFixture({ registrations: [nativeAgent("native", "target", { registrationVersion })] });
+    const view = await fixture.createView();
+    fixture.model.inventoryError = "AgentCandidatesBrokerUnavailable";
+    assert.equal((await discover(view)).error.code, "AgentCandidatesBrokerUnavailable");
+    fixture.model.mutateInventory = (value) => ({ ...value, targetHostId: null, targetId: null,
+      error: { code: "AgentCandidatesRequestInvalid", message: "Invalid selectors" } });
+    assert.equal((await discover(view)).error.code, "AgentCandidatesRequestInvalid");
+    for (const mutate of [
+      (value) => ({ ...value, schema: "ailoha.agent.candidates/v2" }),
+      (value) => ({ ...value, candidates: [] }),
+      (value) => ({ ...value, candidates: undefined }),
+      (value) => ({ ...value, error: { code: "AgentCandidatesBrokerUnavailable" } }),
+      (value) => ({ ...value, error: { ...value.error, owner: "must-not-project" } }),
+      (value) => ({ ...value, error: { code: "FutureFailure", message: "Unknown" } }),
+      (value) => ({ ...value, error: { ...value.error, message: "x".repeat(2049) } }),
+      (value) => ({ ...value, targetHostId: null, targetId: null }),
+      (value) => ({ ...value, targetId: "wrong" }),
+      (value) => ({ ...value, targetHostId: undefined }),
+    ]) {
+      fixture.model.mutateInventory = mutate;
+      const failed = await discover(view);
+      assert.equal(failed.error.code, "semantic_candidates_invalid");
+      assert.equal(failed.binding.discovery, "error");
+      assert.equal(failed.binding.candidates, null);
+    }
+  }
+});
+
+test("native3 canonical binding refuses unsupported, stale and unverified evidence without replay or fallback", async () => {
+  for (const [code, status] of [["AgentTransportUnsupported", 501], ["unsupported-capability", 501],
+    ["AgentTransportStale", 409], ["AgentInstanceUnverified", 409]]) {
+    const fixture = createNativeBindingFixture({ registrations: [
+      nativeAgent("native", "target", { registrationVersion: 3, transportError: code }),
+    ] });
+    const view = await fixture.createView();
+    const failed = await bind(view, await discover(view));
+    assert.equal(failed.error.code, code);
+    assert.equal(failed.error.status, status);
+    assert.equal(failed.appAvailable, false);
+    assert.equal(view.context.selection.runtimeInstanceId, null);
+    assert.equal(fixture.calls.filter((args) => args[1] === "select").length, 1);
+    assert.doesNotMatch(JSON.stringify(failed), /must-not-project/);
+    assert.equal((await view.request({ lens: "system", operation: "tree" })).result.route.owner, "target-host");
+  }
+});
+
 test("stale advertisement and process restart revoke App without selecting a replacement or falling back", async () => {
   const fixture = createNativeBindingFixture({ registrations: [nativeAgent("original")] });
   const view = await fixture.createView();
@@ -218,27 +415,57 @@ test("cancellation, hide and disconnect retire candidate evidence and never repl
   assert.equal(disconnected.error.code, "ContextOwnerUnavailable");
 });
 
-test("verified CLI preserves only the agreed candidate stderr envelope on exit 1", async () => {
+test("verified CLI preserves only strict v1 candidate failure stderr on exit 1, including selected v3 failures", async () => {
   const pin = { version: "synthetic-only", sourceSha: "a".repeat(40) };
+  const failure = { schema: "ailoha.agent.candidates/v1", ok: false, targetHostId: "host", targetId: "target",
+    candidates: null, error: { code: "AgentCandidatesBrokerUnavailable", message: "Synthetic failure" } };
+  const failureText = JSON.stringify(failure);
+  const successText = JSON.stringify({ ...failure, schema: "ailoha.agent.candidates/v2", ok: true, error: null,
+    candidates: [{ agentId: "agent-native", runtimeInstanceId: "native", registrationVersion: 3,
+      targetHostId: "host", targetId: "target" }] });
   for (const [code, shape, accepted] of [
-    [1, { schema: "ailoha.agent.candidates/v1", ok: false, candidates: null, error: { code: "AgentCandidatesBrokerUnavailable" } }, true],
-    [2, { schema: "ailoha.agent.candidates/v1", ok: false, candidates: null, error: { code: "AgentCandidatesBrokerUnavailable" } }, false],
+    [1, failure, true],
+    [1, { ...failure, targetHostId: null, targetId: null,
+      error: { code: "AgentCandidatesRequestInvalid", message: "Invalid selectors" } }, true],
+    [2, failure, false],
+    [1, { ...failure, schema: "ailoha.agent.candidates/v2" }, "invalid"],
+    [1, { ...failure, schema: "ailoha.agent.candidates/v3" }, "invalid"],
+    [1, { ...failure, candidates: [] }, "invalid"],
+    [1, { ...failure, targetId: "other" }, "invalid"],
+    [1, { ...failure, connectionRef: {} }, "invalid"],
+    [1, { ...failure, error: { code: failure.error.code } }, "invalid"],
+    [1, { ...failure, ok: true, error: null, candidates: [] }, false],
+    [1, { ...failure, schema: "ailoha.agent.candidates/v2", ok: true, error: null,
+      candidates: [{ agentId: "agent-native", runtimeInstanceId: "native",
+        registrationVersion: 3, targetHostId: "host", targetId: "target" }] }, false],
+    ...[
+      failureText.replace('"schema":', '"schema":"ailoha.agent.candidates/v2","schema":'),
+      failureText.replace('"schema":', '"schema":"ailoha.agent.candidates/v2","sche\\u006da":'),
+      failureText.replace('"targetId":', '"targetId":"other","targetId":'),
+      failureText.replace('"targetId":', '"targetId":"other","target\\u0049d":'),
+      failureText.replace('"code":', '"code":"AgentCandidatesInventoryInvalid","code":'),
+      failureText.replace('"code":', '"code":"AgentCandidatesInventoryInvalid","co\\u0064e":'),
+      successText.replace('"runtimeInstanceId":', '"runtimeInstanceId":"other","runtimeInstanceId":'),
+      successText.replace('"runtimeInstanceId":', '"runtimeInstanceId":"other","runtimeInstance\\u0049d":'),
+      successText.replace('"registrationVersion":3', '"registrationVersion":4,"registrationVersion":3'),
+      successText.replace('"registrationVersion":3', '"registrationVersion":4,"registration\\u0056ersion":3'),
+    ].map((raw) => [1, raw, "invalid"]),
     [1, { ok: false, error: { code: "private" } }, false],
   ]) {
     const cli = createVerifiedAilohaCli({ pin, sdk: {
       async getVerifiedCliLaunch() {
         return { ...pin, file: process.execPath, args: ["-e",
-          `process.stderr.write(${JSON.stringify(JSON.stringify(shape))});process.exit(${code})`, "--"] };
+          `process.stderr.write(${JSON.stringify(typeof shape === "string" ? shape : JSON.stringify(shape))});process.exit(${code})`, "--"] };
       },
     } });
     const work = cli(["agent", "candidates", "--target-host", "host", "--target", "target", "--json"]);
-    if (accepted) assert.deepEqual(JSON.parse(await work), shape);
-    else await assert.rejects(work, { code: "ailoha_cli_failed" });
+    if (accepted === true) assert.deepEqual(JSON.parse(await work), shape);
+    else await assert.rejects(work, { code: accepted === "invalid" ? "semantic_candidates_invalid" : "ailoha_cli_failed" });
   }
 });
 
-test("GitHub owned HTTP panel binds and clears the canonical view, not a device or another panel", async (t) => {
-  const fixture = createNativeBindingFixture({ registrations: [nativeAgent("one"), nativeAgent("two")] });
+for (const registrationVersion of [2, 3]) test(`GitHub owned HTTP panel binds and clears native v${registrationVersion} in the canonical view, not a device or another panel`, async (t) => {
+  const fixture = createNativeBindingFixture({ registrations: [nativeAgent("one"), nativeAgent("two", "target", { registrationVersion })] });
   const view = await fixture.createView();
   const host = createAilohaCanvasHost({
     scope: view.scope, semanticInspection: view.controller,
@@ -265,6 +492,7 @@ test("GitHub owned HTTP panel binds and clears the canonical view, not a device 
   const initial = await request("GET");
   const evidence = await request("POST", { operation: "candidates", bindingToken: initial.binding.token });
   assert.equal(evidence.binding.candidates.length, 2);
+  assert.deepEqual(evidence.binding.candidates.map((candidate) => candidate.registrationVersion), [2, registrationVersion]);
   assert.equal(evidence.appAvailable, false);
   const chosen = await request("POST", { operation: "bind", bindingToken: evidence.binding.token,
     candidateToken: evidence.binding.candidates[1].token });

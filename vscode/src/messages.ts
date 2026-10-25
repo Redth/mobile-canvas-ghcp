@@ -34,7 +34,7 @@ export interface SemanticInspectionState {
     available: boolean;
     discovery: "idle" | "complete" | "unavailable" | "error";
     candidates: readonly { token: string; agentId: string; runtimeInstanceId: string;
-      registrationVersion: number; targetHostId: string; targetId: string }[] | null;
+      registrationVersion: 2 | 3; targetHostId: string; targetId: string }[] | null;
     message: string;
   };
   lens: string;

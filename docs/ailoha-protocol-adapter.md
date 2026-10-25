@@ -1008,13 +1008,35 @@ bootstrap asset, while its inspection API remains authenticated. This
 source-only slice provides optional explicit native-instance binding in the
 same shared semantic panel in both hosts. **Read registered candidates**
 uses only an advertised read-only `agent candidates` command, with the exact
-captured host/target pair. Its `ailoha.agent.candidates/v1` envelope must
-preserve that pair, explicit success/error, at most 256 canonical v2 IDs and
-global duplicate-runtime validation before filtering. A successful empty
+captured host/target pair. Its `ailoha.agent.candidates/v1` success envelope
+contains only registration version 2 identities (or an empty array).
+`ailoha.agent.candidates/v2` success requires at least one version 3 identity
+for **that selected pair**, and may also contain known version 2 identities.
+Both preserve the exact pair, explicit `ok:true`, `error:null` and at most
+256 candidates. Each candidate has exactly `agentId`, `runtimeInstanceId`,
+`registrationVersion`, `targetHostId` and `targetId`; its agent ID must equal
+`agent-<runtimeInstanceId>`. Runtime IDs are 1..128 ASCII alphanumeric, `_`
+or `-`; each target ID is a nonblank, noncontrol opaque ID of at most 128
+characters, excluding `.` and `..`. The complete JSON is bounded to 512 KiB.
+Unknown registration versions, v1 with version 3, v2 without version 3,
+duplicate identities or JSON properties (including escaped key aliases),
+partial/mismatched target pairs and extra private fields fail explicitly.
+A linear raw-property scan limits JSON container depth to the canonical
+three levels before adopting parsed identities. Canonical inventory validates at most 256 global
+registrations and global duplicates **before** filtering; another target's
+valid v3 registration must not break iOS/v2 discovery or change its schema.
+Failures always use `ailoha.agent.candidates/v1`, `ok:false`,
+`candidates:null` and exactly `error:{code,message}`, including failures when
+enumerating v3 candidates. They retain the exact target pair; only
+`AgentCandidatesRequestInvalid` can return both selectors as explicit nulls.
+The legacy null-bearing fields remain required; a v2 failure or missing
+null field is malformed, not a new failure-envelope variant. The verified
+CLI preserves only a validated failure envelope on exit 1, without exposing
+its diagnostic message. A successful empty
 inventory is distinct from unavailable support or a failed read. Choose a
 candidate explicitly, even when there is only one, then **Verify selected
 candidate**. Advertisements are not live readiness or application mapping.
-Alternatively, enter exact canonical v2 `runtimeInstanceId` and `agentId`
+Alternatively, enter exact canonical v2/v3 `runtimeInstanceId` and `agentId`
 from trusted registration evidence and choose **Verify and bind**.
 A host-issued token captures this named view's
 context, epoch/revision, owner process, target pair and surface; Ailoha
@@ -1049,6 +1071,32 @@ agent, or correlates package/path/name/port to a runtime. Candidate tokens are
 private to one captured view read; another view, a target/process change,
 suspension, or a newer candidate/inspection read cannot reuse them. There is no
 workspace-application-to-native-agent mapping.
+
+The locally admitted Android app-transport v3 source contract is a consumer
+compatibility target, not a published or pinned runtime. Broker registration
+uses `registrationVersion:3` and `endpointScope:"target-guest"`; the runtime
+and Target Host own the actual guest port, ACK and transport negotiation.
+None of those transport/endpoint fields, raw serials or private owner stamps
+belong in candidate projections, binding arguments or MCP tool inputs.
+The existing canonical context selection and three composed App reads carry
+only the exact identity and captured context; no caller transport selector,
+new public transport tool, Android host-loopback, System or legacy fallback
+is introduced. Host, provider and target must explicitly advertise
+`target.agent-transport` version 1 with both `getTargetAgentTransport` and
+`exchangeTargetAgent`. The canonical layer performs this live negotiation;
+candidate discovery is not capability or live-runtime verification.
+`AgentTransportUnsupported` and `unsupported-capability` remain sanitized
+typed 501 failures; `AgentTransportStale` remains a typed 409 refusal rather
+than a guessed replacement owner. Unverified native identity and disconnected
+owner errors remain explicit. Binding/refused reads are not retried.
+
+Shared source tests exercise version-aware discovery, exact binding, named
+GitHub SDK tools, real JS SDK stdio MCP calls, and the compiled VS Code
+bridge with synthetic canonical peers. This is not actual Android runtime
+acceptance. React Native Android adopts the upstream transport first;
+standalone Kotlin remains legacy and managed MAUI Android transport adoption
+is not implied. iOS/v1/v2 behavior, tool catalog identities (64 opt-in /
+61 legacy), runtime/package pins and production defaults are unchanged.
 The three
 legacy `mobile_device_ui_dump/find/tap` identities remain installed. The
 source-only `microsoft/ailoha@5a99822fbbaa4780aa6cc196c9442496c89a06f6`

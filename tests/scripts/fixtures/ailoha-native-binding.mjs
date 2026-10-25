@@ -11,12 +11,12 @@ export function nativeAgent(runtimeInstanceId, targetId = "target", changes = {}
     targetHostId: "host", targetId, appName: "Same app", ...changes };
 }
 
-export function createNativeBindingFixture({ registrations = [], advertised = true } = {}) {
+export function createNativeBindingFixture({ registrations = [], advertised = true, semanticTool } = {}) {
   const calls = [];
   const contexts = new Map();
   const model = { registrations, advertised, inventoryError: null, disconnected: false,
     beforeCandidates: null, beforeSelect: null, afterSelect: null, mutateInventory: null,
-    tamperSelectReply: null, beforeTool: null, mutateTool: null };
+    tamperSelectReply: null, beforeTool: null, mutateTool: null, mutateInventoryText: null };
   const errorResult = (code) => ({ ok: false, context: null,
     error: { code, message: "Synthetic private diagnostic: token=must-not-project" } });
   function resolve(selection) {
@@ -24,14 +24,17 @@ export function createNativeBindingFixture({ registrations = [], advertised = tr
     if (!matches.length) throw new MobileAilohaError("AgentNotFound", "The selected synthetic runtime is absent.", 409);
     if (matches.length !== 1) throw new MobileAilohaError("AgentAmbiguous", "The synthetic runtime is ambiguous.", 409);
     const agent = matches[0];
-    if (agent.registrationVersion !== 2 || agent.agentId !== selection.agentId) {
-      throw new MobileAilohaError("AgentInstanceUnverified", "The synthetic registration is not v2.", 409);
+    if (![2, 3].includes(agent.registrationVersion) || agent.agentId !== selection.agentId) {
+      throw new MobileAilohaError("AgentInstanceUnverified", "The synthetic registration is not a known instance version.", 409);
     }
     if (agent.targetHostId !== selection.targetHostId || agent.targetId !== selection.targetId) {
       throw new MobileAilohaError("AgentTargetCorrelationMismatch", "The synthetic target pair differs.", 409);
     }
     if (agent.liveRuntimeInstanceId && agent.liveRuntimeInstanceId !== agent.runtimeInstanceId) {
       throw new MobileAilohaError("AgentInstanceMismatch", "The synthetic process restarted.", 409);
+    }
+    if (agent.transportError) {
+      throw new MobileAilohaError(agent.transportError, "Synthetic private transport diagnostic: token=must-not-project", 501);
     }
     return agent;
   }
@@ -52,20 +55,24 @@ export function createNativeBindingFixture({ registrations = [], advertised = tr
       let code = model.inventoryError;
       const runtimes = new Set();
       for (const agent of model.registrations) {
-        if (agent.registrationVersion !== 2) continue;
+        if (![1, 2, 3].includes(agent.registrationVersion)) code = "AgentCandidatesInventoryInvalid";
+        if (![2, 3].includes(agent.registrationVersion)) continue;
         if (runtimes.has(agent.runtimeInstanceId)) code = "AgentCandidatesAmbiguous";
         runtimes.add(agent.runtimeInstanceId);
       }
+      const candidates = model.registrations.filter((agent) => [2, 3].includes(agent.registrationVersion)
+        && agent.targetHostId === targetHostId && agent.targetId === targetId)
+        .map(({ agentId, runtimeInstanceId, registrationVersion }) => ({
+          agentId, runtimeInstanceId, registrationVersion, targetHostId, targetId,
+        }));
       const value = code
         ? { schema: "ailoha.agent.candidates/v1", ok: false, targetHostId, targetId, candidates: null,
           error: { code, message: "token=must-not-project /private/registration" } }
-        : { schema: "ailoha.agent.candidates/v1", ok: true, targetHostId, targetId, error: null,
-          candidates: model.registrations.filter((agent) => agent.registrationVersion === 2
-            && agent.targetHostId === targetHostId && agent.targetId === targetId)
-            .map(({ agentId, runtimeInstanceId, registrationVersion }) => ({
-              agentId, runtimeInstanceId, registrationVersion, targetHostId, targetId,
-            })) };
-      return JSON.stringify(model.mutateInventory ? model.mutateInventory(value) : value);
+        : { schema: candidates.some((agent) => agent.registrationVersion === 3)
+          ? "ailoha.agent.candidates/v2" : "ailoha.agent.candidates/v1",
+        ok: true, targetHostId, targetId, error: null, candidates };
+      const raw = JSON.stringify(model.mutateInventory ? model.mutateInventory(value) : value);
+      return model.mutateInventoryText ? model.mutateInventoryText(raw) : raw;
     }
     if (args[0] !== "context") throw new Error("Unexpected synthetic command.");
     const index = args.indexOf("--request-json");
@@ -124,6 +131,7 @@ export function createNativeBindingFixture({ registrations = [], advertised = tr
         if (model.disconnected) throw new MobileAilohaError("ContextOwnerUnavailable", "The synthetic owner disconnected.", 502);
         const selection = context.selection;
         if (request.arguments.route === "require-agent") resolve(selection);
+        if (semanticTool) return semanticTool(request);
         const output = { running: true, agentName: "Synthetic agent", framework: "Synthetic", elements: [], route: {
           owner: request.arguments.route === "require-agent" ? "agent" : "target-host",
           targetHostId: selection.targetHostId, targetId: selection.targetId, surfaceId: selection.surfaceId,
