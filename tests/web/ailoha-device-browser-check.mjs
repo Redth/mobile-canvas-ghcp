@@ -5,7 +5,7 @@ async (page) => {
     if (!condition) throw new Error(message);
   };
   const evidence = async () => {
-    const response = await fetch(evidenceUrl, { signal: AbortSignal.timeout(5000) });
+    const response = await page.request.get(evidenceUrl, { timeout: 5000 });
     verify(response.ok, "The synthetic host evidence endpoint failed.");
     const result = await response.json();
     verify(result.synthetic === true, "This browser check can only control the synthetic fixture.");
@@ -108,8 +108,55 @@ async (page) => {
   await page.locator('[data-action="rotate"]').click();
   observed = await waitFor((result) => result.calls.some((call) =>
     call.path?.endsWith("/presentation") && call.method === "PATCH"));
-  verify(videoPosts(observed) === 1 && videoDeletes(observed) === 0,
-    "Rotation recreated or deleted the owned Ailoha live video resource.");
+  observed = await waitFor((result) => videoPosts(result) === 2 && videoDeletes(result) === 1);
+  const beforeFreshFrame = await page.evaluate(() => ({
+    status: document.querySelector("#input-status").textContent,
+    mode: document.querySelector("#stream-mode").textContent,
+    painted: document.querySelector("#device-screen").getContext("2d")
+      .getImageData(0, 0, 96, 64).data.some((value, index) => index % 4 !== 3 && value > 0),
+  }));
+  verify(beforeFreshFrame.status.includes("Waiting for a frame") && !beforeFreshFrame.painted,
+    "A rotated geometry must not expose old pixels or coordinate input before a new session frame.");
+  await page.locator("#device-screen").focus();
+  await page.keyboard.press("Enter");
+  const beforeFrame = await evidence();
+  verify(beforeFrame.calls.filter((call) => call.path?.endsWith("/input/actions/key")).length === 2,
+    "A key was sent while the rotated frame was pending.");
+  verify((await page.request.post(`${evidenceUrl}/rotation-frame`)).status() === 204,
+    "The synthetic replacement frame was not released.");
+  await page.waitForFunction(() => document.querySelector("#stream-mode")?.textContent === "ALHV H.264"
+    && document.querySelector("#input-status")?.textContent === "Geometry-bound input ready");
+  const rotatedFrame = await page.evaluate(() => {
+    const canvas = document.querySelector("#device-screen");
+    const pixels = canvas.getContext("2d").getImageData(0, 0, canvas.width, canvas.height).data;
+    return {
+      width: canvas.width, height: canvas.height,
+      geometry: document.querySelector("#geometry").value,
+      painted: pixels.some((value, index) => index % 4 !== 3 && value > 0),
+    };
+  });
+  verify(rotatedFrame.painted && rotatedFrame.width === 64 && rotatedFrame.height === 96
+    && rotatedFrame.geometry.includes("32x48 pt") && rotatedFrame.geometry.includes("revision 15")
+    && rotatedFrame.width / rotatedFrame.height === 32 / 48,
+  "The fresh decoded portrait AVC frame, painted canvas and canonical logical geometry disagree.");
+  observed = await evidence();
+  verify(videoPosts(observed) === 2 && videoDeletes(observed) === 1 && observed.videoResources === 1,
+    "Accepted rotation did not hand off exactly one owned video.");
+  const videoLifecycle = observed.calls.filter((call) =>
+    (call.method === "POST" && call.path?.endsWith("/video/sessions"))
+    || (call.method === "DELETE" && call.path?.includes("/video/sessions/")));
+  verify(videoLifecycle.length === 3 && videoLifecycle[0].method === "POST"
+    && videoLifecycle[1].method === "DELETE" && videoLifecycle[2].method === "POST"
+    && videoLifecycle[1].path.startsWith(`${videoLifecycle[0].path}/`)
+    && videoLifecycle[2].path === videoLifecycle[0].path,
+  "Accepted rotation did not retire the original video before submitting one replacement.");
+  await page.locator("#device-screen").click();
+  observed = await waitFor((result) => result.calls.filter((call) =>
+    call.path?.endsWith("/input/actions/tap")).length === 2);
+  const freshTap = JSON.parse(observed.calls.filter((call) =>
+    call.path?.endsWith("/input/actions/tap")).at(-1).body);
+  verify(freshTap.geometryRevision === 15,
+    "Coordinate input after the replacement frame did not use the fresh geometry revision.");
   const orientation = JSON.parse(observed.calls.find((call) =>
     call.path?.endsWith("/presentation") && call.method === "PATCH").body);
   verify(["portrait", "landscape"].includes(orientation.orientation),
@@ -154,7 +201,7 @@ async (page) => {
     document.dispatchEvent(new Event("visibilitychange"));
   });
   const hidden = await waitFor((result) => result.leases === 0 && result.videoResources === 0);
-  verify(videoPosts(hidden) === 1 && videoDeletes(hidden) === 1
+  verify(videoPosts(hidden) === 2 && videoDeletes(hidden) === 2
     && hidden.errors.length === (recordingLostStart ? 1 : 0)
     && (!recordingLostStart || hidden.errors[0].code === "ailoha_cli_failed"),
     "Hiding the real shared renderer did not retire exactly its owned video/lease.");
@@ -169,18 +216,18 @@ async (page) => {
     Object.defineProperty(document, "hidden", { configurable: true, value: false });
     document.dispatchEvent(new Event("visibilitychange"));
   });
-  const resumed = await waitFor((result) => videoPosts(result) === 2 && result.leases === 1 && result.videoResources === 1);
+  const resumed = await waitFor((result) => videoPosts(result) === 3 && result.leases === 1 && result.videoResources === 1);
   await page.waitForTimeout(1000);
   const settled = await evidence();
-  verify(videoPosts(settled) === 2 && videoDeletes(settled) === 1
+  verify(videoPosts(settled) === 3 && videoDeletes(settled) === 2
     && settled.errors.length === (recordingLostStart ? 1 : 0),
     "Explicit resume triggered an automatic video creation loop.");
   verify(!settled.calls.some((call) => call.path === "/api/v1/host/stop"),
     "View cleanup stopped a shared host.");
   return {
     synthetic: true, realWebCodecs: true, resizeEvents: 4, workspaceCards, readOnlyGuidance: workspaceCards,
-    initialVideoPosts: 1, initialVideoDeletes: 0,
-    view, tap, gesture,
+    initialVideoPosts: 1, initialVideoDeletes: 0, rotationVideoPosts: 2,
+    view, rotatedFrame, tap, gesture,
     hidden: { leases: hidden.leases, videoResources: hidden.videoResources },
     resumed: { leases: resumed.leases, videoResources: resumed.videoResources, videoPosts: videoPosts(settled), videoDeletes: videoDeletes(settled) },
     errors: settled.errors,

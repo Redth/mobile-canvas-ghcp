@@ -54,6 +54,18 @@ const opened = await host.openCanvas();
 await host.invokeAction("select_device", { deviceId: "opaque/target" });
 const evidence = createServer(async (request, response) => {
   try {
+    if (request.method === "POST" && request.url === "/old-frame") {
+      response.writeHead(scenario.emitOldFrame?.() ? 204 : 409).end();
+      return;
+    }
+    if (request.method === "POST" && request.url === "/rotation-frame") {
+      if (typeof scenario.releaseReplacementFrame !== "function") throw new Error("No replacement frame is pending.");
+      const release = scenario.releaseReplacementFrame;
+      scenario.releaseReplacementFrame = null;
+      release();
+      response.writeHead(204).end();
+      return;
+    }
     if (request.method === "POST" && request.url === "/control" && inspectionCheck) {
       const chunks = [];
       let size = 0;

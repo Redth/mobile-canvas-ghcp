@@ -29,12 +29,21 @@ const surfaceId = "opaque/surface";
 const fixtureName = process.env.AILOHA_TEST_VIDEO_FIXTURE ?? "baseline";
 if (!["baseline", "bframes"].includes(fixtureName)) throw new Error("The owned video fixture must be baseline or bframes.");
 const packetRoot = new URL(`../../web/fixtures/ailoha-${fixtureName}/`, import.meta.url);
+const portraitPacketRoot = new URL("../../web/fixtures/ailoha-rotation-portrait/", import.meta.url);
+const portraitUnits = [
+  { filename: "00-config.alhv", sequence: 0, geometryRevision: 15 },
+  { filename: "01-key.alhv", sequence: 1, geometryRevision: 15 },
+];
 const imageRoot = new URL("../../web/fixtures/ailoha-baseline/", import.meta.url);
 const fixture = JSON.parse(readFileSync(new URL("manifest.json", packetRoot), "utf8"));
 const pacingMs = Number(process.env.AILOHA_TEST_VIDEO_PACING_MS ?? 0);
 if (!Number.isSafeInteger(pacingMs) || pacingMs < 0 || pacingMs > 1000) throw new Error("Invalid owned video fixture pacing.");
 const initialGeometryRevision = fixture.geometry[0].geometryRevision;
 scenario.geometryRevision = initialGeometryRevision;
+const replacementVideoSessions = new Set();
+const currentGeometryVideoSessions = new Set();
+let videoSessionCreated = false;
+let replacementPending = false;
 const captures = [
   { id: "target.lifecycle", version: 1, features: ["listTargets", "getTarget", "getTargetCapabilities", "startTarget", "stopTarget", "rebootTarget", "resetTarget", "deleteTarget"] },
   { id: "target.surfaces", version: 1, features: ["listTargetSurfaces", "getTargetSurface"] },
@@ -558,6 +567,7 @@ export async function openTargetHostTransport(leaseId) {
         if (options.method === "PATCH") {
           scenario.orientation = JSON.parse(body).orientation;
           scenario.geometryRevision += 1;
+          replacementPending = videoSessionCreated;
         }
         return reply({
           width: scenario.orientation === "portrait" ? 32 : 48,
@@ -620,11 +630,17 @@ export async function openTargetHostTransport(leaseId) {
       }
       const collection = `/api/v1/targets/${encodeURIComponent(mediaTargetId)}/surfaces/${encodeURIComponent(mediaSurfaceId)}/video/sessions`;
       if (path === collection && options.method === "POST") {
-        scenario.geometryRevision = initialGeometryRevision;
+        const replacement = replacementPending;
+        replacementPending = false;
+        const currentGeometry = replacement || videoSessionCreated;
+        videoSessionCreated = true;
+        if (!currentGeometry) scenario.geometryRevision = initialGeometryRevision;
         const videoSessionId = randomUUID();
+        if (replacement) replacementVideoSessions.add(videoSessionId);
+        if (currentGeometry) currentGeometryVideoSessions.add(videoSessionId);
         const session = {
           videoSessionId, targetId: mediaTargetId, surfaceId: mediaSurfaceId, codec: "h264", state: "ready",
-          createdAt: "2026-10-09T23:00:00Z", geometryRevision: initialGeometryRevision, source: "synthetic-fixture",
+          createdAt: "2026-10-09T23:00:00Z", geometryRevision: scenario.geometryRevision, source: "synthetic-fixture",
           websocketUrl: `/ws/v1/targets/${encodeURIComponent(mediaTargetId)}/surfaces/${encodeURIComponent(mediaSurfaceId)}/video/${videoSessionId}`,
         };
         scenario.videos.set(videoSessionId, session);
@@ -634,6 +650,8 @@ export async function openTargetHostTransport(leaseId) {
         const videoSessionId = path.split("/").at(-1);
         if (options.method === "DELETE") {
           scenario.videos.delete(videoSessionId);
+          replacementVideoSessions.delete(videoSessionId);
+          currentGeometryVideoSessions.delete(videoSessionId);
           const operationId = `stop-video-${videoSessionId}`;
           const operation = {
             operationId, kind: "stopLiveVideoSession", status: "succeeded", destructive: false,
@@ -660,15 +678,41 @@ export async function openTargetHostTransport(leaseId) {
       let active = true;
       let nextTimer;
       const videoSessionId = path.split("/").at(-1);
+      const sessionRevision = scenario.videos.get(videoSessionId)?.geometryRevision;
+      if (!Number.isInteger(sessionRevision)) throw new Error("Unknown synthetic video session");
+      const replacement = replacementVideoSessions.has(videoSessionId);
+      const currentGeometry = currentGeometryVideoSessions.has(videoSessionId);
+      const portrait = currentGeometry && scenario.orientation === "portrait";
+      const units = portrait ? portraitUnits : fixture.units;
       function text(control) { callbacks.onMessage(new TextEncoder().encode(JSON.stringify(control)), false); }
       function sendNext() {
-        if (!active || next >= fixture.units.length) return;
-        const unit = fixture.units[next++];
-        if (unit.sequence === 0 || unit.geometryRevision !== scenario.geometryRevision) {
-          scenario.geometryRevision = unit.geometryRevision;
-          text({ type: "geometryChanged", ...fixture.geometry.find((geometry) => geometry.geometryRevision === unit.geometryRevision) });
+        if (!active || next >= units.length) return;
+        const unit = units[next++];
+        const revision = currentGeometry ? sessionRevision : unit.geometryRevision;
+        if (unit.sequence === 0 || revision !== scenario.geometryRevision) {
+          scenario.geometryRevision = revision;
+          text({ type: "geometryChanged", ...(currentGeometry ? {
+            geometryRevision: revision, bounds: { ...target().surfaces[0].bounds, coordinate: "window" }, pixelDensity: 2,
+            orientation: scenario.orientation,
+          } : {
+            ...fixture.geometry.find((geometry) => geometry.geometryRevision === revision),
+            orientation: scenario.orientation,
+          }) });
         }
-        callbacks.onMessage(new Uint8Array(readFileSync(new URL(unit.filename, packetRoot))), true);
+        const packet = new Uint8Array(readFileSync(new URL(unit.filename, portrait ? portraitPacketRoot : packetRoot)));
+        if (currentGeometry) new DataView(packet.buffer).setUint32(20, revision, false);
+        callbacks.onMessage(packet, true);
+      }
+      if (!replacement) {
+        scenario.emitOldFrame = () => {
+          if (!active || next < units.length) return false;
+          const packet = new Uint8Array(readFileSync(new URL("04-key.alhv", packetRoot)));
+          const header = new DataView(packet.buffer);
+          header.setUint32(8, next++, false);
+          header.setBigUint64(12, header.getBigUint64(12, false) + 1_000_000n, false);
+          callbacks.onMessage(packet, true);
+          return true;
+        };
       }
       return Object.freeze({
         get readyState() { return active ? 1 : 3; },
@@ -677,16 +721,18 @@ export async function openTargetHostTransport(leaseId) {
           const control = JSON.parse(data);
           scenario.calls.push({ control });
           if (control.type === "hello") {
-            text({ type: "ready", videoSessionId, codec: "h264", geometryRevision: initialGeometryRevision, resumeFromSequence: 0, maxInFlightFrames: 1 });
-            sendNext();
+            text({ type: "ready", videoSessionId, codec: "h264", geometryRevision: sessionRevision, resumeFromSequence: 0, maxInFlightFrames: 1 });
+            if (replacement) scenario.releaseReplacementFrame = sendNext;
+            else sendNext();
           } else if (control.type === "ack") {
-            if (pacingMs && next < fixture.units.length) nextTimer = setTimeout(sendNext, pacingMs);
+            if (pacingMs && next < units.length) nextTimer = setTimeout(sendNext, pacingMs);
             else sendNext();
           }
         },
         async close() {
           active = false;
           clearTimeout(nextTimer);
+          if (!replacement) scenario.emitOldFrame = null;
           scenario.calls.push({ socketClosed: path });
           callbacks.onClose?.(1000, "");
         },

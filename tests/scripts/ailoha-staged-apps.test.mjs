@@ -126,51 +126,51 @@ test("verified native CLI maps definitive rejection without leaking private path
       assert.equal(error.message.includes("/secret/"), false);
       return true;
     });
-
-    test("verified CLI honors a bounded stage upload deadline without changing control command deadlines", async () => {
-      const pin = { version: "reviewed-source", sourceSha: "c8caabd589d8c008adac33107846bc322632977a" };
-      const sdk = { async getVerifiedCliLaunch() {
-        return { ...pin, file: process.execPath, args: ["-e", "setTimeout(() => process.stdout.write('done'), 250)"] };
-      } };
-      const run = createVerifiedAilohaCli({ sdk, pin });
-      const stageCommand = ["target", "app", "stage", "--json"];
-      const installCommand = ["target", "app", "install-staged", "--json"];
-      for (const timeoutMs of [0, -1, 660_001, Infinity, NaN, "31000"]) {
-        await assert.rejects(run(stageCommand, { timeoutMs }), { code: "invalid_request" });
-      }
-      await assert.rejects(run(installCommand, { timeoutMs: 30_001 }), { code: "invalid_request" });
-      await assert.rejects(run(stageCommand, { timeoutMs: 10 }), { code: "ailoha_cli_timeout" });
-      assert.equal(await run(stageCommand, { timeoutMs: 31_000 }), "done");
-      const controller = new AbortController();
-      const running = run(stageCommand, { signal: controller.signal });
-      setTimeout(() => controller.abort(), 50);
-      await assert.rejects(running, { code: "ailoha_cli_cancelled" });
-    });
-
-    test("the staged submission budget includes verified launch acquisition and cannot spawn after it expires", async (t) => {
-      const directory = await ownedTestDirectory(t, "mobile-cli-deadline-");
-      const marker = join(directory, "native-post-started");
-      const pin = { version: "reviewed-source", sourceSha: "c8caabd589d8c008adac33107846bc322632977a" };
-      const sdk = { async getVerifiedCliLaunch() {
-        await new Promise((resolve) => setTimeout(resolve, 80));
-        return { ...pin, file: process.execPath,
-          args: ["-e", `require('node:fs').writeFileSync(${JSON.stringify(marker)}, 'started')`] };
-      } };
-      const run = createVerifiedAilohaCli({ sdk, pin });
-      await assert.rejects(run(["target", "app", "install-staged", "--json"], { timeoutMs: 20 }), {
-        code: "ailoha_cli_timeout",
-      });
-      await assert.rejects(access(marker), { code: "ENOENT" });
-      const stalled = createVerifiedAilohaCli({
-        sdk: { getVerifiedCliLaunch() { return new Promise(() => {}); } }, pin,
-      });
-      await assert.rejects(stalled(["target", "app", "stage", "--json"], { timeoutMs: 15 }), {
-        code: "ailoha_cli_timeout",
-      });
-      const cancelled = new AbortController();
-      const pending = stalled(["target", "app", "install-staged", "--json"], { signal: cancelled.signal });
-      cancelled.abort();
-      await assert.rejects(pending, { code: "ailoha_cli_cancelled" });
-    });
   }
+});
+
+test("verified CLI honors a bounded stage upload deadline without changing control command deadlines", async () => {
+  const pin = { version: "reviewed-source", sourceSha: "c8caabd589d8c008adac33107846bc322632977a" };
+  const sdk = { async getVerifiedCliLaunch() {
+    return { ...pin, file: process.execPath, args: ["-e", "setTimeout(() => process.stdout.write('done'), 250)"] };
+  } };
+  const run = createVerifiedAilohaCli({ sdk, pin });
+  const stageCommand = ["target", "app", "stage", "--json"];
+  const installCommand = ["target", "app", "install-staged", "--json"];
+  for (const timeoutMs of [0, -1, 660_001, Infinity, NaN, "31000"]) {
+    await assert.rejects(run(stageCommand, { timeoutMs }), { code: "invalid_request" });
+  }
+  await assert.rejects(run(installCommand, { timeoutMs: 30_001 }), { code: "invalid_request" });
+  await assert.rejects(run(stageCommand, { timeoutMs: 10 }), { code: "ailoha_cli_timeout" });
+  assert.equal(await run(stageCommand, { timeoutMs: 31_000 }), "done");
+  const controller = new AbortController();
+  const running = run(stageCommand, { signal: controller.signal });
+  setTimeout(() => controller.abort(), 50);
+  await assert.rejects(running, { code: "ailoha_cli_cancelled" });
+});
+
+test("the staged submission budget includes verified launch acquisition and cannot spawn after it expires", async (t) => {
+  const directory = await ownedTestDirectory(t, "mobile-cli-deadline-");
+  const marker = join(directory, "native-post-started");
+  const pin = { version: "reviewed-source", sourceSha: "c8caabd589d8c008adac33107846bc322632977a" };
+  const sdk = { async getVerifiedCliLaunch() {
+    await new Promise((resolve) => setTimeout(resolve, 80));
+    return { ...pin, file: process.execPath,
+      args: ["-e", `require('node:fs').writeFileSync(${JSON.stringify(marker)}, 'started')`] };
+  } };
+  const run = createVerifiedAilohaCli({ sdk, pin });
+  await assert.rejects(run(["target", "app", "install-staged", "--json"], { timeoutMs: 20 }), {
+    code: "ailoha_cli_timeout",
+  });
+  await assert.rejects(access(marker), { code: "ENOENT" });
+  const stalled = createVerifiedAilohaCli({
+    sdk: { getVerifiedCliLaunch() { return new Promise(() => {}); } }, pin,
+  });
+  await assert.rejects(stalled(["target", "app", "stage", "--json"], { timeoutMs: 15 }), {
+    code: "ailoha_cli_timeout",
+  });
+  const cancelled = new AbortController();
+  const pending = stalled(["target", "app", "install-staged", "--json"], { signal: cancelled.signal });
+  cancelled.abort();
+  await assert.rejects(pending, { code: "ailoha_cli_cancelled" });
 });

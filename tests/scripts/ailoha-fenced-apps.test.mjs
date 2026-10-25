@@ -332,79 +332,79 @@ test("verified CLI retains accepted native operation metadata even when its chil
       return { file: process.execPath, args: ["-e", script], ...pin };
     } },
   });
-
-  test("typed native CLI rejections are definitive while delivery-unknown errors remain non-replayable", async () => {
-    const pin = { version: "synthetic", sourceSha: "a".repeat(40) };
-    for (const [type, code, status] of [
-      ["AppActionRejected", "app_action_rejected", 409],
-      ["AppActionStale", "app_action_stale", 409],
-      ["ContextRevisionConflict", "context_snapshot_superseded", 409],
-      ["ContextBindingMismatch", "context_snapshot_superseded", 409],
-      ["unsupported-capability", "capability_not_supported", 501],
-      ["AppActionDeliveryUnknown", "app_action_delivery_unknown", 502],
-      ["AppActionAcceptedMismatch", "app_action_accepted_mismatch", 409],
-      ["AppActionAttemptAlreadySubmitted", "app_action_attempt_already_submitted", 409],
-      ["AppActionAcceptedRecordUnavailable", "app_action_accepted_record_unavailable", 502],
-    ]) {
-      const script = `process.stderr.write(${JSON.stringify(JSON.stringify({
-        error: "private native path and credential", type, retryable: false,
-      }))}); process.exitCode = 1;`;
-      const runCli = createVerifiedAilohaCli({
-        pin, sdk: { async getVerifiedCliLaunch() {
-          return { file: process.execPath, args: ["-e", script], ...pin };
-        } },
-      });
-      await assert.rejects(runCli(["target", "app", "uninstall-fenced"], { timeoutMs: 10_000 }), (error) => {
-        assert.equal(error.code, code);
-        assert.equal(error.status, status);
-        assert.equal(Object.hasOwn(error, "operationId"), false);
-        assert.equal(JSON.stringify(error).includes("private native path"), false);
-        return true;
-      });
-    }
-    const runCli = createVerifiedAilohaCli({
-      pin, sdk: { async getVerifiedCliLaunch() {
-        const script = `process.stderr.write(JSON.stringify({
-          error: "private path", type: "AppActionRejected", retryable: true,
-        })); process.exitCode = 1;`;
-        return {
-          file: process.execPath, args: ["-e", script], ...pin,
-        };
-      } },
-    });
-    await assert.rejects(runCli(["target", "app", "uninstall-fenced"], { timeoutMs: 10_000 }), {
-      code: "ailoha_cli_failed",
-    });
-  });
-
-  test("accepted CLI metadata cannot assign another target or provider to the captured action", async () => {
-    const invocation = original();
-    const receipt = captured(invocation, "uninstall");
-    for (const mismatch of [
-      { targetId: "other-target" },
-      { providerId: "other-provider" },
-      { kind: "uninstallTargetApp" },
-      { destructive: false },
-    ]) {
-      const value = { ...accepted("uninstallFencedTargetApp"), ...mismatch };
-      const cli = createFencedAppCli({
-        async runCli() {
-          throw new AilohaProtocolError("transport_error", {
-            status: 202, operationId: value.operationId, operation: value,
-          });
-        },
-      });
-      await assert.rejects(cli.uninstall(invocation, receipt, { timeoutMs: 10_000 }), (error) => {
-        assert.equal(error.code, "app_action_owner_mismatch");
-        assert.equal(error.operationId, value.operationId);
-        return true;
-      });
-    }
-  });
   await assert.rejects(runCli(["target", "app", "uninstall-fenced"], { timeoutMs: 10_000 }), (error) => {
     assert.equal(error.status, 202);
     assert.equal(error.operationId, "accepted-op");
     assert.equal(error.operation.kind, "uninstallFencedTargetApp");
     return true;
   });
+});
+
+test("typed native CLI rejections are definitive while delivery-unknown errors remain non-replayable", async () => {
+  const pin = { version: "synthetic", sourceSha: "a".repeat(40) };
+  for (const [type, code, status] of [
+    ["AppActionRejected", "app_action_rejected", 409],
+    ["AppActionStale", "app_action_stale", 409],
+    ["ContextRevisionConflict", "context_snapshot_superseded", 409],
+    ["ContextBindingMismatch", "context_snapshot_superseded", 409],
+    ["unsupported-capability", "capability_not_supported", 501],
+    ["AppActionDeliveryUnknown", "app_action_delivery_unknown", 502],
+    ["AppActionAcceptedMismatch", "app_action_accepted_mismatch", 409],
+    ["AppActionAttemptAlreadySubmitted", "app_action_attempt_already_submitted", 409],
+    ["AppActionAcceptedRecordUnavailable", "app_action_accepted_record_unavailable", 502],
+  ]) {
+    const script = `process.stderr.write(${JSON.stringify(JSON.stringify({
+      error: "private native path and credential", type, retryable: false,
+    }))}); process.exitCode = 1;`;
+    const runCli = createVerifiedAilohaCli({
+      pin, sdk: { async getVerifiedCliLaunch() {
+        return { file: process.execPath, args: ["-e", script], ...pin };
+      } },
+    });
+    await assert.rejects(runCli(["target", "app", "uninstall-fenced"], { timeoutMs: 10_000 }), (error) => {
+      assert.equal(error.code, code);
+      assert.equal(error.status, status);
+      assert.equal(Object.hasOwn(error, "operationId"), false);
+      assert.equal(JSON.stringify(error).includes("private native path"), false);
+      return true;
+    });
+  }
+  const runCli = createVerifiedAilohaCli({
+    pin, sdk: { async getVerifiedCliLaunch() {
+      const script = `process.stderr.write(JSON.stringify({
+        error: "private path", type: "AppActionRejected", retryable: true,
+      })); process.exitCode = 1;`;
+      return {
+        file: process.execPath, args: ["-e", script], ...pin,
+      };
+    } },
+  });
+  await assert.rejects(runCli(["target", "app", "uninstall-fenced"], { timeoutMs: 10_000 }), {
+    code: "ailoha_cli_failed",
+  });
+});
+
+test("accepted CLI metadata cannot assign another target or provider to the captured action", async () => {
+  const invocation = original();
+  const receipt = captured(invocation, "uninstall");
+  for (const mismatch of [
+    { targetId: "other-target" },
+    { providerId: "other-provider" },
+    { kind: "uninstallTargetApp" },
+    { destructive: false },
+  ]) {
+    const value = { ...accepted("uninstallFencedTargetApp"), ...mismatch };
+    const cli = createFencedAppCli({
+      async runCli() {
+        throw new AilohaProtocolError("transport_error", {
+          status: 202, operationId: value.operationId, operation: value,
+        });
+      },
+    });
+    await assert.rejects(cli.uninstall(invocation, receipt, { timeoutMs: 10_000 }), (error) => {
+      assert.equal(error.code, "app_action_owner_mismatch");
+      assert.equal(error.operationId, value.operationId);
+      return true;
+    });
+  }
 });
