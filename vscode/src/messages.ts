@@ -22,6 +22,23 @@ export interface WorkspaceInspectionState {
   error: { code: string; message: string; status?: number } | null;
 }
 
+export interface CanonicalInvocationMetadata {
+  "ailoha.executionContext": {
+    contextRef: string;
+    scope: { sessionId: string; viewId: string };
+    scopeEpoch: string;
+    revision: string;
+    selection: {
+      workspaceId: null; applicationId: null; targetHostId: string; targetId: string;
+      surfaceId: string | null; agentId: string | null; runtimeInstanceId: string | null;
+    };
+  };
+  "ailoha.agentExchange"?: {
+    requestId: string; commitAttempted: boolean; admitted: boolean; completed: boolean;
+    effectMayBeUnknown: boolean; errorCode?: string;
+  };
+}
+
 export interface SemanticInspectionState {
   schema: string;
   scope: { sessionId: string; viewId: string };
@@ -40,7 +57,7 @@ export interface SemanticInspectionState {
   lens: string;
   operation: string | null;
   result: unknown;
-  error: { code: string; message: string; status?: number } | null;
+  error: { code: string; message: string; status?: number; _meta?: CanonicalInvocationMetadata } | null;
 }
 
 export type WebviewMessage =

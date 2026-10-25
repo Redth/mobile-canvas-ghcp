@@ -5,6 +5,8 @@ import "../../tests/scripts/fixtures/ailoha-installed-hooks.mjs";
 import { createSemanticInspectionController } from "../../lib/ailoha/semantic-inspection.mjs";
 import { createAilohaCanvasHost } from "../../lib/ailoha/canvas-host.mjs";
 import { createNativeBindingFixture, nativeAgent } from "../../tests/scripts/fixtures/ailoha-native-binding.mjs";
+import { nativeInvocationMetadata } from "../../tests/scripts/fixtures/ailoha-invocation-metadata.mjs";
+import { canonicalAppFailure, captureMetadataContext, validateInvocationMetadata } from "../../lib/ailoha/invocation-metadata.mjs";
 
 const { HostBridge } = createRequire(import.meta.url)("../out/hostBridge.js");
 const scope = { sessionId: "compiled-semantic-session", viewId: "compiled-semantic-view" };
@@ -94,6 +96,20 @@ for (const registrationVersion of [2, 3]) test(`compiled VS Code bridge shares e
       app = await request("POST", { lens: "app", operation, ...(operation === "query" ? { text: "OK" } : {}) });
       assert.equal(app.result.route.owner, "agent");
       assert.equal(app.result.route.runtimeInstanceId, "chosen");
+    }
+    if (registrationVersion === 3) {
+      fixture.model.beforeTool = async () => {
+        const snapshot = await view.store.readSnapshot();
+        const metadata = validateInvocationMetadata(nativeInvocationMetadata(snapshot, view.scope),
+          captureMetadataContext({ snapshot, scope: view.scope, route: "require-agent" }));
+        throw canonicalAppFailure("ApplicationOperationError", metadata);
+      };
+      const failed = await request("POST", { lens: "app", operation: "status" }, 502);
+      assert.equal(failed.error.code, "transport-failed");
+      assert.equal(failed.error._meta["ailoha.executionContext"].selection.runtimeInstanceId, "chosen");
+      assert.equal(failed.error._meta["ailoha.agentExchange"].effectMayBeUnknown, true);
+      assert.equal(Object.hasOwn(failed.error._meta["ailoha.executionContext"], "observed"), false);
+      fixture.model.beforeTool = null;
     }
     fixture.model.registrations[1].transportError = "AgentTransportUnsupported";
     const unsupported = await request("POST", { lens: "app", operation: "status" }, 501);

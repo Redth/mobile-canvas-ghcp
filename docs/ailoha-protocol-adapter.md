@@ -1097,6 +1097,42 @@ acceptance. React Native Android adopts the upstream transport first;
 standalone Kotlin remains legacy and managed MAUI Android transport adoption
 is not implied. iOS/v1/v2 behavior, tool catalog identities (64 opt-in /
 61 legacy), runtime/package pins and production defaults are unchanged.
+
+Named App CLI results also consume the existing invocation metadata carrier:
+stdout and the typed error payload remain unchanged, followed on stderr by
+exactly one `_meta` notice with `ailoha.executionContext` and, only after an
+exchange exists, optional `ailoha.agentExchange`. The shared reader frames
+bounded JSON objects rather than skipping log lines or assuming all JSON is
+single-line. Compact and pretty records are accepted; extra/duplicate notices,
+escaped duplicate properties, unrelated stderr and malformed metadata fail
+explicitly. This reader is restricted to `app` commands; candidate failures
+remain one isolated v1 JSON object. Trusted callers provide their original
+snapshot/scope internally as `metadataContext`; returned metadata never
+supplies selection authority.
+
+The native context DTO is validated against that original ref, scope,
+epoch/revision and complete invocation selection before projection. Only
+bounded context identity/selection and the sanitized exchange receipt are
+public: observed/provenance blobs, owner stamps and connection evidence are
+not copied. The receipt contains a native-generated 32-lowercase-hex
+`requestId`, boolean `commitAttempted`, `admitted`, `completed` and
+`effectMayBeUnknown`, plus optional bounded `errorCode`. The consumer does
+not know the native per-HTTP ID before invocation, does not equate it with
+an MCP tool ID, and does not invent independent correlation. Admission
+requires a commit attempt; completion requires admission; unknown effect is
+exactly `!completed && (commitAttempted || admitted)`. An original incomplete
+receipt never authorizes replay or a replacement context.
+
+Canonical stdio MCP `_meta` passes through the same validation and public
+projection. Recognized canonical root errors are preserved, while receipt error codes
+recover typed failures from generic/unrecognized SDK-wrapped human error text.
+For example, `ContextRevisionConflict` may legitimately carry a diagnostic
+`not-admitted` receipt; neither original evidence is rewritten. The receipt survives `MobileAilohaError`, semantic state,
+named App MCP errors and cleanup failures. A retired read may return its
+original failure receipt to its original caller, but cannot repopulate the
+hidden/replaced view or restore App availability. CLI cancellation retains
+an already received complete notice and waits for its owned child to close;
+it never fabricates a receipt for a call that failed before capture.
 The three
 legacy `mobile_device_ui_dump/find/tap` identities remain installed. The
 source-only `microsoft/ailoha@5a99822fbbaa4780aa6cc196c9442496c89a06f6`

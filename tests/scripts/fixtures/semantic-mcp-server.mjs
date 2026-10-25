@@ -5,6 +5,7 @@ import { appendFileSync, readFileSync } from "node:fs";
 
 const launchArgs = process.argv.slice(2);
 const statePath = launchArgs[0] === "--fixture-state" ? launchArgs.splice(0, 2)[1] : null;
+const metadataPath = launchArgs[0] === "--fixture-metadata" ? launchArgs.splice(0, 2)[1] : null;
 const [command, flag, contextRef, epochFlag, scopeEpoch] = launchArgs;
 if (command !== "mcp-serve" || flag !== "--context" || epochFlag !== "--context-epoch"
   || !contextRef || !scopeEpoch) process.exit(3);
@@ -17,6 +18,7 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
   })),
 }));
 server.setRequestHandler(CallToolRequestSchema, async ({ params }) => {
+  if (metadataPath) return JSON.parse(readFileSync(metadataPath, "utf8"));
   const context = statePath ? JSON.parse(readFileSync(statePath, "utf8"))
     .find((entry) => entry.contextRef === contextRef) : null;
   if (statePath) {
