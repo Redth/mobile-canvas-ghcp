@@ -431,8 +431,8 @@ const githubTools = backend === "ailoha" ? createAilohaGithubTools({
   nameForDescriptor: isPluginInstall ? (name) => name
     : (name) => name.replace(/^mobile_(device|app)_/, "mobile_$1_local_"),
   getBinding: getRuntimeContextBinding,
-  createDispatcher: ({ binding }) => createAilohaMcpDispatcher({
-    binding, version: JSON.parse(readFileSync(new URL("./package.json", import.meta.url), "utf8")).version,
+  createDispatcher: ({ binding, backendState }) => createAilohaMcpDispatcher({
+    binding, backendState, version: JSON.parse(readFileSync(new URL("./package.json", import.meta.url), "utf8")).version,
   }),
 }) : null;
 const canvas = createCanvas(withAilohaCanvas(canvasOptions, {

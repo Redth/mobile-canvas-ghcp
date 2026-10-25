@@ -576,7 +576,10 @@ retires its requests and dispatcher without affecting another view. SDK-tool
 and canvas backends use separate private lease consumers even for the same
 canonical context; releasing one cannot tear down the other's transport.
 A same-instance reopen waits for SDK request retirement and host closure, then
-reuses the view host's retained receipt/coordinator state for GET recovery.
+reuses the view host's retained receipt/coordinator state for GET recovery. The
+SDK tool owner separately retains its private backend receipt/coordinator
+state across dispatcher disposal and explicit same-view reopen, so an accepted
+MCP operation also recovers by original-ID GET instead of another POST.
 Neither lease ownership nor receipt state is projected into the tool result.
 SDK tool results retain screenshot image bytes and failure status; absent genuine MCP
 form elicitation, destructive MCP requests

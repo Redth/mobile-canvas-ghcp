@@ -286,7 +286,8 @@ test("canvas close serializes a same-instance reopen behind SDK lookup and retai
 test("idempotent SDK leases keep UI, MCP and peer views independent through suspend and receipt recovery", async (t) => {
   const { createRuntimeCanvasHost, createRuntimeMobileBackend } =
     await import(productModule("lib/ailoha/runtime-backend.mjs"));
-  const { createAilohaMcpDispatcher } = await import(productModule("lib/ailoha/mcp-host.mjs"));
+  const { ailohaMcpCatalog, createAilohaMcpDispatcher } =
+    await import(productModule("lib/ailoha/mcp-host.mjs"));
   mkdirSync(join(root, ".build"), { recursive: true });
   const directory = mkdtempSync(join(root, ".build/idempotent-owners-"));
   const previousContext = process.env.AILOHA_TEST_CONTEXT_STATE;
@@ -300,11 +301,31 @@ test("idempotent SDK leases keep UI, MCP and peer views independent through susp
   const peerScope = { sessionId: scope.sessionId, viewId: "external" };
   const host = createRuntimeCanvasHost({ scope, runtime });
   const peer = createRuntimeCanvasHost({ scope: peerScope, runtime });
-  let dispatcher;
+  let binding;
+  const sdkTools = createAilohaGithubTools({
+    descriptors: (await ailohaMcpCatalog()).filter(({ name }) =>
+      ["mobile_device_list", "mobile_device_sms_send"].includes(name)),
+    async getBinding(selected) {
+      assert.deepEqual(selected, scope);
+      return binding;
+    },
+    createDispatcher: ({ binding: selected, backendState }) => createAilohaMcpDispatcher({
+      version: "synthetic-only", binding: selected, backendState,
+      createBackend: (options) => createRuntimeMobileBackend({ ...options, runtime, allowContextReopen: false }),
+    }),
+  });
+  const canvas = withAilohaCanvas({
+    inputSchema: { type: "object", properties: {} }, actions: [],
+  }, {
+    backend: "ailoha", createHost: () => host,
+    onHostOpened: (selected) => sdkTools.opened(selected),
+    onHostClosing: (selected) => sdkTools.closing(selected),
+  });
+  const context = { sessionId: scope.sessionId, instanceId: scope.viewId, input: { deviceId: "opaque/target" } };
   t.after(async () => {
     scenario.beforeOperationRead = undefined;
-    await dispatcher?.dispose();
-    await host.closeCanvas();
+    await canvas.onClose(context);
+    await sdkTools.closeAll();
     await peer.closeCanvas();
     scenario.idempotentLeases = false;
     scenario.leaseKeys.clear();
@@ -313,17 +334,13 @@ test("idempotent SDK leases keep UI, MCP and peer views independent through susp
     rmSync(directory, { recursive: true });
     assert.equal(scenario.leases.size, 0);
   });
-  const opened = await host.openCanvas({ deviceId: "opaque/target" });
+  const opened = await canvas.open(context);
   await peer.openCanvas();
   const selected = await host.invokeAction("get_selected_device", {});
-  dispatcher = await createAilohaMcpDispatcher({
-    version: "synthetic-only", binding: { ...selected.contextBinding, scope },
-    createBackend: (options) => createRuntimeMobileBackend({ ...options, runtime, allowContextReopen: false }),
-  });
-  const call = (name) => dispatcher.handle({
-    jsonrpc: "2.0", id: randomUUID(), method: "tools/call", params: { name, arguments: {} },
-  });
-  assert.equal((await call("mobile_device_list")).result.isError, undefined);
+  binding = { ...selected.contextBinding, scope };
+  const call = (name, args = {}) => sdkTools.tools.find((entry) => entry.name === name)
+    .handler({ instanceId: scope.viewId, ...args }, invocation(scope.sessionId));
+  assert.equal((await call("mobile_device_list")).resultType, "success");
   const ensures = scenario.calls.filter((entry) => entry.ensure);
   assert.equal(ensures.length, 3);
   assert.equal(new Set(ensures.map(({ ensure }) => ensure.consumerId)).size, 3);
@@ -341,7 +358,7 @@ test("idempotent SDK leases keep UI, MCP and peer views independent through susp
   const cookie = bootstrap.headers.get("set-cookie").split(";", 1)[0];
   const panel = (action) => fetch(new URL(`/api/v1/canvas/${action}`, url), { method: "POST", headers: { Cookie: cookie } });
   assert.equal((await panel("suspend")).status, 204);
-  assert.equal((await call("mobile_device_list")).result.isError, undefined);
+  assert.equal((await call("mobile_device_list")).resultType, "success");
   assert.ok((await peer.invokeAction("get_device_catalog", {})).runtimes);
   assert.equal((await panel("resume")).status, 204);
 
@@ -354,17 +371,57 @@ test("idempotent SDK leases keep UI, MCP and peer views independent through susp
   const posts = () => scenario.calls.filter((entry) =>
     entry.method === "POST" && entry.path === "/api/v1/targets/opaque%2Ftarget/telephony/sms");
   assert.equal(posts().length, 1);
-  const closing = host.closeCanvas();
-  const reopening = host.openCanvas({ deviceId: "opaque/target" });
+  const closing = canvas.onClose(context);
+  const reopening = canvas.open(context);
   await closing;
   assert.notEqual((await reopening).url, opened.url);
-  assert.equal((await call("mobile_device_list")).result.isError, undefined);
+  assert.equal((await call("mobile_device_list")).resultType, "success");
   assert.equal((await host.invokeAction("send_sms", sms)).operation, "sms-send");
   assert.equal(posts().length, 1);
-  assert.ok(scenario.calls.some((entry) => entry.method === "GET"
-    && entry.path.startsWith("/api/v1/operations/")));
-  await dispatcher.dispose();
-  dispatcher = null;
+
+  const sdkSms = { ...sms, body: "SDK accepted recovery" };
+  scenario.beforeOperationRead = async () => {
+    scenario.beforeOperationRead = undefined;
+    throw new Error("Synthetic SDK accepted operation GET failed");
+  };
+  assert.equal((await call("mobile_device_sms_send", sdkSms)).resultType, "failure");
+  const originalId = [...scenario.operations.keys()].at(-1);
+  assert.equal(posts().length, 2);
+  const originalGets = () => scenario.calls.filter((entry) => entry.method === "GET"
+    && entry.path === `/api/v1/operations/${encodeURIComponent(originalId)}`).length;
+  const failedGets = originalGets();
+  assert.ok(failedGets >= 1);
+  const sdkClosing = canvas.onClose(context);
+  const sdkReopening = canvas.open(context);
+  await sdkClosing;
+  await sdkReopening;
+  const recovered = await call("mobile_device_sms_send", sdkSms);
+  assert.equal(recovered.resultType, "success");
+  assert.equal(posts().length, 2);
+  assert.ok(originalGets() > failedGets);
+
+  const changedSms = { ...sms, body: "SDK incarnation refusal" };
+  scenario.beforeOperationRead = async () => {
+    scenario.beforeOperationRead = undefined;
+    throw new Error("Synthetic SDK accepted operation GET failed again");
+  };
+  assert.equal((await call("mobile_device_sms_send", changedSms)).resultType, "failure");
+  const changedId = [...scenario.operations.keys()].at(-1);
+  assert.equal(posts().length, 3);
+  await canvas.onClose(context);
+  const originalRef = scenario.connectionRef;
+  scenario.connectionRef = { ...originalRef, pid: originalRef.pid + 1 };
+  try {
+    await canvas.open(context);
+    const refused = await call("mobile_device_sms_send", changedSms);
+    assert.equal(refused.resultType, "failure");
+    assert.match(refused.error, /runtime_incarnation_changed/);
+    assert.equal(posts().length, 3);
+    assert.equal([...scenario.operations.keys()].at(-1), changedId);
+  } finally {
+    scenario.connectionRef = originalRef;
+  }
+  await sdkTools.closing(scope);
   assert.ok((await host.invokeAction("get_device_catalog", {})).runtimes);
   assert.ok((await peer.invokeAction("get_device_catalog", {})).runtimes);
 });

@@ -186,7 +186,7 @@ export async function ensureTargetHost(options) {
     Object.assign(error, { name: "RuntimeDeliveryError", code: scenario.ensureFailureCode });
     throw error;
   }
-  const key = JSON.stringify([options.consumerId, options.scope]);
+  const key = JSON.stringify([options.consumerId, options.scope, process.pid]);
   const existing = scenario.idempotentLeases ? scenario.leaseKeys.get(key) : undefined;
   const leaseId = existing && scenario.leases.has(existing) ? existing : randomUUID();
   if (existing && scenario.leases.has(existing)) {
