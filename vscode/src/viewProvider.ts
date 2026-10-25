@@ -48,7 +48,7 @@ export class MobileCanvasViewProvider implements vscode.WebviewViewProvider {
     const generation = this.lifecycle.beginResolution();
     // The previous bridge's `canvas close` is asynchronous; opening the replacement before it
     // settles lets a late close tear down the panel this resolution is about to create.
-    await this.lifecycle.retire();
+    await this.lifecycle.retire({ retryFailed: true, generation });
     if (!this.lifecycle.isCurrent(generation)) {
       return;
     }
@@ -105,7 +105,9 @@ export class MobileCanvasViewProvider implements vscode.WebviewViewProvider {
       () => {
         if (this.lifecycle.current === bridge) {
           this.view = undefined;
-          void this.lifecycle.retire();
+          void this.lifecycle.retire().catch((error: unknown) => {
+            this.output.appendLine(`Mobile Canvas close failed: ${error instanceof Error ? error.message : "unknown error"}`);
+          });
         }
       },
     );
@@ -150,7 +152,9 @@ export class MobileCanvasViewProvider implements vscode.WebviewViewProvider {
   dispose(): void {
     this.lifecycle.invalidate();
     this.view = undefined;
-    void this.lifecycle.retire();
+    void this.lifecycle.retire().catch((error: unknown) => {
+      this.output.appendLine(`Mobile Canvas close failed: ${error instanceof Error ? error.message : "unknown error"}`);
+    });
     this.contextOpened.dispose();
   }
 

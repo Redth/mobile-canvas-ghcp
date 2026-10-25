@@ -9,6 +9,7 @@ import { createAilohaCanvasHost } from "../../lib/ailoha/canvas-host.mjs";
 
 const require = createRequire(import.meta.url);
 const { HostBridge } = require(join(dirname(fileURLToPath(import.meta.url)), "../out/hostBridge.js"));
+const { BridgeLifecycleCoordinator } = require(join(dirname(fileURLToPath(import.meta.url)), "../out/bridgeLifecycle.js"));
 
 async function waitFor(condition) {
   const deadline = Date.now() + 5000;
@@ -199,4 +200,23 @@ test("a failed visibility close remains observable and is retried before same-ow
   assert.equal(state.messages.at(-1).visible, true);
   state.bridge.dispose();
   await state.bridge.closed();
+});
+
+test("compiled Ailoha bridge retries a failed retirement only on a new explicit resolution", async () => {
+  const state = fixture({ closeFailures: 2 });
+  const coordinator = new BridgeLifecycleCoordinator();
+  coordinator.setActive(state.bridge);
+  await state.bridge.handleMessage({ type: "ready" });
+  await assert.rejects(coordinator.retire(), /synthetic cleanup failure/);
+  assert.equal(coordinator.current, undefined);
+  assert.equal(state.calls.filter(([kind]) => kind === "close-canvas").length, 2);
+  const generation = coordinator.beginResolution();
+  await coordinator.retire({ retryFailed: true, generation });
+  assert.equal(state.calls.filter(([kind]) => kind === "close-canvas").length, 3);
+  const replacement = fixture();
+  coordinator.setActive(replacement.bridge);
+  await replacement.bridge.handleMessage({ type: "ready" });
+  assert.equal(coordinator.current, replacement.bridge);
+  await coordinator.retire();
+  assert.ok(replacement.calls.some(([kind]) => kind === "close-canvas"));
 });

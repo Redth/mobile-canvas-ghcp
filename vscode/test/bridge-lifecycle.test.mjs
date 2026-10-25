@@ -148,3 +148,97 @@ test("overlapping retire() calls still serialize even when both clear the active
   await both;
   assert.equal(bothSettled, true);
 });
+
+test("a failed retirement keeps the exact bridge for a later explicit resolution, without replaying dispose", async () => {
+  const coordinator = new BridgeLifecycleCoordinator();
+  let disposals = 0;
+  let closes = 0;
+  const bridge = {
+    dispose() { disposals += 1; },
+    async closed() {
+      if (++closes === 1) throw new Error("owned close failed");
+    },
+  };
+  coordinator.setActive(bridge);
+  await assert.rejects(coordinator.retire(), /owned close failed/);
+  assert.equal(coordinator.current, undefined);
+  await assert.rejects(coordinator.retire(), /owned close failed/);
+  assert.equal(closes, 1, "an overlapping/non-resolution retirement cannot retry failed cleanup");
+  const generation = coordinator.beginResolution();
+  await coordinator.retire({ retryFailed: true, generation });
+  assert.equal(closes, 2);
+  assert.equal(disposals, 1);
+  const replacement = { dispose() {}, closed: () => Promise.resolve() };
+  coordinator.setActive(replacement);
+  assert.equal(coordinator.current, replacement);
+});
+
+test("stale explicit resolution cannot retry failed cleanup or adopt a replacement", async () => {
+  const coordinator = new BridgeLifecycleCoordinator();
+  let closes = 0;
+  coordinator.setActive({
+    dispose() {},
+    async closed() {
+      closes += 1;
+      if (closes === 1) throw new Error("owned close failed");
+    },
+  });
+  await assert.rejects(coordinator.retire(), /owned close failed/);
+  const stale = coordinator.beginResolution();
+  const current = coordinator.beginResolution();
+  await assert.rejects(coordinator.retire({ retryFailed: true, generation: stale }), /owned close failed/);
+  assert.equal(closes, 1);
+  await coordinator.retire({ retryFailed: true, generation: current });
+  assert.equal(closes, 2);
+});
+
+test("an explicit resolution waits for in-flight retirement, then retries only its failed close", async () => {
+  const coordinator = new BridgeLifecycleCoordinator();
+  let releaseClose;
+  const gate = new Promise((resolve) => { releaseClose = resolve; });
+  let closes = 0;
+  let disposals = 0;
+  coordinator.setActive({
+    dispose() { disposals += 1; },
+    async closed() {
+      closes += 1;
+      if (closes === 1) {
+        await gate;
+        throw new Error("owned close failed");
+      }
+    },
+  });
+  const first = coordinator.retire();
+  const generation = coordinator.beginResolution();
+  const retry = coordinator.retire({ retryFailed: true, generation });
+  let settled = false;
+  void retry.then(() => { settled = true; });
+  await Promise.resolve();
+  assert.equal(settled, false);
+  assert.equal(closes, 1);
+  releaseClose();
+  await assert.rejects(first, /owned close failed/);
+  await retry;
+  assert.equal(closes, 2);
+  assert.equal(disposals, 1);
+  assert.equal(coordinator.current, undefined);
+});
+
+test("a still-failing explicit retry preserves the same bridge for another explicit resolution", async () => {
+  const coordinator = new BridgeLifecycleCoordinator();
+  let closes = 0;
+  coordinator.setActive({
+    dispose() {},
+    async closed() {
+      if (++closes < 3) throw new Error(`close ${closes}`);
+    },
+  });
+  await assert.rejects(coordinator.retire(), /close 1/);
+  await assert.rejects(
+    coordinator.retire({ retryFailed: true, generation: coordinator.beginResolution() }),
+    /close 2/,
+  );
+  assert.equal(coordinator.current, undefined);
+  await coordinator.retire({ retryFailed: true, generation: coordinator.beginResolution() });
+  assert.equal(closes, 3);
+});

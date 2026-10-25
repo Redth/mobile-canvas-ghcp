@@ -580,8 +580,14 @@ reuses the view host's retained receipt/coordinator state for GET recovery. The
 SDK tool owner separately retains its private backend receipt/coordinator
 state across dispatcher disposal and explicit same-view reopen, so an accepted
 MCP operation also recovers by original-ID GET instead of another POST.
-Failed SDK lease cleanup keeps the retired view and dispatcher reachable for
-explicit close retry; it cannot reopen or admit tools until cleanup succeeds.
+Failed SDK lease cleanup keeps the retired view and dispatcher reachable; a
+new explicit same-instance open retries that cleanup once before reopening,
+and another failed retry leaves the view closed with its receipts intact.
+Neither in-flight close nor failed cleanup admits SDK tools.
+VS Code similarly retains a failed retiring bridge. A new explicit view
+resolution retries that exact bridge's cleanup before admitting its replacement;
+overlapping retirement and stale resolutions cannot retry or replace it.
+Disposal failures are reported through the VS Code output channel.
 Session shutdown attempts every SDK and canvas owner before reporting failures.
 Neither lease ownership nor receipt state is projected into the tool result.
 SDK tool results retain screenshot image bytes and failure status; absent genuine MCP
