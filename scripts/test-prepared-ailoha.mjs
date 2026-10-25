@@ -48,6 +48,7 @@ const tests = [
   "tests/scripts/ailoha-runtime-pin.test.mjs",
   "tests/scripts/ailoha-recording.test.mjs",
   "tests/scripts/ailoha-mcp-host.test.mjs",
+  "tests/scripts/ailoha-app-mcp.test.mjs",
   "tests/scripts/ailoha-destructive-consent.test.mjs",
   "tests/web/ailoha-video-player.test.mjs",
   "tests/web/ailoha-presentation-lease.test.mjs",

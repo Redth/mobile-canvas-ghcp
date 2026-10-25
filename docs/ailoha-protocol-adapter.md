@@ -564,8 +564,51 @@ infer the first panel or derive private context filenames. VS Code supplies its
 actual window/view binding and refreshes MCP definitions after a genuine context
 open. Binding discovery itself cannot create or reopen an authority: before a
 trusted view opens it reports `context_not_bound`, and a retired view reports
-`context_retired`. The first slice is target-only; app/agent/runtime-instance
-selectors are not adopted as native package identity.
+`context_retired`. Device tools remain target-only; app/agent/runtime-instance
+selectors are never adopted as native package identity.
+
+### Optional selected-view App MCP reads
+
+Only the explicitly named Ailoha MCP profile appends `mobile_app_tree`,
+`mobile_app_query` and `mobile_app_status` to the unchanged 61 legacy
+`mobile_device_*` tools (64 in that profile). The legacy backend, catalog
+JSON and compatibility baseline remain at 61. Initialize guidance distinguishes
+provider-owned device tools from these optional native-instance App reads.
+Choose and verify an instance in the UI first; MCP exposes no binding writes
+or mutable App actions.
+For host-owned SDK bootstrap, `ailohaAppMcpCatalog()` exports these same
+three fresh descriptors without needing any view authority or native runtime;
+it can be combined with the unchanged legacy catalog. Only execution requires
+a real trusted named binding, never a dummy dispatcher for schema discovery.
+
+Tree accepts only optional `maxDepth` in 1..16 (default 6); query accepts only
+literal `type`, `automationId` and `text` filters of at most 128 characters,
+with at least one nonempty filter; status accepts an empty object. None
+accept session/view/context/owner, target/device/surface, application/agent,
+route, port or endpoint selectors. All advertise read-only, non-destructive
+annotations and `taskSupport:forbidden`.
+
+Each invocation creates an independent reader using the same runtime semantic
+factory and controller as the UI. It captures the current named context and
+verified native instance, invokes canonical composed tools with
+`require-agent`, then validates the same context/target/surface/runtime and
+provenance before releasing the result. Output includes scope, selection,
+operation and the bounded shared result (at most 300 elements, 16 levels,
+512 characters per element field and 1 MiB encoded result). Missing, stale,
+disconnected, retired or mismatched App ownership returns MCP `isError`;
+it never falls back to System, another agent or legacy. Cancellation and MCP
+shutdown retire the captured read and close its canonical child. App reads
+do not acquire the device backend, follow/select a device, emit automation,
+or request approval; the VS Code proxy also never follows a device supplied
+in a rejected App read.
+
+Prepared stdio tests exercise both host entry scripts with explicit trusted
+launch flags and UI-selected context bindings, including isolation between
+two views, absent/disconnected agents, selector/task rejection, cancellation,
+and independent device reads. These are synthetic source/adapter proofs, not
+normal GitHub SDK-owned launch registration or real-app acceptance. The
+static no-argument GitHub entry still cannot invent a named binding; its
+supported host-owned SDK launch adapter is separate integration work.
 
 ### Internal host incarnation evidence
 

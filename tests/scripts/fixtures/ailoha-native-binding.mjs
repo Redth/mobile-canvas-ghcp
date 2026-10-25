@@ -15,7 +15,8 @@ export function createNativeBindingFixture({ registrations = [], advertised = tr
   const calls = [];
   const contexts = new Map();
   const model = { registrations, advertised, inventoryError: null, disconnected: false,
-    beforeCandidates: null, beforeSelect: null, afterSelect: null, mutateInventory: null, tamperSelectReply: null };
+    beforeCandidates: null, beforeSelect: null, afterSelect: null, mutateInventory: null,
+    tamperSelectReply: null, beforeTool: null, mutateTool: null };
   const errorResult = (code) => ({ ok: false, context: null,
     error: { code, message: "Synthetic private diagnostic: token=must-not-project" } });
   function resolve(selection) {
@@ -112,17 +113,18 @@ export function createNativeBindingFixture({ registrations = [], advertised = tr
     await store.binding();
     const toolCalls = [];
     const errors = [];
-    const controller = createSemanticInspectionController({
+    const createInspection = () => createSemanticInspectionController({
       scope, readSnapshot: (options) => store.readSnapshot(options),
       bindNativeInstance: (binding, snapshot, options) => store.bindNativeInstance(binding, snapshot, options),
       readCandidates: (snapshot, options) => readNativeAgentCandidates({ runCli, snapshot, ...options }),
       onError: (error) => errors.push(error.code),
       async callTool(request) {
         toolCalls.push(request);
+        await model.beforeTool?.(request);
         if (model.disconnected) throw new MobileAilohaError("ContextOwnerUnavailable", "The synthetic owner disconnected.", 502);
         const selection = context.selection;
         if (request.arguments.route === "require-agent") resolve(selection);
-        return { running: true, elements: [], route: {
+        const output = { running: true, agentName: "Synthetic agent", framework: "Synthetic", elements: [], route: {
           owner: request.arguments.route === "require-agent" ? "agent" : "target-host",
           targetHostId: selection.targetHostId, targetId: selection.targetId, surfaceId: selection.surfaceId,
           agentId: selection.agentId, runtimeInstanceId: selection.runtimeInstanceId,
@@ -131,10 +133,12 @@ export function createNativeBindingFixture({ registrations = [], advertised = tr
             observed: context.observed,
           },
         } };
+        return model.mutateTool ? model.mutateTool(output) : output;
       },
     });
+    const controller = createInspection();
     const request = (input) => controller.request("POST", JSON.stringify(input));
-    return { scope, context, store, controller, request, toolCalls, errors,
+    return { scope, context, store, controller, createInspection, request, toolCalls, errors,
       mcpStore: () => createAilohaContextStore({ scope, runCli, contextRef: context.contextRef, scopeEpoch: context.scopeEpoch }),
     };
   }

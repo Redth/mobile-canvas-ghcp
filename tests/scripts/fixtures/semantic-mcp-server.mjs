@@ -24,6 +24,13 @@ server.setRequestHandler(CallToolRequestSchema, async ({ params }) => {
     if (context?.state !== "open" || context.scopeEpoch !== scopeEpoch || context.revision !== params.arguments.contextRevision) {
       return { isError: true, content: [{ type: "text", text: "ContextRevisionConflict: owned synthetic context changed" }] };
     }
+    let failures;
+    try { failures = JSON.parse(readFileSync(`${statePath}.semantic-failures.json`, "utf8")); }
+    catch (error) { if (error.code !== "ENOENT") throw error; }
+    const code = failures?.[contextRef];
+    if (params.arguments.route === "require-agent" && code) {
+      return { isError: true, content: [{ type: "text", text: `${code}: token=private-fixture-detail` }] };
+    }
   }
   if (params.arguments?.text === "wait") return new Promise(() => {});
   if (params.arguments?.text === "error") return { isError: true, content: [{ type: "text", text: "CanonicalCapabilityUnsupported: no query owner" }] };

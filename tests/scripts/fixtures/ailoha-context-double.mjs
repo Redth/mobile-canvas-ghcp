@@ -154,6 +154,10 @@ if (args[1] === "select") {
     process.exit(1);
   }
   context.selection = input.selection;
+  if (process.env.AILOHA_TEST_SEMANTIC_CONTEXT === "1") {
+    context.observed = { hostInstanceId: "synthetic-native-incarnation", applicationEvidence: null,
+      runtimeInstanceEvidence: input.selection.runtimeInstanceId ? "verified-native-instance" : "unsupported" };
+  }
   context.revision = String(BigInt(context.revision) + 1n);
 }
 if (args[1] === "detach") {

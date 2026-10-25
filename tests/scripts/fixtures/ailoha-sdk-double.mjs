@@ -172,7 +172,8 @@ export async function getVerifiedCliLaunch({ expectedVersion }) {
     file: process.execPath,
     args: [
       fileURLToPath(new URL("./ailoha-context-double.mjs", import.meta.url)),
-      ...(scenario.combinedInspection ? ["--fixture-state", process.env.AILOHA_TEST_CONTEXT_STATE] : []),
+      ...(scenario.combinedInspection || process.env.AILOHA_TEST_SEMANTIC_CONTEXT === "1"
+        ? ["--fixture-state", process.env.AILOHA_TEST_CONTEXT_STATE] : []),
     ],
     version: expectedVersion, sourceSha,
   };
