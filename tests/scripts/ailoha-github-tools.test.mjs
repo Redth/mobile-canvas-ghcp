@@ -327,6 +327,74 @@ test("an explicit open waits for an in-flight close and retries its failed SDK c
   await tools.closeAll();
 });
 
+for (const { name, phase, queued } of [
+  { name: "successful prior retirement", phase: "closing", queued: 1 },
+  { name: "failed-cleanup retry", phase: "retry", queued: 1 },
+  { name: "concurrent queued opens", phase: "closing", queued: 2 },
+  { name: "active host acquisition", phase: "acquiring", queued: 1 },
+]) {
+  test(`a later close fences ${name} before admitting a replacement`, async () => {
+    let release;
+    let entered;
+    const gate = new Promise((resolve) => { release = resolve; });
+    const blocked = new Promise((resolve) => { entered = resolve; });
+    let opens = 0;
+    let closes = 0;
+    let leases = 0;
+    let admissions = 0;
+    const canvas = withAilohaCanvas({
+      inputSchema: { type: "object", properties: {} }, actions: [],
+    }, {
+      backend: "ailoha",
+      createHost: () => ({
+        async openCanvas() {
+          opens += 1;
+          leases += 1;
+          if (phase === "acquiring" && opens === 2) { entered(); await gate; }
+          return { title: "Mobile", url: `http://127.0.0.1/${opens}` };
+        },
+        async closeCanvas() {
+          closes += 1;
+          if (phase === "retry" && closes === 1) throw new Error("first cleanup failed");
+          if ((phase === "retry" && closes === 2) || (phase === "closing" && closes === 1)) {
+            entered();
+            await gate;
+          }
+          leases = 0;
+        },
+      }),
+      onHostOpened: () => { admissions += 1; },
+      onHostClosing: () => {},
+    });
+    const context = { sessionId: "session", instanceId: "view" };
+    await canvas.open(context);
+    let firstClose;
+    if (phase === "retry") {
+      await assert.rejects(canvas.onClose(context));
+    } else {
+      firstClose = canvas.onClose(context);
+      if (phase === "acquiring") await firstClose;
+      else await blocked;
+    }
+    const requests = Array.from({ length: queued }, () =>
+      canvas.open(context).then(() => null, (error) => error));
+    if (phase !== "closing") await blocked;
+    const laterClose = canvas.onClose(context);
+    release();
+    if (firstClose) await firstClose;
+    await laterClose;
+    for (const request of requests) assert.equal((await request)?.code, "view_closed");
+    assert.equal(opens, phase === "acquiring" ? 2 : 1);
+    assert.equal(closes, phase === "acquiring" || phase === "retry" ? 2 : 1);
+    assert.equal(leases, 0);
+    assert.equal(admissions, 1);
+    await canvas.open(context);
+    assert.equal(admissions, 2);
+    await canvas.onClose(context);
+    assert.equal(leases, 0);
+  });
+}
+
 test("SDK tool captures nested input before an asynchronous binding lookup", async () => {
   let release;
   const gate = new Promise((resolve) => { release = resolve; });
@@ -597,6 +665,8 @@ test("idempotent SDK leases keep UI, MCP and peer views independent through susp
   const runtimeHost = createRuntimeCanvasHost({ scope, runtime });
   let heldOpen;
   let releaseHeldOpen;
+  let heldClose;
+  let releaseHeldClose;
   const host = {
     ...runtimeHost,
     async openCanvas(input) {
@@ -608,6 +678,15 @@ test("idempotent SDK leases keep UI, MCP and peer views independent through susp
         await hold.wait;
       }
       return result;
+    },
+    async closeCanvas() {
+      if (heldClose) {
+        const hold = heldClose;
+        heldClose = undefined;
+        hold.enter();
+        await hold.wait;
+      }
+      return runtimeHost.closeCanvas();
     },
   };
   const peer = createRuntimeCanvasHost({ scope: peerScope, runtime });
@@ -635,6 +714,7 @@ test("idempotent SDK leases keep UI, MCP and peer views independent through susp
   t.after(async () => {
     scenario.beforeOperationRead = undefined;
     releaseHeldOpen?.();
+    releaseHeldClose?.();
     await canvas.onClose(context);
     await sdkTools.closeAll();
     await peer.closeCanvas();
@@ -712,6 +792,26 @@ test("idempotent SDK leases keep UI, MCP and peer views independent through susp
   assert.ok((await peer.invokeAction("get_device_catalog", {})).runtimes);
   await canvas.open(context);
   assert.equal(scenario.leases.has(failedLeaseId), false);
+
+  let enterHeldClose;
+  const enteredHeldClose = new Promise((resolve) => { enterHeldClose = resolve; });
+  const closeGate = new Promise((resolve) => { releaseHeldClose = resolve; });
+  heldClose = { enter: enterHeldClose, wait: closeGate };
+  const queuedLeaseId = [...scenario.leaseKeys].find(([key]) =>
+    JSON.parse(key)[0].startsWith("mobile-canvas-canvas-") && JSON.parse(key)[1].viewId === scope.viewId)?.[1];
+  assert.ok(queuedLeaseId && scenario.leases.has(queuedLeaseId));
+  const earlierClose = canvas.onClose(context);
+  await enteredHeldClose;
+  const queuedReopen = canvas.open(context);
+  const laterClose = canvas.onClose(context);
+  releaseHeldClose();
+  await earlierClose;
+  await laterClose;
+  await assert.rejects(queuedReopen, { code: "view_closed" });
+  assert.equal(scenario.leases.has(queuedLeaseId), false);
+  assert.equal((await call("mobile_device_list")).resultType, "failure");
+  assert.ok((await peer.invokeAction("get_device_catalog", {})).runtimes);
+  await canvas.open(context);
   const recovered = await call("mobile_device_sms_send", sdkSms);
   assert.equal(recovered.resultType, "success");
   assert.equal(posts().length, 2);
