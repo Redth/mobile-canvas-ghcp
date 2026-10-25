@@ -97,7 +97,7 @@ export function createSemanticInspectionView({ element, request }) {
     if (state?.result) {
       const route = state.result.route;
       output.append(node("p", `${route.owner} / ${route.reason} / ${route.correlation}`));
-      output.append(node("p", `Target ${route.targetHostId} / ${route.targetId}; surface ${route.surfaceId ?? "primary"}; context ${route.executionContext.contextRef} @ ${route.executionContext.scopeEpoch}:${route.executionContext.revision}`));
+      output.append(node("p", `Target ${route.targetHostId} / ${route.targetId}; surface ${route.surfaceId ?? "not selected"}; context ${route.executionContext.contextRef} @ ${route.executionContext.scopeEpoch}:${route.executionContext.revision}`));
       if (state.result.provenance?.ownerProcessId) {
         output.append(node("p", `View owner process ${state.result.provenance.ownerProcessId} started ${state.result.provenance.processStartedAt}; native evidence ${state.result.provenance.runtimeInstanceEvidence}`));
       }
@@ -120,7 +120,7 @@ export function createSemanticInspectionView({ element, request }) {
     binding.setAttribute("aria-label", "Optional native app-agent binding");
     binding.append(node("h2", "Native app agent (optional)"));
     binding.append(node("p", "Leave unbound for device-only System inspection. Binding changes this named view's context only; it does not launch or install an app."));
-    if (state?.selection) binding.append(node("p", `Selected target ${state.selection.targetHostId} / ${state.selection.targetId}; surface ${state.selection.surfaceId ?? "primary"}.`));
+    if (state?.selection) binding.append(node("p", `Selected target ${state.selection.targetHostId} / ${state.selection.targetId}; surface ${state.selection.surfaceId ?? "not selected"}.`));
     binding.append(node("p", state?.binding?.message ?? "Native binding is unavailable in this host."));
     const bindingToken = state?.binding?.token ?? null;
     if (draftBindingToken !== bindingToken) {

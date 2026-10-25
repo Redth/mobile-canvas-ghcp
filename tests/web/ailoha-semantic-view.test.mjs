@@ -153,6 +153,8 @@ test("shared native picker never selects even a single advertisement; explicit c
     view.setActive(true);
     view.acceptState(withBinding(1, count));
     assert.equal(requests.length, 0);
+    assert.match(element.textContent, /surface not selected/);
+    assert.doesNotMatch(element.textContent, /surface primary/);
     assert.equal(find(element, (entry) => entry.tag === "details").textContent.includes("Clear native binding"), false);
     const picker = find(element, (entry) => entry.attributes?.["aria-label"] === "Registered native instance");
     const choose = find(element, (entry) => entry.tag === "button" && entry.textContent === "Verify selected candidate");

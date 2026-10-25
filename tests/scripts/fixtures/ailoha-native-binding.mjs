@@ -15,7 +15,7 @@ export function createNativeBindingFixture({ registrations = [], advertised = tr
   const calls = [];
   const contexts = new Map();
   const model = { registrations, advertised, inventoryError: null, disconnected: false,
-    beforeCandidates: null, beforeSelect: null, afterSelect: null, mutateInventory: null };
+    beforeCandidates: null, beforeSelect: null, afterSelect: null, mutateInventory: null, tamperSelectReply: null };
   const errorResult = (code) => ({ ok: false, context: null,
     error: { code, message: "Synthetic private diagnostic: token=must-not-project" } });
   function resolve(selection) {
@@ -94,7 +94,8 @@ export function createNativeBindingFixture({ registrations = [], advertised = tr
       context.observed = null;
       context.revision = String(BigInt(context.revision) + 1n);
     }
-    return JSON.stringify({ ok: true, context, error: null });
+    return JSON.stringify({ ok: true, context: args[1] === "select" && model.tamperSelectReply
+      ? model.tamperSelectReply(structuredClone(context)) : context, error: null });
   }
   async function createView(viewId = "view", targetId = "target") {
     const scope = { sessionId: "synthetic-binding-session", viewId };

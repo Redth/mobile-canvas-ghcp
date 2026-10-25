@@ -342,3 +342,44 @@ test("binding needs host-incarnation evidence and never accepts workspace mappin
       agentId: "agent-exact", runtimeInstanceId: "exact", ...extra }), { code: "semantic_binding_invalid" });
   }
 });
+
+test("tampered successful binding replies are rejected before document adoption or listener emission", async () => {
+  for (const tamper of [
+    (reply) => { reply.selection.targetHostId = "invalid-host"; },
+    (reply) => { reply.selection.targetId = "invalid-target"; },
+    (reply) => { reply.selection.surfaceId = "invalid-surface"; },
+    (reply) => { reply.selection.agentId = "agent-invalid"; },
+    (reply) => { reply.selection.runtimeInstanceId = "invalid-runtime"; },
+    (reply) => { reply.owner.processStartedAt = "invalid-owner-birth"; },
+    (reply) => { reply.observed.hostInstanceId = "invalid-host-incarnation"; },
+    (reply) => { reply.observed.runtimeInstanceEvidence = "unsupported"; },
+    (reply) => { reply.observed.applicationEvidence = "invalid-application-evidence"; },
+  ]) {
+    const fixture = createNativeBindingFixture({ registrations: [nativeAgent("exact")] });
+    const view = await fixture.createView();
+    const evidence = await discover(view);
+    const original = await view.store.readSnapshot();
+    const observations = [];
+    const states = [];
+    const unsubscribe = view.store.onChange(() => observations.push(view.store.contextProjection));
+    const unsubscribeState = view.controller.subscribe((state) => states.push(state));
+    fixture.model.tamperSelectReply = (reply) => { tamper(reply); return reply; };
+    const rejected = await bind(view, evidence);
+    assert.equal(rejected.error.code, "semantic_binding_mismatch");
+    assert.deepEqual(observations, []);
+    assert.deepEqual(view.store.contextProjection, original.contextProjection);
+    assert.equal(view.store.isCurrentSnapshot(original), true);
+    assert.equal(states.some((state) => JSON.stringify(state.selection).includes("invalid-")), false);
+    assert.equal(view.context.selection.targetId, "target");
+    assert.equal(view.context.selection.runtimeInstanceId, "exact");
+    assert.equal(fixture.calls.filter((call) => call[1] === "select").length, 1);
+    fixture.model.tamperSelectReply = null;
+    const recovered = await view.controller.request("GET");
+    assert.equal(recovered.selection.runtimeInstanceId, "exact");
+    assert.equal(recovered.selection.targetId, "target");
+    assert.equal(recovered.appAvailable, false);
+    assert.equal(fixture.calls.filter((call) => call[1] === "select").length, 1);
+    unsubscribe();
+    unsubscribeState();
+  }
+});
