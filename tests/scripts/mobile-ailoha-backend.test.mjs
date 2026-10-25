@@ -5,6 +5,7 @@ import { access, readFile, rm, writeFile } from "node:fs/promises";
 import { basename, join, relative, resolve } from "node:path";
 import { productModule } from "../ailoha-test-module.mjs";
 import { ownedTestDirectory } from "./fixtures/owned-test-directory.mjs";
+import { createNativeBindingFixture, nativeAgent } from "./fixtures/ailoha-native-binding.mjs";
 const { AilohaMobileBackend } = await import(productModule("lib/ailoha/mobile-backend.mjs"));
 const { mobileCanvasBackend } = await import(productModule("lib/backend.mjs"));
 const { createAilohaMediaAdapter } = await import(productModule("lib/ailoha/media-adapter.mjs"));
@@ -169,7 +170,7 @@ function fixture(options = {}) {
     },
   };
   const backend = new AilohaMobileBackend({
-    scope: { sessionId: "unique-session", viewId: "unique-view" },
+    scope: options.scope ?? { sessionId: "unique-session", viewId: "unique-view" },
     client, media, owner, selectionStore, features: options.features, featureState: options.featureState,
     reveal: options.reveal, revealState: options.revealState,
     systemUi: options.systemUi, systemUiState: options.systemUiState,
@@ -194,6 +195,53 @@ function fixture(options = {}) {
     selectHost(hostId) { selection = { targetHostId: hostId, targetId: "one" }; },
   };
 }
+
+test("optional native binding cannot make provider/System reads depend on a disconnected or restarted agent", async (t) => {
+  for (const restarted of [false, true]) {
+    const canonical = createNativeBindingFixture({ registrations: [nativeAgent("original", "one")] });
+    const view = await canonical.createView(`optional-agent-${restarted}`, "one");
+    view.context.selection.surfaceId = "surface/opaque";
+    const initial = await view.controller.request("GET");
+    const selected = await view.request({ operation: "bind", bindingToken: initial.binding.token,
+      agentId: "agent-original", runtimeInstanceId: "original" });
+    assert.equal(selected.appAvailable, true);
+    const provider = fixture({
+      scope: view.scope, selectionStore: view.store,
+      systemUi: {
+        async snapshot(invocation) {
+          assert.equal(invocation.targetId, "one");
+          return { schemaVersion: "1.0", deviceId: "one", platform: "ios",
+            root: null, elementCount: 0, raw: null, uiRevision: "provider-ui" };
+        },
+      },
+    });
+    t.after(() => provider.backend.dispose());
+    canonical.model.registrations = restarted ? [nativeAgent("replacement", "one")] : [];
+    const unavailable = await view.request({ lens: "app", operation: "status" });
+    assert.equal(unavailable.error.code, "AgentNotFound");
+    assert.equal(unavailable.result, null);
+    assert.equal(unavailable.appAvailable, false);
+    assert.equal(view.toolCalls.length, 1);
+    assert.equal(view.toolCalls[0].arguments.route, "require-agent");
+    assert.equal((await provider.backend.display("one")).surfaceId, "surface/opaque");
+    assert.equal((await provider.backend.screenshot("one")).bytes.length, 9);
+    assert.equal((await provider.backend.uiDump("one")).elementCount, 0);
+    const system = await view.request({ lens: "system", operation: "tree" });
+    assert.equal(system.result.route.owner, "target-host");
+    assert.equal(system.selection.runtimeInstanceId, "original");
+    assert.deepEqual(view.toolCalls.map((call) => call.arguments.route), ["require-agent", "target-host"]);
+    const current = await view.controller.request("GET");
+    assert.equal(current.binding.available, true);
+    assert.ok(current.binding.token);
+    const cleared = await view.request({ operation: "unbind", bindingToken: current.binding.token });
+    assert.equal(cleared.error, null);
+    assert.equal(cleared.selection.runtimeInstanceId, undefined);
+    assert.equal(cleared.selection.targetId, "one");
+    assert.equal((await provider.backend.display("one")).surfaceId, "surface/opaque");
+    assert.equal(canonical.calls.filter((call) => call[1] === "select").length, 2);
+    assert.equal(canonical.calls.some((call) => call[0] === "agent" || call[0] === "broker"), false);
+  }
+});
 
 test("app compatibility uses native package mapping and waits for its exact accepted target operation", async (t) => {
   const state = fixture({ app: true });

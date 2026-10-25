@@ -948,12 +948,21 @@ suspension and cancellation retire pending results and binding tokens.
 Canonical failures are explicit and never route to System as a fallback;
 uncertain binding writes are not replayed. **Read current binding** reads
 the same canonical context consumed by bound MCP operations.
+An agent disconnect/restart fails App reads explicitly but does not make
+provider-owned device reads or an explicitly chosen System lens depend on
+that agent. Target Host routing marks both agent selectors as not requested;
+it still validates the original host, target, surface and view authority.
+Clear remains available after App failures: target-only `context select`
+validates the new null-agent tuple, not the old agent's liveness. A dead
+trusted host/context owner is a different failure and must not be bypassed.
 
 Older runtimes (including preview2) without the advertised command show
 candidate enumeration as explicitly **unavailable**, not an empty inventory.
 The runtime SDK has no read-only enumeration API; this command is a
 separate source-only engine prerequisite and requires an approved published
-pin before real acceptance. `agent list` may start the broker or scan the current workspace, and
+pin before real acceptance. The reviewed canonical inventory source is
+`microsoft/ailoha@a53d2070830cad1f2b425a57eff421cbd25a5afa`; this is not
+an approved runtime/package pin. `agent list` may start the broker or scan the current workspace, and
 `broker status` / MCP human-text empty results cannot distinguish failed
 inventory from zero agents. This workflow never calls them, reads private
 broker configuration or credentials, guesses an endpoint, selects the first

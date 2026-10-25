@@ -231,3 +231,24 @@ test("candidate failure is not rendered as empty success and never switches the 
   assert.equal(find(element, (entry) => entry.attributes?.["aria-label"] === "Inspection lens").value, "app");
   assert.equal(find(element, (entry) => entry.attributes?.["aria-label"] === "Registered native instance").disabled, true);
 });
+
+test("clear stays visible and enabled after an App-agent failure without switching lenses", (t) => {
+  const previous = globalThis.document;
+  globalThis.document = { createElement: (tag) => new Element(tag) };
+  t.after(() => { globalThis.document = previous; });
+  const element = new Element("aside");
+  const requests = [];
+  const view = createSemanticInspectionView({
+    element, async request(_path, options) { requests.push(options); return withBinding(2, 0); },
+  });
+  view.setActive(true);
+  view.acceptState({ ...withBinding(), lens: "app", status: "error", appAvailable: false,
+    selection: { targetHostId: "host", targetId: "target", runtimeInstanceId: "original", agentId: "agent-original" },
+    error: { code: "AgentNotFound", message: "The selected runtime disconnected." } });
+  const clear = find(element, (entry) => entry.tag === "button" && entry.textContent === "Clear native binding");
+  assert.equal(clear.disabled, false);
+  assert.equal(find(element, (entry) => entry.tag === "details").textContent.includes("Clear native binding"), false);
+  clear.listeners.get("click")();
+  assert.deepEqual(JSON.parse(requests[0].body), { operation: "unbind", bindingToken: "binding-1" });
+  assert.equal(find(element, (entry) => entry.attributes?.["aria-label"] === "Inspection lens").value, "app");
+});
