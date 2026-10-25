@@ -66,6 +66,13 @@ const evidence = createServer(async (request, response) => {
       response.writeHead(204).end();
       return;
     }
+    if (request.method === "POST" && request.url === "/defer-next-video-frame") {
+      if (!scenario.calls.some((call) => call.method === "POST" && call.path?.endsWith("/video/sessions"))
+        || scenario.deferNextVideoFrame) throw new Error("No original video is available for deferred recovery.");
+      scenario.deferNextVideoFrame = true;
+      response.writeHead(204).end();
+      return;
+    }
     if (request.method === "POST" && request.url === "/control" && inspectionCheck) {
       const chunks = [];
       let size = 0;

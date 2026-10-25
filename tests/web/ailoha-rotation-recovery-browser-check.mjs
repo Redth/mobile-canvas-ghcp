@@ -84,6 +84,9 @@ async (page) => {
     await page.waitForFunction(() => document.querySelector("#toast")?.textContent
       ?.includes("Synthetic original owner changed"));
   } else {
+    if ((await page.request.post(`${evidenceUrl}/defer-next-video-frame`)).status() !== 204) {
+      throw new Error("The synthetic recovery frame was not held.");
+    }
     if (mode === "retry") {
       await page.locator('[data-status-action="retry-stream"]').click();
     } else {

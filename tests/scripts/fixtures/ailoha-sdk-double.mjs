@@ -630,8 +630,9 @@ export async function openTargetHostTransport(leaseId) {
       }
       const collection = `/api/v1/targets/${encodeURIComponent(mediaTargetId)}/surfaces/${encodeURIComponent(mediaSurfaceId)}/video/sessions`;
       if (path === collection && options.method === "POST") {
-        const replacement = replacementPending;
+        const replacement = replacementPending || scenario.deferNextVideoFrame === true;
         replacementPending = false;
+        scenario.deferNextVideoFrame = false;
         const currentGeometry = replacement || videoSessionCreated;
         videoSessionCreated = true;
         if (!currentGeometry) scenario.geometryRevision = initialGeometryRevision;
