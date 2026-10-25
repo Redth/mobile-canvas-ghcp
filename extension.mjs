@@ -7,7 +7,7 @@ import { createCanvas, joinSession } from "@github/copilot-sdk/extension";
 import { resolveCommand } from "./lib/runtime.mjs";
 import { mobileCanvasBackend } from "./lib/backend.mjs";
 import { createAilohaCanvasConsent, withAilohaCanvas } from "./lib/ailoha/github-adapter.mjs";
-import { createAilohaGithubTools } from "./lib/ailoha/github-tools.mjs";
+import { closeAilohaGithubOwners, createAilohaGithubTools } from "./lib/ailoha/github-tools.mjs";
 import { ailohaAppMcpCatalog, ailohaMcpCatalog, createAilohaMcpDispatcher } from "./lib/ailoha/mcp-host.mjs";
 import { createRuntimeCanvasHost, getRuntimeContextBinding } from "./lib/ailoha/runtime-backend.mjs";
 
@@ -457,8 +457,7 @@ session = await joinSession({
   ...(githubTools ? { tools: githubTools.tools } : {}),
   hooks: {
     async onSessionEnd() {
-      await githubTools?.closeAll();
-      await Promise.all([...ownedAilohaHosts].map((host) => host.closeCanvas()));
+      await closeAilohaGithubOwners(githubTools, [...ownedAilohaHosts]);
     },
   },
 });

@@ -580,6 +580,9 @@ reuses the view host's retained receipt/coordinator state for GET recovery. The
 SDK tool owner separately retains its private backend receipt/coordinator
 state across dispatcher disposal and explicit same-view reopen, so an accepted
 MCP operation also recovers by original-ID GET instead of another POST.
+Failed SDK lease cleanup keeps the retired view and dispatcher reachable for
+explicit close retry; it cannot reopen or admit tools until cleanup succeeds.
+Session shutdown attempts every SDK and canvas owner before reporting failures.
 Neither lease ownership nor receipt state is projected into the tool result.
 SDK tool results retain screenshot image bytes and failure status; absent genuine MCP
 form elicitation, destructive MCP requests

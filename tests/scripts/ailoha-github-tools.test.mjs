@@ -7,7 +7,7 @@ import { join } from "node:path";
 import test from "node:test";
 import { fileURLToPath } from "node:url";
 import { productModule } from "../ailoha-test-module.mjs";
-import { createAilohaGithubTools } from "../../lib/ailoha/github-tools.mjs";
+import { closeAilohaGithubOwners, createAilohaGithubTools } from "../../lib/ailoha/github-tools.mjs";
 import { withAilohaCanvas } from "../../lib/ailoha/github-adapter.mjs";
 import * as sdkDouble from "./fixtures/ailoha-sdk-double.mjs";
 
@@ -116,12 +116,131 @@ test("closing a view during binding cannot retarget its pending call to a reopen
   tools.opened(selected);
   const old = tools.tools[0].handler(input("same"), invocation("session"));
   const closing = tools.closing(selected);
-  tools.opened(selected);
+  assert.throws(() => tools.opened(selected), { code: "view_cleanup_pending" });
   release();
   assert.equal((await old).resultType, "failure");
   await closing;
+  tools.opened(selected);
   assert.equal((await tools.tools[0].handler(input("same"), invocation("session"))).resultType, "success");
   assert.deepEqual(dispatched, [2]);
+  await tools.closeAll();
+});
+
+test("failed SDK dispatcher disposal retains its aborted owner for explicit close retry", async () => {
+  let disposals = 0;
+  let created = 0;
+  const tools = createAilohaGithubTools({
+    descriptors: [descriptor],
+    async getBinding(selected) { return { scope: selected }; },
+    createDispatcher() {
+      created += 1;
+      return {
+        async handle() { return { result: { content: [{ type: "text", text: "ok" }] } }; },
+        async dispose() {
+          if (++disposals === 1) throw new Error("owned lease cleanup failed");
+        },
+      };
+    },
+  });
+  const selected = scope("session", "view");
+  tools.opened(selected);
+  const tool = tools.tools[0];
+  assert.equal((await tool.handler(input("view"), invocation("session"))).resultType, "success");
+  await assert.rejects(tools.closing(selected), /owned lease cleanup failed/);
+  assert.equal((await tool.handler(input("view"), invocation("session"))).resultType, "failure");
+  assert.throws(() => tools.opened(selected), { code: "view_cleanup_pending" });
+  await tools.closing(selected);
+  assert.equal(disposals, 2);
+  tools.opened(selected);
+  assert.equal((await tool.handler(input("view"), invocation("session"))).resultType, "success");
+  assert.equal(created, 2);
+  await tools.closeAll();
+});
+
+test("session-end cleanup tries peer SDK owners and every UI host before surfacing a failed lease", async () => {
+  const disposed = [];
+  const hosts = [];
+  let fail = true;
+  let failHost = true;
+  const tools = createAilohaGithubTools({
+    descriptors: [descriptor],
+    async getBinding(selected) { return { scope: selected }; },
+    createDispatcher({ binding }) {
+      return {
+        async handle() { return { result: { content: [{ type: "text", text: "ok" }] } }; },
+        async dispose() {
+          disposed.push(binding.scope.viewId);
+          if (binding.scope.viewId === "failed" && fail) {
+            fail = false;
+            throw new Error("SDK lease cleanup failed");
+          }
+        },
+      };
+    },
+  });
+  for (const viewId of ["failed", "peer"]) {
+    tools.opened(scope("session", viewId));
+    assert.equal((await tools.tools[0].handler(input(viewId), invocation("session"))).resultType, "success");
+  }
+  const uiHosts = ["failed", "peer"].map((id) => ({
+    closeCanvas() {
+      hosts.push(id);
+      if (id === "failed" && failHost) {
+        failHost = false;
+        throw new Error("UI host cleanup failed");
+      }
+    },
+  }));
+  await assert.rejects(closeAilohaGithubOwners(tools, uiHosts), (error) =>
+    error instanceof AggregateError && error.errors.some((entry) => /SDK lease cleanup failed/.test(entry.message))
+      && error.errors.some((entry) => /UI host cleanup failed/.test(entry.message)));
+  assert.deepEqual(new Set(hosts), new Set(["failed", "peer"]));
+  assert.deepEqual(new Set(disposed), new Set(["failed", "peer"]));
+  assert.equal((await tools.tools[0].handler(input("failed"), invocation("session"))).resultType, "failure");
+  assert.throws(() => tools.opened(scope("session", "failed")), { code: "view_closed" });
+  await closeAilohaGithubOwners(tools, uiHosts);
+  assert.equal(disposed.filter((id) => id === "failed").length, 2);
+});
+
+test("failed canvas SDK close is retriable and blocks reopening until the original cleanup settles", async () => {
+  let fail = true;
+  let hostCloses = 0;
+  let hostOpens = 0;
+  const tools = createAilohaGithubTools({
+    descriptors: [descriptor],
+    async getBinding(selected) { return { scope: selected }; },
+    createDispatcher() {
+      return {
+        async handle() { return { result: { content: [{ type: "text", text: "ok" }] } }; },
+        async dispose() {
+          if (fail) { fail = false; throw new Error("retained SDK cleanup"); }
+        },
+      };
+    },
+  });
+  const canvas = withAilohaCanvas({
+    inputSchema: { type: "object", properties: {} }, actions: [],
+  }, {
+    backend: "ailoha",
+    createHost: () => ({
+      async openCanvas() { return { title: "Mobile", url: `http://127.0.0.1/${++hostOpens}` }; },
+      async closeCanvas() { hostCloses += 1; },
+    }),
+    onHostOpened: (selected) => tools.opened(selected),
+    onHostClosing: (selected) => tools.closing(selected),
+  });
+  const context = { sessionId: "session", instanceId: "view" };
+  await canvas.open(context);
+  assert.equal((await tools.tools[0].handler(input("view"), invocation("session"))).resultType, "success");
+  await assert.rejects(canvas.onClose(context), /retained SDK cleanup/);
+  assert.equal(hostCloses, 1);
+  await assert.rejects(canvas.open(context), /retained SDK cleanup/);
+  assert.equal(hostOpens, 1);
+  assert.equal((await tools.tools[0].handler(input("view"), invocation("session"))).resultType, "failure");
+  await canvas.onClose(context);
+  assert.equal(hostCloses, 2);
+  assert.equal((await canvas.open(context)).url, "http://127.0.0.1/2");
+  await canvas.onClose(context);
   await tools.closeAll();
 });
 
@@ -296,7 +415,19 @@ test("idempotent SDK leases keep UI, MCP and peer views independent through susp
   scenario.calls.length = 0;
   scenario.operations.clear();
   scenario.idempotentLeases = true;
-  const runtime = async () => ({ sdk: sdkDouble, pin: { version: "synthetic-only", sourceSha: sdkDouble.sourceSha } });
+  let failedLeaseId;
+  let failLeaseOnce = false;
+  const sdk = {
+    ...sdkDouble,
+    async releaseRuntimeLease(leaseId) {
+      if (failLeaseOnce && leaseId === failedLeaseId) {
+        failLeaseOnce = false;
+        throw new Error("synthetic SDK lease cleanup failed");
+      }
+      return sdkDouble.releaseRuntimeLease(leaseId);
+    },
+  };
+  const runtime = async () => ({ sdk, pin: { version: "synthetic-only", sourceSha: sdkDouble.sourceSha } });
   const scope = { sessionId: randomUUID(), viewId: "shared" };
   const peerScope = { sessionId: scope.sessionId, viewId: "external" };
   const host = createRuntimeCanvasHost({ scope, runtime });
@@ -391,10 +522,17 @@ test("idempotent SDK leases keep UI, MCP and peer views independent through susp
     && entry.path === `/api/v1/operations/${encodeURIComponent(originalId)}`).length;
   const failedGets = originalGets();
   assert.ok(failedGets >= 1);
-  const sdkClosing = canvas.onClose(context);
-  const sdkReopening = canvas.open(context);
-  await sdkClosing;
-  await sdkReopening;
+  failedLeaseId = [...scenario.leaseKeys].find(([key]) =>
+    JSON.parse(key)[0].startsWith("mobile-canvas-mcp-"))?.[1];
+  assert.ok(failedLeaseId);
+  failLeaseOnce = true;
+  await assert.rejects(canvas.onClose(context), /synthetic SDK lease cleanup failed/);
+  assert.equal(scenario.leases.has(failedLeaseId), true);
+  assert.equal((await call("mobile_device_sms_send", sdkSms)).resultType, "failure");
+  await assert.rejects(canvas.open(context), /synthetic SDK lease cleanup failed/);
+  await canvas.onClose(context);
+  assert.equal(scenario.leases.has(failedLeaseId), false);
+  await canvas.open(context);
   const recovered = await call("mobile_device_sms_send", sdkSms);
   assert.equal(recovered.resultType, "success");
   assert.equal(posts().length, 2);
