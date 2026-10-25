@@ -72,6 +72,8 @@ function verifyExtracted(directory) {
     "extension/dist/lib/ailoha/context-adapter.mjs",
     "extension/dist/lib/ailoha/canvas-host.mjs",
     "extension/dist/lib/ailoha/github-adapter.mjs",
+    "extension/dist/lib/ailoha/github-tools.mjs",
+    "extension/dist/lib/ailoha/github-unbound-mcp.mjs",
     "extension/dist/lib/ailoha/mcp-host.mjs",
     "extension/dist/lib/ailoha/semantic-inspection.mjs",
     "extension/dist/lib/ailoha/semantic-mcp.mjs",

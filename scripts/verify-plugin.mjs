@@ -59,6 +59,8 @@ for (const relative of [
   "lib/ailoha/context-adapter.mjs",
   "lib/ailoha/canvas-host.mjs",
   "lib/ailoha/github-adapter.mjs",
+  "lib/ailoha/github-tools.mjs",
+  "lib/ailoha/github-unbound-mcp.mjs",
   "lib/ailoha/mcp-host.mjs",
   "lib/ailoha/mcp-catalog.json",
   "lib/backend.mjs",

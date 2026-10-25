@@ -3,6 +3,7 @@ import { existsSync, mkdirSync, readFileSync, rmSync, statSync, writeFileSync } 
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { createHash, randomUUID } from "node:crypto";
+import { execFileSync } from "node:child_process";
 import { createRequire } from "node:module";
 import { WebSocket } from "ws";
 import { enableCatalogCreation, scenario, sourceSha } from "./ailoha-sdk-double.mjs";
@@ -864,16 +865,44 @@ try {
     await trustedHost.closeCanvas();
   }
   if (host === "github") {
+    const manifestEntry = JSON.parse(readFileSync(join(root, ".mcp.json"), "utf8")).mcpServers["mobile-canvas"];
+    assert.equal(manifestEntry.command, "node");
+    assert.deepEqual(manifestEntry.args, ["${CLAUDE_PLUGIN_ROOT}/scripts/mcp.mjs"]);
+    const unbound = execFileSync(process.execPath, [join(root, "scripts/mcp.mjs")], {
+      input: [
+        JSON.stringify({ jsonrpc: "2.0", id: 1, method: "initialize", params: { protocolVersion: "2025-06-18" } }),
+        JSON.stringify({ jsonrpc: "2.0", id: 2, method: "tools/list", params: {} }),
+        "",
+      ].join("\n"),
+      encoding: "utf8", env: { ...process.env, MOBILE_CANVAS_BACKEND: "ailoha" },
+    }).trim().split("\n").map((line) => JSON.parse(line));
+    assert.match(unbound[0].result.instructions, /SDK extension/);
+    assert.deepEqual(unbound[1].result.tools, []);
     process.env.EXTENSION_PATH = join(scratch, "installed-plugins", "mobile-canvas", "extension.mjs");
     await import(pathToFileURL(join(root, "extensions", "mobile-canvas", "extension.mjs")).href);
     const registration = globalThis.ailohaTestCanvasRegistration;
     const canvas = registration.canvases[0];
     assert.equal(canvas.id, "mobile-device");
     assert.equal(canvas.actions.length, 25);
+    process.env.EXTENSION_PATH = join(scratch, "source-local", "extension.mjs");
+    await import(`${pathToFileURL(join(root, "extension.mjs")).href}?source-local-registration`);
+    const localRegistration = globalThis.ailohaTestCanvasRegistration;
+    assert.equal(localRegistration.canvases[0].id, "mobile-device-local");
+    assert.equal(localRegistration.tools.length, 64);
+    assert.equal(new Set([...registration.tools, ...localRegistration.tools].map((tool) => tool.name)).size, 128);
+    assert.ok(localRegistration.tools.some((tool) => tool.name === "mobile_app_local_status"));
+    await localRegistration.hooks.onSessionEnd();
+    globalThis.ailohaTestCanvasRegistration = registration;
+    process.env.EXTENSION_PATH = join(scratch, "installed-plugins", "mobile-canvas", "extension.mjs");
     assert.equal(canvas.actions.at(-1).name, "workspace_inspect");
     const baseline = JSON.parse(readFileSync(join(source, "tests/scripts/ailoha-compatibility-baseline.json"), "utf8"));
     assert.deepEqual(canvas.actions.slice(0, 24).map((entry) => entry.name).sort(), baseline.canvasActions);
     const context = { sessionId: scope.sessionId, instanceId: scope.viewId };
+    assert.equal(registration.tools.length, 64);
+    assert.equal(new Set(registration.tools.map((tool) => tool.name)).size, 64);
+    const sdkTool = (name, args, sessionId = scope.sessionId) =>
+      registration.tools.find((tool) => tool.name === name).handler(args, { sessionId });
+    assert.equal((await sdkTool("mobile_device_get_selected", { instanceId: scope.viewId })).resultType, "failure");
     const action = (name, input = {}) => canvas.actions.find((entry) => entry.name === name).handler({ ...context, input });
     readCatalog = () => action("get_device_catalog");
     createFromHost = (input) => action("create_device", input);
@@ -894,6 +923,22 @@ try {
     assert.equal(selected.device.id, "opaque/target");
     assertPrivateConnectionRefAbsent(selected);
     returnedBinding(selected);
+    const sdkSelected = await sdkTool("mobile_device_get_selected", { instanceId: scope.viewId });
+    assert.equal(sdkSelected.resultType, "success", sdkSelected.error);
+    assert.equal(JSON.parse(sdkSelected.textResultForLlm).device.id, "opaque/target");
+    const sdkScreen = await sdkTool("mobile_device_screenshot", { instanceId: scope.viewId, deviceId: "opaque/target" });
+    assert.equal(sdkScreen.resultType, "success", sdkScreen.error);
+    assert.equal(sdkScreen.binaryResultsForLlm[0].mimeType, "image/png");
+    assert.equal(Buffer.from(sdkScreen.binaryResultsForLlm[0].data, "base64")[0], 137);
+    const peerContext = { sessionId: scope.sessionId, instanceId: `${scope.viewId}-peer` };
+    await canvas.open(peerContext);
+    const peerSelected = await sdkTool("mobile_device_get_selected", { instanceId: peerContext.instanceId });
+    assert.equal(peerSelected.resultType, "success", peerSelected.error);
+    assert.equal(JSON.parse(peerSelected.textResultForLlm).hasSelection, false);
+    assert.equal((await sdkTool("mobile_device_get_selected", { instanceId: scope.viewId }, "unrelated-session")).resultType, "failure");
+    await canvas.onClose(peerContext);
+    assert.equal((await sdkTool("mobile_device_get_selected", { instanceId: peerContext.instanceId })).resultType, "failure");
+    assert.equal((await sdkTool("mobile_device_get_selected", { instanceId: scope.viewId })).resultType, "success");
     assert.equal((await action("shutdown_device", { deviceId: "opaque/target" })).state, "shutdown");
     assert.equal((await action("boot_device", { deviceId: "opaque/target" })).state, "booted");
     const geometry = await action("get_display_geometry", { deviceId: "opaque/target" });
@@ -1380,7 +1425,11 @@ try {
   assert.equal(scenario.calls.some((call) => call.method === "PATCH" && call.path?.endsWith("/settings/status-bar")), true);
   assert.equal(scenario.calls.filter((call) => call.path?.startsWith("/api/v1/operations/")).length >= 3, true);
   const contextCommands = JSON.parse(readFileSync(process.env.AILOHA_TEST_CONTEXT_STATE, "utf8"));
-  assert.equal(contextCommands.length, 1);
+  assert.equal(contextCommands.length, host === "github" ? 2 : 1);
+  if (host === "github") {
+    assert.deepEqual(contextCommands[1].scope, { sessionId: scope.sessionId, viewId: `${scope.viewId}-peer` });
+    assert.equal(contextCommands[1].state, "open");
+  }
   assert.deepEqual(contextCommands[0].scope, scope);
   assert.equal(contextCommands[0].state, "open");
   assert.equal(contextCommands[0].contextRef, selectedContext.contextBinding.contextRef);

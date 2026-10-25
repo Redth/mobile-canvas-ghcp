@@ -12,6 +12,8 @@ const sourceFiles = new Set([
   "extension.mjs",
   "lib/ailoha/recording-coordinator.mjs",
   "lib/ailoha/mcp-host.mjs",
+  "lib/ailoha/github-tools.mjs",
+  "lib/ailoha/github-unbound-mcp.mjs",
   "scripts/mcp.mjs",
   "web/device-canvas.js",
 ]);

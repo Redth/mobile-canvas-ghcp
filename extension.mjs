@@ -1,4 +1,5 @@
 import { execFile } from "node:child_process";
+import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { sep } from "node:path";
 import { promisify } from "node:util";
@@ -6,7 +7,9 @@ import { createCanvas, joinSession } from "@github/copilot-sdk/extension";
 import { resolveCommand } from "./lib/runtime.mjs";
 import { mobileCanvasBackend } from "./lib/backend.mjs";
 import { createAilohaCanvasConsent, withAilohaCanvas } from "./lib/ailoha/github-adapter.mjs";
-import { createRuntimeCanvasHost } from "./lib/ailoha/runtime-backend.mjs";
+import { createAilohaGithubTools } from "./lib/ailoha/github-tools.mjs";
+import { ailohaAppMcpCatalog, ailohaMcpCatalog, createAilohaMcpDispatcher } from "./lib/ailoha/mcp-host.mjs";
+import { createRuntimeCanvasHost, getRuntimeContextBinding } from "./lib/ailoha/runtime-backend.mjs";
 
 const execFileAsync = promisify(execFile);
 const extensionPath = process.env.EXTENSION_PATH || fileURLToPath(import.meta.url);
@@ -422,13 +425,25 @@ const canvasOptions = {
   },
 };
 const ownedAilohaHosts = new Set();
+const backend = mobileCanvasBackend();
+const githubTools = backend === "ailoha" ? createAilohaGithubTools({
+  descriptors: [...await ailohaMcpCatalog(), ...ailohaAppMcpCatalog()],
+  nameForDescriptor: isPluginInstall ? (name) => name
+    : (name) => name.replace(/^mobile_(device|app)_/, "mobile_$1_local_"),
+  getBinding: getRuntimeContextBinding,
+  createDispatcher: ({ binding }) => createAilohaMcpDispatcher({
+    binding, version: JSON.parse(readFileSync(new URL("./package.json", import.meta.url), "utf8")).version,
+  }),
+}) : null;
 const canvas = createCanvas(withAilohaCanvas(canvasOptions, {
-  backend: mobileCanvasBackend(),
+  backend,
   createHost(options) {
     const host = createRuntimeCanvasHost({ ...options, confirmDestructive: createAilohaCanvasConsent(() => session) });
     ownedAilohaHosts.add(host);
     return host;
   },
+  onHostOpened: (scope) => githubTools.opened(scope),
+  onHostClosing: (scope) => githubTools.closing(scope),
 }));
 
 // The icon is a declaration field that has to be an extension-relative PNG path, but
@@ -439,8 +454,10 @@ canvas.declaration.icon = "assets/icon.png";
 
 session = await joinSession({
   canvases: [canvas],
+  ...(githubTools ? { tools: githubTools.tools } : {}),
   hooks: {
     async onSessionEnd() {
+      await githubTools?.closeAll();
       await Promise.all([...ownedAilohaHosts].map((host) => host.closeCanvas()));
     },
   },

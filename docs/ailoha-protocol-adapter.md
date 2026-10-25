@@ -558,14 +558,28 @@ cannot revive a detached/closed view. Genuine view binding may reopen explicitly
 Ordinary hide/reload preserves selection/epoch; destructive scope retirement
 does not silently restore a selection.
 
-The static GitHub plugin MCP path fails closed without explicit `--context`,
-`--context-epoch`, `--session`, `--instance` and `--owner-process`. It cannot
-infer the first panel or derive private context filenames. VS Code supplies its
-actual window/view binding and refreshes MCP definitions after a genuine context
-open. Binding discovery itself cannot create or reopen an authority: before a
-trusted view opens it reports `context_not_bound`, and a retired view reports
-`context_retired`. Device tools remain target-only; app/agent/runtime-instance
-selectors are never adopted as native package identity.
+The GitHub plugin's unmodified `.mcp.json` launches without context arguments.
+In Ailoha mode this entry initializes with an empty tool list and directs
+callers to the SDK extension's session-owned tools; it does not acquire a
+runtime, infer the first panel or register duplicate global tool names. An
+explicit but incomplete named-flag invocation still fails closed. Complete
+named flags retain the standalone dispatcher for VS Code and other trusted
+launchers. The SDK extension registers 64 descriptors before any view opens;
+execution requires the actual SDK invocation session ID plus the caller's
+explicit `instanceId` of an opened canvas. It reads that view's canonical
+binding without create/reopen authority and forwards to the same bound MCP
+dispatcher. The installed plugin contributes canonical `mobile_device_*` /
+`mobile_app_*` SDK names; a source-local extension inserts `_local` after
+`device` or `app` so both registrations coexist without duplicate tool names.
+Both forward to the same canonical dispatcher identities. Closing a view
+retires its requests and dispatcher without affecting another view. SDK tool
+results retain screenshot image bytes and failure status; absent genuine MCP
+form elicitation, destructive MCP requests
+report `consent_not_supported`, not a simulated approval. Legacy launch and
+tools remain unchanged. VS Code supplies its actual window/view binding and
+refreshes definitions after a genuine context open. Binding discovery itself
+cannot create or reopen authority: before a trusted view opens it reports
+`context_not_bound`, and a retired view reports `context_retired`.
 
 ### Optional selected-view App MCP reads
 
@@ -605,10 +619,11 @@ in a rejected App read.
 Prepared stdio tests exercise both host entry scripts with explicit trusted
 launch flags and UI-selected context bindings, including isolation between
 two views, absent/disconnected agents, selector/task rejection, cancellation,
-and independent device reads. These are synthetic source/adapter proofs, not
-normal GitHub SDK-owned launch registration or real-app acceptance. The
-static no-argument GitHub entry still cannot invent a named binding; its
-supported host-owned SDK launch adapter is separate integration work.
+and independent device reads. The prepared GitHub host also tests the exact
+no-argument `.mcp.json` shape, SDK-double registration and opened-view calls
+without launch flags, image/failure projection and two-view isolation. These
+are synthetic source/adapter proofs, not an installed production SDK session,
+published runtime or real-app acceptance.
 
 ### Internal host incarnation evidence
 

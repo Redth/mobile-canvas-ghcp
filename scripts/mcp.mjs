@@ -10,10 +10,14 @@ import { spawn } from "node:child_process";
 import { resolveCommand } from "../lib/runtime.mjs";
 import { mobileCanvasBackend } from "../lib/backend.mjs";
 import { runAilohaMcp } from "../lib/ailoha/mcp-host.mjs";
+import { runAilohaGithubUnboundMcp } from "../lib/ailoha/github-unbound-mcp.mjs";
 import { mobileErrorResult } from "../lib/ailoha/mobile-backend.mjs";
 
 if (mobileCanvasBackend() === "ailoha") {
-  try { await runAilohaMcp(); }
+  try {
+    if (process.argv.length === 2) await runAilohaGithubUnboundMcp();
+    else await runAilohaMcp();
+  }
   catch (error) {
     process.stderr.write(`mobile-canvas: ${JSON.stringify(mobileErrorResult(error))}\n`);
     process.exitCode = 1;
