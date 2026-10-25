@@ -156,6 +156,9 @@ const state = {
   socket: null,
   decoder: null,
   ailohaPlayer: null,
+  awaitingRotatedFrame: false,
+  rotationFrameRevision: null,
+  rotationRecoveryStarted: false,
   pngTimer: null,
   frameCounter: 0,
   frameClock: performance.now(),
@@ -538,11 +541,50 @@ function closeDevicePopover() {
 }
 
 async function selectDevice(device, persist) {
+  if (!persist && state.awaitingRotatedFrame && shouldRetainAilohaStream(state.selected, device)) {
+    const original = captureCanvasInvocation(state);
+    const sameOriginalSelection = () => state.selected?.backend === "ailoha"
+      && state.selected.id === original.deviceId
+      && state.selected.targetHostId === original.targetHostId
+      && state.display?.surfaceId === original.surfaceId
+      && state.selectionVersion === original.selectionVersion;
+    try {
+      const response = await api("/api/v1/selection");
+      const canonical = await response.json();
+      if (!sameOriginalSelection()) return;
+      if (!canonical.hasSelection || !shouldRetainAilohaStream(state.selected, canonical.device)) {
+        throw new Error("The original Ailoha selection is no longer bound to this view.");
+      }
+      return;
+    } catch (error) {
+      if (sameOriginalSelection()) {
+        state.awaitingRotatedFrame = true;
+        state.rotationFrameRevision = null;
+        state.rotationRecoveryStarted = false;
+        cancelPointer();
+        stopStream();
+        clearScreen();
+        setInputStatus("error", "Live view unavailable");
+        showDeviceStatus("error", { detail: error.message || String(error) });
+      }
+      throw error;
+    }
+  }
+  const recoveringRotatedView = state.awaitingRotatedFrame;
+  const changedAilohaSelection = !persist && state.selected?.backend === "ailoha"
+    && state.selected.id === device.id && !shouldRetainAilohaStream(state.selected, device);
   const selectionVersion = ++state.selectionVersion;
   // Recorded before the first await so a selection announcement that races this request can tell it
   // is watching work already under way rather than starting a second switch to the same device.
   state.selectionTarget = device.id;
   stopStream();
+  if (state.selected?.backend === "ailoha") {
+    state.awaitingRotatedFrame = true;
+    clearScreen();
+    setInputStatus("pending", "Waiting for the selected live frame");
+  }
+  state.rotationFrameRevision = null;
+  state.rotationRecoveryStarted = false;
   if (persist) {
     setInputStatus("pending", "Selecting device");
     const response = await api("/api/v1/selection", {
@@ -550,9 +592,22 @@ async function selectDevice(device, persist) {
       body: JSON.stringify({ deviceId: device.id }),
     });
     device = await response.json();
+  } else if (changedAilohaSelection) {
+    const response = await api("/api/v1/selection");
+    const canonical = await response.json();
+    if (selectionVersion !== state.selectionVersion) return;
+    if (!canonical.hasSelection || canonical.device?.id !== device.id
+      || canonical.device?.targetHostId !== device.targetHostId
+      || canonical.device?.provider !== device.provider
+      || canonical.device?.surfaceId !== device.surfaceId) {
+      throw new Error("The changed Ailoha selection is not bound to this view.");
+    }
+    device = canonical.device;
   }
   if (selectionVersion !== state.selectionVersion) return;
 
+  state.awaitingRotatedFrame = device.backend === "ailoha"
+    && (recoveringRotatedView || state.selected?.backend === "ailoha");
   const retainFrame = shouldRetainDeviceFrame(state.frameDeviceId, device.id);
   state.selected = device;
   state.display = null;
@@ -563,7 +618,7 @@ async function selectDevice(device, persist) {
   endAutomation();
   // Reusing the selected device is a refresh/reconnect, so keep its last frame visible. A genuinely
   // different selection must not inherit pixels from the previous device.
-  if (!retainFrame) clearScreen();
+  if (!retainFrame || state.awaitingRotatedFrame) clearScreen();
   elements.empty.classList.add("hidden");
   elements.detached.classList.add("hidden");
   elements.view.classList.remove("hidden");
@@ -582,11 +637,13 @@ async function selectDevice(device, persist) {
       || state.selected?.id !== device.id
     ) return;
     state.display = display;
+    if (state.awaitingRotatedFrame) state.rotationFrameRevision = display.geometryRevision;
     elements.geometry.value = device.backend === "ailoha"
       ? `${display.pointWidth}x${display.pointHeight} pt (${display.coordinate}, revision ${display.geometryRevision})`
       : `${display.pointWidth}x${display.pointHeight} pt @${display.scale}x`;
     fitDeviceScreen();
-    setInputStatus("ready", "Input ready");
+    setInputStatus(state.awaitingRotatedFrame ? "pending" : "ready",
+      state.awaitingRotatedFrame ? "Waiting for a frame at the rotated geometry" : "Input ready");
     startStream();
     await updateRecordingStatus(device.id, selectionVersion);
   } else {
@@ -1036,7 +1093,7 @@ function startStream() {
   if (!state.panelVisible || !state.selected || state.selected.state !== "booted") return;
 
   const deviceId = state.selected.id;
-  const retainFrame = shouldRetainDeviceFrame(state.frameDeviceId, deviceId);
+  const retainFrame = !state.awaitingRotatedFrame && shouldRetainDeviceFrame(state.frameDeviceId, deviceId);
   if (retainFrame) hideDeviceStatus();
   else showDeviceStatus("connecting");
   setStreamMode("connecting");
@@ -1146,19 +1203,28 @@ function startAilohaStream() {
           isCurrent: current,
           onGeometry(geometry) {
             if (!current()) return;
+            if (state.awaitingRotatedFrame
+              && (state.rotationFrameRevision !== invocation.geometryRevision
+                || geometry.geometryRevision !== invocation.geometryRevision)) return;
             cancelPointer();
             state.display = ailohaDisplayGeometry(geometry, invocation.surfaceId);
             elements.geometry.value = state.display
               ? `${state.display.pointWidth}x${state.display.pointHeight} pt (${state.display.coordinate}, revision ${state.display.geometryRevision})`
               : "Geometry unavailable";
-            setInputStatus(state.display ? "ready" : "idle",
-              state.display ? "Geometry-bound input ready" : "Waiting for authoritative geometry");
+            setInputStatus(state.awaitingRotatedFrame ? "pending" : state.display ? "ready" : "idle",
+              state.awaitingRotatedFrame ? "Waiting for a frame at the rotated geometry"
+                : state.display ? "Geometry-bound input ready" : "Waiting for authoritative geometry");
             fitDeviceScreen();
           },
           present(frame, metadata) {
             if (!current() || state.ailohaPlayer !== player) return false;
+            if (state.awaitingRotatedFrame
+              && (state.rotationFrameRevision !== invocation.geometryRevision
+                || metadata.geometry?.geometryRevision !== invocation.geometryRevision)) return false;
             const visible = frame.visibleRect ?? { x: 0, y: 0, width: frame.codedWidth, height: frame.codedHeight };
             state.display = ailohaDisplayGeometry(metadata.geometry, invocation.surfaceId);
+            if (!state.display || (state.awaitingRotatedFrame
+              && !isCanvasInvocationCurrent(invocation, state))) return false;
             if (elements.canvas.width !== visible.width || elements.canvas.height !== visible.height) {
               elements.canvas.width = visible.width;
               elements.canvas.height = visible.height;
@@ -1169,6 +1235,11 @@ function startAilohaStream() {
               0, 0, visible.width, visible.height);
             state.frameDeviceId = invocation.deviceId;
             state.framePainted = true;
+            if (state.awaitingRotatedFrame) {
+              state.awaitingRotatedFrame = false;
+              state.rotationRecoveryStarted = false;
+              setInputStatus("ready", "Geometry-bound input ready");
+            }
             hideDeviceStatus();
             elements.encodeSize.textContent = `${visible.width}x${visible.height}`;
             setStreamMode("ALHV H.264");
@@ -1210,6 +1281,7 @@ function startAilohaStream() {
 
 function showStreamFailure(error) {
   stopStream();
+  state.rotationRecoveryStarted = false;
   showDeviceStatus("error", { detail: error.message || String(error) });
   setStreamMode("offline");
   setInputStatus("error", "Live view unavailable");
@@ -1612,8 +1684,14 @@ function sendInput(kind, payload, label = formatAction(kind), captured) {
   }
 
   const invocation = captured ?? captureCanvasInvocation(state);
+  if (invocation.backend === "ailoha" && state.awaitingRotatedFrame && kind !== "rotate") {
+    return Promise.reject(new Error("Wait for a frame at the rotated geometry before sending input."));
+  }
   const body = JSON.stringify(ailohaInputPayload(invocation, payload));
   const operation = async () => {
+    if (invocation.backend === "ailoha" && state.awaitingRotatedFrame && kind !== "rotate") {
+      throw new Error("Wait for a frame at the rotated geometry before sending input.");
+    }
     if (invocation.backend === "ailoha" && !isCanvasInvocationCurrent(invocation, state)) {
       throw new Error("The selected Ailoha surface or geometry changed before queued input could be sent.");
     }
@@ -1639,6 +1717,13 @@ function sendInput(kind, payload, label = formatAction(kind), captured) {
 
 async function rotateDevice() {
   const invocation = captureCanvasInvocation(state);
+  if (invocation.backend === "ailoha") {
+    if (state.awaitingRotatedFrame) throw new Error("Wait for the rotated live frame before rotating again.");
+    state.awaitingRotatedFrame = true;
+    state.rotationFrameRevision = null;
+    state.rotationRecoveryStarted = false;
+    stopStream();
+  }
   const stillSelected = () => state.selected?.id === invocation.deviceId
     && state.selectionVersion === invocation.selectionVersion
     && (invocation.backend !== "ailoha"
@@ -1649,19 +1734,48 @@ async function rotateDevice() {
     : "landscape-left";
   const deviceId = invocation.deviceId;
 
-  await sendInput("rotate", { orientation: target }, "Rotate");
+  if (invocation.backend === "ailoha") {
+    cancelPointer();
+    canvasContext().clearRect(0, 0, elements.canvas.width, elements.canvas.height);
+    state.frameDeviceId = null;
+    showDeviceStatus("connecting");
+  }
+  try {
+    await sendInput("rotate", { orientation: target }, "Rotate");
+  } catch (error) {
+    if (invocation.backend === "ailoha" && stillSelected()) {
+      showDeviceStatus("error", { detail: error.message || String(error) });
+    }
+    throw error;
+  }
+  if (invocation.backend === "ailoha" && stillSelected()) {
+    setInputStatus("pending", "Waiting for rotated geometry");
+  }
 
   // Both platforms acknowledge the rotation request before their display geometry changes. Wait for
   // the new orientation so the replacement stream and pointer mapping start with the right dimensions.
   let settledRotation = false;
   for (let attempt = 0; attempt < 20 && stillSelected(); attempt++) {
-    const response = await api(`/api/v1/devices/${encodeURIComponent(deviceId)}/display`);
-    const display = await response.json();
+    let display;
+    try {
+      const response = await api(`/api/v1/devices/${encodeURIComponent(deviceId)}/display`);
+      display = await response.json();
+    } catch (error) {
+      if (invocation.backend === "ailoha" && stillSelected()) {
+        setInputStatus("error", "Rotated geometry unavailable");
+        showDeviceStatus("error", { detail: error.message || String(error) });
+      }
+      throw error;
+    }
     if (invocation.backend === "ailoha" && !stillSelected()) return;
     const settled = target === "portrait"
       ? display.orientation === "portrait"
       : display.orientation?.startsWith("landscape");
-    if (invocation.backend === "ailoha" && !settled) {
+    const settledAiloha = invocation.backend !== "ailoha" || (settled
+      && display.surfaceId === invocation.surfaceId
+      && Number.isInteger(display.geometryRevision)
+      && display.geometryRevision > invocation.geometryRevision);
+    if (invocation.backend === "ailoha" && !settledAiloha) {
       await new Promise((resolve) => setTimeout(resolve, 100));
       continue;
     }
@@ -1672,7 +1786,7 @@ async function rotateDevice() {
         ? `${display.pointWidth}x${display.pointHeight} pt (${display.coordinate}, revision ${display.geometryRevision})`
         : `${display.pointWidth}x${display.pointHeight} pt @${display.scale}x`;
 
-    if (settled) {
+    if (settledAiloha && settled) {
       settledRotation = true;
       break;
     }
@@ -1681,12 +1795,58 @@ async function rotateDevice() {
 
   if (invocation.backend === "ailoha") {
     if (!stillSelected()) return;
-    if (!settledRotation) throw new Error("Ailoha did not report the rotated display geometry.");
-    if (stillSelected()) fitDeviceScreen();
+    if (!settledRotation) {
+      setInputStatus("error", "Rotated geometry unavailable");
+      showDeviceStatus("error", { detail: "Ailoha did not report the rotated display geometry." });
+      throw new Error("Ailoha did not report the rotated display geometry.");
+    }
+    state.rotationFrameRevision = state.display.geometryRevision;
+    canvasContext().clearRect(0, 0, elements.canvas.width, elements.canvas.height);
+    state.frameDeviceId = null;
+    state.rotationRecoveryStarted = true;
+    startStream();
+    fitDeviceScreen();
     return;
   }
   startStream();
   fitDeviceScreen();
+}
+
+async function retryStream() {
+  if (!state.awaitingRotatedFrame || state.selected?.backend !== "ailoha") {
+    startStream();
+    return;
+  }
+  if (state.rotationRecoveryStarted) throw new Error("The owned replacement stream is already pending.");
+  const invocation = captureCanvasInvocation(state);
+  if (!state.panelVisible || state.detached || !isCanvasInvocationCurrent(invocation, state)) {
+    throw new Error("The original Ailoha view is no longer current.");
+  }
+  state.rotationRecoveryStarted = true;
+  try {
+    const response = await api(`/api/v1/devices/${encodeURIComponent(invocation.deviceId)}/display`);
+    const display = await response.json();
+    if (!state.panelVisible || state.detached || !isCanvasInvocationCurrent(invocation, state)
+      || display.backend !== "ailoha" || display.surfaceId !== invocation.surfaceId
+      || !Number.isInteger(display.geometryRevision) || display.geometryRevision < 0
+      || !["window", "screen"].includes(display.coordinate)
+      || !(display.pointWidth > 0 && display.pointHeight > 0)) {
+      throw new Error("The original Ailoha surface is no longer available for stream recovery.");
+    }
+    state.display = display;
+    state.rotationFrameRevision = display.geometryRevision;
+    elements.geometry.value =
+      `${display.pointWidth}x${display.pointHeight} pt (${display.coordinate}, revision ${display.geometryRevision})`;
+    startStream();
+    fitDeviceScreen();
+  } catch (error) {
+    if (isCanvasInvocationCurrent(invocation, state)) {
+      state.rotationRecoveryStarted = false;
+      setInputStatus("error", "Live view unavailable");
+      showDeviceStatus("error", { detail: error.message || String(error) });
+    }
+    throw error;
+  }
 }
 
 function setInputStatus(status, message, latency = "") {
@@ -2288,7 +2448,7 @@ elements.overlayAction.addEventListener("click", () => {
       return;
     }
     if (action === "retry-stream") {
-      startStream();
+      await retryStream();
       return;
     }
     if (action === "refresh") {

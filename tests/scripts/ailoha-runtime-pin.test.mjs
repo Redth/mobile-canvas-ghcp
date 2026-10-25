@@ -59,69 +59,69 @@ test("an unreadable pin reports a sanitized read failure rather than missing run
     assert.equal(Object.hasOwn(error, "cause"), false);
     return true;
   });
+});
 
-  function cliFixture(t) {
-    mkdirSync(join(root, ".build"), { recursive: true });
-    const scratch = mkdtempSync(join(root, ".build/ailoha-cli-budget-"));
-    t.after(() => rmSync(scratch, { recursive: true }));
-    const wire = join(scratch, "owned-wire");
-    const pin = { version: "synthetic-only", sourceSha: "a".repeat(40) };
-    const launch = { file: process.execPath, args: [join(root, "tests/scripts/fixtures/ailoha-cli-budget-target.mjs")], ...pin };
-    return { wire, pin, launch };
-  }
+function cliFixture(t) {
+  mkdirSync(join(root, ".build"), { recursive: true });
+  const scratch = mkdtempSync(join(root, ".build/ailoha-cli-budget-"));
+  t.after(() => rmSync(scratch, { recursive: true }));
+  const wire = join(scratch, "owned-wire");
+  const pin = { version: "synthetic-only", sourceSha: "a".repeat(40) };
+  const launch = { file: process.execPath, args: [join(root, "tests/scripts/fixtures/ailoha-cli-budget-target.mjs")], ...pin };
+  return { wire, pin, launch };
+}
 
-  test("verified CLI cannot start a child after caller cancellation during SDK launch resolution", async (t) => {
-    const { wire, pin, launch } = cliFixture(t);
-    const caller = new AbortController();
-    let resolve;
-    const cli = createVerifiedAilohaCli({ pin, sdk: {
-      getVerifiedCliLaunch() { return new Promise((complete) => { resolve = complete; }); },
-    } });
-    const work = cli([wire], { signal: caller.signal, timeoutMs: 100 });
-    const rejected = assert.rejects(work, { code: "ailoha_cli_cancelled" });
-    await Promise.resolve();
-    caller.abort();
-    await rejected;
-    resolve(launch);
-    await new Promise((complete) => setImmediate(complete));
-    assert.equal(existsSync(wire), false);
+test("verified CLI cannot start a child after caller cancellation during SDK launch resolution", async (t) => {
+  const { wire, pin, launch } = cliFixture(t);
+  const caller = new AbortController();
+  let resolve;
+  const cli = createVerifiedAilohaCli({ pin, sdk: {
+    getVerifiedCliLaunch() { return new Promise((complete) => { resolve = complete; }); },
+  } });
+  const work = cli([wire], { signal: caller.signal, timeoutMs: 100 });
+  const rejected = assert.rejects(work, { code: "ailoha_cli_cancelled" });
+  await Promise.resolve();
+  caller.abort();
+  await rejected;
+  resolve(launch);
+  await new Promise((complete) => setImmediate(complete));
+  assert.equal(existsSync(wire), false);
+});
+
+test("verified CLI total budget includes delayed SDK launch and rejects before child dispatch", async (t) => {
+  const { wire, pin, launch } = cliFixture(t);
+  let resolve;
+  const cli = createVerifiedAilohaCli({ pin, sdk: {
+    getVerifiedCliLaunch() { return new Promise((complete) => { resolve = complete; }); },
+  } });
+  await assert.rejects(cli([wire], { timeoutMs: 20 }), { code: "ailoha_cli_timeout" });
+  resolve(launch);
+  await new Promise((complete) => setImmediate(complete));
+  assert.equal(existsSync(wire), false);
+});
+
+test("an actual owned child startup is cancelled by the validated remaining budget before its synthetic wire", async (t) => {
+  const { wire, pin, launch } = cliFixture(t);
+  const cli = createVerifiedAilohaCli({ pin, sdk: { async getVerifiedCliLaunch() { return launch; } } });
+  await assert.rejects(cli([wire], { timeoutMs: 30 }), (error) => {
+    assert.ok(["ailoha_cli_timeout", "ailoha_cli_failed"].includes(error.code));
+    return true;
   });
+  assert.equal(existsSync(wire), false);
+});
 
-  test("verified CLI total budget includes delayed SDK launch and rejects before child dispatch", async (t) => {
-    const { wire, pin, launch } = cliFixture(t);
-    let resolve;
-    const cli = createVerifiedAilohaCli({ pin, sdk: {
-      getVerifiedCliLaunch() { return new Promise((complete) => { resolve = complete; }); },
-    } });
-    await assert.rejects(cli([wire], { timeoutMs: 20 }), { code: "ailoha_cli_timeout" });
-    resolve(launch);
-    await new Promise((complete) => setImmediate(complete));
-    assert.equal(existsSync(wire), false);
-  });
-
-  test("an actual owned child startup is cancelled by the validated remaining budget before its synthetic wire", async (t) => {
-    const { wire, pin, launch } = cliFixture(t);
-    const cli = createVerifiedAilohaCli({ pin, sdk: { async getVerifiedCliLaunch() { return launch; } } });
-    await assert.rejects(cli([wire], { timeoutMs: 30 }), (error) => {
-      assert.ok(["ailoha_cli_timeout", "ailoha_cli_failed"].includes(error.code));
-      return true;
-    });
-    assert.equal(existsSync(wire), false);
-  });
-
-  test("native stage preserves a typed nonzero receipt without broadening ordinary CLI budgets", async () => {
-    const pin = { version: "synthetic-only", sourceSha: "a".repeat(40) };
-    const outcome = { status: "readbackUnconfirmed", receipt: { kind: "file", artifacts: [] } };
-    const script = `process.stdout.write(${JSON.stringify(JSON.stringify(outcome))}); process.exit(2)`;
-    const cli = createVerifiedAilohaCli({ pin, sdk: {
-      async getVerifiedCliLaunch() {
-        return { file: process.execPath, args: ["-e", script], ...pin };
-      },
-    } });
-    assert.deepEqual(JSON.parse(await cli(["target", "native-stage", "stage"], { timeoutMs: 30_001 })), outcome);
-    assert.deepEqual(JSON.parse(await cli(["target", "native-file", "recover"], { timeoutMs: 30_001 })), outcome);
-    await assert.rejects(cli(["context", "get"], { timeoutMs: 30_001 }), { code: "ailoha_cli_budget_invalid" });
-  });
+test("native stage preserves a typed nonzero receipt without broadening ordinary CLI budgets", async () => {
+  const pin = { version: "synthetic-only", sourceSha: "a".repeat(40) };
+  const outcome = { status: "readbackUnconfirmed", receipt: { kind: "file", artifacts: [] } };
+  const script = `process.stdout.write(${JSON.stringify(JSON.stringify(outcome))}); process.exit(2)`;
+  const cli = createVerifiedAilohaCli({ pin, sdk: {
+    async getVerifiedCliLaunch() {
+      return { file: process.execPath, args: ["-e", script], ...pin };
+    },
+  } });
+  assert.deepEqual(JSON.parse(await cli(["target", "native-stage", "stage"], { timeoutMs: 30_001 })), outcome);
+  assert.deepEqual(JSON.parse(await cli(["target", "native-file", "recover"], { timeoutMs: 30_001 })), outcome);
+  await assert.rejects(cli(["context", "get"], { timeoutMs: 30_001 }), { code: "ailoha_cli_budget_invalid" });
 });
 
 test("verified CLI reserves the longer total budget only for canonical recording commands", async () => {

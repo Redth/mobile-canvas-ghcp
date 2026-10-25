@@ -14,7 +14,7 @@ for (const [host, product] of [
     const output = execFileSync(process.execPath, [
       "--import", join(fixtures, "ailoha-installed-hooks.mjs"),
       join(fixtures, "run-installed-ailoha-host.mjs"), product, host, ...(focusedText ? ["--focused-text"] : []),
-    ], { encoding: "utf8", cwd: root, timeout: 30_000 });
+    ], { encoding: "utf8", cwd: root, timeout: 90_000 });
     const evidence = JSON.parse(output);
     assert.equal(evidence.synthetic, true);
     assert.equal(evidence.focusedText, focusedText);

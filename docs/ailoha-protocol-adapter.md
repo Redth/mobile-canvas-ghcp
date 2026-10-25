@@ -1086,18 +1086,26 @@ directional rotation support is explicit unsupported/error, never a fallback.
 The Target Host only guarantees generic landscape and portrait; requests for
 landscape-right or portrait-upside-down are not silently approximated.
 Changes to orientation invalidate observed logical geometry; new pointer input
-needs a fresh display observation. The existing ALHV resource stays owned
-through rotation, while view hide/resume releases only its own resource.
-These are synchronous canonical actions; uncertain delivery is not retried.
+needs a fresh display observation. An explicit Ailoha rotation retires its
+original ALHV player before submitting the canonical action, clears old pixels
+and blocks coordinate input. Only an accepted rotation with settled geometry
+and the same original view/selection may create one replacement video session;
+input becomes ready only after a matching fresh frame is painted. Unknown or
+refused rotation does not start another stream or replay input; explicit
+user-initiated recovery first reads the canonical display and owner again.
+View hide/resume releases only its own resource.
 Both hosts share the control adapter and renderer; neither gains native
 commands or credentials in the webview.
 
-The source fixtures accept canonical `PATCH` for rotation and status-bar
-writes. The currently examined upstream runtime transport only accepts
-GET/POST/DELETE, so these fixture results are not proof of installed SDK
-write readiness. A reviewed, publicly pinned SDK transport with `PATCH`
-support is required before either write can be accepted as installed parity;
-the adapter must not bypass that transport or substitute a different method.
+The official `@ailoha/cli@0.2.5-preview.2` transport accepts `PATCH` and
+`PUT` as well as GET/POST/DELETE. A disposable TEST GitHub WebView exercised
+one real Android rotation through that SDK: the original video POST 201,
+old-video DELETE 202 and one replacement POST 201 were observed in order at
+the original native request boundary. Fresh landscape 2400x1080 H.264 painted
+at revision 2 without a presenter-contract error; the final owned DELETE 202
+was observed on closure. HTTP statuses do not prove asynchronous DELETE
+completion, nor does the observation qualify a real installed VS Code
+extension window, GitHub app chrome or a production runtime pin.
 
 The pinned Target Host `fill` implementation taps the field center before
 typing, even when it was already focused. Unlike legacy `TypeTextAsync`,
