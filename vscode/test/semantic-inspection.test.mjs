@@ -7,6 +7,7 @@ import { createAilohaCanvasHost } from "../../lib/ailoha/canvas-host.mjs";
 import { createNativeBindingFixture, nativeAgent } from "../../tests/scripts/fixtures/ailoha-native-binding.mjs";
 import { nativeInvocationMetadata } from "../../tests/scripts/fixtures/ailoha-invocation-metadata.mjs";
 import { canonicalAppFailure, captureMetadataContext, validateInvocationMetadata } from "../../lib/ailoha/invocation-metadata.mjs";
+import { nativeSemanticOutput, privateRouteMarker, withPrivateRouteBlobs } from "../../tests/scripts/fixtures/native-semantic-route.mjs";
 
 const { HostBridge } = createRequire(import.meta.url)("../out/hostBridge.js");
 const scope = { sessionId: "compiled-semantic-session", viewId: "compiled-semantic-view" };
@@ -65,6 +66,7 @@ for (const registrationVersion of [2, 3]) test(`compiled VS Code bridge shares e
   const fixture = createNativeBindingFixture({ registrations: [nativeAgent("first"),
     nativeAgent("chosen", "target", { registrationVersion })] });
   const view = await fixture.createView("compiled-native-binding");
+  fixture.model.mutateTool = (output, request) => withPrivateRouteBlobs(nativeSemanticOutput(output, request, registrationVersion));
   const host = createAilohaCanvasHost({
     scope: view.scope, semanticInspection: view.controller,
     createBackend() { throw new Error("Semantic binding must not acquire or mutate a device backend."); },
@@ -96,6 +98,12 @@ for (const registrationVersion of [2, 3]) test(`compiled VS Code bridge shares e
       app = await request("POST", { lens: "app", operation, ...(operation === "query" ? { text: "OK" } : {}) });
       assert.equal(app.result.route.owner, "agent");
       assert.equal(app.result.route.runtimeInstanceId, "chosen");
+      assert.deepEqual(Object.keys(app.result.route.executionContext).sort(),
+        ["contextRef", "scope", "scopeEpoch", "revision", "selection"].sort());
+      assert.equal(app.result.route.executionContext.selection.runtimeInstanceId, "chosen");
+      assert.equal(app.result.route.agentRegistrationVersion, registrationVersion);
+      assert.equal(JSON.stringify(app).includes(privateRouteMarker), false);
+      assert.equal(Object.hasOwn(app.result, "_meta"), false);
     }
     if (registrationVersion === 3) {
       fixture.model.beforeTool = async () => {
@@ -126,6 +134,11 @@ for (const registrationVersion of [2, 3]) test(`compiled VS Code bridge shares e
     assert.equal(view.toolCalls.every((call) => call.arguments.route === "require-agent"), true);
     const system = await request("POST", { lens: "system", operation: "tree" });
     assert.equal(system.result.route.owner, "target-host");
+    assert.deepEqual(Object.keys(system.result.route.executionContext).sort(),
+      ["contextRef", "scope", "scopeEpoch", "revision", "selection"].sort());
+    assert.equal(system.result.route.executionContext.selection.agentId, null);
+    assert.equal(system.result.route.executionContext.selection.runtimeInstanceId, null);
+    assert.equal(JSON.stringify(system).includes(privateRouteMarker), false);
     const cleared = await request("POST", { operation: "unbind", bindingToken: system.binding.token });
     assert.equal(cleared.appAvailable, false);
     assert.equal(cleared.selection.targetId, "target");

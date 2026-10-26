@@ -141,7 +141,7 @@ export function createNativeBindingFixture({ registrations = [], advertised = tr
             observed: context.observed,
           },
         } };
-        return model.mutateTool ? model.mutateTool(output) : output;
+        return model.mutateTool ? model.mutateTool(output, request) : output;
       },
     });
     const controller = createInspection();

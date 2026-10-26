@@ -1138,6 +1138,26 @@ public message, not a generic inspection failure. A refusal before native
 capture has no `_meta` or exchange receipt; none is invented. It never
 reopens, retries or falls back, and a late refusal cannot restore a retired
 view. This normalization does not change MCP startup/transport failures.
+Successful `route.executionContext` uses the same captured-context projection
+as `_meta`, rather than forwarding the native invocation object. The host
+first validates private route owner, target/surface, context identity/scope
+and native-instance evidence. It then publishes only `contextRef`, the
+two-key `scope`, `scopeEpoch`, `revision`, and a verified seven-key
+`selection` when the native route provides one. Native nullable omissions
+become explicit nulls; System `target-host` selection has null agent/runtime
+IDs even when the view also has an App binding. Older minimal routes without
+selection stay supported without inventing a native selection.
+
+Public route scalars are limited to owner, operation, reason, description,
+target/surface IDs, agent/runtime/legacy IDs, registration version and
+correlation. Unknown native route/context/scope/selection blobs and
+`capturedAt`, native `observed`/`provenance`, owner stamps and connection
+evidence are never forwarded to renderer or MCP. This does not remove the
+existing controlled three-field host `result.provenance` DTO. Invalid
+private evidence or contradictory selection still fails before publication;
+projection is not a substitute for authority validation. Genuine received
+`_meta` receipts remain unchanged, and no metadata or receipt is synthesized
+for a success that supplied none.
 The three
 legacy `mobile_device_ui_dump/find/tap` identities remain installed. The
 source-only `microsoft/ailoha@5a99822fbbaa4780aa6cc196c9442496c89a06f6`

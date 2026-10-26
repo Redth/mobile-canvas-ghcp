@@ -48,6 +48,7 @@ const tests = [
   "tests/scripts/ailoha-semantic-inspection.test.mjs",
   "tests/scripts/ailoha-native-binding.test.mjs",
   "tests/scripts/ailoha-invocation-metadata.test.mjs",
+  "tests/scripts/ailoha-semantic-route-projection.test.mjs",
   "tests/scripts/ailoha-runtime-pin.test.mjs",
   "tests/scripts/ailoha-recording.test.mjs",
   "tests/scripts/ailoha-mcp-host.test.mjs",
