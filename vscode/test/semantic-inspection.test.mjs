@@ -109,6 +109,12 @@ for (const registrationVersion of [2, 3]) test(`compiled VS Code bridge shares e
       assert.equal(failed.error._meta["ailoha.executionContext"].selection.runtimeInstanceId, "chosen");
       assert.equal(failed.error._meta["ailoha.agentExchange"].effectMayBeUnknown, true);
       assert.equal(Object.hasOwn(failed.error._meta["ailoha.executionContext"], "observed"), false);
+      fixture.model.beforeTool = () => { throw canonicalAppFailure("ContextClosed"); };
+      const closed = await request("POST", { lens: "app", operation: "status" }, 409);
+      assert.deepEqual(closed.error, { code: "ContextClosed",
+        message: "The captured named context is closed. No reopen, retry or fallback was attempted.", status: 409 });
+      assert.equal(closed.result, null);
+      assert.equal(closed.appAvailable, false);
       fixture.model.beforeTool = null;
     }
     fixture.model.registrations[1].transportError = "AgentTransportUnsupported";

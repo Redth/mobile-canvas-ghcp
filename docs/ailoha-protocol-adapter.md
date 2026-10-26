@@ -1133,6 +1133,11 @@ original failure receipt to its original caller, but cannot repopulate the
 hidden/replaced view or restore App availability. CLI cancellation retains
 an already received complete notice and waits for its owned child to close;
 it never fabricates a receipt for a call that failed before capture.
+Canonical `ContextClosed` errors remain a specific 409 refusal with a fixed
+public message, not a generic inspection failure. A refusal before native
+capture has no `_meta` or exchange receipt; none is invented. It never
+reopens, retries or falls back, and a late refusal cannot restore a retired
+view. This normalization does not change MCP startup/transport failures.
 The three
 legacy `mobile_device_ui_dump/find/tap` identities remain installed. The
 source-only `microsoft/ailoha@5a99822fbbaa4780aa6cc196c9442496c89a06f6`

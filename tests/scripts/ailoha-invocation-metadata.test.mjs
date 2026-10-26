@@ -349,3 +349,89 @@ test("cancelled CLI rejects two conflicting complete notices instead of discardi
   await rejected;
   assert.equal(f.launches(), before + 1);
 });
+
+const closedMessage = "The captured named context is closed. No reopen, retry or fallback was attempted.";
+const closedDiagnostic = "ContextClosed: The named view authority has been retired.";
+
+test("verified CLI preserves ContextClosed before native capture without inventing a receipt or reopening", async (t) => {
+  const f = await fixture(t);
+  const original = structuredClone(f.view.context);
+  const calls = structuredClone(f.calls);
+  const before = f.launches();
+  const stderr = `${JSON.stringify({ error: closedDiagnostic, type: "ContextClosed", retryable: false })}\n`;
+  await assert.rejects(f.cli(stderr)(f.args, f.options()), (error) => {
+    assert.deepEqual(mobileErrorResult(error), { code: "ContextClosed", message: closedMessage, status: 409 });
+    assert.equal(Object.hasOwn(error, "_meta"), false);
+    return true;
+  });
+  assert.equal(f.launches(), before + 1);
+  assert.deepEqual(f.calls, calls);
+  assert.deepEqual(f.view.context, original);
+});
+
+test("SDK stdio fixtures and shared App reads retain bare or wrapped ContextClosed without metadata or fallback", async (t) => {
+  const f = await fixture(t);
+  const original = structuredClone(f.view.context);
+  const beforeCalls = f.calls.length;
+  const beforeLaunches = f.launches();
+  for (const text of [closedDiagnostic, `An error occurred invoking 'app_query': ${closedDiagnostic}`]) {
+    f.respond(undefined, { _meta: undefined, content: [{ type: "text", text }] });
+    const read = await f.view.request({ lens: "app", operation: "query", text: "OK" });
+    assert.deepEqual(read.error, { code: "ContextClosed", message: closedMessage, status: 409 });
+    assert.equal(read.result, null);
+    assert.equal(read.appAvailable, false);
+  }
+  const dispatcher = await createAilohaMcpDispatcher({
+    binding: { scope: f.view.scope, contextRef: f.view.context.contextRef,
+      scopeEpoch: f.view.context.scopeEpoch, ownerProcessId: process.pid },
+    createSemanticInspection: () => f.view.createInspection(),
+    createBackend() { throw new Error("A closed context must not acquire a device backend or fallback."); },
+  });
+  t.after(() => dispatcher.dispose());
+  f.respond(undefined, { _meta: undefined, content: [{ type: "text", text: closedDiagnostic }] });
+  for (const name of ["mobile_app_tree", "mobile_app_query", "mobile_app_status"]) {
+    const response = await dispatcher.handle({ jsonrpc: "2.0", id: 1, method: "tools/call",
+      params: { name, arguments: name === "mobile_app_query" ? { text: "OK" } : {} } });
+    assert.equal(response.result.isError, true);
+    assert.deepEqual(JSON.parse(response.result.content[0].text), { code: "ContextClosed", message: closedMessage, status: 409 });
+    assert.equal(Object.hasOwn(response.result, "_meta"), false);
+  }
+  assert.equal(f.launches(), beforeLaunches + 5);
+  assert.equal(f.view.toolCalls.length, 5);
+  assert(f.view.toolCalls.every((request) => request.arguments.route === "require-agent"));
+  assert(f.calls.slice(beforeCalls).every((args) => args[0] === "context" && args[1] === "get"));
+  assert.deepEqual(f.view.context, original);
+});
+
+test("late ContextClosed without a native receipt cannot restore a retired semantic view", async (t) => {
+  const f = await fixture(t);
+  f.respond(undefined, { _meta: undefined, content: [{ type: "text", text: closedDiagnostic }] });
+  const originalClose = Client.prototype.close;
+  let entered;
+  let release;
+  const waiting = new Promise((resolve) => { entered = resolve; });
+  Client.prototype.close = async function () {
+    await originalClose.call(this);
+    entered();
+    await new Promise((resolve) => { release = resolve; });
+    throw new Error("token=private-cleanup");
+  };
+  try {
+    const before = f.launches();
+    const pending = f.view.request({ lens: "app", operation: "query", text: "OK" });
+    await waiting;
+    f.view.controller.setVisible(false);
+    Object.assign(f.view.context, { state: "closed", revision: "2", selection: null, observed: null });
+    release();
+    const retired = await pending;
+    assert.equal(retired, f.view.controller.snapshot());
+    assert.equal(retired.status, "suspended");
+    assert.equal(retired.error, null);
+    assert.equal(retired.result, null);
+    assert.equal(retired.selection, null);
+    assert.equal(retired.appAvailable, false);
+    assert.equal(retired.binding.token, null);
+    assert.equal(Object.hasOwn(retired, "_meta"), false);
+    assert.equal(f.launches(), before + 1);
+  } finally { Client.prototype.close = originalClose; }
+});
