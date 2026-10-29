@@ -384,7 +384,10 @@ preparers, with tarball/integrity and license notices retained. Its dependencies
 must be bundled within the pinned launcher; hoisted checkout dependencies cannot
 substitute for an incomplete installed graph. The complete bundled tree,
 including transitive dependencies, is retained without native optional packages
-or symlinks. Both archive verifiers compare the complete staged tree with its
+or symlinks. Ancestor path aliases (such as macOS `/var` and `/private/var`)
+are canonicalized at the SDK graph root before resolving bundled dependencies;
+symlinks inside the graph and hoisted replacements remain rejected.
+Both archive verifiers compare the complete staged tree with its
 deterministic byte fingerprint and require matching package/runtime source pins,
 dependency versions and notices. A receipt checks staged-byte consistency; it
 does not by itself establish anonymous publication of the upstream tarball.

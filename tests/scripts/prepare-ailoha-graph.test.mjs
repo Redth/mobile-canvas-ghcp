@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, renameSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { createRequire } from "node:module";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, renameSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import test from "node:test";
 import { fileURLToPath } from "node:url";
@@ -130,6 +131,41 @@ test("an absent public pin leaves the preparer dormant rather than resolving any
   assert.equal(prepareAilohaGraph(output, { sourceRoot: state.sourceRoot }), false);
   assert.equal(verifyPreparedAilohaGraph(output), false);
   assert.equal(existsSync(join(output, "node_modules")), false);
+});
+
+test("both complete host graphs verify through an aliased ancestor without accepting a different dependency graph", (t) => {
+  const state = fixture(t);
+  const container = dirname(state.sourceRoot);
+  const alias = join(container, "ancestor-alias");
+  symlinkSync(container, alias, process.platform === "win32" ? "junction" : "dir");
+  for (const host of ["github", "vscode"]) {
+    const product = state.output(host);
+    prepareAilohaGraph(product, { sourceRoot: state.sourceRoot });
+    const aliasedProduct = join(alias, host);
+    const sdk = join(aliasedProduct, "node_modules/@ailoha/cli");
+    const resolved = dirname(createRequire(join(sdk, "package.json")).resolve("tar/package.json"));
+    const lexicalExpected = join(sdk, "node_modules/tar");
+    assert.notEqual(resolved, lexicalExpected);
+    assert.equal(resolved, realpathSync(lexicalExpected));
+    assert.equal(verifyPreparedAilohaGraph(aliasedProduct), true);
+  }
+});
+
+test("ancestor aliases do not permit symlinked bundled dependencies or hoisted replacements", (t) => {
+  const state = fixture(t);
+  const container = dirname(state.sourceRoot);
+  const alias = join(container, "ancestor-alias");
+  symlinkSync(container, alias, process.platform === "win32" ? "junction" : "dir");
+  const product = state.output("vscode");
+  prepareAilohaGraph(product, { sourceRoot: state.sourceRoot });
+  const sdk = join(product, "node_modules/@ailoha/cli");
+  const dependency = join(sdk, "node_modules/tar");
+  const outside = join(product, "node_modules/tar");
+  renameSync(dependency, outside);
+  assert.throws(() => verifyPreparedAilohaGraph(join(alias, "vscode")),
+    /must come from the bundled launcher graph/);
+  symlinkSync(outside, dependency, process.platform === "win32" ? "junction" : "dir");
+  assert.throws(() => verifyPreparedAilohaGraph(join(alias, "vscode")), /must not contain symlinks/);
 });
 
 test("a hoisted direct dependency cannot make an incomplete bundled launcher look install-ready", (t) => {

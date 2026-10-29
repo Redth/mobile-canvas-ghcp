@@ -1,6 +1,6 @@
 import { createHash } from "node:crypto";
 import { createRequire } from "node:module";
-import { cpSync, existsSync, lstatSync, mkdirSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
+import { cpSync, existsSync, lstatSync, mkdirSync, readFileSync, readdirSync, realpathSync, writeFileSync } from "node:fs";
 import { dirname, join, relative, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -31,14 +31,16 @@ function inspectLauncher(directory) {
   if (!Array.isArray(bundled) || Object.keys(manifest.dependencies ?? {}).some((name) => !bundled.includes(name))) {
     throw new Error("The official small launcher must contain its complete bundled dependency graph.");
   }
-  const graphRequire = createRequire(join(directory, "package.json"));
+  // Node canonicalizes ancestor aliases such as macOS /var -> /private/var.
+  const canonicalDirectory = realpathSync(directory);
+  const graphRequire = createRequire(join(canonicalDirectory, "package.json"));
   const dependencies = [];
   for (const [name, version] of Object.entries(manifest.dependencies ?? {})) {
     if (!["ws", "undici", "tar"].includes(name) || !/^\d+\.\d+\.\d+$/.test(version)) {
       throw new Error("The approved Ailoha small dependency graph changed; review its package provenance first.");
     }
     const dependencyPath = graphRequire.resolve(`${name}/package.json`);
-    if (dirname(dependencyPath) !== join(directory, "node_modules", name)) {
+    if (dirname(dependencyPath) !== join(canonicalDirectory, "node_modules", name)) {
       throw new Error(`The official ${name} dependency must come from the bundled launcher graph.`);
     }
     const dependency = JSON.parse(readFileSync(dependencyPath, "utf8"));
