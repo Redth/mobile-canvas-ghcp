@@ -64,7 +64,7 @@ const queuedMessages = [];
 const sharedAssets = new Set([
   "index.html", "device-canvas.css", "device-canvas.js", "canvas-state.js", "create-device-options.js",
   "ailoha-canvas-state.js", "ailoha-video-protocol.js", "ailoha-video-receiver.js", "ailoha-video-player.js",
-  "ailoha-workspace-view.js", "ailoha-semantic-view.js",
+  "ailoha-workspace-view.js", "ailoha-semantic-view.js", "inspection-panel.js",
 ]);
 const hostAssets = new Set(["vscode-theme.css", "vscode-theme.js", "vscode-transport.js"]);
 const shim = `

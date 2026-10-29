@@ -122,7 +122,9 @@ export class HostBridge implements vscode.Disposable {
           this.output.appendLine("Mobile Canvas workspace evidence could not be delivered to its view.");
         });
       });
-      this.workspaceSubscription = workspaceRoots?.onDidChange(() => inspection.clearRoot());
+      this.workspaceSubscription = workspaceRoots?.onDidChange((reason) => {
+        this.reconcileWorkspaceRoot(reason !== "editor");
+      });
     }
     if (ailohaHost?.semanticInspection) {
       this.semanticSubscription = ailohaHost.semanticInspection.subscribe((state) => {
@@ -149,6 +151,7 @@ export class HostBridge implements vscode.Disposable {
     try {
       switch (message.type) {
         case "ready":
+          this.reconcileWorkspaceRoot();
           if (this.ailohaHost?.workspaceInspection) {
             await this.post({ type: "workspace-inspection", state: this.ailohaHost.workspaceInspection.snapshot() });
           }
@@ -207,6 +210,7 @@ export class HostBridge implements vscode.Disposable {
     this.visible = visible;
     this.ailohaHost?.workspaceInspection?.setVisible(visible);
     this.ailohaHost?.semanticInspection?.setVisible(visible);
+    if (visible) this.reconcileWorkspaceRoot();
     const previous = this.visibilityTask;
     const task = previous.then(
       () => this.applyVisibility(visible),
@@ -501,6 +505,19 @@ export class HostBridge implements vscode.Disposable {
     }
   }
 
+  private reconcileWorkspaceRoot(retire = false): void {
+    const inspection = this.ailohaHost?.workspaceInspection;
+    if (!inspection || !this.workspaceRoots || this.disposed) return;
+    if (retire) inspection.clearRoot();
+    if (!this.visible) return;
+    const inferred = this.workspaceRoots.infer();
+    if (inferred && "path" in inferred) {
+      if (inspection.snapshot().root !== inferred.path) inspection.bindRoot(inferred.path);
+    } else if (inferred && "error" in inferred) {
+      inspection.clearRoot(inferred.error);
+    }
+  }
+
   private async forwardWorkspace(message: Extract<WebviewMessage, { type: "api" }>): Promise<void> {
     const inspection = this.ailohaHost?.workspaceInspection;
     if (!inspection) throw new Error("Workspace inspection is not available in this host.");
@@ -519,6 +536,11 @@ export class HostBridge implements vscode.Disposable {
 
     } else if (message.body?.trim() && message.body.trim() !== "{}") {
       result = { code: "workspace_root_authority_required", message: "Renderer requests cannot supply or enlarge the trusted workspace root.", status: 403 };
+    } else if (message.path === "/api/v1/workspace/open" && method === "POST") {
+      await this.workspaceRoots?.openFolder();
+      if (this.disposed) return;
+      this.reconcileWorkspaceRoot();
+      result = inspection.snapshot();
     } else if (message.path === "/api/v1/workspace/root" && method === "POST") {
       const generation = inspection.snapshot().generation;
       const choice = await this.workspaceRoots?.choose();

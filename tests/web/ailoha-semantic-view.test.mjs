@@ -2,7 +2,12 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { productModule } from "../ailoha-test-module.mjs";
 
-const { createSemanticInspectionView } = await import(productModule("web/ailoha-semantic-view.js"));
+const { createSemanticInspectionView: createSemanticView } = await import(productModule("web/ailoha-semantic-view.js"));
+function createSemanticInspectionView(options) {
+  const view = createSemanticView(options);
+  view.setTarget({ id: "target", targetHostId: "host", state: "booted", isAvailable: true });
+  return view;
+}
 class Element {
   constructor(tag) {
     this.tag = tag;
@@ -39,6 +44,32 @@ const state = (generation = 1) => ({
       targetHostId: "host", targetId: "target",
       executionContext: { contextRef: "ctx", scopeEpoch: "epoch", revision: "1" } },
   },
+});
+
+test("System live reads require the exact available running target while native candidate metadata stays independent", (t) => {
+  const previous = globalThis.document;
+  globalThis.document = { createElement: (tag) => new Element(tag) };
+  t.after(() => { globalThis.document = previous; });
+  const element = new Element("aside");
+  const requests = [];
+  const view = createSemanticInspectionView({
+    element, async request(path, options) { requests.push({ path, options }); return state(2); },
+  });
+  view.setActive(true);
+  view.acceptState({ ...state(), binding: {
+    available: true, token: "original-token", candidates: null, discovery: "idle", message: "Read registered candidates",
+  } });
+  view.setTarget({ id: "target", targetHostId: "host", state: "unknown", isAvailable: false, unavailableReason: "Target is unavailable." });
+  const inspect = find(element, (entry) => entry.tag === "button" && entry.textContent === "Inspect");
+  assert.equal(inspect.disabled, true);
+  inspect.listeners.get("click")();
+  assert.equal(requests.length, 0);
+  assert.match(element.textContent, /Target is unavailable/);
+  assert.equal(find(element, (entry) => entry.tag === "button" && entry.textContent === "Read registered candidates").disabled, false);
+  view.setTarget({ id: "another-target", targetHostId: "host", state: "booted", isAvailable: true });
+  assert.equal(find(element, (entry) => entry.tag === "button" && entry.textContent === "Inspect").disabled, true);
+  view.setTarget({ id: "target", targetHostId: "host", state: "booted", isAvailable: true });
+  assert.equal(find(element, (entry) => entry.tag === "button" && entry.textContent === "Inspect").disabled, false);
 });
 
 test("shared semantic renderer displays literal UI text and only read controls", (t) => {

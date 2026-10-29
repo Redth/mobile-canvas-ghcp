@@ -84,6 +84,10 @@ test("the real loopback panel serves the shared renderer but gates API by unique
   const asset = await fetch(new URL("/device-canvas.js", url));
   assert.equal(asset.status, 200);
   assert.match(await asset.text(), /createAilohaVideoPlayer/);
+  const panel = await fetch(new URL("/inspection-panel.js", url));
+  assert.equal(panel.status, 200);
+  assert.match(panel.headers.get("content-type"), /text\/javascript/);
+  assert.match(await panel.text(), /createInspectionPanel/);
   assert.equal((await fetch(new URL("/api/v1/catalog", url))).status, 401);
   const response = await fetch(new URL("/api/v1/catalog", url), { headers: { Cookie: cookie } });
   assert.equal((await response.json()).backend, "ailoha");

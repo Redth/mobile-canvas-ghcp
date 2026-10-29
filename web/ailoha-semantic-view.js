@@ -25,8 +25,10 @@ function validate(value) {
   }
 }
 
-export function createSemanticInspectionView({ element, request }) {
+export function createSemanticInspectionView({ element, request, preferenceId }) {
+  const panel = createInspectionPanel({ element, kind: "semantic", title: "Live inspection", preferenceId });
   let state = null;
+  let target = null;
   let active = false;
   let visible = true;
   let version = 0;
@@ -43,8 +45,6 @@ export function createSemanticInspectionView({ element, request }) {
     element.hidden = !active || !visible;
     element.closest(".workspace")?.classList.toggle("has-semantic-inspection", active && visible);
     if (!active || !visible) return;
-    const header = node("div", "", "semantic-inspection-header");
-    header.append(node("h2", "Live inspection"), node("span", "Read-only inspection", "workspace-readonly-badge"));
     const lens = node("select", "");
     lens.setAttribute("aria-label", "Inspection lens");
     for (const name of ["system", "app"]) {
@@ -76,17 +76,21 @@ export function createSemanticInspectionView({ element, request }) {
     const inspect = node("button", "Inspect", "button");
     inspect.type = "button";
     const busy = retiring || ["reading", "binding", "suspended"].includes(state?.status);
-    inspect.disabled = busy;
+    const systemUnavailable = lens.value === "system" && (!state?.selection
+      || target?.id !== state.selection.targetId || target?.targetHostId !== state.selection.targetHostId
+      || target?.isAvailable === false || target?.state !== "booted");
+    inspect.disabled = busy || systemUnavailable;
     const cancel = node("button", "Cancel", "button");
     cancel.type = "button";
     cancel.hidden = !["reading", "binding"].includes(state?.status);
     actions.append(inspect, cancel);
     const message = state?.error ? `${state.error.code}: ${state.error.message}`
       : !state?.selection ? "Select a target to inspect its System UI."
+        : systemUnavailable ? target?.unavailableReason ?? "Start an available target to inspect its live System UI."
         : lens.value === "app" && !state.appAvailable
           ? state.selection.runtimeInstanceId
             ? "App binding needs live re-verification. Verify and bind again or explicitly inspect App; System is never a fallback."
-            : "App unavailable: no explicitly selected verified native instance in this named context. Workspace evidence cannot bind an agent."
+            : "App unavailable: verify and bind a running native instance. Choosing a project does not bind an agent."
           : state.status === "binding" ? "Verifying the explicit native binding with Ailoha..."
             : state.status === "reading" ? "Reading canonical composed operation..."
             : "System is Target Host-owned. App requires an explicitly selected native instance; no automatic fallback.";
@@ -204,7 +208,7 @@ export function createSemanticInspectionView({ element, request }) {
     });
     unbind.addEventListener("click", () => { void perform("POST", { operation: "unbind", bindingToken }); });
     refresh.addEventListener("click", () => { void perform(); });
-    element.replaceChildren(header, lens, operation, filters, actions, status, binding, output);
+    panel.render([lens, operation, filters, actions, status, binding, output], state);
     function changeSelection() {
       chosenLens = lens.value;
       chosenOperation = operation.value;
@@ -222,6 +226,7 @@ export function createSemanticInspectionView({ element, request }) {
       changeSelection();
     });
     inspect.addEventListener("click", () => {
+      if (inspect.disabled) return;
       const input = { lens: lens.value, operation: operation.value, maxDepth: 6 };
       if (input.operation === "query") {
         for (const [key, value] of Object.entries(queryFilters)) if (value.trim()) input[key] = value.trim();
@@ -267,6 +272,7 @@ export function createSemanticInspectionView({ element, request }) {
 
   return Object.freeze({
     acceptState, load: () => perform(),
+    setTarget(value) { target = value; render(); },
     setActive(value) { active = value; if (!value) version += 1; render(); },
     setVisible(value) {
       visible = value;
@@ -280,3 +286,4 @@ export function createSemanticInspectionView({ element, request }) {
     },
   });
 }
+import { createInspectionPanel } from "./inspection-panel.js";

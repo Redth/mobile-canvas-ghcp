@@ -6,8 +6,9 @@ the shared Target Host adapter once the reviewed package contains its approved
 public SDK graph. Missing pins/packages report unavailable; errors never fall
 back. Inventory/selection, advertised lifecycle, PNG, geometry-bound pointer
 gestures, ALHV display and scoped recording are wired. Recording starts only
-when the verified CLI advertises recovery. Read-only workspace evidence uses
-an explicit native folder choice in a trusted local workspace; it does not
+when the verified CLI advertises recovery. Optional Workspace project details use
+the current trusted local folder (or the active editor's folder in multi-root
+windows), asking only when ambiguous; they do not
 install instrumentation, verify a running agent or select an application.
 Remote/non-file inspection roots are unsupported. Read-only System inspection
 uses the selected Target Host target; App inspection requires a verified native

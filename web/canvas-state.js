@@ -217,7 +217,11 @@ export function canBootDeviceState(deviceState) {
 }
 
 export function canUseDeviceCapability(device, capability) {
-  if (device?.backend === "ailoha") return device.capabilities?.[capability] === true;
+  if (device?.backend === "ailoha" && capability === "delete") {
+    return ["ready", "degraded"].includes(device.providerState) && device.capabilities?.delete === true;
+  }
+  if (device?.backend === "ailoha") return device.isAvailable !== false
+    && device.targetStatus !== "error" && device.capabilities?.[capability] === true;
   return Boolean(device) && device.capabilities?.[capability] !== false;
 }
 

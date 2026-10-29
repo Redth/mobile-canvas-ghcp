@@ -16,6 +16,7 @@ export function activate(context: vscode.ExtensionContext): void {
   }
   const backend = setting;
   const mcpChanged = new vscode.EventEmitter<void>();
+  let contextOpened = false;
   const viewProvider = new MobileCanvasViewProvider(
     context,
     output,
@@ -46,10 +47,14 @@ export function activate(context: vscode.ExtensionContext): void {
       viewProvider.refresh(),
     ),
     ...registerChatTools(viewProvider),
-    viewProvider.onDidOpenAilohaContext(() => mcpChanged.fire()),
+    viewProvider.onDidOpenAilohaContext(() => {
+      contextOpened = true;
+      mcpChanged.fire();
+    }),
     vscode.lm.registerMcpServerDefinitionProvider("mobileCanvas.mcp", {
       onDidChangeMcpServerDefinitions: mcpChanged.event,
       provideMcpServerDefinitions: async () => {
+        if (backend === "ailoha" && !contextOpened) return [];
         const binding = backend === "ailoha" ? await resolveAilohaContextBinding(
           context, { sessionId: viewSessionId, viewId: VIEW_INSTANCE_ID },
         ) : undefined;

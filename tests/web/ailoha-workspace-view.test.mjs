@@ -70,7 +70,8 @@ test("shared app evidence uses semantic local details/text and never creates a s
     for (const child of node.children) visit(child);
   };
   visit(element);
-  assert.deepEqual(controls, ["Inspect"]);
+  assert.deepEqual(controls, ["Workspace", "Inspect"]);
+  assert.equal(element.dataset.collapsed, "true");
   assert.equal(requests.length, 0);
   assert.equal(projectionSource.includes('name: "workspace_inspect"'), true);
 });
@@ -126,7 +127,7 @@ test("renderer ignores other view/older-root results and clears old cards on hid
 test("the clicked inspect button captures only its displayed generation, never root/context selectors", async (t) => {
   const { element, view, requests } = fixture(t);
   view.acceptState(state(7));
-  find(element, (node) => node.tag === "button").listeners.get("click")();
+  find(element, (node) => node.tag === "button" && node.textContent === "Inspect").listeners.get("click")();
   await new Promise((resolve) => setImmediate(resolve));
   assert.equal(requests.length, 1);
   assert.equal(requests[0].path, "/api/v1/workspace/inspection");
@@ -155,9 +156,9 @@ test("complete/incomplete/empty and XSS strings remain truthful plain-text evide
   view.acceptState(state(1, "/first-root", "incomplete"));
   assert.match(element.textContent, /Incomplete scan/);
   assert.match(element.textContent, /malformed-json/);
-  assert.equal(find(element, (node) => node.textContent === "Choose workspace").tag, "button");
+  assert.equal(find(element, (node) => node.textContent === "Choose project").tag, "button");
   view.acceptState(state(2, "/first-root", "empty"));
-  assert.match(element.textContent, /No application candidates found/);
+  assert.match(element.textContent, /No apps found/);
   view.acceptState(state(3, "/first-root", "xss"));
   assert.match(element.textContent, /<img src=x onerror=/);
   const suggestions = find(element, (node) => node.className === "workspace-review-guidance");

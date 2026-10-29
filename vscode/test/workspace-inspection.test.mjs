@@ -26,10 +26,11 @@ function reset() {
   vscode.workspace.isTrusted = true;
   vscode.workspace.workspaceFolders = [folder("First", "/explicit-first"), folder("Second", "/explicit-second")];
   vscode.env.remoteName = undefined;
+  vscode.window.activeTextEditor = undefined;
   vscode.window.showQuickPick = async (items) => items[1];
 }
 
-test("compiled native root adapter requires explicit choice for both multi-root and a sole local folder", async () => {
+test("compiled native root adapter infers a sole local folder and only asks for genuinely ambiguous multi-root choices", async () => {
   reset();
   let choices;
   vscode.window.showQuickPick = async (items) => { choices = items; return items[1]; };
@@ -43,7 +44,8 @@ test("compiled native root adapter requires explicit choice for both multi-root 
   let calls = 0;
   vscode.window.showQuickPick = async (items) => { calls += 1; return items[0]; };
   assert.deepEqual(await adapter.choose(), { path: "/explicit-sole" });
-  assert.equal(calls, 1);
+  assert.equal(calls, 0);
+  vscode.workspace.workspaceFolders = [folder("First", "/explicit-first"), folder("Second", "/explicit-second")];
   vscode.window.showQuickPick = async () => undefined;
   assert.equal(await adapter.choose(), undefined);
   vscode.workspace.workspaceFolders = [];
@@ -83,6 +85,24 @@ test("native folder/trust changes during the picker are not silently adopted", a
     return choices[1];
   };
   assert.equal((await createWorkspaceRootAdapter().choose()).error.code, "workspace_untrusted");
+});
+
+test("multi-root inference uses only the active editor's containing local folder", async () => {
+  reset();
+  let picks = 0;
+  vscode.window.showQuickPick = async () => { picks += 1; return undefined; };
+  vscode.window.activeTextEditor = { document: { uri: vscode.Uri.file("/explicit-first/src/app.ts") } };
+  const adapter = createWorkspaceRootAdapter();
+  assert.deepEqual(adapter.infer(), { path: "/explicit-first" });
+  assert.equal(picks, 0);
+  vscode.window.showQuickPick = async (items) => { picks += 1; return items[1]; };
+  assert.deepEqual(await adapter.choose(), { path: "/explicit-second" });
+  assert.equal(picks, 1);
+  vscode.window.showQuickPick = async () => { picks += 1; return undefined; };
+  vscode.window.activeTextEditor = { document: { uri: vscode.Uri.file("/outside/app.ts") } };
+  assert.equal(adapter.infer(), undefined);
+  assert.equal(await adapter.choose(), undefined);
+  assert.equal(picks, 2);
 });
 
 function bridgeFixture(runCli) {
@@ -162,12 +182,13 @@ test("folder and trust events retire pending compiled bridge results and subscri
   const chosen = (await state.api("/api/v1/workspace/root", "POST")).value;
   const result = state.api("/api/v1/workspace/inspection", "POST", { generation: chosen.generation });
   await new Promise((resolve) => setImmediate(resolve));
-  assert.equal(vscode.__test.listenerCount(), 2);
+  assert.equal(vscode.__test.listenerCount(), 3);
   vscode.workspace.workspaceFolders = [];
   vscode.__test.foldersChanged();
   assert.equal(signal.aborted, true);
   pending.resolve(JSON.stringify(workspaceInspectionFixture("/explicit-second")));
-  assert.equal((await result).value.status, "not-selected");
+  assert.equal((await result).value.status, "error");
+  assert.equal(state.inspection.snapshot().error.code, "workspace_root_not_selected");
   assert.equal(state.inspection.snapshot().inspection, null);
   vscode.workspace.isTrusted = true;
   vscode.__test.trustGranted();
@@ -189,6 +210,34 @@ test("late native root choice after hide is answered but cannot bind or restore 
   assert.equal((await result).value.status, "suspended");
   assert.equal(state.inspection.snapshot().root, null);
   assert.equal(state.calls.length, 0);
+});
+
+test("compiled bridge infers the sole project on ready, rebinds editor roots without scanning and exposes native Open Folder for empty windows", async (t) => {
+  const state = bridgeFixture();
+  t.after(async () => { state.bridge.dispose(); await state.bridge.closed(); });
+  vscode.workspace.workspaceFolders = [folder("Sole", "/explicit-first")];
+  await state.bridge.handleMessage({ type: "ready" });
+  assert.equal(state.inspection.snapshot().root, "/explicit-first");
+  assert.equal(state.calls.filter(Array.isArray).length, 0);
+  vscode.workspace.workspaceFolders = [folder("First", "/explicit-first"), folder("Second", "/explicit-second")];
+  vscode.window.activeTextEditor = { document: { uri: vscode.Uri.file("/explicit-second/app.ts") } };
+  vscode.__test.editorChanged();
+  assert.equal(state.inspection.snapshot().root, "/explicit-second");
+  const generation = state.inspection.snapshot().generation;
+  vscode.window.activeTextEditor = { document: { uri: vscode.Uri.file("/explicit-second/other.ts") } };
+  vscode.__test.editorChanged();
+  assert.equal(state.inspection.snapshot().generation, generation);
+  vscode.workspace.workspaceFolders = [];
+  vscode.window.activeTextEditor = undefined;
+  vscode.__test.foldersChanged();
+  assert.equal(state.inspection.snapshot().root, null);
+  assert.equal(state.inspection.snapshot().error.code, "workspace_root_not_selected");
+  const original = vscode.commands.executeCommand;
+  const commands = [];
+  vscode.commands.executeCommand = async (command) => commands.push(command);
+  t.after(() => { vscode.commands.executeCommand = original; });
+  await state.api("/api/v1/workspace/open", "POST");
+  assert.deepEqual(commands, ["vscode.openFolder"]);
 });
 
 test("actual missing SDK ready failure still exposes read-only root state and an explicit unavailable inspection", async (t) => {

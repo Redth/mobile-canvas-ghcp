@@ -3,6 +3,7 @@ import { createServer } from "node:http";
 import { randomUUID } from "node:crypto";
 import { dirname, join, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
+import { createRequire } from "node:module";
 import "../scripts/fixtures/ailoha-installed-hooks.mjs";
 import { scenario, sourceSha } from "../scripts/fixtures/ailoha-sdk-double.mjs";
 
@@ -13,11 +14,16 @@ const noRecovery = process.argv.includes("--no-recovery");
 const recordingLostStart = process.argv.includes("--lost-start");
 if (recordingLostStart && !recording) throw new Error("Lost-start proof requires --recording.");
 if (noRecovery && !recording) throw new Error("Recovery gating proof requires recording capture capabilities.");
-const inspectionCheck = process.argv.includes("--workspace-inspection");
+const hardening = process.argv.includes("--hardening");
+const inspectionCheck = process.argv.includes("--workspace-inspection") || hardening;
 const product = inspectionCheck ? `${contextPath}.product` : preparedProduct;
 if (inspectionCheck) {
   for (const directory of ["lib", "web"]) cpSync(join(preparedProduct, directory), join(product, directory), { recursive: true });
   cpSync(join(preparedProduct, "node_modules"), join(product, "node_modules"), { recursive: true });
+  if (!existsSync(join(product, "node_modules/ws/package.json"))) {
+    const require = createRequire(join(preparedProduct, "lib/ailoha/canvas-host.mjs"));
+    cpSync(dirname(require.resolve("ws/package.json")), join(product, "node_modules/ws"), { recursive: true });
+  }
   writeFileSync(join(product, "package.json"), '{"type":"module"}\n');
 }
 const fixtureRoot = join(contextPath, "..", "browser-workspace-root");
@@ -82,7 +88,10 @@ const evidence = createServer(async (request, response) => {
         chunks.push(chunk);
       }
       const input = JSON.parse(Buffer.concat(chunks));
-      if (input.type === "root" && ["first", "second"].includes(input.root)) {
+      if (hardening && input.type === "target-state" && ["running", "stopped", "error"].includes(input.status)) {
+        scenario.status = input.status;
+        scenario.syntheticRuntimeFailure = input.runtimeFailure === true;
+      } else if (input.type === "root" && ["first", "second"].includes(input.root)) {
         host.workspaceInspection.bindRoot(input.root === "first" ? fixtureRoot : secondRoot, ["explicit-exclusion/**"]);
       } else if (input.type === "mode" && ["complete", "incomplete", "unknown-schema", "empty", "xss"].includes(input.mode)) {
         process.env.AILOHA_TEST_INSPECTION_MODE = input.mode;

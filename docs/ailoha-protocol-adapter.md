@@ -1426,3 +1426,33 @@ node scripts/prepare-vscode.mjs --thin
 node --test tests/scripts/ailoha-client.test.mjs tests/web/ailoha-video-protocol.test.mjs vscode/test/prepared-assets.test.mjs
 vscode/node_modules/.bin/tsc --noEmit --strict --target ES2022 --module Node16 --moduleResolution Node16 lib/ailoha/index.d.mts tests/scripts/ailoha-client-types.mts
 ```
+
+## Source follow-up after the immutable RC1
+
+Preview loading/error/unavailable messages use the shared stage, not the
+pixel-fitted device bezel. Long messages wrap and scroll with a reachable
+44-pixel recovery action at narrow and wide sizes; hiding the status layer
+restores normal device input.
+
+An authoritative target error or unavailable provider disables boot and live
+controls. Error state alone is not a blanket cleanup ban: delete remains
+available only with an available provider, advertised canonical delete
+capability and the existing explicit scoped approval/revalidation. No native
+shutdown state is inferred. System live inspection requires the exact selected,
+available running target; project reads and native-candidate metadata remain
+independent.
+
+Only the bounded, known native runtime-bundle boot failure is classified into
+a fixed Xcode/runtime recovery hint. Raw commands, paths and stacks are not
+rendered. Other failures retain their generic safe message/code. Ailoha
+lifecycle error recovery refreshes observations rather than automatically
+resubmitting the action. Original operation metadata, uncertain/mismatched
+receipt GET recovery and verified-terminal release semantics are unchanged.
+After a genuine runtime repair and fresh available observation, a new explicit
+action can legitimately create a new operation.
+
+These source changes are not present in the immutable `v0.1.19-rc.1` producer
+artifacts. Shared web and embedded-asset inputs change the native source hash.
+Use a freshly built matching unpublished local review runtime for source
+package acceptance; do not restamp the old published manifest. A new published
+producer remains a separate approval boundary.

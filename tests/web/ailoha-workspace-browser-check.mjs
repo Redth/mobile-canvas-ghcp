@@ -71,23 +71,24 @@ async (page) => {
   try {
     await page.goto(url);
     await page.waitForFunction(() => document.querySelector("#stream-mode")?.textContent === "ALHV H.264");
-    await status("Supply workspaceRoot");
-    assert((await page.locator("#workspace-inspection button").count()) === 1, "GitHub shared renderer invented a root picker or install action.");
+    await page.getByRole("button", { name: "Expand Workspace", exact: true }).click();
+    await status("Choose a project when opening");
+    assert((await page.locator("#workspace-inspection button").count()) === 2, "GitHub shared renderer invented a root picker or install action.");
     const initial = await evidence();
     assert(initial.inspectionCalls.length === 0, "Workspace inspection ran automatically or inferred an ambient root.");
     await control({ type: "root", root: "first" });
-    await status("ready for a bounded static scan");
+    await status("Read project files");
     assert(await page.locator(".workspace-inspection-root").textContent() === fixtureRoot, "The explicit root is not displayed.");
     const capturedContext = JSON.stringify((await evidence()).context);
     const deviceCalls = (await evidence()).calls.length;
     await inspect("complete");
-    await status("Static scan complete");
+    await status("Project details updated");
     assert(await page.locator(".workspace-app-card").count() === 8, "The complete canonical app candidates were not rendered.");
     const copy = await page.locator("#workspace-inspection").textContent();
     for (const required of [
       "maui", "expo", "react-native", "PhoneApp", "DesktopApp", "SharedLibrary", "swiftpm",
       "Declared; installation not verified", "Observed syntax; execution not verified",
-      "Observed guard syntax; release stripping not verified", "Not evaluated", "Application selection is not supported",
+      "Observed guard syntax; release stripping not verified", "Not evaluated", "Running app inspection is separate",
     ]) assert(copy.includes(required), `Missing conservative app evidence: ${required}`);
     const identities = await page.locator(".workspace-app-card").evaluateAll((cards) => cards.map((card) => card.dataset.applicationId));
     assert(new Set(identities).size === 8, "Distinct native targets were collapsed by package/bundle identity.");
@@ -118,12 +119,12 @@ async (page) => {
     assert(await page.locator(".workspace-app-card").count() === 0, "Unknown schema retained misleading app cards.");
     await control({ type: "mode", mode: "empty" });
     await inspect("complete");
-    await status("Static scan complete");
-    assert((await page.locator("#workspace-inspection").textContent()).includes("No application candidates found"), "Complete empty scan is not explicit.");
+    await status("Project details updated");
+    assert((await page.locator("#workspace-inspection").textContent()).includes("No apps found"), "Complete empty scan is not explicit.");
 
     await control({ type: "mode", mode: "xss" });
     await inspect("complete");
-    await status("Static scan complete");
+    await status("Project details updated");
     await guidance((await evidence()).workspace.inspection.applications);
     const safe = await page.locator("#workspace-inspection").evaluate((element) => ({
       containsText: element.textContent.includes('<img src=x onerror="window.workspaceXss=true">'),
@@ -140,14 +141,14 @@ async (page) => {
     await inspect();
     await waitFor((value) => value.inspectionCalls.length > beforeRootChange);
     await control({ type: "root", root: "second" });
-    await status("ready for a bounded static scan");
+    await status("Read project files");
     await page.waitForTimeout(1100);
     assert(await page.locator(".workspace-inspection-root").textContent() === secondRoot, "An old-root result retargeted the displayed explicit root.");
     assert(await page.locator(".workspace-app-card").count() === 0, "An old-root result painted app cards after retirement.");
     assert(JSON.stringify((await evidence()).context) === capturedContext, "Changing the workspace root changed device selection or its context revision.");
     await control({ type: "mode", mode: "complete" });
     await inspect("complete");
-    await status("Static scan complete");
+    await status("Project details updated");
     assert((await evidence()).workspace.inspection.workspace.root === secondRoot, "New cards do not belong to the explicit new root.");
 
     await control({ type: "mode", mode: "complete", delayMs: 1000 });
@@ -175,7 +176,7 @@ async (page) => {
       document.dispatchEvent(new Event("visibilitychange"));
     });
     await waitFor((value) => value.leases === 1 && value.videoResources === 1);
-    await status("ready for a bounded static scan");
+    await status("Read project files");
     const resumed = await evidence();
     assert(posts(resumed) === 2 && deletes(resumed) === 1, "Workspace hide/resume broke owned media cleanup.");
     assert(await page.locator(".workspace-app-card").count() === 0, "A hidden scan repainted stale app cards after resume.");
@@ -184,7 +185,7 @@ async (page) => {
     await page.setViewportSize({ width: 1200, height: 800 });
     await control({ type: "mode", mode: "complete" });
     await inspect("complete");
-    await status("Static scan complete");
+    await status("Project details updated");
     return {
       syntheticSdkHooks: true, canonicalFixtureOutput: true, fullSharedRenderer: true,
       candidateCount: 8, uniqueApplicationIds: identities.length, ownedWrappers: 2,

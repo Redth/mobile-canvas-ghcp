@@ -109,8 +109,10 @@ const elements = {
 };
 
 const transport = window.mobileCanvasTransport || null;
+let panelPreferenceReady = false;
 const workspaceInspection = createWorkspaceInspectionView({
   element: document.querySelector("#workspace-inspection"),
+  preferenceId: panelPreferenceId,
   chooseRoot: Boolean(transport?.onWorkspaceInspectionChanged),
   async request(path, options) {
     const response = await sendApiRequest(path, options);
@@ -131,6 +133,7 @@ transport?.onWorkspaceInspectionChanged?.((snapshot) => {
 });
 const semanticInspection = createSemanticInspectionView({
   element: document.querySelector("#semantic-inspection"),
+  preferenceId: panelPreferenceId,
   async request(path, options) {
     const response = await sendApiRequest(path, options);
     const value = await response.json();
@@ -186,6 +189,7 @@ const state = {
   followTarget: null,
   panelVisible: !document.hidden,
 };
+panelPreferenceReady = true;
 
 const framePrimer = createFramePrimer({
   capture: async (deviceId) => {
@@ -292,6 +296,7 @@ async function refresh() {
         return;
       }
       state.selected = null;
+      semanticInspection.setTarget(null);
     }
 
     const selectionResponse = await api("/api/v1/selection");
@@ -610,6 +615,7 @@ async function selectDevice(device, persist) {
     && (recoveringRotatedView || state.selected?.backend === "ailoha");
   const retainFrame = shouldRetainDeviceFrame(state.frameDeviceId, device.id);
   state.selected = device;
+  semanticInspection.setTarget(device);
   state.display = null;
   setRecordingState(false);
   storeDeviceId(localStorage, canvasPreferenceId(), device.id);
@@ -691,6 +697,7 @@ function showEmptySelection() {
   stopStream();
   endAutomation();
   state.selected = null;
+  semanticInspection.setTarget(null);
   state.display = null;
   clearScreen();
   elements.view.classList.add("hidden");
@@ -766,7 +773,10 @@ function selectedNoun() {
 
 function updateControlAvailability() {
   const booted = state.selected?.state === "booted";
-  const canBoot = canBootDeviceState(state.selected?.state);
+  const available = state.selected?.isAvailable !== false && state.selected?.targetStatus !== "error";
+  const canBoot = state.selected?.backend === "ailoha"
+    ? available && state.selected.state === "shutdown"
+    : canBootDeviceState(state.selected?.state);
   const capabilities = state.selected?.capabilities || {};
   for (const button of document.querySelectorAll("[data-action]")) {
     const action = button.dataset.action;
@@ -776,12 +786,13 @@ function updateControlAvailability() {
     const wrongPlatform = Boolean(
       state.selected && button.dataset.platform && button.dataset.platform !== state.selected.platform);
     button.hidden = wrongPlatform ||
-      Boolean(state.selected && capability && capabilities[capability] === false);
+      Boolean(state.selected && capability && (state.selected.backend === "ailoha"
+        ? !canUseDeviceCapability(state.selected, capability) : capabilities[capability] === false));
 
     const needsBooted =
       ["home", "back", "apps", "lock", "rotate", "screenshot", "record", "restart", "shutdown"].includes(action);
     button.disabled = !state.selected ||
-      (action === "boot" ? !canBoot : needsBooted && !booted);
+      (action === "boot" ? !canBoot : needsBooted && (!booted || !available));
 
     if (action === "reveal") {
       const description = state.selected?.platform === "android"
@@ -977,6 +988,7 @@ function fitDeviceScreen() {
   // clientHeight excludes neither padding nor the reserve we may have written on a previous pass,
   // so measure the unreserved height once and drive both passes from it.
   const fullHeight = stage.clientHeight;
+  stage.style.setProperty("--status-top-reserve", `${pillReserve(stage.clientWidth, fullHeight, stage)}px`);
   const unreserved = measureFit(aspect, stage.clientWidth - chromeX, fullHeight - chromeY);
   if (!unreserved) return;
 
@@ -1049,10 +1061,13 @@ function showDeviceStatus(kind, overrides = {}) {
   const base = deviceStatusPresentation(kind, {
     deviceName: state.selected?.deviceTypeName || state.selected?.name,
     platform: state.selected?.platform,
-    detail: overrides.detail,
+    detail: overrides.detail ?? (kind === "unavailable" ? state.selected?.unavailableReason : undefined),
   });
   const presentation = { ...base, ...overrides };
-  const action = overrides.action === undefined ? base.action : overrides.action;
+  let action = overrides.action === undefined ? base.action : overrides.action;
+  if (action?.id === "boot" && !canUseDeviceCapability(state.selected, "boot")) {
+    action = { id: "refresh", label: "Refresh devices", icon: "#icon-refresh" };
+  }
 
   elements.frame.dataset.status = kind;
   elements.overlay.dataset.busy = presentation.busy ? "true" : "false";
@@ -1631,6 +1646,11 @@ function countFrame() {
 async function lifecycle(action) {
   const device = state.selected;
   if (!device) return;
+  if (device.backend === "ailoha" && (!canUseDeviceCapability(device, ACTION_CAPABILITY[action])
+    || (action === "boot" ? device.state !== "shutdown"
+      : ["restart", "shutdown"].includes(action) && device.state !== "booted"))) {
+    throw new Error(device.unavailableReason || "This action is unavailable for the selected target's current state and capabilities. Refresh devices.");
+  }
   const selectionVersion = state.selectionVersion;
 
   const disruptive = action !== "reveal" || device.platform === "android";
@@ -1660,14 +1680,18 @@ async function lifecycle(action) {
     const result = await response.json();
     if (state.selected?.id !== device.id || state.selectionVersion !== selectionVersion) return;
     state.selected = result;
+    semanticInspection.setTarget(result);
     await refresh();
     showToast(`${label} complete`);
   } catch (error) {
     if (disruptive && state.selected?.id === device.id && state.selectionVersion === selectionVersion) {
       showDeviceStatus("error", {
         title: `${label} failed`,
-        detail: error.message || String(error),
-        action: {
+        detail: `${error.message || String(error)}${device.backend === "ailoha"
+          && ["operation_failed", "http_error", "ailoha_operation_failed"].includes(error.code) ? ` (${error.code})` : ""}`,
+        action: device.backend === "ailoha" ? {
+          id: "refresh", label: "Refresh devices", icon: "#icon-refresh",
+        } : {
           id: `lifecycle:${action}`,
           label: "Try again",
           icon: "#icon-refresh",
@@ -2641,7 +2665,10 @@ elements.createForm.addEventListener("submit", (event) => {
       if (applySelection) await selectDevice(created, false);
       await loadCatalog();
     } else {
-      if (applySelection) state.selected = created;
+      if (applySelection) {
+        state.selected = created;
+        semanticInspection.setTarget(created);
+      }
       await refresh();
     }
     showToast(`${created.name} created and started${created.selectionApplied === false ? "; current selection unchanged" : ""}`);
@@ -2668,6 +2695,7 @@ document.querySelector("#erase-button").addEventListener("click", async (event) 
     const device = await response.json();
     if (captured && !isDestructiveSelectionCurrent(captured)) return;
     state.selected = device;
+    semanticInspection.setTarget(device);
     await refresh();
     showToast(`${capitalize(selectedNoun())} erased`);
   }).catch(showError);
@@ -2692,6 +2720,7 @@ document.querySelector("#delete-button").addEventListener("click", async (event)
     if (captured && !isDestructiveSelectionCurrent(captured)) return;
     stopStream();
     state.selected = null;
+    semanticInspection.setTarget(null);
     elements.view.classList.add("hidden");
     elements.empty.classList.remove("hidden");
     await refresh();
@@ -2993,6 +3022,10 @@ function canvasPreferenceId() {
   const instance = canvasInstanceId();
   return state.catalog?.backend === "ailoha"
     ? `${instance}:ailoha:${state.catalog.targetHostId}` : instance;
+}
+
+function panelPreferenceId() {
+  return panelPreferenceReady && sessionStorage.getItem("mobile-canvas-instance") ? canvasPreferenceId() : null;
 }
 
 function setPanelVisible(visible) {

@@ -51,14 +51,14 @@ function applicationCard(application) {
     ["Live connection", "Not evaluated"],
   ]));
   const details = node("details", "workspace-app-details");
-  details.append(node("summary", "", "Evidence and native identities"));
+  details.append(node("summary", "", "Project details"));
   details.append(detailList([
     ["Application ID", application.applicationId],
     ["Relative root", application.relativeRoot],
     ["Manifest", application.primaryManifest],
     ["Agent package", instrumentation.dependency.packageId],
     ["Correlation", "Not evaluated; no device/application association"],
-    ["Live capabilities", "Unknown (explicit null static evidence)"],
+    ["Live capabilities", "Not checked"],
   ]));
   if (application.nativeTarget) details.append(targetDetails(application.nativeTarget));
   for (const wrapper of application.nativeWrappers) {
@@ -156,7 +156,8 @@ function validateSnapshot(value) {
   }
 }
 
-export function createWorkspaceInspectionView({ element, request, chooseRoot = false }) {
+export function createWorkspaceInspectionView({ element, request, chooseRoot = false, preferenceId }) {
+  const panel = createInspectionPanel({ element, kind: "workspace", title: "Workspace", preferenceId });
   let snapshot = null;
   let visible = !document.hidden;
   let epoch = 0;
@@ -169,9 +170,8 @@ export function createWorkspaceInspectionView({ element, request, chooseRoot = f
     element.dataset.generation = String(value.generation);
     element.dataset.status = value.status;
     workspace?.classList.toggle("has-workspace-inspection", enabled && visible);
-    const header = node("div", "workspace-inspection-header");
-    header.append(node("h2", "", "Workspace evidence"), node("span", "workspace-readonly-badge", "Read-only"));
-    const root = node("code", "workspace-inspection-root", value.root ?? "No workspace selected");
+    const root = node("code", "workspace-inspection-root", value.root ?? (chooseRoot ? "No folder open" : "No project selected"));
+    const noFolder = value.error?.code === "workspace_root_not_selected";
     const actions = node("div", "workspace-inspection-actions");
     function button(label, path, method, disabled = false) {
       const control = node("button", "button", label);
@@ -180,38 +180,44 @@ export function createWorkspaceInspectionView({ element, request, chooseRoot = f
       control.addEventListener("click", () => { void perform(path, method, value.generation); });
       actions.append(control);
     }
-    if (chooseRoot) button("Choose workspace", "/api/v1/workspace/root", "POST", value.status === "suspended");
+    if (chooseRoot) {
+      const empty = value.error?.code === "workspace_root_not_selected";
+      button(empty ? "Open folder" : "Choose project", empty ? "/api/v1/workspace/open" : "/api/v1/workspace/root",
+        "POST", value.status === "suspended");
+    }
     button(value.status === "scanning" ? "Inspecting..." : "Inspect", "/api/v1/workspace/inspection", "POST",
       !value.root || value.status === "scanning" || value.status === "suspended");
     if (value.status === "scanning") button("Cancel", "/api/v1/workspace/inspection", "DELETE");
     const status = node("p", "workspace-inspection-status");
-    status.dataset.tone = value.error ? "danger" : value.status === "incomplete" ? "attention" : "neutral";
+    status.dataset.tone = value.error && !noFolder ? "danger" : value.status === "incomplete" ? "attention" : "neutral";
     status.setAttribute("role", "status");
     status.setAttribute("aria-live", "polite");
-    status.textContent = value.error ? `${value.error.code}: ${value.error.message}` : {
-      "not-selected": chooseRoot ? "Choose a trusted local workspace folder to inspect."
-        : "Supply workspaceRoot when opening this canvas, or an explicit path in its workspace_inspect action.",
-      ready: "This explicit root is ready for a bounded static scan.",
-      scanning: "Reading bounded static evidence. No build, script, device or agent is started.",
-      complete: "Static scan complete. This is not installation or runtime verification.",
+    status.textContent = noFolder ? "Open a local folder to see project details."
+      : value.error ? `${value.error.code}: ${value.error.message}` : {
+      "not-selected": chooseRoot ? "Choose a project folder."
+        : "Choose a project when opening this canvas.",
+      ready: "Read project files to see app and setup details.",
+      scanning: "Reading project files...",
+      complete: "Project details updated.",
       incomplete: "Incomplete scan. Missing evidence remains unknown.",
       cancelled: "Inspection cancelled. No retired application evidence is displayed.",
       suspended: "Inspection retired while this view is hidden or detached.",
       error: "Workspace inspection failed. Choose a root or retry explicitly.",
     }[value.status];
     const notice = node("p", "workspace-inspection-note",
-      "Static evidence cannot establish a running agent, live capabilities or device correlation. Application selection is not supported in this target-only view.");
-    element.replaceChildren(header, root, actions, status, notice);
+      "Optional project details from files. Running app inspection is separate.");
+    const content = [root, actions, status, notice];
     element.setAttribute("aria-busy", String(value.status === "scanning"));
-    if (value.exclusions.length) element.append(node("p", "workspace-inspection-note", `Explicit exclusions: ${value.exclusions.join(", ")}`));
-    if (!value.inspection) return;
+    if (value.exclusions.length) content.push(node("p", "workspace-inspection-note", `Excluded: ${value.exclusions.join(", ")}`));
+    if (!value.inspection) { panel.render(content, noFolder ? { ...value, status: "not-selected" } : value); return; }
     const inspection = value.inspection;
     const apps = node("div", "workspace-app-cards");
     for (const application of inspection.applications) apps.append(applicationCard(application));
     if (!inspection.applications.length) apps.append(node("p", "", inspection.scan.complete
-      ? "No application candidates found in this bounded static scan."
+      ? "No apps found in the inspected project files."
       : "No candidates returned by an incomplete scan; absence is not established."));
-    element.append(apps, scanDetails(inspection));
+    content.push(apps, scanDetails(inspection));
+    panel.render(content, value);
   }
 
   function acceptState(value) {
@@ -259,3 +265,4 @@ export function createWorkspaceInspectionView({ element, request, chooseRoot = f
     },
   });
 }
+import { createInspectionPanel } from "./inspection-panel.js";

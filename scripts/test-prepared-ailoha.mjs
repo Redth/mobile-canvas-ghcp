@@ -22,13 +22,13 @@ const modules = [
   "lib/ailoha/github-tools.mjs", "lib/ailoha/github-unbound-mcp.mjs",
   "lib/ailoha/staged-apps.mjs", "lib/ailoha/fenced-apps.mjs",
   "lib/ailoha/destructive-consent.mjs",
-  "lib/ailoha/index.mjs", "web/ailoha-canvas-state.js", "web/ailoha-video-player.js", "web/ailoha-video-receiver.js",
+  "lib/ailoha/index.mjs", "lib/ailoha/errors.mjs", "web/ailoha-canvas-state.js", "web/ailoha-video-player.js", "web/ailoha-video-receiver.js",
   "lib/ailoha/protocol.mjs", "lib/ailoha/mobile-catalog.mjs", "lib/ailoha/operation-receipts.mjs",
   "web/create-device-options.js",
   "lib/ailoha/workspace-inspection.mjs", "web/ailoha-workspace-view.js",
   "lib/ailoha/agent-candidates.mjs", "lib/ailoha/semantic-inspection.mjs", "lib/ailoha/semantic-mcp.mjs", "web/ailoha-semantic-view.js",
   "lib/ailoha/json-objects.mjs", "lib/ailoha/invocation-metadata.mjs",
-  "web/device-canvas.js", "web/device-canvas.css", "web/index.html",
+  "web/device-canvas.js", "web/device-canvas.css", "web/index.html", "web/inspection-panel.js", "web/canvas-state.js",
 ];
 const tests = [
   "tests/scripts/mobile-ailoha-projection.test.mjs",
@@ -62,6 +62,7 @@ const tests = [
   "tests/web/ailoha-canvas-state.test.mjs",
   "tests/web/ailoha-workspace-view.test.mjs",
   "tests/web/ailoha-semantic-view.test.mjs",
+  "tests/web/inspection-panel.test.mjs",
 ];
 for (const product of products) {
   for (const path of modules) {

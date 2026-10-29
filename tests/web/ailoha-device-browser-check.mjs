@@ -30,6 +30,7 @@ async (page) => {
   verify(await page.locator("#semantic-inspection").getByText("System (Target Host)").count() > 0,
     "Read-only System inspection is not visible alongside the live video.");
   if (workspaceCards) {
+    await page.getByRole("button", { name: "Expand Workspace", exact: true }).click();
     await page.waitForFunction(() => document.querySelector("#workspace-inspection")?.dataset.status === "ready");
     await page.locator("#workspace-inspection").getByRole("button", { name: "Inspect", exact: true }).click();
     await page.waitForFunction(() => document.querySelector("#workspace-inspection")?.dataset.status === "complete");

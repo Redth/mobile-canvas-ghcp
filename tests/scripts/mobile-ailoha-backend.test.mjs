@@ -13,6 +13,7 @@ const { createAilohaDeviceFeatures } = await import(productModule("lib/ailoha/de
 const { createAilohaRevealAdapter } = await import(productModule("lib/ailoha/reveal-adapter.mjs"));
 const { createAilohaSystemUiAdapter } = await import(productModule("lib/ailoha/system-ui-adapter.mjs"));
 const { AilohaProtocolError } = await import(productModule("lib/ailoha/errors.mjs"));
+const { mobileErrorResult } = await import(productModule("lib/ailoha/mobile-backend.mjs"));
 const { publicSnapshot, MobileAilohaError } = await import(productModule("lib/ailoha/mobile-projection.mjs"));
 const { createAilohaContextStore } = await import(productModule("lib/ailoha/context-adapter.mjs"));
 const { createAilohaMcpDispatcher } = await import(productModule("lib/ailoha/mcp-host.mjs"));
@@ -195,6 +196,48 @@ function fixture(options = {}) {
     selectHost(hostId) { selection = { targetHostId: hostId, targetId: "one" }; },
   };
 }
+
+test("unavailable targets refuse fresh lifecycle submissions on the shared HTTP and tool paths", async (t) => {
+  const state = fixture();
+  t.after(() => state.backend.dispose());
+  state.targets.get("one").status = "error";
+  for (const action of ["boot", "restart", "shutdown"]) {
+    await assert.rejects(state.backend.lifecycle(action, "one"), { code: "target_unavailable" });
+    const response = await state.backend.request(`/api/v1/devices/one/${action}`, { method: "POST" });
+    assert.equal(response.status, 409);
+    assert.equal((await response.json()).code, "target_unavailable");
+  }
+  assert.equal(state.calls.some(([kind]) => ["start", "stop", "reboot", "wait"].includes(kind)), false);
+});
+
+test("a known runtime-bundle boot failure has a fixed safe hint, original receipt and no follow-up POST for the errored target", async (t) => {
+  const state = fixture();
+  t.after(() => state.backend.dispose());
+  state.targets.get("one").status = "stopped";
+  const operation = { operationId: "start-one", kind: "startTarget", targetId: "one", providerId: "provider", status: "failed" };
+  const problem = {
+    status: 502, type: "urn:devflow:error:internal-error", errorCode: "internal-error",
+    detail: "xcrun simctl boot /private/host/path exited 2: Unable to boot device because we cannot determine the runtime bundle. No such file or directory",
+  };
+  state.client.waitForOperation = async () => {
+    state.targets.get("one").status = "error";
+    throw new AilohaProtocolError("operation_failed", { status: 502, problem, operationId: operation.operationId, operation });
+  };
+  await assert.rejects(state.backend.lifecycle("boot", "one"), (error) => {
+    const result = mobileErrorResult(error);
+    assert.match(result.message, /runtime is missing or unavailable/);
+    assert.doesNotMatch(result.message, /xcrun|simctl|private\/host|exited 2/);
+    assert.equal(result.operationId, "start-one");
+    assert.equal(result.operation, operation);
+    return true;
+  });
+  await assert.rejects(state.backend.lifecycle("boot", "one"), { code: "target_unavailable" });
+  assert.equal(state.calls.filter(([kind]) => kind === "start").length, 1);
+  for (const changes of [{ detail: "private runtime failure" }, { errorCode: "timeout" }, { type: "untrusted:type" }]) {
+    const unknown = new AilohaProtocolError("operation_failed", { problem: { ...problem, ...changes } });
+    assert.equal(unknown.message, "The Ailoha operation failed.");
+  }
+});
 
 test("optional native binding cannot make provider/System reads depend on a disconnected or restarted agent", async (t) => {
   for (const restarted of [false, true]) {
@@ -4536,6 +4579,31 @@ test("missing real scoped destructive consent is unsupported even when confirm i
     await assert.rejects(state.backend.lifecycle("delete", "one", input), { code: "confirmation_required" });
   }
   assert.equal(state.calls.length, 0);
+});
+
+test("an errored missing-runtime target keeps only explicitly consented canonical delete cleanup, never boot/input", async (t) => {
+  for (const mode of ["approved", "no-consent", "provider-unavailable", "no-delete-capability"]) {
+    let prompts = 0;
+    const state = canonicalFixture({
+      confirmDestructive: mode === "no-consent" ? undefined : async () => { prompts += 1; return true; },
+    });
+    t.after(() => state.backend.dispose());
+    state.targets.get("one").status = "error";
+    if (mode === "provider-unavailable") state.providers[0].state = "unavailable";
+    if (mode === "no-delete-capability") {
+      state.capabilities[0].features = state.capabilities[0].features.filter((value) => value !== "deleteTarget");
+    }
+    if (mode === "approved") {
+      const result = await state.backend.lifecycle("delete", "one", { confirm: true });
+      assert.equal(result.success, true);
+      assert.equal(prompts, 1);
+      assert.equal(state.calls.filter(([kind]) => kind === "delete").length, 1);
+    } else {
+      await assert.rejects(state.backend.lifecycle("delete", "one", { confirm: true }));
+      assert.equal(state.calls.some(([kind]) => kind === "delete"), false);
+    }
+    assert.equal(state.calls.some(([kind]) => ["start", "tap", "swipe"].includes(kind)), false);
+  }
 });
 
 test("real consent is captured to the original target and is separate from the literal gate", async (t) => {

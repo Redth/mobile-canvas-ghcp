@@ -20,6 +20,7 @@ public sealed class DeviceApiTests
 	[InlineData("/ailoha-video-player.js")]
 	[InlineData("/ailoha-workspace-view.js")]
 	[InlineData("/ailoha-semantic-view.js")]
+	[InlineData("/inspection-panel.js")]
 	[InlineData("/create-device-options.js")]
 	[InlineData("/device-canvas.js")]
 	[InlineData("/device-canvas.css")]
@@ -38,6 +39,7 @@ public sealed class DeviceApiTests
 			"ailoha-video-protocol.js", "ailoha-video-receiver.js", "ailoha-video-player.js",
 			"ailoha-workspace-view.js",
 			"ailoha-semantic-view.js",
+			"inspection-panel.js",
 		})
 		{
 			using var stream = typeof(DeviceApi).Assembly.GetManifestResourceStream(
@@ -77,6 +79,10 @@ public sealed class DeviceApiTests
 			Assert.Equal(HttpStatusCode.OK, response.StatusCode);
 			Assert.Equal("text/javascript", response.Content.Headers.ContentType?.MediaType);
 			Assert.Contains("createSemanticInspectionView", await response.Content.ReadAsStringAsync());
+			using var panel = await client.GetAsync(new Uri(new Uri(address), "/inspection-panel.js"));
+			Assert.Equal(HttpStatusCode.OK, panel.StatusCode);
+			Assert.Equal("text/javascript", panel.Content.Headers.ContentType?.MediaType);
+			Assert.Contains("createInspectionPanel", await panel.Content.ReadAsStringAsync());
 		}
 		finally
 		{

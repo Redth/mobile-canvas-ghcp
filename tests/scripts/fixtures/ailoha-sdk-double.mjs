@@ -421,6 +421,17 @@ export async function openTargetHostTransport(leaseId) {
         scenario.operations.set(operationId, {
           ...operation, status: "succeeded", startedAt: "2026-10-09T23:00:01Z", completedAt: "2026-10-09T23:00:02Z",
         });
+        if (action === "start" && scenario.syntheticRuntimeFailure) {
+          scenario.status = "error";
+          scenario.operations.set(operationId, {
+            ...scenario.operations.get(operationId), status: "failed",
+            problem: {
+              type: "urn:devflow:error:internal-error", title: "Synthetic runtime unavailable", status: 502,
+              errorCode: "internal-error",
+              detail: "xcrun simctl boot /private/synthetic-only/path exited 2: Unable to boot device because we cannot determine the runtime bundle. No such file or directory",
+            },
+          });
+        }
         return reply(operation, 202, `/api/v1/operations/${operationId}`);
       }
       if (path.startsWith("/api/v1/operations/")) {

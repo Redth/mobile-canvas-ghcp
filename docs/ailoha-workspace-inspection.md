@@ -51,17 +51,18 @@ for an application, library, unknown role or incomplete scan.
 
 ## Root authority and lifecycle
 
-| Host | Explicit root policy |
+| Host | Project root policy |
 | --- | --- |
 | GitHub canvas | `workspaceRoot` and optional `workspaceExclusions` in the opt-in open input, or `workspace_inspect({ path, exclusions? })`. These provider calls are the root authority. No ambient cwd, first folder or parent root is used. The inspected SDK includes an optional `session.workingDirectory` hint, but this adapter has no established trust/topology contract for that hint and deliberately does not adopt it. |
-| VS Code | **Choose workspace** opens the native workspace-folder picker, including a sole-folder workspace. The choice must still be an actual trusted local `file:` workspace-folder URI when it returns and when the scan runs/completes. Multi-root never silently picks the first folder. Remote windows, URI authorities and non-file folders are positively unsupported. |
+| VS Code | A sole trusted local workspace folder is inferred automatically. In multi-root windows, the active editor's containing workspace folder is used when unambiguous; **Choose project** can explicitly choose another root or resolve ambiguity through the native picker. An empty window shows **No folder open** and a native **Open folder** action, never an artifact/session-directory guess. The root must remain an actual trusted local `file:` workspace folder when bound and when a scan runs/completes. No all-roots union or first-folder fallback is used. Remote windows, URI authorities and non-file folders remain unsupported. |
 
 The bound absolute root is always displayed. Renderer requests to
 `/api/v1/workspace/inspection` may capture only the displayed `generation`;
 they cannot change root, exclusions, view/host identity, application ID or
 context selection. A stale generation is rejected before scanning another
 root. The VS Code-only `/api/v1/workspace/root` bridge route opens the native
-picker; it does not accept a renderer path. Neither route requires a
+picker when needed; `/api/v1/workspace/open` invokes VS Code's native Open Folder
+command. Neither accepts a renderer path. These routes do not require a
 device/context connection to inspect.
 
 Root changes, workspace/trust events, selection intents, context errors,
@@ -71,6 +72,23 @@ after retirement cannot paint a new card. Closing waits are not a reason to
 launch overlapping scan processes. Resume requires an explicit new inspection
 and does not replay an old scan. Root choices and scan results are not
 persisted in preferences.
+
+The shared **Workspace** and **Live inspection** panels are optional context,
+not prerequisites for device controls. Both start collapsed and can be expanded
+and resized independently. Resize handles support pointer drag, Arrow keys,
+Home and End; collapse buttons support the native Enter/Space behavior.
+Only collapsed state and bounded panel dimensions are persisted under the
+existing host/view preference identity. Panel collapse/resize does not retire
+inspection results, bindings, selection or leases, and panel input never
+becomes device input. Narrow windows stack the panels below the device.
+
+Workspace reads project files to identify applications and setup details; it
+does not identify a running app agent. Native-instance binding remains a separate,
+explicit Live inspection action. VS Code folder/trust changes retire pending
+results before inference is reconsidered; changing the active editor to another
+workspace folder also rebinds and retires the previous generation. Moving within
+the same folder does not discard its results. Inspection itself remains an
+explicit read rather than an automatic scan.
 
 Card details use local semantic `details`/`summary` controls and text nodes.
 Opening details never changes device selection, broker/agent selection or

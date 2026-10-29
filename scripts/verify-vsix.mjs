@@ -55,6 +55,7 @@ function verifyExtracted(directory) {
     "extension/dist/web/ailoha-video-receiver.js",
     "extension/dist/web/ailoha-video-player.js",
     "extension/dist/web/ailoha-semantic-view.js",
+    "extension/dist/web/inspection-panel.js",
     "extension/dist/web/ailoha-canvas-state.js",
     "extension/dist/web/canvas-state.js",
     "extension/dist/web/create-device-options.js",

@@ -1,5 +1,6 @@
 const folderListeners = new Set();
 const trustListeners = new Set();
+const editorListeners = new Set();
 class Disposable {
   constructor(close) { this.close = close; }
   dispose() { this.close?.(); }
@@ -32,6 +33,8 @@ module.exports = {
   testUi,
   env: { clipboard: { async writeText() {} }, remoteName: undefined },
   window: {
+    activeTextEditor: undefined,
+    onDidChangeActiveTextEditor(listener) { editorListeners.add(listener); return new Disposable(() => editorListeners.delete(listener)); },
     createQuickPick,
     async showSaveDialog() { return undefined; },
     async showQuickPick() { return undefined; },
@@ -39,15 +42,23 @@ module.exports = {
   workspace: {
     isTrusted: true,
     workspaceFolders: [],
+    getWorkspaceFolder(resource) {
+      return this.workspaceFolders.filter((folder) =>
+        resource.scheme === folder.uri.scheme && resource.authority === folder.uri.authority
+        && (resource.fsPath === folder.uri.fsPath || resource.fsPath.startsWith(`${folder.uri.fsPath}/`)))
+        .sort((a, b) => b.uri.fsPath.length - a.uri.fsPath.length)[0];
+    },
     fs: { async writeFile() {} },
     onDidChangeWorkspaceFolders(listener) { folderListeners.add(listener); return new Disposable(() => folderListeners.delete(listener)); },
     onDidGrantWorkspaceTrust(listener) { trustListeners.add(listener); return new Disposable(() => trustListeners.delete(listener)); },
   },
   Uri: { file: uri, joinPath: (base, ...paths) => uri(`${base.fsPath}/${paths.join("/")}`) },
+  commands: { async executeCommand() {} },
   Disposable,
   __test: {
     foldersChanged() { for (const listener of folderListeners) listener(); },
     trustGranted() { for (const listener of trustListeners) listener(); },
-    listenerCount() { return folderListeners.size + trustListeners.size; },
+    editorChanged() { for (const listener of editorListeners) listener(); },
+    listenerCount() { return folderListeners.size + trustListeners.size + editorListeners.size; },
   },
 };

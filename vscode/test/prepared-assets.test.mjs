@@ -17,6 +17,7 @@ test("prepared extension assets contain the shared runtime and UI", () => {
     "dist/web/canvas-state.js",
     "dist/web/create-device-options.js",
     "dist/web/device-canvas.js",
+    "dist/web/inspection-panel.js",
     "dist/lib/runtime.mjs",
     "dist/lib/runtime-assets.mjs",
     "dist/lib/mcp-vscode-proxy.mjs",

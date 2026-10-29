@@ -10,7 +10,7 @@ const {
   isCanvasInvocationCurrent,
   pointInLogicalBounds,
 } = await import(productModule("web/ailoha-canvas-state.js"));
-const { supportsLegacyStreamOptions, shouldRetainAilohaStream } = await import(productModule("web/canvas-state.js"));
+const { supportsLegacyStreamOptions, shouldRetainAilohaStream, canUseDeviceCapability } = await import(productModule("web/canvas-state.js"));
 
 function state() {
   return {
@@ -22,6 +22,26 @@ function state() {
   };
 }
 
+test("the actual lifecycle handler preserves advertised stopped-target Reveal dispatch while refusing unavailable targets", async () => {
+  const source = readFileSync(new URL(productModule("web/device-canvas.js")), "utf8");
+  const definition = /async function lifecycle\(action\) \{[\s\S]*?\n\}/.exec(source)?.[0];
+  assert.ok(definition);
+  const selected = { backend: "ailoha", id: "target", platform: "ios", state: "shutdown",
+    isAvailable: true, capabilities: { reveal: true } };
+  const calls = [];
+  const current = { selected, selectionVersion: 1 };
+  const lifecycle = vm.runInNewContext(`(${definition})`, {
+    state: current, canUseDeviceCapability, ACTION_CAPABILITY: { reveal: "reveal" },
+    semanticInspection: { setTarget() {} },
+    api: async (path) => { calls.push(path); return { json: async () => selected }; },
+    refresh: async () => {}, showToast() {}, stopStream() {}, showDeviceStatus() {},
+  });
+  await lifecycle("reveal");
+  assert.deepEqual(calls, ["/api/v1/devices/target/reveal"]);
+  current.selected = { ...selected, isAvailable: false };
+  await assert.rejects(lifecycle("reveal"), /unavailable/);
+  assert.equal(calls.length, 1);
+});
 test("input coordinates use logical bounds and origin, never the encoded framebuffer", () => {
   const current = state();
   const point = pointInLogicalBounds({ clientX: 150, clientY: 150 },

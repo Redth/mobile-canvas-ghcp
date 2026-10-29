@@ -77,6 +77,25 @@ test("missing and multiple surfaces are explicit and disable positional compatib
   assert.equal(project({ target: multiple, surfaceId: "other" }).surfaceId, "other");
 });
 
+test("canonical error targets cannot advertise usable controls or invent an unavailable-runtime reason", () => {
+  const device = project({
+    target: { ...target, status: "error" },
+    supported: { boot: true, restart: true, screenshot: true, liveStream: true, tap: true, delete: true },
+  });
+  assert.equal(device.state, "unknown");
+  assert.equal(device.isAvailable, false);
+  assert.ok(Object.entries(device.capabilities).every(([name, value]) => name === "delete" || value === false));
+  assert.equal(device.capabilities.delete, true);
+  const unavailable = project({ target: { ...target, status: "error" },
+    provider: { ...provider, state: "unavailable" }, supported: { delete: true } });
+  assert.equal(unavailable.capabilities.delete, false);
+  assert.match(device.unavailableReason, /error state/);
+  assert.doesNotMatch(device.unavailableReason, /missing.*runtime|iOS-26|native-id/);
+  const stopped = project({ target: { ...target, status: "stopped" }, supported: { boot: true } });
+  assert.equal(stopped.isAvailable, true);
+  assert.equal(stopped.capabilities.boot, true);
+});
+
 test("logical geometry preserves its observed origin/revision without inventing density", () => {
   const geometry = projectSurfaceGeometry(surface);
   assert.equal(geometry.coordinate, "window");

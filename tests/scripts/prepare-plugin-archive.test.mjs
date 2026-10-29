@@ -16,6 +16,7 @@ const sourceFiles = new Set([
   "lib/ailoha/github-unbound-mcp.mjs",
   "scripts/mcp.mjs",
   "web/device-canvas.js",
+  "web/inspection-panel.js",
 ]);
 
 function text(bytes, start, end) {

@@ -10,9 +10,11 @@ export interface WorkspaceRootError {
 export type WorkspaceRootChoice = { path: string } | { error: WorkspaceRootError };
 
 export interface WorkspaceRootAdapter {
+  infer(): WorkspaceRootChoice | undefined;
   choose(): Promise<WorkspaceRootChoice | undefined>;
+  openFolder(): Promise<void>;
   validate(path: string): WorkspaceRootError | undefined;
-  onDidChange(listener: () => void): vscode.Disposable;
+  onDidChange(listener: (reason: "folders" | "trust" | "editor") => void): vscode.Disposable;
 }
 
 function topologyError(): WorkspaceRootError | undefined {
@@ -33,19 +35,32 @@ function folderError(folder: vscode.WorkspaceFolder): WorkspaceRootError | undef
 }
 
 export function createWorkspaceRootAdapter(): WorkspaceRootAdapter {
+  function infer(): WorkspaceRootChoice | undefined {
+    const error = topologyError();
+    if (error) return { error };
+    const folders = vscode.workspace.workspaceFolders ?? [];
+    if (!folders.length) return {
+      error: { code: "workspace_root_not_selected", message: "No folder open. Open a local folder to see project details." },
+    };
+    const active = vscode.window.activeTextEditor?.document.uri;
+    const folder = folders.length === 1 ? folders[0]
+      : active ? vscode.workspace.getWorkspaceFolder(active) : undefined;
+    if (!folder) return undefined;
+    const unsupported = folderError(folder);
+    return unsupported ? { error: unsupported } : { path: normalize(folder.uri.fsPath) };
+  }
   return {
+    infer,
     async choose() {
+      const folders = vscode.workspace.workspaceFolders ?? [];
+      if (folders.length <= 1) return infer();
       const error = topologyError();
       if (error) return { error };
-      const folders = vscode.workspace.workspaceFolders ?? [];
-      if (!folders.length) {
-        return { error: { code: "workspace_root_not_selected", message: "Open a local workspace folder, then choose its explicit inspection root." } };
-      }
       const choice = await vscode.window.showQuickPick(folders.map((folder) => ({
         label: folder.name,
         description: folder.uri.toString(),
         folderUri: folder.uri.toString(),
-      })), { placeHolder: "Choose the exact workspace folder for read-only inspection", canPickMany: false });
+      })), { placeHolder: "Choose the project folder", canPickMany: false });
       if (!choice) return undefined;
       const changed = topologyError();
       if (changed) return { error: changed };
@@ -55,6 +70,9 @@ export function createWorkspaceRootAdapter(): WorkspaceRootAdapter {
       }
       const unsupported = folderError(selected);
       return unsupported ? { error: unsupported } : { path: normalize(selected.uri.fsPath) };
+    },
+    async openFolder() {
+      await vscode.commands.executeCommand("vscode.openFolder");
     },
     validate(path) {
       const error = topologyError();
@@ -67,8 +85,9 @@ export function createWorkspaceRootAdapter(): WorkspaceRootAdapter {
     },
     onDidChange(listener) {
       return vscode.Disposable.from(
-        vscode.workspace.onDidChangeWorkspaceFolders(listener),
-        vscode.workspace.onDidGrantWorkspaceTrust(listener),
+        vscode.workspace.onDidChangeWorkspaceFolders(() => listener("folders")),
+        vscode.workspace.onDidGrantWorkspaceTrust(() => listener("trust")),
+        vscode.window.onDidChangeActiveTextEditor(() => listener("editor")),
       );
     },
   };
