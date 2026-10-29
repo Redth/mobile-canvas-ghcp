@@ -536,16 +536,17 @@ The MCP names, request fields, and legacy output envelopes remain unchanged.
 | `mobile_device_settings_get` | Enabled with `target.settings` | `GET /settings/device` projects the nullable appearance/accessibility fields. |
 | `mobile_device_settings_set` | Enabled with `target.settings` | `PATCH /settings/device` requires the device namespace and reads back the resulting settings. |
 
-These source-level gates do not indicate that the current public Ailoha package
-can run the opt-in: no compatible public runtime pin has been approved. Enabling
-PUT-dependent features needs exact official runtime support, not a fixture-only
-verb; reviewed runtime PR 67 source at `5abe074c7a91bb64aaf2691300e4bd39e9807079`
+The official preview3 graph is now pinned as described above; that source/package
+qualification does not enable these feature flags or prove native feature parity.
+Enabling PUT-dependent features still needs exact official runtime and target
+capability support, not a fixture-only verb. Historical source qualification
+used runtime PR 67 at `5abe074c7a91bb64aaf2691300e4bd39e9807079`, which
 includes the fixed PUT method/type/private guard and is merged at
 `1c82c6b65b9ef099f49f42386bd0e875c91b3339`. Reviewed native PR 76 source
 at `00c8eda7e9e01145e0493d2ed45d2a455042d71d` includes the fidelity
 fields; its current draft head is `75b165e2c51bb194980d5a88c0acc47de8d05eef`
-after a normal merge of main. Native PR 76 is not merged, and neither source
-head is an approved public SDK pin. Internal
+after a normal merge of main. Those historical draft heads are not the current
+public SDK pin and their fixture evidence is not installed-host acceptance. Internal
 source-only fixtures explicitly enable these contracts and exercise 21 API plus
 21 MCP feature cases in **each** thin-installed GitHub and VS Code host (84
 positive invocations total), along with missing-generic-evidence negatives.
@@ -1089,8 +1090,10 @@ private to one captured view read; another view, a target/process change,
 suspension, or a newer candidate/inspection read cannot reuse them. There is no
 workspace-application-to-native-agent mapping.
 
-The locally admitted Android app-transport v3 source contract is a consumer
-compatibility target, not a published or pinned runtime. Broker registration
+The Android app-transport v3 contract below was first admitted as a local source
+compatibility target. The current official preview3 SDK graph is now pinned,
+but that source/package qualification does not prove installed Android behavior.
+Broker registration
 uses `registrationVersion:3` and `endpointScope:"target-guest"`; the runtime
 and Target Host own the actual guest port, ACK and transport negotiation.
 None of those transport/endpoint fields, raw serials or private owner stamps
