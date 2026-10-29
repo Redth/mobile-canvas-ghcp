@@ -24,21 +24,23 @@ function fixture(t) {
 
 test("the product stamp updates both lock roots without changing SDK pins or published native evidence", (t) => {
   const directory = fixture(t);
+  const targetVersion = "9.8.7";
   const before = (path) => readFileSync(join(directory, path));
+  assert.notEqual(JSON.parse(before("package.json").toString("utf8")).version, targetVersion);
   const native = before("runtimes/manifest.json");
   const sdk = before("lib/ailoha/runtime-package.json");
   const locks = ["package-lock.json", "vscode/package-lock.json"].map((path) =>
     JSON.parse(before(path).toString("utf8")));
   const catalogs = [".github/plugin/marketplace.json", ".claude-plugin/marketplace.json"]
     .map((path) => JSON.parse(before(path).toString("utf8")).metadata);
-  execFileSync(process.execPath, [join(directory, "scripts/stamp-version.mjs"), "0.1.19"]);
+  execFileSync(process.execPath, [join(directory, "scripts/stamp-version.mjs"), targetVersion]);
   const check = execFileSync(process.execPath, [join(directory, "scripts/stamp-version.mjs"), "--check"],
     { encoding: "utf8" });
-  assert.match(check, /all 9 agree on 0\.1\.19/);
+  assert(check.includes(`all 9 agree on ${targetVersion}`));
   for (const [index, path] of ["package-lock.json", "vscode/package-lock.json"].entries()) {
     const lock = JSON.parse(before(path).toString("utf8"));
-    assert.equal(lock.version, "0.1.19");
-    assert.equal(lock.packages[""].version, "0.1.19");
+    assert.equal(lock.version, targetVersion);
+    assert.equal(lock.packages[""].version, targetVersion);
     for (const [key, value] of Object.entries(locks[index].packages)) {
       if (key) assert.deepEqual(lock.packages[key], value);
     }
@@ -47,6 +49,14 @@ test("the product stamp updates both lock roots without changing SDK pins or pub
   for (const [index, path] of [".github/plugin/marketplace.json", ".claude-plugin/marketplace.json"].entries()) {
     assert.deepEqual(JSON.parse(before(path).toString("utf8")).metadata, catalogs[index]);
   }
+  assert.deepEqual(before("runtimes/manifest.json"), native);
+  assert.deepEqual(before("lib/ailoha/runtime-package.json"), sdk);
+  const stampedFiles = ["package.json", "package-lock.json", "vscode/package.json",
+    "vscode/package-lock.json", "Directory.Build.props", ".github/plugin/plugin.json",
+    ".github/plugin/marketplace.json", ".claude-plugin/plugin.json", ".claude-plugin/marketplace.json"];
+  const stamped = stampedFiles.map(before);
+  execFileSync(process.execPath, [join(directory, "scripts/stamp-version.mjs"), targetVersion]);
+  for (const [index, path] of stampedFiles.entries()) assert.deepEqual(before(path), stamped[index]);
   assert.deepEqual(before("runtimes/manifest.json"), native);
   assert.deepEqual(before("lib/ailoha/runtime-package.json"), sdk);
 });
