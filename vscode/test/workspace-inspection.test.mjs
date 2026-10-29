@@ -6,6 +6,7 @@ import { createWorkspaceInspectionController } from "../../lib/ailoha/workspace-
 import { createAilohaCanvasHost } from "../../lib/ailoha/canvas-host.mjs";
 import { createRuntimeCanvasHost } from "../../lib/ailoha/runtime-backend.mjs";
 import { workspaceInspectionFixture } from "../../tests/scripts/fixtures/workspace-inspection-fixture.mjs";
+import { MobileAilohaError } from "../../lib/ailoha/mobile-projection.mjs";
 
 const require = createRequire(import.meta.url);
 const vscode = require("vscode");
@@ -195,7 +196,13 @@ test("actual missing SDK ready failure still exposes read-only root state and an
   const roots = createWorkspaceRootAdapter();
   const messages = [];
   const logs = [];
-  const host = createRuntimeCanvasHost({ scope, validateWorkspaceRoot: roots.validate, onError: (error) => logs.push(error.code) });
+  const host = createRuntimeCanvasHost({
+    scope, validateWorkspaceRoot: roots.validate, onError: (error) => logs.push(error.code),
+    async runtime() {
+      throw new MobileAilohaError("ailoha_runtime_unavailable",
+        "The approved official Ailoha runtime graph is not present in this synthetic host. Legacy was not started.", 503);
+    },
+  });
   const bridge = new HostBridge(undefined, scope.sessionId, scope.viewId, {
     async postMessage(message) { messages.push(message); return true; },
   }, { appendLine: (line) => logs.push(line) }, undefined, host, undefined, roots);

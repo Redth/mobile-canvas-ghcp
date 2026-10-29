@@ -143,12 +143,14 @@ autoscale/session recreation is revived.
 
 ## Public installation gate
 
-`lib/ailoha/runtime-package.json` remains intentionally absent. No private or
-fixture pin, unpublished candidate, PATH CLI, sibling checkout or native
-manifest/hash stamp is supplied. Normal public installation is **not ready**.
-The official `@ailoha/cli` runtime graph must be published and verified by
-its owner before that install path can be exercised end to end. The parent
-host PR owns that handoff and final native rebuild/publication sequencing.
+`lib/ailoha/runtime-package.json` now pins the actual anonymously published
+`@ailoha/cli@0.2.5-preview.3` root tarball, integrity and source
+`d1d16d142b110406c6070665db9222d424983aa9`, publication run `40706552606`
+attempt `1`. Both host locks and prepared byte-graph receipts must agree.
+No private/fixture pin, PATH CLI or sibling checkout substitutes for that
+official graph. Metadata/import/package checks do not acquire or start its
+native payloads. Normal installed-host routing and genuinely refreshed Mobile
+Canvas native release artifacts remain separate qualification gates.
 
 Both preparers refresh real shared web bytes; existing native binaries embed
 older web assets and are not claimed to contain these cards. A later release

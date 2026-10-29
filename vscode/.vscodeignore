@@ -8,3 +8,4 @@ tsconfig.json
 *.tsbuildinfo
 .vscode-test/**
 node_modules/@types/**
+node_modules/@ailoha/**

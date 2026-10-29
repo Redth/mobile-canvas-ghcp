@@ -70,13 +70,17 @@ preview wires the same scoped Ailoha backend into the installed canvas, VS Code
 view/Chat tools, and MCP entrypoints. It does not change the product version,
 identifiers, Marketplace package, or stable runtime channel.
 
-After a reviewed package contains the approved public Ailoha launcher graph,
+The source now pins the anonymously published `@ailoha/cli@0.2.5-preview.3`
+launcher graph in both hosts, including its exact tarball integrity and source
+provenance. Once a reviewed host package is installed in a separately qualified
+environment,
 start the GitHub Copilot host with `MOBILE_CANVAS_BACKEND=ailoha`, or set
 `"mobileCanvas.backend": "ailoha"` in VS Code's application settings and reload
 the window. Without that prepared, exact-pinned public graph, opt-in reports
-**unavailable** rather than starting the legacy engine. The public runtime pin
-and refreshed legacy embedded-web native artifacts are still release gates;
-this is not a normal-install-ready release.
+**unavailable** rather than starting the legacy engine. Refreshed Mobile Canvas
+embedded-web native release artifacts and normal installed-host routing remain
+separate gates; this SDK source/package qualification is not a production
+cutover or a normal-install-ready release.
 
 The opt-in covers authoritative provider/runtime/device-type/template catalogs,
 compatible iOS/Android create+boot, inventory/selection, advertised start/stop/reboot, PNG

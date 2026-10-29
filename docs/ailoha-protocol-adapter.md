@@ -358,10 +358,16 @@ reload the window after changing it. Both installed paths use
 and the shared `web/ailoha-video-player.js`. Legacy remains the default; an
 Ailoha refusal, timeout or operational failure never invokes the legacy engine.
 
-**Package readiness is gated.** No public runtime version, integrity or source
-pin is guessed. `lib/ailoha/runtime-package.json` is required before the official
-small launcher graph is staged. Until the owner supplies verified anonymous
-artifacts, the opt-in reports `ailoha_runtime_unavailable`. Normal installs must
+**The official SDK source/package pin is now present.** Both manifests and locks
+pin `@ailoha/cli@0.2.5-preview.3`; `lib/ailoha/runtime-package.json` records its
+actual public npm URL, SHA-512 SRI, source
+`d1d16d142b110406c6070665db9222d424983aa9`, and publication run `40706552606`
+attempt `1`. The downloaded root is 999,818 bytes with SHA-256
+`fed271d89317a75e2cc2fd551e86c48e3c80d93f72c2ce28f8755ba3826dc38f`.
+This is the actual anonymous registry publication, not an earlier local pack.
+It covers five Target Host RIDs and six CLI packages; Linux musl is CLI-only,
+and Windows ARM64 remains deferred. Missing official graph/pin still reports
+`ailoha_runtime_unavailable`. Normal installs must
 not require a private source checkout, another worktree, PATH-installed CLI,
 install hooks or end-user `npm install`.
 Malformed provenance reports `ailoha_runtime_pin_invalid`; a read failure reports
@@ -381,11 +387,22 @@ including transitive dependencies, is retained without native optional packages
 or symlinks. Both archive verifiers compare the complete staged tree with its
 deterministic byte fingerprint and require matching package/runtime source pins,
 dependency versions and notices. A receipt checks staged-byte consistency; it
-does not establish anonymous publication of the upstream tarball. VSIX validation
+does not by itself establish anonymous publication of the upstream tarball.
+Both archive verifiers also require matching source run/attempt in the native
+CLI and Target Host attestations. VS Code locks the same official graph but
+ships it only once under `dist/node_modules/@ailoha/cli`, without a second
+partially filtered root copy. VSIX validation
 permits upstream source maps only inside that verified pinned graph, preserving
 the publisher's bundled bytes; Mobile Canvas source, tests and generated maps
 remain excluded. Required native RIDs and public pins remain upstream release
-evidence, not consumer assumptions.
+evidence, not consumer assumptions. Restore dependencies with
+`npm ci --ignore-scripts --omit=optional` (and `--prefix vscode` for that host)
+when doing metadata/package-only qualification. Imports and pin-file checks
+do not call acquisition APIs. In particular, even `getRuntimePin` can lazily
+acquire native bytes; it, `getVerifiedCliLaunch` and `ensureTargetHost` are not
+metadata-only probes. Public native acquisition/start, both normal installed
+hosts, and refreshed Mobile Canvas embedded-web release artifacts require
+their own qualification; legacy defaults and all capability gates stay intact.
 
 `connectTargetHostTransport` applies the same strict validators and bounded
 operation waits to the factory's `response()` metadata without requiring or
@@ -1339,7 +1356,7 @@ Stop the helper to restore/remove its explicitly synthetic prepared pin.
 
 ```sh
 npm ci --ignore-scripts --omit=optional
-npm ci --prefix vscode --ignore-scripts
+npm ci --prefix vscode --ignore-scripts --omit=optional
 node scripts/prepare-plugin.mjs --thin
 node scripts/prepare-vscode.mjs --thin
 npm run compile --prefix vscode

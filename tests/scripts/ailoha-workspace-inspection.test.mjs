@@ -11,6 +11,7 @@ const {
   createWorkspaceInspectionController, projectWorkspaceInspection, WORKSPACE_INSPECTION_MAX_BYTES,
 } = await import(productModule("lib/ailoha/workspace-inspection.mjs"));
 const { createVerifiedAilohaCli } = await import(productModule("lib/ailoha/runtime-sdk.mjs"));
+const { MobileAilohaError } = await import(productModule("lib/ailoha/mobile-projection.mjs"));
 const { createRuntimeCanvasHost } = await import(productModule("lib/ailoha/runtime-backend.mjs"));
 const { createAilohaCanvasHost } = await import(productModule("lib/ailoha/canvas-host.mjs"));
 const { withAilohaCanvas } = await import(productModule("lib/ailoha/github-adapter.mjs"));
@@ -250,9 +251,15 @@ test("trust lost during a scan rejects late evidence even without a workspace ev
   assert.equal(view.clearRoot({ code: "workspace_untrusted", message: "Workspace trust is required." }).error.status, 403);
 });
 
-test("actual missing public SDK gate is an error without starting a Target Host or changing context", async () => {
+test("a missing public SDK remains an explicit host error without acquisition or context changes", async () => {
   const errors = [];
-  const host = createRuntimeCanvasHost({ scope, onError: (error) => errors.push(error) });
+  const host = createRuntimeCanvasHost({
+    scope, onError: (error) => errors.push(error),
+    async runtime() {
+      throw new MobileAilohaError("ailoha_runtime_unavailable",
+        "The approved official Ailoha runtime graph is not present in this synthetic host.", 503);
+    },
+  });
   const result = await host.invokeAction("workspace_inspect", { path: root });
   assert.equal(result.status, "error");
   assert.equal(result.error.code, "ailoha_runtime_unavailable");

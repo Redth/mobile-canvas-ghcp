@@ -74,7 +74,7 @@ jobs:
         run: npm run ailoha:manifest -- --require-clean --output .build/ailoha-source-manifest.json
 
       - name: Install VS Code extension dependencies
-        run: npm ci --prefix vscode --ignore-scripts
+        run: npm ci --prefix vscode --ignore-scripts --omit=optional
 
       - name: Test VS Code extension
         run: npm test --prefix vscode

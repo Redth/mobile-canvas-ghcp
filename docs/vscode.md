@@ -152,7 +152,7 @@ Dependencies are restored through
 `https://packagefeedproxy.microsoft.io/npm/`, configured in `vscode/.npmrc`.
 
 ```bash
-npm ci --prefix vscode --ignore-scripts
+npm ci --prefix vscode --ignore-scripts --omit=optional
 npm test --prefix vscode
 npm run package --prefix vscode
 ./scripts/release.sh

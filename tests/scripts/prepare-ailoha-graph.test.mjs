@@ -178,6 +178,42 @@ test("packaged SDK pins cannot disagree with the approved source provenance", (t
   state.json(join(state.launcher, "runtime-pins.json"), {
     version: state.pin.version, sourceSha: "b".repeat(40),
   });
-  prepareAilohaGraph(output, { sourceRoot: state.sourceRoot });
-  assert.throws(() => verifyPreparedAilohaGraph(output), /bytes or provenance/);
+  assert.throws(() => prepareAilohaGraph(output, { sourceRoot: state.sourceRoot }), /source provenance/);
+  assert.equal(existsSync(join(output, "node_modules", "@ailoha", "cli")), false);
+});
+
+test("publication provenance requires the exact source run and attempt before staging and after extraction", (t) => {
+  const state = fixture(t);
+  const pin = { ...state.pin, sourceRunId: "12345", sourceRunAttempt: "2" };
+  const runtimePins = {
+    schema: "ailoha.runtime-distribution/v1", version: pin.version, sourceRepository: "microsoft/ailoha",
+    sourceSha: pin.sourceSha, runtimes: { "synthetic-rid": {
+      provenance: Object.fromEntries(["cli", "targetHost"].map((kind) => [kind, {
+        sourceSha: pin.sourceSha, producer: { runId: pin.sourceRunId, runAttempt: pin.sourceRunAttempt },
+      }])),
+    } },
+  };
+  state.json(join(state.sourceRoot, "lib", "ailoha", "runtime-package.json"), pin);
+  state.json(join(state.launcher, "runtime-pins.json"), runtimePins);
+  const product = state.output("published");
+  state.json(join(product, "lib", "ailoha", "runtime-package.json"), pin);
+  prepareAilohaGraph(product, { sourceRoot: state.sourceRoot });
+  assert.equal(verifyPreparedAilohaGraph(product), true);
+  const receiptPath = join(product, "lib", "ailoha", "prepared-runtime-graph.json");
+  const receipt = JSON.parse(readFileSync(receiptPath, "utf8"));
+  assert.equal(receipt.sourceRunId, pin.sourceRunId);
+  assert.equal(receipt.sourceRunAttempt, pin.sourceRunAttempt);
+  state.json(receiptPath, { ...receipt, sourceRunAttempt: "1" });
+  assert.throws(() => verifyPreparedAilohaGraph(product), /bytes or provenance/);
+  for (const [index, change] of [
+    (value) => { value.runtimes["synthetic-rid"].provenance.targetHost.producer.runAttempt = "1"; },
+    (value) => { value.runtimes["synthetic-rid"].provenance.cli.sourceSha = "b".repeat(40); },
+    (value) => { value.sourceRepository = "other/repo"; },
+  ].entries()) {
+    const changed = structuredClone(runtimePins);
+    change(changed);
+    state.json(join(state.launcher, "runtime-pins.json"), changed);
+    assert.throws(() => prepareAilohaGraph(state.output(`refused-${index}`), { sourceRoot: state.sourceRoot }),
+      /publication run and attempt/);
+  }
 });

@@ -32,6 +32,17 @@ const productPackage = JSON.parse(readFileSync(join(root, "package.json"), "utf8
 if (extensionPackage.dependencies["@modelcontextprotocol/sdk"] !== productPackage.dependencies["@modelcontextprotocol/sdk"]) {
   throw new Error("Both installed hosts must use the same exact-pinned semantic MCP client.");
 }
+const ailohaPin = JSON.parse(readFileSync(join(root, "lib", "ailoha", "runtime-package.json"), "utf8"));
+const productLock = JSON.parse(readFileSync(join(root, "package-lock.json"), "utf8"));
+const extensionLock = JSON.parse(readFileSync(join(extensionRoot, "package-lock.json"), "utf8"));
+if (productPackage.dependencies["@ailoha/cli"] !== ailohaPin.version
+  || extensionPackage.dependencies["@ailoha/cli"] !== ailohaPin.version
+  || [productLock, extensionLock].some((lock) =>
+    lock.packages?.["node_modules/@ailoha/cli"]?.version !== ailohaPin.version
+    || lock.packages["node_modules/@ailoha/cli"].resolved !== ailohaPin.tarball
+    || lock.packages["node_modules/@ailoha/cli"].integrity !== ailohaPin.integrity)) {
+  throw new Error("Both hosts must lock the same exact official Ailoha SDK tarball, integrity and source pin.");
+}
 const runtimeManifest = JSON.parse(readFileSync(join(runtimeDirectory, "manifest.json"), "utf8"));
 const targetIndex = process.argv.indexOf("--target");
 const target = targetIndex >= 0 ? process.argv[targetIndex + 1] : null;

@@ -72,6 +72,27 @@ function fingerprintGraph(directory, include = () => true) {
   return { sha256: hash.digest("hex"), files, bytes };
 }
 
+function launcherProvenance(directory, pin) {
+  const runtimePins = JSON.parse(readFileSync(join(directory, "runtime-pins.json"), "utf8"));
+  if (pin.schema !== "mobile-canvas.ailoha-runtime/v1" || !/^[a-f0-9]{40}$/.test(pin.sourceSha)
+    || runtimePins.version !== pin.version || runtimePins.sourceSha !== pin.sourceSha) {
+    throw new Error("The official launcher runtime pins do not match the approved source provenance.");
+  }
+  const hasRun = pin.sourceRunId !== undefined || pin.sourceRunAttempt !== undefined;
+  if (hasRun && (typeof pin.sourceRunId !== "string" || !/^[1-9][0-9]{0,19}$/.test(pin.sourceRunId)
+    || typeof pin.sourceRunAttempt !== "string" || !/^[1-9][0-9]{0,5}$/.test(pin.sourceRunAttempt)
+    || runtimePins.schema !== "ailoha.runtime-distribution/v1"
+    || runtimePins.sourceRepository !== "microsoft/ailoha"
+    || !runtimePins.runtimes || !Object.keys(runtimePins.runtimes).length
+    || Object.values(runtimePins.runtimes).some((runtime) =>
+      ["cli", "targetHost"].some((kind) => runtime.provenance?.[kind]?.sourceSha !== pin.sourceSha
+        || runtime.provenance[kind].producer?.runId !== pin.sourceRunId
+        || runtime.provenance[kind].producer?.runAttempt !== pin.sourceRunAttempt)))) {
+    throw new Error("The official launcher runtime provenance does not match the approved publication run and attempt.");
+  }
+  return hasRun ? { sourceRunId: pin.sourceRunId, sourceRunAttempt: pin.sourceRunAttempt } : {};
+}
+
 export function prepareAilohaGraph(output, { sourceRoot = root } = {}) {
   const require = createRequire(join(sourceRoot, "package.json"));
   const pinPath = join(sourceRoot, "lib", "ailoha", "runtime-package.json");
@@ -97,6 +118,7 @@ export function prepareAilohaGraph(output, { sourceRoot = root } = {}) {
   });
   const graph = fingerprintGraph(directory, include);
   const { dependencies } = inspectLauncher(directory);
+  const provenance = launcherProvenance(directory, pin);
   const graphRoot = join(output, "node_modules", "@ailoha", "cli");
   mkdirSync(dirname(graphRoot), { recursive: true });
   cpSync(directory, graphRoot, {
@@ -111,6 +133,7 @@ export function prepareAilohaGraph(output, { sourceRoot = root } = {}) {
     sourceSha: pin.sourceSha,
     tarball: entry.resolved,
     integrity: entry.integrity,
+    ...provenance,
     license: manifest.license,
     dependencies,
     graph,
@@ -188,13 +211,13 @@ export function verifyPreparedAilohaGraph(output) {
   const receipt = JSON.parse(readFileSync(receiptPath, "utf8"));
   const graph = fingerprintGraph(directory);
   const { manifest, dependencies } = inspectLauncher(directory);
-  const runtimePins = JSON.parse(readFileSync(join(directory, "runtime-pins.json"), "utf8"));
+  const provenance = launcherProvenance(directory, pin);
   if (pin.schema !== "mobile-canvas.ailoha-runtime/v1" || !/^[a-f0-9]{40}$/.test(pin.sourceSha)
     || receipt.schema !== "mobile-canvas.prepared-ailoha-graph/v1" || receipt.name !== "@ailoha/cli"
     || manifest.name !== receipt.name || manifest.version !== pin.version || receipt.version !== pin.version
     || receipt.sourceSha !== pin.sourceSha || receipt.tarball !== pin.tarball || receipt.integrity !== pin.integrity
     || receipt.license !== manifest.license || receipt.nativeAcquisition !== "official-sdk-selected-rid"
-    || runtimePins.version !== pin.version || runtimePins.sourceSha !== pin.sourceSha
+    || receipt.sourceRunId !== provenance.sourceRunId || receipt.sourceRunAttempt !== provenance.sourceRunAttempt
     || JSON.stringify(receipt.dependencies) !== JSON.stringify(dependencies)
     || graph.sha256 !== receipt.graph?.sha256 || graph.files !== receipt.graph.files || graph.bytes !== receipt.graph.bytes) {
     throw new Error("The prepared Ailoha launcher bytes or provenance do not match the pinned graph receipt.");
