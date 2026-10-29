@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
-import { join } from "node:path";
+import { isAbsolute, join } from "node:path";
 import test from "node:test";
 import { gzipSync } from "node:zlib";
 import { sourceHash } from "../../scripts/source-hash.mjs";
@@ -13,8 +13,10 @@ import { fileURLToPath } from "node:url";
 const root = fileURLToPath(new URL("../..", import.meta.url));
 
 test("single-RID review packaging requires matching unpublished source and actual local binary bytes", (t) => {
-  mkdirSync(".build", { recursive: true });
-  const directory = mkdtempSync(join(".build", "review-runtime-test-"));
+  const parent = join(root, ".build");
+  mkdirSync(parent, { recursive: true });
+  const directory = mkdtempSync(join(parent, "review-runtime-test-"));
+  assert.equal(isAbsolute(directory), true);
   t.after(() => rmSync(directory, { recursive: true }));
   const files = {};
   for (const name of ["mobile-canvas", "mobile-screencap"]) {
