@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import childProcess from "node:child_process";
-import { createRequire } from "node:module";
+import * as childProcessBindings from "node:child_process";
+import { createRequire, syncBuiltinESMExports } from "node:module";
 import { existsSync, readFileSync, readdirSync } from "node:fs";
 import { dirname, join } from "node:path";
 import test from "node:test";
@@ -86,7 +87,10 @@ test("real official runtime and target-host exports import without native acquis
   const originals = Object.fromEntries(methods.map((name) => [name, childProcess[name]]));
   globalThis.fetch = forbidden;
   for (const name of methods) childProcess[name] = forbidden;
+  syncBuiltinESMExports();
   try {
+    for (const name of methods) assert.equal(childProcessBindings[name], forbidden);
+    assert.throws(() => childProcessBindings.execFile("must-not-run"), /must not acquire/);
     const sdk = await import(pathToFileURL(join(packageRoot, manifest.exports["./runtime"].import)));
     const transport = await import(pathToFileURL(join(packageRoot, manifest.exports["./target-host"])));
     for (const name of ["getRuntimePin", "getVerifiedCliLaunch", "ensureTargetHost",
@@ -102,6 +106,8 @@ test("real official runtime and target-host exports import without native acquis
   } finally {
     globalThis.fetch = originalFetch;
     for (const name of methods) childProcess[name] = originals[name];
+    syncBuiltinESMExports();
+    for (const name of methods) assert.equal(childProcessBindings[name], originals[name]);
   }
 });
 
