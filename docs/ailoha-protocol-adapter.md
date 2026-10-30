@@ -359,12 +359,14 @@ and the shared `web/ailoha-video-player.js`. Legacy remains the default; an
 Ailoha refusal, timeout or operational failure never invokes the legacy engine.
 
 **The official SDK source/package pin is now present.** Both manifests and locks
-pin `@ailoha/cli@0.2.5-preview.3`; `lib/ailoha/runtime-package.json` records its
+pin `@ailoha/cli@0.2.5-preview.4`; `lib/ailoha/runtime-package.json` records its
 actual public npm URL, SHA-512 SRI, source
-`d1d16d142b110406c6070665db9222d424983aa9`, and publication run `40706552606`
-attempt `1`. The downloaded root is 999,818 bytes with SHA-256
-`fed271d89317a75e2cc2fd551e86c48e3c80d93f72c2ce28f8755ba3826dc38f`.
+`e31559ba06a3d926fa5903db3227e36ce519c8c9`, and publication run `41132135307`
+attempt `1`. The downloaded root is 1,000,035 bytes with SHA-256
+`baafba2aa3482f67ad38006ebbcd4215fe11dfa3a60e5750de16bd3c1ecf4f8f`.
 This is the actual anonymous registry publication, not an earlier local pack.
+Its complete small graph is 539 files / 4,598,944 bytes, graph SHA-256
+`97b73121fd9b7ece99d3bbd9fcd8be4ee6e60e5b92e11a171ab32796ae5b47e6`.
 It covers five Target Host RIDs and six CLI packages; Linux musl is CLI-only,
 and Windows ARM64 remains deferred. Missing official graph/pin still reports
 `ailoha_runtime_unavailable`. Normal installs must
@@ -1457,7 +1459,7 @@ Use a freshly built matching unpublished local review runtime for source
 package acceptance; do not restamp the old published manifest. A new published
 producer remains a separate approval boundary.
 
-### Fresh target catalog: source-only engine prerequisite
+### Fresh target catalog: published preview4 prerequisite
 
 The original inventory performed a separate canonical capability read for each
 target. In the pinned preview3 native runtime each such read can repeat native
@@ -1466,7 +1468,7 @@ but did not eliminate that amplification: retained real-backend qualification
 of that follow-up still timed out. Its local review packages and failed native
 evidence remain historical, not a successful installed-host latency result.
 
-The replacement source contract is `GET /api/v1/target-catalog`, optionally
+The replacement contract, published in preview4, is `GET /api/v1/target-catalog`, optionally
 filtered with the exact opaque `providerId` query. The shared client negotiates
 `target.catalog` version 1 / `getTargetCatalogSnapshot` on the host and every
 selected provider descriptor, including unavailable or disabled providers.
@@ -1516,8 +1518,18 @@ accepted-receipt recovery.
 Both hosts use this shared client/backend. Clearly synthetic source-contract
 fixtures cover 54 targets, old-peer refusal, exact shape/bounds, failure,
 cancellation and context retirement through shared HTTP/SDK/named MCP and the
-compiled VS Code bridge. These fixtures are **not** published preview3/native
-acceptance. The official SDK graph and `runtime-package.json` still pin
-`0.2.5-preview.3` source D1/run407; that native peer does not advertise this
-capability. New compatible native qualification/publication and an approved
-official pin update are separate prerequisites before actual acceptance.
+compiled VS Code bridge. These fixtures are **not** installed-host acceptance.
+The approved official graph now pins preview4 source
+`e31559ba06a3d926fa5903db3227e36ce519c8c9` / run `41132135307` attempt `1`.
+Preview3 source D1 remains an explicit unsupported old-peer regression, not a
+fanout fallback. Prior local engine and consumer review packages are historical,
+not relabeled as this publication.
+
+Preview4 installed testing requires a fresh host process environment, short
+private Code user-data directory, extensions directory, `AILOHA_CONFIG_DIR`
+and unused `AILOHA_BROKER_PORT`, plus `AILOHA_NO_UPDATE_CHECK=1`. Keep
+`AILOHA_TARGET_HOST_ID` absent for the first managed start. Do not reuse the
+preview3 broker/Host realm: SDK lease release retains those services. Metadata,
+complete-byte packaging and source tests do not acquire native payloads or
+prove actual new installed routing. GUI activation/acquisition remains a
+separate coordinated test, not a package-verification side effect.

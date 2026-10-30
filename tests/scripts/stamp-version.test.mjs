@@ -44,7 +44,7 @@ test("the product stamp updates both lock roots without changing SDK pins or pub
     for (const [key, value] of Object.entries(locks[index].packages)) {
       if (key) assert.deepEqual(lock.packages[key], value);
     }
-    assert.equal(lock.packages[""].dependencies["@ailoha/cli"], "0.2.5-preview.3");
+    assert.equal(lock.packages[""].dependencies["@ailoha/cli"], "0.2.5-preview.4");
   }
   for (const [index, path] of [".github/plugin/marketplace.json", ".claude-plugin/marketplace.json"].entries()) {
     assert.deepEqual(JSON.parse(before(path).toString("utf8")).metadata, catalogs[index]);

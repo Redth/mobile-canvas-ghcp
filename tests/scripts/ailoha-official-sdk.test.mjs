@@ -2,7 +2,8 @@ import assert from "node:assert/strict";
 import childProcess from "node:child_process";
 import * as childProcessBindings from "node:child_process";
 import { createRequire, syncBuiltinESMExports } from "node:module";
-import { existsSync, readFileSync, readdirSync } from "node:fs";
+import { existsSync, lstatSync, readFileSync, readdirSync } from "node:fs";
+import { createHash } from "node:crypto";
 import { dirname, join } from "node:path";
 import test from "node:test";
 import { fileURLToPath, pathToFileURL } from "node:url";
@@ -16,14 +17,39 @@ const packageRoot = dirname(requireProduct.resolve("@ailoha/cli/package.json"));
 const manifest = JSON.parse(readFileSync(join(packageRoot, "package.json"), "utf8"));
 const pin = JSON.parse(readFileSync(new URL("./runtime-package.json", sdkModule), "utf8"));
 const runtimePins = JSON.parse(readFileSync(join(packageRoot, "runtime-pins.json"), "utf8"));
+const expectedGraph = { files: 539, bytes: 4598944, sha256: "97b73121fd9b7ece99d3bbd9fcd8be4ee6e60e5b92e11a171ab32796ae5b47e6" };
+
+test("the complete official preview4 small graph matches its qualified publication bytes", () => {
+  const hash = createHash("sha256");
+  let files = 0;
+  let bytes = 0;
+  function visit(directory, prefix = "") {
+    for (const name of readdirSync(directory).sort()) {
+      const path = join(directory, name);
+      const relative = prefix ? `${prefix}/${name}` : name;
+      const stat = lstatSync(path);
+      assert.equal(stat.isSymbolicLink(), false);
+      if (stat.isDirectory()) visit(path, relative);
+      else {
+        assert.equal(stat.isFile(), true);
+        const content = readFileSync(path);
+        hash.update(relative).update(`\0${content.length}\0`).update(content).update("\0");
+        files += 1;
+        bytes += content.length;
+      }
+    }
+  }
+  visit(packageRoot);
+  assert.deepEqual({ files, bytes, sha256: hash.digest("hex") }, expectedGraph);
+});
 
 test("both host locks use the exact anonymously published official SDK and approved source pin", () => {
-  assert.equal(pin.version, "0.2.5-preview.3");
-  assert.equal(pin.sourceSha, "d1d16d142b110406c6070665db9222d424983aa9");
-  assert.equal(pin.sourceRunId, "40706552606");
+  assert.equal(pin.version, "0.2.5-preview.4");
+  assert.equal(pin.sourceSha, "e31559ba06a3d926fa5903db3227e36ce519c8c9");
+  assert.equal(pin.sourceRunId, "41132135307");
   assert.equal(pin.sourceRunAttempt, "1");
-  assert.equal(pin.tarball, "https://registry.npmjs.org/@ailoha/cli/-/cli-0.2.5-preview.3.tgz");
-  assert.equal(pin.integrity, "sha512-fPjWPQHOwRGYL/wIwRHKDWhqlSk1aECE/uhbdmufYI9RXoN/BRzU2ITaeGpms/4c3ABWVA/MlP+9Ta0RPtS8Wg==");
+  assert.equal(pin.tarball, "https://registry.npmjs.org/@ailoha/cli/-/cli-0.2.5-preview.4.tgz");
+  assert.equal(pin.integrity, "sha512-6I8td1eDpEerSjdiIMNciIPRGc5ixhiZyFMyb1drfmPFDNQiIpZq9B4ZSAtycw6KyvLUwsxWu4viNwCU+lzGMw==");
   for (const host of [root, join(root, "vscode")]) {
     const pkg = JSON.parse(readFileSync(join(host, "package.json"), "utf8"));
     const lock = JSON.parse(readFileSync(join(host, "package-lock.json"), "utf8"));
@@ -116,7 +142,7 @@ if (process.env.AILOHA_TEST_PRODUCT_ROOT) test("the actual prepared host contain
   const receipt = JSON.parse(readFileSync(join(process.env.AILOHA_TEST_PRODUCT_ROOT, "lib/ailoha/prepared-runtime-graph.json"), "utf8"));
   assert.equal(receipt.sourceRunId, pin.sourceRunId);
   assert.equal(receipt.sourceRunAttempt, pin.sourceRunAttempt);
-  assert(receipt.graph.files >= 539);
+  assert.deepEqual(receipt.graph, expectedGraph);
   for (const name of Object.keys(manifest.optionalDependencies)) {
     assert.equal(existsSync(join(packageRoot, "node_modules", name)), false);
     assert.equal(existsSync(join(process.env.AILOHA_TEST_PRODUCT_ROOT, "node_modules", name)), false);

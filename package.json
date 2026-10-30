@@ -27,7 +27,7 @@
     "publish:vscode": "node scripts/publish-vscode.mjs"
   },
   "dependencies": {
-    "@ailoha/cli": "0.2.5-preview.3",
+    "@ailoha/cli": "0.2.5-preview.4",
     "@github/copilot-sdk": "latest",
     "@modelcontextprotocol/sdk": "1.32.0",
     "ws": "8.22.0"

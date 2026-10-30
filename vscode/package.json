@@ -168,7 +168,7 @@
     "package:targets": "npm run compile && npm run check:web && npm run check:scripts && node ../scripts/package-vscode-targets.mjs"
   },
   "dependencies": {
-    "@ailoha/cli": "0.2.5-preview.3",
+    "@ailoha/cli": "0.2.5-preview.4",
     "@modelcontextprotocol/sdk": "1.32.0",
     "ws": "8.22.0"
   },
