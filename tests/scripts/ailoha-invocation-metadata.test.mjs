@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { ChildProcess } from "node:child_process";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import test from "node:test";
@@ -62,6 +63,29 @@ function checkReceipt(value, expected, code = "transport-failed") {
   assert.deepEqual(context.selection, expected["ailoha.executionContext"].selection);
   assert.deepEqual(Object.keys(context).sort(), ["contextRef", "scope", "scopeEpoch", "revision", "selection"].sort());
   assert.doesNotMatch(JSON.stringify(value), /private-diagnostic|\/private\/owner|capturedAt|observed|provenance|connectionRef|endpointScope/);
+}
+
+function noticeObservedByParent(t, script, expected) {
+  const spawn = ChildProcess.prototype.spawn;
+  let timer;
+  const observed = new Promise((resolve, reject) => {
+    timer = setTimeout(() => reject(new Error("The owned parent did not receive the complete synthetic notice.")), 5000);
+    t.mock.method(ChildProcess.prototype, "spawn", function (options) {
+      const result = spawn.call(this, options);
+      if (options.args.includes(script)) {
+        let received = "";
+        this.stderr.on("data", (chunk) => {
+          received += chunk;
+          if (received.length < expected.length) return;
+          if (received !== expected) reject(new Error("The owned parent received unexpected synthetic stderr."));
+          else resolve();
+        });
+      }
+      return result;
+    });
+  });
+  t.after(() => clearTimeout(timer));
+  return observed.finally(() => clearTimeout(timer));
 }
 
 test("verified CLI preserves one combined original-context receipt after compact or pretty error JSON", async (t) => {
@@ -311,6 +335,7 @@ test("CLI cancellation after a complete notice retains original admission eviden
   const ready = join(f.scratch, "ready");
   const notice = JSON.stringify({ _meta: f.metadata });
   const script = `require("node:fs");process.stderr.write(${JSON.stringify(`${notice}\n`)},()=>require("node:fs").writeFileSync(${JSON.stringify(ready)},"ready"));setInterval(()=>{},1000);`;
+  const observed = noticeObservedByParent(t, script, `${notice}\n`);
   const caller = new AbortController();
   const pending = f.cli("", 1, "", script)(f.args, { ...f.options(), signal: caller.signal });
   const rejected = assert.rejects(pending, (error) => {
@@ -320,6 +345,7 @@ test("CLI cancellation after a complete notice retains original admission eviden
   const deadline = Date.now() + 5000;
   while (!existsSync(ready) && Date.now() < deadline) await new Promise((resolve) => setTimeout(resolve, 10));
   assert(existsSync(ready));
+  await observed;
   caller.abort();
   await rejected;
   assert.equal(readFileSync(ready, "utf8"), "ready");
@@ -334,6 +360,7 @@ test("cancelled CLI rejects two conflicting complete notices instead of discardi
   const second = nativeInvocationMetadata(f.snapshot, f.view.scope, exchangeOutcome({ requestId: "b".repeat(32) }));
   const notices = `${JSON.stringify({ _meta: first })}\n${JSON.stringify({ _meta: second })}\n`;
   const script = `process.stderr.write(${JSON.stringify(notices)},()=>require("node:fs").writeFileSync(${JSON.stringify(ready)},"ready"));setInterval(()=>{},1000);`;
+  const observed = noticeObservedByParent(t, script, notices);
   const caller = new AbortController();
   const before = f.launches();
   const pending = f.cli("", 1, "", script)(f.args, { ...f.options(), signal: caller.signal });
@@ -345,6 +372,7 @@ test("cancelled CLI rejects two conflicting complete notices instead of discardi
   const deadline = Date.now() + 5000;
   while (!existsSync(ready) && Date.now() < deadline) await new Promise((resolve) => setTimeout(resolve, 10));
   assert(existsSync(ready));
+  await observed;
   caller.abort();
   await rejected;
   assert.equal(f.launches(), before + 1);
