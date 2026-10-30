@@ -168,3 +168,20 @@ test("complete/incomplete/empty and XSS strings remain truthful plain-text evide
   assert.equal(find(element, (node) => ["img", "script", "iframe"].includes(node.tag)), undefined);
   assert.throws(() => view.acceptState({ ...state(4), schema: "unknown" }), /Invalid workspace inspection response/);
 });
+
+test("an empty VS Code workspace keeps Open folder on initial state and hide/resume, without mistaking ambiguity for emptiness", (t) => {
+  const { element, view } = fixture(t, { chooseRoot: true });
+  const empty = {
+    ...state(1, null), status: "error", inspection: null,
+    error: { code: "workspace_root_not_selected", message: "No folder open." },
+  };
+  view.acceptState(empty);
+  assert.ok(find(element, (entry) => entry.tag === "button" && entry.textContent === "Open folder"));
+  view.setVisible(false);
+  view.setVisible(true);
+  assert.ok(find(element, (entry) => entry.tag === "button" && entry.textContent === "Open folder"));
+  assert.match(element.textContent, /Open a local folder/);
+  view.acceptState({ ...empty, generation: 3, error: null, status: "not-selected" });
+  assert.equal(find(element, (entry) => entry.tag === "button" && entry.textContent === "Open folder"), undefined);
+  assert.ok(find(element, (entry) => entry.tag === "button" && entry.textContent === "Choose project"));
+});

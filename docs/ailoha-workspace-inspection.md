@@ -90,6 +90,14 @@ workspace folder also rebinds and retires the previous generation. Moving within
 the same folder does not discard its results. Inspection itself remains an
 explicit read rather than an automatic scan.
 
+The host's unbound-root diagnostic (including **No folder open**) belongs to
+root authority, not a transient scan result. Startup, invalidation and
+hide/resume retain it until a new root binding or native folder/topology
+decision replaces it. The renderer therefore keeps **Open folder** available
+without requiring a failed **Choose project** round-trip. A genuinely
+ambiguous multi-root workspace still uses **Choose project**; a null root
+alone is never treated as proof that no folder is open.
+
 Card details use local semantic `details`/`summary` controls and text nodes.
 Opening details never changes device selection, broker/agent selection or
 the canonical context revision. No install/enable action or automatic

@@ -47,3 +47,12 @@ test("resolving with no selection still restores the real empty-selection copy v
   assert.match(body[1], /title: "Select a device"/);
   assert.match(body[1], /action: \{ id: "create"/);
 });
+
+test("initial runtime preparation and inventory checking have separate truthful loading copy and no elapsed-time claims", () => {
+  assert.match(html, /Preparing the runtime and local device services/);
+  assert.match(script, /function showLoadingCatalog\(\)/);
+  assert.match(script, /title: "Loading devices/);
+  assert.match(script, /Reading device inventory and checking each target's capabilities/);
+  assert.match(script, /bootstrap\(\)\s*\.then\(\(\) => \{\s*showLoadingCatalog\(\);\s*return refresh\(\);/);
+  assert.match(html, /id="empty-state"[^>]+role="status"[^>]+aria-live="polite"/);
+});

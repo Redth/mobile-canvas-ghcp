@@ -686,7 +686,17 @@ function showLoadingSelection() {
     tone: "accent",
     icon: "#icon-device",
     title: "Opening live view…",
-    detail: "Connecting to the device catalog.",
+    detail: "Preparing the runtime and local device services. First use may take longer.",
+  });
+  elements.empty.classList.remove("hidden");
+}
+
+function showLoadingCatalog() {
+  configureEmptyState({
+    tone: "accent",
+    icon: "#icon-device",
+    title: "Loading devices…",
+    detail: "Reading device inventory and checking each target's capabilities.",
   });
   elements.empty.classList.remove("hidden");
 }
@@ -3117,7 +3127,10 @@ function findStartCodes(bytes) {
 showLoadingSelection();
 
 bootstrap()
-  .then(refresh)
+  .then(() => {
+    showLoadingCatalog();
+    return refresh();
+  })
   .then(async () => {
     if (state.catalog?.backend === "ailoha" && !transport) await workspaceInspection.load();
   })

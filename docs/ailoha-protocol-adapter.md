@@ -1456,3 +1456,22 @@ artifacts. Shared web and embedded-asset inputs change the native source hash.
 Use a freshly built matching unpublished local review runtime for source
 package acceptance; do not restamp the old published manifest. A new published
 producer remains a separate approval boundary.
+
+### First-view inventory latency follow-up
+
+A large inventory previously awaited each target's canonical capability read
+serially. Those reads may themselves refresh provider-native inventory; they
+are not cheap cached metadata lookups. The shared consumer now overlaps at
+most four target projections per inventory invocation, retaining every
+canonical capability read and the original target order. Recording eligibility
+shares a provider-type promise only within that captured invocation. Nothing
+is cached across refreshes, views or owners. This reduces 54 serialized
+capability-read rounds to 14 bounded batches in the synthetic regression; it
+does not establish an actual native startup-time guarantee.
+
+Caller cancellation now reaches catalog/device inventory from both SDK tools
+and HTTP requests. Failure, cancellation or context retirement stops new
+batches, aborts sibling reads and rejects the whole result rather than
+returning partial/all-false capability success. Runtime preparation and catalog
+checking have distinct loading copy; neither implies automatic target selection.
+The installed-host latency must be measured again with a matching review build.

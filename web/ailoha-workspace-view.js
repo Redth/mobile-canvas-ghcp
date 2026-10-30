@@ -259,7 +259,9 @@ export function createWorkspaceInspectionView({ element, request, chooseRoot = f
       if (!value && snapshot) retiredGeneration = Math.max(retiredGeneration, snapshot.generation);
       visible = value;
       if (snapshot) {
-        snapshot = { ...snapshot, status: value ? snapshot.root ? "ready" : "not-selected" : "suspended", inspection: null, error: null };
+        const rootError = snapshot.root === null ? snapshot.error : null;
+        snapshot = { ...snapshot, status: value ? snapshot.root ? "ready" : rootError ? "error" : "not-selected" : "suspended",
+          inspection: null, error: rootError };
         render(snapshot);
       }
     },

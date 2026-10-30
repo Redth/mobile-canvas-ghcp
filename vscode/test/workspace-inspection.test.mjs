@@ -252,6 +252,7 @@ test("actual missing SDK ready failure still exposes read-only root state and an
         "The approved official Ailoha runtime graph is not present in this synthetic host. Legacy was not started.", 503);
     },
   });
+
   const bridge = new HostBridge(undefined, scope.sessionId, scope.viewId, {
     async postMessage(message) { messages.push(message); return true; },
   }, { appendLine: (line) => logs.push(line) }, undefined, host, undefined, roots);
@@ -269,4 +270,49 @@ test("actual missing SDK ready failure still exposes read-only root state and an
   assert.equal(reply.status, 503);
   assert.equal(JSON.parse(new TextDecoder().decode(reply.body)).error.code, "ailoha_runtime_unavailable");
   assert.equal(logs.some((line) => line.includes("Legacy was not started")), true);
+});
+
+test("actual asynchronous host startup and visibility invalidation retain empty-window root authority until native folder topology changes", async (t) => {
+  reset();
+  vscode.workspace.workspaceFolders = [];
+  const roots = createWorkspaceRootAdapter();
+  const started = deferred();
+  const inspection = createWorkspaceInspectionController({
+    scope, validateRoot: roots.validate, async runCli() { throw new Error("No automatic project scan."); },
+  });
+  const host = createAilohaCanvasHost({
+    scope, workspaceInspection: inspection,
+    async createBackend() {
+      await started.promise;
+      return {
+        async ready() {}, async dispose() {}, async closeVideos() {},
+        async request() { return Response.json({ hasSelection: false }); },
+      };
+    },
+  });
+  const messages = [];
+  const bridge = new HostBridge(undefined, scope.sessionId, scope.viewId, {
+    async postMessage(message) { messages.push(message); return true; },
+  }, { appendLine() {} }, undefined, host, undefined, roots);
+  t.after(async () => { bridge.dispose(); await bridge.closed(); });
+  const ready = bridge.handleMessage({ type: "ready" });
+  assert.equal(inspection.snapshot().error.code, "workspace_root_not_selected");
+  inspection.invalidate();
+  started.resolve();
+  await ready;
+  assert.ok(messages.some((message) => message.type === "context"));
+  assert.equal(inspection.snapshot().error.code, "workspace_root_not_selected");
+  await bridge.setVisible(false);
+  await bridge.setVisible(true);
+  await bridge.handleMessage({ type: "ready" });
+  inspection.invalidate();
+  const current = inspection.snapshot();
+  assert.equal(current.root, null);
+  assert.equal(current.error.code, "workspace_root_not_selected");
+  assert.equal(current.status, "error");
+  vscode.workspace.workspaceFolders = [folder("First", "/explicit-first"), folder("Second", "/explicit-second")];
+  vscode.__test.foldersChanged();
+  assert.equal(inspection.snapshot().root, null);
+  assert.equal(inspection.snapshot().error, null);
+  assert.equal(inspection.snapshot().status, "not-selected");
 });

@@ -151,13 +151,13 @@
     ></aside>
 
     <main class="workspace">
-      <section id="empty-state" class="empty-state">
+      <section id="empty-state" class="empty-state" role="status" aria-live="polite">
         <div class="empty-card">
           <div class="empty-icon" aria-hidden="true">
             <svg class="icon"><use id="empty-state-icon" href="#icon-device"></use></svg>
           </div>
           <h2 id="empty-state-title">Opening live view…</h2>
-          <p id="empty-state-detail">Connecting to the device catalog.</p>
+          <p id="empty-state-detail">Preparing the runtime and local device services. First use may take longer.</p>
           <button id="empty-state-action" class="button primary empty-action hidden" type="button"
                   data-empty-action="create">
             <svg class="icon" aria-hidden="true"><use id="empty-state-action-icon" href="#icon-plus"></use></svg>

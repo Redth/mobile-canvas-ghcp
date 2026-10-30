@@ -1874,6 +1874,139 @@ function canonicalFixture(options = {}) {
   };
 }
 
+function largeInventory(state, count = 54) {
+  const original = state.targets.get("one");
+  state.targets.clear();
+  state.providers.push({ ...state.providers[0], providerId: "second-provider" });
+  for (let index = 0; index < count; index += 1) {
+    const targetId = `large-${index}`;
+    state.targets.set(targetId, {
+      ...original, targetId, name: targetId,
+      providerId: index % 2 ? "second-provider" : "provider",
+    });
+  }
+}
+
+for (const host of ["github", "vscode"]) {
+  test(`${host} shared 54-target inventory bounds capability overlap, preserves order and reuses only this request's provider-type reads`, async (t) => {
+    const state = canonicalFixture({ recording: {} });
+    t.after(() => state.backend.dispose());
+    largeInventory(state);
+    state.capabilities.push({
+      id: "surface.capture", version: 1,
+      features: ["startTargetRecording", "getTargetRecording", "stopTargetRecording"],
+    });
+    let active = 0;
+    let maximum = 0;
+    let completed = 0;
+    let blocking = true;
+    const pending = [];
+    const capabilities = [];
+    const typeReads = [];
+    state.client.getTargetCapabilities = async (targetId, options) => {
+      capabilities.push(targetId);
+      assert.equal(options.signal.aborted, false);
+      active += 1;
+      maximum = Math.max(maximum, active);
+      try {
+        if (blocking) {
+          const gate = deferred();
+          pending.push(gate);
+          await gate.promise;
+        } else await new Promise((resolve) => setImmediate(resolve));
+        return state.capabilities;
+      } finally { active -= 1; completed += 1; }
+    };
+    state.client.listProviderTargetTypes = async (providerId, options) => {
+      assert.equal(options.signal.aborted, false);
+      typeReads.push(providerId);
+      await new Promise((resolve) => setImmediate(resolve));
+      return [{ targetTypeId: "type", kind: "simulator", platform: "ios" }];
+    };
+    const read = host === "github"
+      ? () => state.backend.invokeAction("list_devices", {})
+      : async () => (await state.backend.request("/api/v1/devices")).json();
+    const work = read();
+    work.catch(() => {});
+    t.after(() => pending.forEach((entry) => entry.resolve()));
+    let batches = 0;
+    for (let offset = 0; offset < 54; offset += 4) {
+      await new Promise((resolve) => setImmediate(resolve));
+      await new Promise((resolve) => setImmediate(resolve));
+      assert.equal(capabilities.length, Math.min(54, offset + 4));
+      assert.equal(completed, offset);
+      for (const entry of pending.splice(0).reverse()) entry.resolve();
+      batches += 1;
+      await new Promise((resolve) => setImmediate(resolve));
+    }
+    const devices = await work;
+    assert.equal(batches, 14);
+    assert.equal(maximum, 4);
+    assert.equal(capabilities.length, 54);
+    assert.deepEqual(devices.map((entry) => entry.id), [...state.targets.keys()]);
+    assert.ok(devices.every((entry) => entry.capabilities.recording === true));
+    assert.deepEqual(typeReads.sort(), ["provider", "second-provider"]);
+    blocking = false;
+    await read();
+    assert.equal(capabilities.length, 108);
+    assert.equal(typeReads.length, 4);
+    assert.equal(state.calls.some(([kind]) => ["start", "stop", "reboot", "tap", "swipe"].includes(kind)), false);
+  });
+}
+
+for (const cause of ["cancel", "capability-failure", "context-change"]) {
+  test(`54-target inventory ${cause} refuses partial success and never starts another capability batch`, async (t) => {
+    const state = canonicalFixture();
+    t.after(() => state.backend.dispose());
+    largeInventory(state);
+    const gates = [];
+    const signals = [];
+    state.client.getTargetCapabilities = async (_targetId, options) => {
+      signals.push(options.signal);
+      return new Promise((resolve, reject) => {
+        const abort = () => reject(new AilohaProtocolError("cancelled"));
+        options.signal.addEventListener("abort", abort, { once: true });
+        gates.push({
+          resolve() { options.signal.removeEventListener("abort", abort); resolve(state.capabilities); },
+          reject() { options.signal.removeEventListener("abort", abort); reject(new AilohaProtocolError("invalid_response")); },
+        });
+      });
+    };
+    const caller = new AbortController();
+    const work = state.backend.listDevices({ signal: caller.signal });
+    const rejected = assert.rejects(work, {
+      code: cause === "cancel" ? "cancelled" : cause === "capability-failure" ? "invalid_response" : "context_snapshot_superseded",
+    });
+    await new Promise((resolve) => setImmediate(resolve));
+    assert.equal(gates.length, 4);
+    if (cause === "cancel") caller.abort();
+    else if (cause === "capability-failure") gates[0].reject();
+    else {
+      await state.advanceSelection();
+      gates.forEach((gate) => gate.resolve());
+    }
+    await rejected;
+    await new Promise((resolve) => setImmediate(resolve));
+    assert.equal(signals.length, 4);
+    assert.ok(signals.every((signal) => signal.aborted));
+    assert.equal(state.calls.some(([kind]) => ["start", "stop", "tap"].includes(kind)), false);
+  });
+}
+
+test("catalog HTTP and SDK calls propagate their caller cancellation before inventory and catalog reads", async (t) => {
+  for (const via of ["http", "sdk"]) {
+    const state = fixture();
+    t.after(() => state.backend.dispose());
+    const caller = new AbortController();
+    caller.abort();
+    if (via === "http") {
+      const response = await state.backend.request("/api/v1/catalog", { signal: caller.signal });
+      assert.equal((await response.json()).code, "cancelled");
+    } else await assert.rejects(state.backend.invokeAction("get_device_catalog", {}, { signal: caller.signal }), { code: "cancelled" });
+    assert.equal(state.calls.length, 0);
+  }
+});
+
 function guardedFixture(kind, path, owner, options = {}) {
   const date = "2026-10-10T00:00:00Z";
   const ticks = (value) => (BigInt(Date.parse(value)) + 62135596800000n) * 10000n;
