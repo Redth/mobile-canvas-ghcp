@@ -39,6 +39,8 @@ const tests = [
   "tests/scripts/mobile-ailoha-creation.test.mjs",
   "tests/scripts/parent-operation-receipts.test.mjs",
   "tests/scripts/ailoha-owner-transport.test.mjs",
+  "tests/scripts/ailoha-target-catalog.test.mjs",
+  "tests/scripts/ailoha-target-catalog-hosts.test.mjs",
   "tests/scripts/ailoha-media-adapter.test.mjs",
   "tests/scripts/ailoha-reveal-adapter.test.mjs",
   "tests/scripts/ailoha-system-ui-adapter.test.mjs",

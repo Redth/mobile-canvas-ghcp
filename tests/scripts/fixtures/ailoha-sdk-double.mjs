@@ -19,6 +19,8 @@ export const scenario = {
   focusedText: false,
   recordingEnabled: false,
   targets: new Map(), providerId: "synthetic-provider", nativeId: "native-deployment-not-opaque-target",
+  // This is the new unpublished source contract, not the pinned preview3 native runtime.
+  targetCatalogSourceContract: true,
   connectionRef: {
     schema: "ailoha.target-host.connection/v1", serviceId: "synthetic-service", pid: 12345,
     startedAt: "2026-10-09T23:00:00Z", processStartedAt: "2026-10-09T22:59:59Z",
@@ -63,6 +65,7 @@ const captures = [
   { id: "target.push", version: 1, features: ["sendTargetPushNotification"] },
   { id: "target.telephony", version: 1, features: ["simulateTargetSms"] },
 ];
+const catalogCapability = { id: "target.catalog", version: 1, features: ["getTargetCatalogSnapshot"] };
 const appCapabilities = [
   { id: "target.apps", version: 1,
     features: ["listTargetApps", "launchTargetApp", "terminateTargetApp", "uninstallTargetApp"] },
@@ -100,6 +103,7 @@ function providerRecords() {
     { id: "target.app-ops", version: 1, features: ["updateFencedTargetAppOp"] },
   ] : [];
   const features = mergedCapabilities([
+    ...(scenario.targetCatalogSourceContract ? [catalogCapability] : []),
     ...targetCapabilities(),
     ...(scenario.recordingEnabled ? [{ id: "surface.capture", version: 1,
       features: ["startTargetRecording", "getTargetRecording", "stopTargetRecording"] }] : []),
@@ -249,6 +253,7 @@ export async function openTargetHostTransport(leaseId) {
       if (path === "/api/v1/host/status") return reply({
         hostId: "synthetic-host", profile: "ailoha.target-host/v1", version: "synthetic",
         state: "ready", capabilities: mergedCapabilities([
+          ...(scenario.targetCatalogSourceContract ? [catalogCapability] : []),
           ...targetCapabilities(), ...(scenario.appResponses ? appCapabilities : []),
           ...(scenario.catalog?.status.capabilities ?? []),
         ]),
@@ -256,6 +261,27 @@ export async function openTargetHostTransport(leaseId) {
       if (path === "/api/v1/providers") {
         if (scenario.beforeCatalogRead) await scenario.beforeCatalogRead(path, options);
         return reply(providerRecords());
+      }
+      if (path === "/api/v1/target-catalog") {
+        if (!scenario.targetCatalogSourceContract) throw new Error("The old peer does not implement source-only target catalog snapshots.");
+        if (scenario.beforeCatalogRead) await scenario.beforeCatalogRead(path, options);
+        const targets = [
+          ...(scenario.targets.size ? [...scenario.targets.values()] : scenario.deleted ? [] : [target()]),
+          ...[...scenario.createdTargets.keys()].map(createdTarget),
+        ];
+        const providerRows = providerRecords();
+        if (targets.some((target) => !providerRows.some((provider) => provider.providerId === target.providerId))) {
+          throw new Error("Synthetic target catalog has a foreign provider.");
+        }
+        return reply({
+          schema: "ailoha.target-catalog/v1", capturedAt: "2026-10-30T20:06:34+00:00",
+          providers: providerRows.map((provider) => ({
+            provider,
+            targets: ["unavailable", "disabled"].includes(provider.state) ? [] : targets
+              .filter((target) => target.providerId === provider.providerId)
+              .map((target) => ({ target, capabilities: provider.capabilities })),
+          })),
+        });
       }
       if (path === "/api/v1/providers/synthetic-provider/target-types" && scenario.recordingEnabled) {
         if (scenario.beforeCatalogRead) await scenario.beforeCatalogRead(path, options);

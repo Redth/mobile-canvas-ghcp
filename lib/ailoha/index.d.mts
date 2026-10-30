@@ -142,6 +142,20 @@ export interface TargetListOptions extends RequestOptions {
   status?: TargetStatus;
 }
 
+/** Fresh read observations, not a token or authority for a later mutation. */
+export interface TargetCatalogSnapshot {
+  schema: "ailoha.target-catalog/v1";
+  capturedAt: string;
+  providers: Array<{
+    provider: Provider;
+    targets: Array<{ target: Target; capabilities: Capability[] }>;
+  }>;
+}
+
+export interface TargetCatalogOptions extends RequestOptions {
+  providerId?: string;
+}
+
 export type JsonValue = string | number | boolean | null | JsonValue[] | JsonObject;
 export interface JsonObject {
   [key: string]: JsonValue;
@@ -256,7 +270,7 @@ export interface ProblemDetails {
 export type ProtocolErrorCode =
   | "invalid_connection" | "invalid_options" | "invalid_identifier"
   | "invalid_request" | "confirmation_required" | "request_too_large"
-  | "incompatible_profile" | "host_identity_mismatch" | "target_identity_mismatch"
+  | "incompatible_profile" | "capability_not_supported" | "host_identity_mismatch" | "target_identity_mismatch"
   | "provider_identity_mismatch" | "app_identity_mismatch"
   | "operation_identity_mismatch" | "operation_failed" | "operation_cancelled"
   | "invalid_response" | "credential_exposure" | "redirect_rejected"
@@ -334,6 +348,7 @@ export interface TargetHostClient {
   readonly connection: PublicConnection;
   getHostStatus(options?: RequestOptions): Promise<HostStatus>;
   listProviders(options?: RequestOptions): Promise<Provider[]>;
+  getTargetCatalogSnapshot(options?: TargetCatalogOptions): Promise<TargetCatalogSnapshot>;
   listProviderCatalogs(providerId: string, options?: RequestOptions): Promise<CatalogDescriptor[]>;
   listProviderRuntimes(providerId: string, options?: RequestOptions): Promise<RuntimeDescriptor[]>;
   listProviderTargetTypes(providerId: string, options?: RequestOptions): Promise<TargetTypeDescriptor[]>;

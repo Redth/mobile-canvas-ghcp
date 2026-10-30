@@ -60,9 +60,12 @@ export function createCatalogModel({ templates = false, runtimeConstraints = tru
   return {
     status: {
       hostId: catalogIds.host, profile: "ailoha.target-host/v1", version: "synthetic-only", state: "ready",
-      capabilities: [lifecycle, { id: "host.operations", version: 1, features: ["getOperation", "cancelOperation", "listOperations"] }],
+      capabilities: [lifecycle, { id: "host.operations", version: 1, features: ["getOperation", "cancelOperation", "listOperations"] },
+        { id: "target.catalog", version: 1, features: ["getTargetCatalogSnapshot"] }],
     },
-    providers, providerCatalogs, devices: [],
+    providers: providers.map((provider) => ({ ...provider, capabilities: [
+      ...provider.capabilities, { id: "target.catalog", version: 1, features: ["getTargetCatalogSnapshot"] },
+    ] })), providerCatalogs, devices: [],
   };
 }
 
@@ -88,6 +91,17 @@ export async function startCatalogHost(t, { model = createCatalogModel(), before
     try {
       if (request.url === "/api/v1/host/status") return reply(response, model.status);
       if (request.url === "/api/v1/providers") return reply(response, model.providers);
+      if (request.url === "/api/v1/target-catalog") {
+        await beforeRead?.("target-catalog", undefined, state);
+        return reply(response, {
+          schema: "ailoha.target-catalog/v1", capturedAt: "2026-10-30T20:06:34Z",
+          providers: model.providers.map((provider) => ({
+            provider, targets: ["unavailable", "disabled"].includes(provider.state) ? []
+              : [...targets.values()].filter((target) => target.providerId === provider.providerId)
+                .map((target) => ({ target, capabilities: provider.capabilities })),
+          })),
+        });
+      }
       const providerRoute = /^\/api\/v1\/providers\/([^/]+)\/(catalogs|runtimes|target-types|templates|diagnostics)$/.exec(request.url);
       if (providerRoute) {
         const providerId = decodeURIComponent(providerRoute[1]);

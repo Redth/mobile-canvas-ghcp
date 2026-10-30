@@ -1457,21 +1457,67 @@ Use a freshly built matching unpublished local review runtime for source
 package acceptance; do not restamp the old published manifest. A new published
 producer remains a separate approval boundary.
 
-### First-view inventory latency follow-up
+### Fresh target catalog: source-only engine prerequisite
 
-A large inventory previously awaited each target's canonical capability read
-serially. Those reads may themselves refresh provider-native inventory; they
-are not cheap cached metadata lookups. The shared consumer now overlaps at
-most four target projections per inventory invocation, retaining every
-canonical capability read and the original target order. Recording eligibility
-shares a provider-type promise only within that captured invocation. Nothing
-is cached across refreshes, views or owners. This reduces 54 serialized
-capability-read rounds to 14 bounded batches in the synthetic regression; it
-does not establish an actual native startup-time guarantee.
+The original inventory performed a separate canonical capability read for each
+target. In the pinned preview3 native runtime each such read can repeat native
+device enumeration. The bounded-four follow-up reduced consumer serialization
+but did not eliminate that amplification: retained real-backend qualification
+of that follow-up still timed out. Its local review packages and failed native
+evidence remain historical, not a successful installed-host latency result.
 
-Caller cancellation now reaches catalog/device inventory from both SDK tools
-and HTTP requests. Failure, cancellation or context retirement stops new
-batches, aborts sibling reads and rejects the whole result rather than
-returning partial/all-false capability success. Runtime preparation and catalog
-checking have distinct loading copy; neither implies automatic target selection.
-The installed-host latency must be measured again with a matching review build.
+The replacement source contract is `GET /api/v1/target-catalog`, optionally
+filtered with the exact opaque `providerId` query. The shared client negotiates
+`target.catalog` version 1 / `getTargetCatalogSnapshot` on the host and every
+selected provider descriptor, including unavailable or disabled providers.
+Missing support is explicit `capability_not_supported` / 501; there is **no**
+old list-plus-per-target-capability fallback. A missing selected provider is 404.
+
+The exact response is:
+
+```json
+{
+  "schema": "ailoha.target-catalog/v1",
+  "capturedAt": "2026-10-30T20:06:34Z",
+  "providers": [
+    {
+      "provider": "<existing ProviderDescriptor>",
+      "targets": [
+        {
+          "target": "<existing TargetDescriptor>",
+          "capabilities": "<actual per-target CapabilityDescriptor[]>"
+        }
+      ]
+    }
+  ]
+}
+```
+
+The descriptor placeholders above stand for the existing JSON objects/arrays,
+not literal wire strings. `capturedAt` is required RFC3339 UTC (`Z` or `+00:00`).
+Unknown fields/schema, malformed descriptors, duplicate provider/target IDs,
+foreign target-provider IDs, more than 128 providers or 4096 total targets, and
+nonempty unavailable/disabled providers fail explicitly. All registered
+providers must be represented in an unfiltered response. Provider failure,
+cancellation or ownership drift fails the entire read, never a partial or
+success-shaped empty inventory.
+
+The engine obtains descriptor/surface/capability observations from the same
+fresh provider enumeration per request. The consumer projects those supplied
+target capabilities; it does not guess them from provider/surface capabilities
+or refetch them per target. Optional recording eligibility still uses a
+provider-type promise bounded to this inventory invocation. Response order is
+preserved, and there is no cross-refresh, cross-view or global cache.
+The read timestamp/envelope is not an atomic OS fence, token or authority for
+later mutations. Selected action paths retain their existing fresh
+target/capability checks, named-context generation, owner fences, approval and
+accepted-receipt recovery.
+
+Both hosts use this shared client/backend. Clearly synthetic source-contract
+fixtures cover 54 targets, old-peer refusal, exact shape/bounds, failure,
+cancellation and context retirement through shared HTTP/SDK/named MCP and the
+compiled VS Code bridge. These fixtures are **not** published preview3/native
+acceptance. The official SDK graph and `runtime-package.json` still pin
+`0.2.5-preview.3` source D1/run407; that native peer does not advertise this
+capability. New compatible native qualification/publication and an approved
+official pin update are separate prerequisites before actual acceptance.

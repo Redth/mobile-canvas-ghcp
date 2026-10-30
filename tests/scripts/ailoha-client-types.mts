@@ -10,11 +10,16 @@ import {
   type ProviderDiagnostics,
   type SucceededOperation,
   type TargetHostConnection,
+  type TargetCatalogSnapshot,
 } from "../../lib/ailoha/index.mjs";
 
 async function exercise(connection: TargetHostConnection, signal: AbortSignal) {
   const client = await connectTargetHost(connection, { signal, timeoutMs: 1000 });
   try {
+    const snapshot: TargetCatalogSnapshot = await client.getTargetCatalogSnapshot({ providerId: "provider/opaque", signal });
+    void snapshot.providers[0]?.targets[0]?.capabilities;
+    // @ts-expect-error A catalog read is not mutation authority and takes no context/selection token.
+    await client.getTargetCatalogSnapshot({ expectedRevision: "1" });
     const catalogs: CatalogDescriptor[] = await client.listProviderCatalogs("provider/opaque", { signal });
     const runtimes: RuntimeDescriptor[] = await client.listProviderRuntimes("provider/opaque", { signal });
     const types: TargetTypeDescriptor[] = await client.listProviderTargetTypes("provider/opaque", { signal });

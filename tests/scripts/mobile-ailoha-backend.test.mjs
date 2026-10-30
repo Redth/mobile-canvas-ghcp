@@ -48,7 +48,8 @@ function fixture(options = {}) {
   const systemUiCapabilities = options.systemUi
     ? [{ id: "surface.ui", version: 1, features: ["getSystemUiSnapshot", "querySystemUi", "tapSystemUiMatch"] }] : [];
   const providers = [{ providerId: "provider", name: "Provider", version: "1", state: "ready",
-    capabilities: [...featureCapabilities, ...systemUiCapabilities] }];
+    capabilities: [{ id: "target.catalog", version: 1, features: ["getTargetCatalogSnapshot"] },
+      ...featureCapabilities, ...systemUiCapabilities] }];
   const capabilities = [{ id: "target.lifecycle", version: 1, features: [
     "startTarget", "stopTarget", "rebootTarget", "resetTarget", "deleteTarget",
     ...(options.reveal ? ["revealTarget"] : []),
@@ -68,6 +69,16 @@ function fixture(options = {}) {
       capabilities: options.stagedApps ? [{ id: "host.artifacts", version: 1, features: ["createArtifact"] }] : [] }; },
     async listProviders() { return providers; },
     async listTargets() { return [...targets.values()]; },
+    async getTargetCatalogSnapshot() {
+      return {
+        schema: "ailoha.target-catalog/v1", capturedAt: "2026-10-30T20:06:34Z",
+        providers: providers.map((provider) => ({
+          provider, targets: ["unavailable", "disabled"].includes(provider.state) ? []
+            : [...targets.values()].filter((entry) => entry.providerId === provider.providerId)
+              .map((target) => ({ target: { ...target, surfaces: [surface()] }, capabilities })),
+        })),
+      };
+    },
     async getTarget(id) { calls.push(["get", id]); return { ...targets.get(id), surfaces: [surface()] }; },
     async getTargetCapabilities() { return capabilities; },
     async listTargetApps(id, query) {
@@ -1888,7 +1899,7 @@ function largeInventory(state, count = 54) {
 }
 
 for (const host of ["github", "vscode"]) {
-  test(`${host} shared 54-target inventory bounds capability overlap, preserves order and reuses only this request's provider-type reads`, async (t) => {
+  test(`${host} shared 54-target inventory consumes one correlated snapshot without per-target fanout or cross-request cache`, async (t) => {
     const state = canonicalFixture({ recording: {} });
     t.after(() => state.backend.dispose());
     largeInventory(state);
@@ -1896,27 +1907,17 @@ for (const host of ["github", "vscode"]) {
       id: "surface.capture", version: 1,
       features: ["startTargetRecording", "getTargetRecording", "stopTargetRecording"],
     });
-    let active = 0;
-    let maximum = 0;
-    let completed = 0;
-    let blocking = true;
-    const pending = [];
-    const capabilities = [];
+    let snapshots = 0;
+    const snapshot = state.client.getTargetCatalogSnapshot;
     const typeReads = [];
-    state.client.getTargetCapabilities = async (targetId, options) => {
-      capabilities.push(targetId);
+    state.client.getTargetCatalogSnapshot = async (options) => {
       assert.equal(options.signal.aborted, false);
-      active += 1;
-      maximum = Math.max(maximum, active);
-      try {
-        if (blocking) {
-          const gate = deferred();
-          pending.push(gate);
-          await gate.promise;
-        } else await new Promise((resolve) => setImmediate(resolve));
-        return state.capabilities;
-      } finally { active -= 1; completed += 1; }
+      snapshots += 1;
+      return snapshot.call(state.client, options);
     };
+    for (const method of ["listTargets", "listProviders", "getTargetCapabilities"]) {
+      state.client[method] = async () => { throw new Error("Old per-target inventory fanout is forbidden."); };
+    }
     state.client.listProviderTargetTypes = async (providerId, options) => {
       assert.equal(options.signal.aborted, false);
       typeReads.push(providerId);
@@ -1926,69 +1927,57 @@ for (const host of ["github", "vscode"]) {
     const read = host === "github"
       ? () => state.backend.invokeAction("list_devices", {})
       : async () => (await state.backend.request("/api/v1/devices")).json();
-    const work = read();
-    work.catch(() => {});
-    t.after(() => pending.forEach((entry) => entry.resolve()));
-    let batches = 0;
-    for (let offset = 0; offset < 54; offset += 4) {
-      await new Promise((resolve) => setImmediate(resolve));
-      await new Promise((resolve) => setImmediate(resolve));
-      assert.equal(capabilities.length, Math.min(54, offset + 4));
-      assert.equal(completed, offset);
-      for (const entry of pending.splice(0).reverse()) entry.resolve();
-      batches += 1;
-      await new Promise((resolve) => setImmediate(resolve));
-    }
-    const devices = await work;
-    assert.equal(batches, 14);
-    assert.equal(maximum, 4);
-    assert.equal(capabilities.length, 54);
-    assert.deepEqual(devices.map((entry) => entry.id), [...state.targets.keys()]);
+    const devices = await read();
+    assert.equal(snapshots, 1);
+    assert.equal(devices.length, 54);
+    assert.deepEqual(devices.map((entry) => entry.id),
+      state.providers.flatMap((provider) => [...state.targets.values()]
+        .filter((target) => target.providerId === provider.providerId).map((target) => target.targetId)));
     assert.ok(devices.every((entry) => entry.capabilities.recording === true));
     assert.deepEqual(typeReads.sort(), ["provider", "second-provider"]);
-    blocking = false;
+    state.targets.get("large-0").status = "error";
     await read();
-    assert.equal(capabilities.length, 108);
+    assert.equal(snapshots, 2);
     assert.equal(typeReads.length, 4);
     assert.equal(state.calls.some(([kind]) => ["start", "stop", "reboot", "tap", "swipe"].includes(kind)), false);
   });
 }
 
-for (const cause of ["cancel", "capability-failure", "context-change"]) {
-  test(`54-target inventory ${cause} refuses partial success and never starts another capability batch`, async (t) => {
+for (const cause of ["cancel", "provider-failure", "context-change"]) {
+  test(`54-target snapshot ${cause} refuses partial success without legacy fanout`, async (t) => {
     const state = canonicalFixture();
     t.after(() => state.backend.dispose());
     largeInventory(state);
-    const gates = [];
-    const signals = [];
-    state.client.getTargetCapabilities = async (_targetId, options) => {
-      signals.push(options.signal);
+    const original = state.client.getTargetCatalogSnapshot;
+    let gate;
+    state.client.getTargetCatalogSnapshot = async (options) => {
       return new Promise((resolve, reject) => {
         const abort = () => reject(new AilohaProtocolError("cancelled"));
         options.signal.addEventListener("abort", abort, { once: true });
-        gates.push({
-          resolve() { options.signal.removeEventListener("abort", abort); resolve(state.capabilities); },
+        gate = {
+          resolve() { options.signal.removeEventListener("abort", abort); resolve(original.call(state.client)); },
           reject() { options.signal.removeEventListener("abort", abort); reject(new AilohaProtocolError("invalid_response")); },
-        });
+        };
       });
     };
+    for (const method of ["listTargets", "listProviders", "getTargetCapabilities"]) {
+      state.client[method] = async () => { throw new Error("Old inventory must not be used."); };
+    }
     const caller = new AbortController();
     const work = state.backend.listDevices({ signal: caller.signal });
     const rejected = assert.rejects(work, {
-      code: cause === "cancel" ? "cancelled" : cause === "capability-failure" ? "invalid_response" : "context_snapshot_superseded",
+      code: cause === "cancel" ? "cancelled" : cause === "provider-failure" ? "invalid_response" : "context_snapshot_superseded",
     });
     await new Promise((resolve) => setImmediate(resolve));
-    assert.equal(gates.length, 4);
+    assert.ok(gate);
     if (cause === "cancel") caller.abort();
-    else if (cause === "capability-failure") gates[0].reject();
+    else if (cause === "provider-failure") gate.reject();
     else {
       await state.advanceSelection();
-      gates.forEach((gate) => gate.resolve());
+      gate.resolve();
     }
     await rejected;
     await new Promise((resolve) => setImmediate(resolve));
-    assert.equal(signals.length, 4);
-    assert.ok(signals.every((signal) => signal.aborted));
     assert.equal(state.calls.some(([kind]) => ["start", "stop", "tap"].includes(kind)), false);
   });
 }
@@ -4515,8 +4504,8 @@ for (const action of ["lifecycle", "getSelected", "getDevice", "display", "input
     if (action === "input") await state.backend.display("one");
     const entered = deferred();
     const release = deferred();
-    const get = action === "inventory" ? state.client.listTargets : state.client.getTarget;
-    const method = action === "inventory" ? "listTargets" : "getTarget";
+    const get = action === "inventory" ? state.client.getTargetCatalogSnapshot : state.client.getTarget;
+    const method = action === "inventory" ? "getTargetCatalogSnapshot" : "getTarget";
     state.client[method] = async (...args) => {
       entered.resolve();
       await release.promise;
@@ -5103,6 +5092,7 @@ for (const status of [408, 499]) {
 test("unknown SDK failures are explicitly reported without serializing private diagnostic data", async (t) => {
   const state = fixture({ client: { async listTargets() { throw new Error("Bearer private-secret http://private-origin"); } } });
   t.after(() => state.backend.dispose());
+  state.client.getTargetCatalogSnapshot = state.client.listTargets;
   const response = await state.backend.request("/api/v1/devices");
   assert.equal(response.status, 502);
   assert.equal((await response.text()).includes("private"), false);
@@ -5167,7 +5157,8 @@ test("provider diagnostics distinguish control connection from unavailable/degra
   t.after(() => state.backend.dispose());
   state.providers.push({
     providerId: "unavailable-provider", name: "Missing platform tooling", version: "1", state: "unavailable",
-    description: "Synthetic Xcode/Android SDK dependency is unavailable.", capabilities: [],
+    description: "Synthetic Xcode/Android SDK dependency is unavailable.",
+    capabilities: [{ id: "target.catalog", version: 1, features: ["getTargetCatalogSnapshot"] }],
   });
 
   const mixed = await state.backend.catalog();
