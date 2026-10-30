@@ -63,6 +63,48 @@ workspace behavior, manual MCP setup, and development commands.
 Both hosts still require Xcode for iOS or the Android SDK for Android; see
 [Requirements](#requirements).
 
+### Ailoha opt-in source preview
+
+The production **legacy backend remains the default** in both hosts. This source
+preview wires the same scoped Ailoha backend into the installed canvas, VS Code
+view/Chat tools, and MCP entrypoints. It does not change the product version,
+identifiers, Marketplace package, or stable runtime channel.
+
+The source now pins the anonymously published `@ailoha/cli@0.2.5-preview.3`
+launcher graph in both hosts, including its exact tarball integrity and source
+provenance. Once a reviewed host package is installed in a separately qualified
+environment,
+start the GitHub Copilot host with `MOBILE_CANVAS_BACKEND=ailoha`, or set
+`"mobileCanvas.backend": "ailoha"` in VS Code's application settings and reload
+the window. Without that prepared, exact-pinned public graph, opt-in reports
+**unavailable** rather than starting the legacy engine. Refreshed Mobile Canvas
+embedded-web native release artifacts and normal installed-host routing remain
+separate gates; this SDK source/package qualification is not a production
+cutover or a normal-install-ready release.
+
+The opt-in covers authoritative provider/runtime/device-type/template catalogs,
+compatible iOS/Android create+boot, inventory/selection, advertised start/stop/reboot, PNG
+screenshots, observed-geometry tap/held-press/swipe/scroll, and complete ALHV
+H.264 access units. Device control and System inspection require no app
+instrumentation; App inspection does. Creation uses exact
+host/provider catalog choices and one canonical operation; accepted retries do
+not submit another create or boot. Destructive reset/delete without scoped human
+consent remains unsupported where genuine scoped approval is unavailable. The read-only System lens uses the selected Target Host target;
+canonical app inventory, launch, terminate, cold relaunch and Android app-op
+reads use native target identities. Source-conditional staged installation
+remains unsupported in installed hosts until a compatible approved public
+runtime and host artifact capability are available; uninstall and app-op
+mutation use source-conditional fenced CLI actions with captured native app
+evidence, scoped human approval and effective readback. They remain unsupported
+in installed hosts until the compatible reviewed public CLI and native host
+capabilities are packaged; ordinary uninstall/app-op routes cannot substitute.
+The App lens requires an explicitly selected verified native runtime instance
+in the canonical named context. Workspace application evidence cannot bind an
+agent. Recording uses the verified scoped CLI only when recovery is positively
+advertised; keyboard/buttons and broader controls remain unsupported.
+See [the Ailoha adapter contract](docs/ailoha-protocol-adapter.md)
+for ownership, setup, package evidence and remaining gates.
+
 ## Give Copilot hands and eyes
 
 Mobile Canvas lets an agent work on the same device you see. Ask Copilot to
@@ -87,6 +129,9 @@ and take over at any time.
 </table>
 
 ## What it does
+
+The following feature list describes the production legacy default, not the
+bounded Ailoha opt-in preview.
 
 **Device management**
 

@@ -9,6 +9,10 @@
   let visibilityHandler = null;
   let refreshHandler = null;
   let automationHandler = null;
+  let inspectionHandler = null;
+  let inspectionState = null;
+  let semanticHandler = null;
+  let semanticState = null;
   let refreshPending = false;
   const queuedAutomation = [];
 
@@ -16,11 +20,50 @@
     return crypto.randomUUID();
   }
 
-  function request(message) {
+  function request(message, signal) {
     return new Promise((resolve, reject) => {
-      pending.set(message.id, { resolve, reject });
-      vscode.postMessage(message);
+      if (signal?.aborted) {
+        reject(new DOMException("The captured API request was cancelled.", "AbortError"));
+        return;
+      }
+      const key = message.requestId ?? message.id;
+      let timer;
+      if (message.type === "socket-send") {
+        if ([...pending.values()].filter((entry) => entry.socketId).length >= 32) {
+          reject(new Error("The bounded video control queue is full."));
+          return;
+        }
+        timer = setTimeout(() => {
+          pending.delete(key);
+          reject(new Error("The owned video control send exceeded its deadline."));
+        }, 30_000);
+      }
+      const cancel = () => {
+        completePending(key, undefined, new DOMException("The captured API request was cancelled.", "AbortError"));
+        if (message.type === "api") vscode.postMessage({ type: "api-cancel", id: message.id });
+      };
+      const cleanup = () => signal?.removeEventListener("abort", cancel);
+      pending.set(key, { resolve, reject, timer, cleanup, socketId: message.type === "socket-send" ? message.id : undefined });
+      signal?.addEventListener("abort", cancel, { once: true });
+      try { vscode.postMessage(message); }
+      catch (error) { completePending(key, undefined, error); }
     });
+  }
+
+  function completePending(key, value, error) {
+    const entry = pending.get(key);
+    if (!entry) return;
+    if (entry.timer !== undefined) clearTimeout(entry.timer);
+    entry.cleanup?.();
+    pending.delete(key);
+    if (error) entry.reject(error);
+    else entry.resolve(value);
+  }
+
+  function rejectSocketRequests(socketId) {
+    for (const [key, entry] of pending) {
+      if (entry.socketId === socketId) completePending(key, undefined, new Error("The owned video channel was closed."));
+    }
   }
 
   class BridgeSocket extends EventTarget {
@@ -29,6 +72,7 @@
       this.id = id();
       this.readyState = WebSocket.CONNECTING;
       this.binaryType = "arraybuffer";
+      this.protocol = "";
       sockets.set(this.id, this);
       vscode.postMessage({
         type: "socket-open",
@@ -38,16 +82,32 @@
       });
     }
 
-    close() {
-      if (this.readyState === WebSocket.CLOSING || this.readyState === WebSocket.CLOSED) {
-        return;
+    send(data) {
+      if (this.readyState !== WebSocket.OPEN) {
+        return Promise.reject(new Error("The owned video channel is not open."));
       }
-      this.readyState = WebSocket.CLOSING;
-      vscode.postMessage({ type: "socket-close", id: this.id });
+      return request({ type: "socket-send", id: this.id, requestId: id(), data });
     }
 
-    opened() {
+    close() {
+      if (this.readyState === WebSocket.CLOSING || this.readyState === WebSocket.CLOSED) {
+        return this.closePromise;
+      }
+      this.readyState = WebSocket.CLOSING;
+      rejectSocketRequests(this.id);
+      if (this.protocol === "ailoha.video.v1") {
+        this.closePromise = new Promise((resolve, reject) => {
+          this.finishClose = resolve;
+          this.closeTimer = setTimeout(() => reject(new Error("The owned video close exceeded its deadline.")), 30_000);
+        });
+      }
+      vscode.postMessage({ type: "socket-close", id: this.id });
+      return this.closePromise;
+    }
+
+    opened(protocol = "") {
       if (this.readyState !== WebSocket.CONNECTING) return;
+      this.protocol = protocol;
       this.readyState = WebSocket.OPEN;
       this.dispatchEvent(new Event("open"));
     }
@@ -65,6 +125,9 @@
       if (this.readyState === WebSocket.CLOSED) return;
       this.readyState = WebSocket.CLOSED;
       sockets.delete(this.id);
+      rejectSocketRequests(this.id);
+      if (this.closeTimer !== undefined) clearTimeout(this.closeTimer);
+      this.finishClose?.();
       this.dispatchEvent(new CloseEvent("close", { code, reason }));
     }
   }
@@ -72,6 +135,14 @@
   window.addEventListener("message", (event) => {
     const message = event.data;
     switch (message.type) {
+      case "workspace-inspection":
+        inspectionState = message.state;
+        inspectionHandler?.(inspectionState);
+        break;
+      case "semantic-inspection":
+        semanticState = message.state;
+        semanticHandler?.(semanticState);
+        break;
       case "context":
         context = { sessionId: message.sessionId, instanceId: message.instanceId };
         resolveContext?.(context);
@@ -84,26 +155,23 @@
         resolveContext = null;
         break;
       case "api-result":
-        pending.get(message.id)?.resolve(
+        completePending(message.id,
           new Response(message.body, {
             status: message.status,
             statusText: message.statusText,
             headers: message.headers,
           }),
         );
-        pending.delete(message.id);
         break;
       case "api-error":
       case "operation-error":
-        pending.get(message.id)?.reject(new Error(message.message));
-        pending.delete(message.id);
+        completePending(message.id, undefined, new Error(message.message));
         break;
       case "operation-result":
-        pending.get(message.id)?.resolve(message);
-        pending.delete(message.id);
+        completePending(message.id, message);
         break;
       case "socket-opened":
-        sockets.get(message.id)?.opened();
+        sockets.get(message.id)?.opened(message.protocol);
         break;
       case "socket-message":
         sockets.get(message.id)?.message(message.data);
@@ -153,7 +221,7 @@
         path,
         method: options.method || "GET",
         body: options.body,
-      });
+      }, options.signal);
     },
 
     createSocket(channel, query) {
@@ -180,6 +248,16 @@
 
     onVisibilityChanged(handler) {
       visibilityHandler = handler;
+    },
+
+    onWorkspaceInspectionChanged(handler) {
+      inspectionHandler = handler;
+      if (inspectionState) inspectionHandler(inspectionState);
+    },
+
+    onSemanticInspectionChanged(handler) {
+      semanticHandler = handler;
+      if (semanticState) semanticHandler(semanticState);
     },
 
     onRefreshRequested(handler) {

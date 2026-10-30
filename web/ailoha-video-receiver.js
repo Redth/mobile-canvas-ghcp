@@ -10,6 +10,8 @@ export const AILOHA_VIDEO_RECEIVER_LIMITS = Object.freeze({
   maxBufferedMessages: 32,
   maxBufferedBytes: 16 * 1024 * 1024,
   maxInFlightFrames: 64,
+  maxPresentationLeases: 64,
+  maxPresentationBytes: 16 * 1024 * 1024,
 });
 
 const UINT32_MAX = 0xffffffff;
@@ -324,6 +326,8 @@ function createConnection({
   const lifetime = new AbortController();
   const queue = [];
   const sends = [];
+  const presentations = new Set();
+  let presentationBytes = 0;
   let phase = "attached";
   let startPromise;
   let closePromise;
@@ -345,13 +349,39 @@ function createConnection({
   let dropBeforeSequence = 0;
 
   const live = () => !lifetime.signal.aborted && isCurrent();
-  const scope = (controller = lifetime, current = live, details = {}) => Object.freeze({
+  const scope = (controller = lifetime, current = live, details = {}, retainable = false, retainedBytes = 0) => Object.freeze({
     context,
     signal: controller.signal,
     isCurrent: current,
     geometry,
     needsKeyFrame,
     ...details,
+    ...(retainable ? {
+      retainPresentation() {
+        if (!current() || details.canDecode !== true || details.canPresent !== true) {
+          throw new TypeError("Only a current picture scope can retain presentation ownership.");
+        }
+        if (presentations.size >= AILOHA_VIDEO_RECEIVER_LIMITS.maxPresentationLeases
+          || presentationBytes + retainedBytes > AILOHA_VIDEO_RECEIVER_LIMITS.maxPresentationBytes) {
+          throw failure("QueueOverflow", "The bounded deferred presentation lease pool is full.");
+        }
+        const epoch = presentationEpoch;
+        const capturedGeometry = geometry;
+        const retained = new AbortController();
+        const valid = () => live() && !retained.signal.aborted && epoch === presentationEpoch;
+        const lease = Object.freeze({
+          ...scope(retained, valid, { ...details, geometry: capturedGeometry }),
+          release() {
+            if (!presentations.delete(lease)) return;
+            presentationBytes -= retainedBytes;
+            retained.abort();
+          },
+        });
+        presentations.add(lease);
+        presentationBytes += retainedBytes;
+        return lease;
+      },
+    } : {}),
     commit(action) {
       if (typeof action !== "function") throw new TypeError("commit requires a synchronous callback.");
       if (!current() || details.canDecode === false) return false;
@@ -363,6 +393,11 @@ function createConnection({
     },
   });
   const connectionScope = scope();
+
+  function invalidatePresentations() {
+    presentationEpoch += 1;
+    for (const lease of [...presentations]) lease.release();
+  }
 
   function release(item, consumed) {
     if (!item.retained) return;
@@ -393,6 +428,7 @@ function createConnection({
       },
     );
     phase = "closed";
+    invalidatePresentations();
     lifetime.abort();
     active?.controller?.abort();
     if (active) release(active, false);
@@ -502,7 +538,7 @@ function createConnection({
     geometry = observed?.geometryRevision === wireGeometryRevision ? observed : null;
     recordGeometry(geometry);
     needsKeyFrame = true;
-    presentationEpoch += 1;
+    invalidatePresentations();
   }
 
   function applyControl(control) {
@@ -514,7 +550,7 @@ function createConnection({
       const { type, ...observed } = control;
       geometry = Object.freeze(observed);
       recordGeometry(geometry);
-      presentationEpoch += 1;
+      invalidatePresentations();
     } else if (control.type === "backpressure") {
       maxInFlightFrames = control.maxInFlight;
       if (Object.hasOwn(control, "dropBeforeSequence")) {
@@ -529,7 +565,7 @@ function createConnection({
         dropBeforeSequence = nextSequence;
         advanceResume(nextSequence);
         needsKeyFrame = true;
-        presentationEpoch += 1;
+        invalidatePresentations();
       }
       if (bufferedFrames > maxInFlightFrames) {
         throw failure("QueueOverflow", "Video frames exceed the authoritative backpressure window.");
@@ -609,7 +645,7 @@ function createConnection({
           const delivery = scope(item.controller, messageCurrent, {
             canDecode,
             canPresent: canDecode && (!frame.isCodecConfig || frame.isKeyFrame),
-          });
+          }, true, frame.payload.byteLength);
           const result = await untilAborted(
             callbacks.onFrame(frame, delivery),
             item.controller.signal,

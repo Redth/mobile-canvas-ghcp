@@ -104,7 +104,12 @@ jobs:
         with:
           node-version: 22
           cache: npm
-          cache-dependency-path: vscode/package-lock.json
+          cache-dependency-path: |
+            package-lock.json
+            vscode/package-lock.json
+
+      - name: Install host packaging dependencies
+        run: npm ci --ignore-scripts --omit=optional
 
       - uses: actions/download-artifact@v4
         with:
@@ -204,7 +209,7 @@ jobs:
 
       - name: Package VS Code extension
         run: |
-          npm ci --prefix vscode --ignore-scripts
+          npm ci --prefix vscode --ignore-scripts --omit=optional
           npm run package --prefix vscode
 
       - name: Package platform-specific VS Code extensions
@@ -347,7 +352,7 @@ jobs:
       # The extension's own devDependencies are what pin vsce; --ignore-scripts
       # because nothing here needs the build hooks.
       - name: Install vsce
-        run: npm ci --prefix vscode --ignore-scripts
+        run: npm ci --prefix vscode --ignore-scripts --omit=optional
 
       # Azure DevOps retires global PATs on 1 December 2026, so the publish
       # authenticates as an Entra identity instead. vsce resolves that token

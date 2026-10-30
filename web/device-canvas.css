@@ -824,6 +824,214 @@ summary:focus-visible,
   overflow: hidden;
 }
 
+.workspace.has-workspace-inspection {
+  grid-template-columns: minmax(0, 1fr) var(--workspace-panel-inline-size, 44px);
+}
+.workspace.has-semantic-inspection {
+  grid-template-columns: minmax(0, 1fr) var(--semantic-panel-inline-size, 44px);
+}
+.workspace.has-workspace-inspection.has-semantic-inspection {
+  grid-template-columns: minmax(0, 1fr) var(--workspace-panel-inline-size, 44px) var(--semantic-panel-inline-size, 44px);
+}
+
+.workspace.has-workspace-inspection > .empty-state,
+.workspace.has-workspace-inspection > .device-view,
+.workspace.has-semantic-inspection > .empty-state,
+.workspace.has-semantic-inspection > .device-view {
+  grid-column: 1;
+  grid-row: 1;
+}
+
+.workspace-inspection {
+  grid-column: 2;
+  grid-row: 1;
+  min-width: 0;
+  min-height: 0;
+  overflow: hidden;
+  border-left: 1px solid var(--border-muted);
+  background: var(--canvas-subtle);
+}
+.semantic-inspection {
+  grid-column: 2;
+  grid-row: 1;
+  min-width: 0;
+  min-height: 0;
+  overflow: hidden;
+  border-left: 1px solid var(--border-muted);
+  background: var(--canvas-subtle);
+  font-size: 12px;
+  overflow-wrap: anywhere;
+}
+.workspace.has-workspace-inspection.has-semantic-inspection .semantic-inspection { grid-column: 3; }
+.workspace-inspection, .semantic-inspection {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+}
+.inspection-panel-header { flex: 0 0 auto; display: flex; align-items: center; gap: 6px; padding: 8px; }
+.inspection-panel-toggle {
+  display: flex; align-items: center; gap: 6px; min-width: 0; min-height: 28px;
+  padding: 4px; border: 0; border-radius: var(--control-radius-sm);
+  background: transparent; color: var(--fg-default); font: inherit; font-weight: 600; cursor: pointer;
+}
+.inspection-panel-toggle::before { content: "-"; }
+[data-collapsed="true"] .inspection-panel-toggle::before { content: "+"; }
+.inspection-panel-toggle:hover { background: var(--control-hover); }
+.inspection-panel-toggle:focus-visible, .inspection-panel-resize:focus-visible { outline: 2px solid var(--focus); outline-offset: -2px; }
+.inspection-panel-status { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--fg-muted); font-size: 11px; }
+.inspection-panel-body { min-width: 0; min-height: 0; flex: 1 1 auto; overflow: auto; overscroll-behavior: contain; padding: 0 14px 14px; }
+.inspection-panel-resize { position: absolute; z-index: 3; left: 0; top: 0; width: 6px; height: 100%; cursor: col-resize; touch-action: none; }
+.inspection-panel-resize:hover { background: var(--accent-muted); }
+@media (min-width: 761px) {
+  [data-collapsed="true"] .inspection-panel-header { justify-content: center; }
+  [data-collapsed="true"] .inspection-panel-toggle { flex-direction: column; }
+  [data-collapsed="true"] .inspection-panel-title { writing-mode: vertical-rl; }
+  [data-collapsed="true"] .inspection-panel-status { display: none; }
+}
+.semantic-inspection-header, .semantic-inspection-actions, .semantic-inspection-filters {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-bottom: 10px;
+}
+.semantic-inspection h2 { margin: 0; font-size: 13px; }
+.semantic-inspection select, .semantic-inspection input { max-width: 100%; min-width: 0; }
+.semantic-inspection-output { white-space: pre-wrap; overflow-wrap: anywhere; }
+.semantic-inspection-output pre { white-space: pre-wrap; overflow-wrap: anywhere; }
+.semantic-inspection-status[data-tone="danger"] { color: var(--danger-fg); }
+
+.workspace-inspection-header,
+.workspace-inspection-actions {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.workspace-inspection h2,
+.workspace-inspection h3,
+.workspace-inspection h4 {
+  margin: 0;
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.workspace-readonly-badge {
+  padding: 1px 6px;
+  border: 1px solid var(--border-default);
+  border-radius: var(--control-radius-sm);
+  color: var(--fg-muted);
+  font-size: 11px;
+}
+
+.workspace-inspection-root {
+  display: block;
+  margin: 10px 0;
+}
+
+.workspace-inspection code,
+.workspace-inspection dd,
+.workspace-inspection p,
+.workspace-inspection h3 {
+  overflow-wrap: anywhere;
+}
+
+.workspace-inspection-note,
+.workspace-app-meta {
+  color: var(--fg-muted);
+  font-size: 12px;
+}
+
+.workspace-inspection-status[data-tone="attention"] {
+  color: var(--attention-fg);
+}
+
+.workspace-inspection-status[data-tone="danger"] {
+  color: var(--danger-fg);
+}
+
+.workspace-app-cards {
+  display: grid;
+  gap: 10px;
+}
+
+.workspace-app-card {
+  padding: 10px;
+  border: 1px solid var(--border-default);
+  border-radius: var(--control-radius);
+  background: var(--canvas-default);
+}
+
+.workspace-evidence-fields {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 2fr);
+  gap: 4px 8px;
+  font-size: 12px;
+}
+
+.workspace-evidence-fields dt {
+  color: var(--fg-muted);
+}
+
+.workspace-evidence-fields dd {
+  min-width: 0;
+  margin: 0;
+}
+
+.workspace-inspection summary {
+  cursor: pointer;
+  color: var(--accent-fg);
+}
+
+.workspace-evidence-list {
+  padding-left: 16px;
+  font-size: 12px;
+}
+
+.workspace-evidence-list li,
+.workspace-native-wrapper,
+.workspace-scan-details {
+  margin-top: 10px;
+}
+
+.workspace-evidence-list span,
+.workspace-evidence-list code,
+.workspace-scan-diagnostic span,
+.workspace-scan-diagnostic code {
+  display: block;
+}
+
+@media (max-width: 760px) {
+  .workspace.has-semantic-inspection,
+  .workspace.has-workspace-inspection.has-semantic-inspection {
+    grid-template-columns: minmax(0, 1fr);
+    grid-template-rows: minmax(0, 1fr) var(--workspace-panel-block-size, 40px) var(--semantic-panel-block-size, 40px);
+  }
+  .semantic-inspection, .workspace.has-workspace-inspection.has-semantic-inspection .semantic-inspection {
+    grid-column: 1;
+    grid-row: 3;
+    border-left: 0;
+    border-top: 1px solid var(--border-muted);
+  }
+  .workspace.has-workspace-inspection {
+    grid-template-columns: minmax(0, 1fr);
+    grid-template-rows: minmax(0, 1fr) var(--workspace-panel-block-size, 40px);
+  }
+
+  .workspace-inspection {
+    grid-column: 1;
+    grid-row: 2;
+    border-left: 0;
+    border-top: 1px solid var(--border-muted);
+  }
+  .workspace.has-semantic-inspection:not(.has-workspace-inspection) {
+    grid-template-rows: minmax(0, 1fr) var(--semantic-panel-block-size, 40px);
+  }
+  .workspace.has-semantic-inspection:not(.has-workspace-inspection) .semantic-inspection { grid-row: 2; }
+  .inspection-panel-resize { width: 100%; height: 6px; cursor: row-resize; }
+}
+
 /* The stage is the only row now that the drawers have become dialogs, so it takes the full height. */
 .device-view {
   display: grid;
@@ -850,6 +1058,7 @@ summary:focus-visible,
    space actually available to the device, excluding the status pill. The top padding is
    written by fitDeviceScreen() and only exceeds 0 when the frame would run into a tool pill. */
 .stage-viewport {
+  position: relative;
   display: grid;
   place-items: center;
   width: 100%;
@@ -955,12 +1164,13 @@ summary:focus-visible,
   --status-accent: var(--accent-fg);
   --status-tint: var(--accent-muted);
   position: absolute;
-  inset: 6px;
+  inset: var(--status-top-reserve, 0px) 0 0;
+  z-index: 2;
   display: grid;
   align-items: safe center;
   justify-items: center;
   padding: clamp(14px, 6%, 24px);
-  border-radius: var(--screen-radius);
+  border-radius: var(--control-radius);
   overflow: auto;
   background: linear-gradient(180deg, var(--canvas-subtle), var(--canvas-inset));
   color: var(--fg-default);
@@ -987,6 +1197,8 @@ summary:focus-visible,
   justify-items: center;
   gap: 12px;
   width: min(100%, 272px);
+  min-width: 0;
+  overflow-wrap: anywhere;
   padding: 20px;
   border: 1px solid var(--border-default);
   border-radius: var(--control-radius);
@@ -1032,6 +1244,7 @@ summary:focus-visible,
   justify-items: center;
   gap: 4px;
   min-width: 0;
+  max-width: 100%;
 }
 
 .stream-status-eyebrow {
@@ -1067,13 +1280,14 @@ summary:focus-visible,
   padding: 8px 16px;
   font-weight: 600;
   touch-action: manipulation;
+  flex-shrink: 0;
 }
 
 .button.stream-status-action:active:not(:disabled) {
   filter: brightness(0.96);
 }
 
-.device-frame[data-orientation="landscape"] .stream-status-card {
+.stage-viewport:has(.device-frame[data-orientation="landscape"]) .stream-status-card {
   grid-template-areas:
     "icon copy"
     "action action";
@@ -1084,18 +1298,18 @@ summary:focus-visible,
   text-align: left;
 }
 
-.device-frame[data-orientation="landscape"] .stream-status-icon {
+.stage-viewport:has(.device-frame[data-orientation="landscape"]) .stream-status-icon {
   grid-area: icon;
   align-self: center;
 }
 
-.device-frame[data-orientation="landscape"] .stream-status-copy {
+.stage-viewport:has(.device-frame[data-orientation="landscape"]) .stream-status-copy {
   grid-area: copy;
   justify-items: start;
   align-self: center;
 }
 
-.device-frame[data-orientation="landscape"] .stream-status-action {
+.stage-viewport:has(.device-frame[data-orientation="landscape"]) .stream-status-action {
   grid-area: action;
   width: auto;
 }

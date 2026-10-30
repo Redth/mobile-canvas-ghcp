@@ -142,6 +142,26 @@ public class AppInventoryTests
 		Assert.Null(poolmath.Name);
 	}
 
+	[Theory]
+	[InlineData("package:/data/app/~~first/pkg/base.apk=com.example.app versionCode:2 uid:10123")]
+	[InlineData("package:/data/app/~~first/pkg/base.apk=com.example.app uid:10123 versionCode:2")]
+	public void ReadsNativePackageUidWithEitherFieldOrder(string output)
+	{
+		var app = Assert.Single(PackageListParser.Parse(output, AppKinds.User));
+		Assert.Equal("com.example.app", app.BundleId);
+		Assert.Equal("2", app.Build);
+		Assert.Equal(10123, app.Uid);
+		Assert.Equal("/data/app/~~first/pkg/base.apk", app.Path);
+	}
+
+	[Fact]
+	public void InvalidPackageUidDoesNotBecomeInstallationEvidence()
+	{
+		var app = Assert.Single(PackageListParser.Parse(
+			"package:/data/app/pkg/base.apk=com.example.app versionCode:2 uid:invalid", AppKinds.User));
+		Assert.Null(app.Uid);
+	}
+
 	[Fact]
 	public void ParsesPackagesWithoutPathOrVersion()
 	{

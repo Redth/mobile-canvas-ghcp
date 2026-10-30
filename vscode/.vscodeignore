@@ -2,8 +2,10 @@ src/**
 test/**
 out/test/**
 out/**/*.map
+node_modules/**/*.map
 tsconfig.json
 .npmrc
 *.tsbuildinfo
 .vscode-test/**
 node_modules/@types/**
+node_modules/@ailoha/**

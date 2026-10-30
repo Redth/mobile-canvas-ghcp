@@ -1,0 +1,132 @@
+{
+  "schema": "mobile-canvas.synthetic-video-fixture/v1",
+  "source": "Locally generated FFmpeg testsrc2; no device or third-party media.",
+  "width": 96,
+  "height": 64,
+  "framesPerSecond": 2,
+  "codec": "h264",
+  "profile": "baseline",
+  "timestampBase": "9223372036854775808",
+  "referenceFrames": [
+    "reference-1.png",
+    "reference-2.png",
+    "reference-3.png",
+    "reference-4.png"
+  ],
+  "geometry": [
+    {
+      "geometryRevision": 13,
+      "bounds": {
+        "x": 0,
+        "y": 0,
+        "width": 48,
+        "height": 32,
+        "coordinate": "window"
+      },
+      "pixelDensity": 2
+    },
+    {
+      "geometryRevision": 14,
+      "bounds": {
+        "x": 0,
+        "y": 0,
+        "width": 48,
+        "height": 32,
+        "coordinate": "window"
+      },
+      "pixelDensity": 2
+    }
+  ],
+  "units": [
+    {
+      "filename": "00-config.alhv",
+      "sequence": 0,
+      "pictureIndex": 0,
+      "kind": "config",
+      "isKeyFrame": false,
+      "isCodecConfig": true,
+      "timestampMicroseconds": "9223372036854775808",
+      "relativeTimestampMicroseconds": "0",
+      "geometryRevision": 13,
+      "payloadBytes": 34
+    },
+    {
+      "filename": "01-key.alhv",
+      "sequence": 1,
+      "pictureIndex": 0,
+      "kind": "key",
+      "isKeyFrame": true,
+      "isCodecConfig": false,
+      "timestampMicroseconds": "9223372036854775808",
+      "relativeTimestampMicroseconds": "0",
+      "geometryRevision": 13,
+      "payloadBytes": 2982
+    },
+    {
+      "filename": "02-delta.alhv",
+      "sequence": 2,
+      "pictureIndex": 1,
+      "kind": "delta",
+      "isKeyFrame": false,
+      "isCodecConfig": false,
+      "timestampMicroseconds": "9223372036855275808",
+      "relativeTimestampMicroseconds": "500000",
+      "geometryRevision": 13,
+      "payloadBytes": 1808
+    },
+    {
+      "filename": "03-config.alhv",
+      "sequence": 3,
+      "pictureIndex": 2,
+      "kind": "config",
+      "isKeyFrame": false,
+      "isCodecConfig": true,
+      "timestampMicroseconds": "9223372036855775808",
+      "relativeTimestampMicroseconds": "1000000",
+      "geometryRevision": 14,
+      "payloadBytes": 34
+    },
+    {
+      "filename": "04-key.alhv",
+      "sequence": 4,
+      "pictureIndex": 2,
+      "kind": "key",
+      "isKeyFrame": true,
+      "isCodecConfig": false,
+      "timestampMicroseconds": "9223372036855775808",
+      "relativeTimestampMicroseconds": "1000000",
+      "geometryRevision": 14,
+      "payloadBytes": 3059
+    },
+    {
+      "filename": "05-delta.alhv",
+      "sequence": 5,
+      "pictureIndex": 3,
+      "kind": "delta",
+      "isKeyFrame": false,
+      "isCodecConfig": false,
+      "timestampMicroseconds": "9223372036856275808",
+      "relativeTimestampMicroseconds": "1500000",
+      "geometryRevision": 14,
+      "payloadBytes": 1540
+    }
+  ],
+  "referenceI420": {
+    "filename": "reference.yuv",
+    "frameBytes": 9216,
+    "frames": 4
+  },
+  "sha256": {
+    "00-config.alhv": "31b23370125e2727781e9e222b7e0c48bee35dfd1a4d087bbefa1db2d0105ae0",
+    "01-key.alhv": "f39893d00f8144f159054c7417ecbf885343afdd84e33c55ae3eabcfeb263e25",
+    "02-delta.alhv": "3486f59d318b871dbf0e624b180dfebde820e003c677999cd491adea51fd046c",
+    "03-config.alhv": "839bb1ad84ebd3a63799436e253268a1657db14e0d96b3675959a5c9f7b4b11c",
+    "04-key.alhv": "dfd28f522ab33af900e6b774a7e1c0aa2e332fc81b9b13e484b68dd79d941e55",
+    "05-delta.alhv": "03b8af4b4da0538b18c1b6d774d3a2dd8a9669cd8f3bb6f34a929a0954455a57",
+    "reference-1.png": "7c6c076f8b10c4168fca9fa2d0118c92bc501bb45574912c623eb48a5932a47e",
+    "reference-2.png": "b80be5650df4ccaa72e473d2144daa4a17645c7e587c246e49f0147958754a3f",
+    "reference-3.png": "27c590ca5e03812cf383d2f0419a65c74d0af4db021fe256da7542e5eab6f5c1",
+    "reference-4.png": "4b89a7a909d4de4c8a2e785f6b05077998616865beaf96db661598019309095a",
+    "reference.yuv": "6d8223cdcd6abb9cd3a16b94da8ef4b6abc595e6764adb132e23f561c55c9ba0"
+  }
+}

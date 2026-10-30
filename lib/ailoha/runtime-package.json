@@ -1,0 +1,9 @@
+{
+  "schema": "mobile-canvas.ailoha-runtime/v1",
+  "version": "0.2.5-preview.4",
+  "sourceSha": "e31559ba06a3d926fa5903db3227e36ce519c8c9",
+  "tarball": "https://registry.npmjs.org/@ailoha/cli/-/cli-0.2.5-preview.4.tgz",
+  "integrity": "sha512-6I8td1eDpEerSjdiIMNciIPRGc5ixhiZyFMyb1drfmPFDNQiIpZq9B4ZSAtycw6KyvLUwsxWu4viNwCU+lzGMw==",
+  "sourceRunId": "41132135307",
+  "sourceRunAttempt": "1"
+}

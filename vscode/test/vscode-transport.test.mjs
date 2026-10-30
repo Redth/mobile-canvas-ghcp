@@ -35,10 +35,13 @@ test("bridges bootstrap, API responses, and socket frames", async () => {
     MessageEvent,
     CloseEvent: TestCloseEvent,
     Response,
+    DOMException,
     ArrayBuffer,
     Blob,
     Uint8Array,
     console,
+    setTimeout,
+    clearTimeout,
   };
   const script = readFileSync(
     join(dirname(fileURLToPath(import.meta.url)), "..", "media", "vscode-transport.js"),
@@ -49,6 +52,12 @@ test("bridges bootstrap, API responses, and socket frames", async () => {
   const receive = (data) => {
     for (const listener of listeners.get("message") ?? []) listener({ data });
   };
+  const inspection = { schema: "mobile-canvas.workspace-view/v1", root: "/explicit-root", status: "ready" };
+  receive({ type: "workspace-inspection", state: inspection });
+  let inspectionState;
+  transport.onWorkspaceInspectionChanged((state) => { inspectionState = state; });
+  assert.equal(inspectionState.root, "/explicit-root");
+  assert.equal(outbound.length, 0);
 
   const bootstrap = transport.bootstrap();
   assert.equal(outbound.shift().type, "ready");
@@ -69,6 +78,31 @@ test("bridges bootstrap, API responses, and socket frames", async () => {
     body: new TextEncoder().encode('{"devices":[]}').buffer,
   });
   assert.deepEqual((await (await api).json()).devices, []);
+
+  const alreadyCancelled = new AbortController();
+  alreadyCancelled.abort();
+  await assert.rejects(transport.api("/api/v1/devices", { method: "POST", signal: alreadyCancelled.signal }), { name: "AbortError" });
+  assert.equal(outbound.length, 0);
+  const controller = new AbortController();
+  const cancelledApi = transport.api("/api/v1/devices", { method: "POST", signal: controller.signal });
+  const cancelledRequest = outbound.shift();
+  const survivingApi = transport.api("/api/v1/catalog");
+  const survivingRequest = outbound.shift();
+  controller.abort();
+  await assert.rejects(cancelledApi, { name: "AbortError" });
+  assert.deepEqual(JSON.parse(JSON.stringify(outbound.shift())), { type: "api-cancel", id: cancelledRequest.id });
+  receive({ type: "api-result", id: cancelledRequest.id, status: 200, headers: {}, body: null });
+  receive({ type: "api-result", id: survivingRequest.id, status: 200, headers: {}, body: null });
+  assert.equal((await survivingApi).status, 200);
+  assert.equal(outbound.length, 0);
+
+  const completedController = new AbortController();
+  const completedApi = transport.api("/api/v1/catalog", { signal: completedController.signal });
+  const completedRequest = outbound.shift();
+  receive({ type: "api-result", id: completedRequest.id, status: 200, headers: {}, body: null });
+  assert.equal((await completedApi).status, 200);
+  completedController.abort();
+  assert.equal(outbound.length, 0);
 
   const settings = transport.api("/api/v1/host/settings/accessibility", {
     method: "POST",
@@ -144,4 +178,29 @@ test("bridges bootstrap, API responses, and socket frames", async () => {
 
   socket.close();
   assert.equal(outbound.shift().type, "socket-close");
+
+  const video = transport.createSocket("video", "deviceId=opaque");
+  const videoRequest = outbound.shift();
+  await assert.rejects(video.send('{"type":"hello"}'), /not open/);
+  receive({ type: "socket-opened", id: videoRequest.id, protocol: "ailoha.video.v1" });
+  assert.equal(video.protocol, "ailoha.video.v1");
+  const sending = video.send('{"type":"ack","sequence":1}');
+  const sendRequest = outbound.shift();
+  assert.equal(sendRequest.type, "socket-send");
+  assert.equal(sendRequest.id, videoRequest.id);
+  assert.notEqual(sendRequest.requestId, sendRequest.id);
+  receive({ type: "operation-result", id: sendRequest.requestId });
+  await sending;
+
+  const outstanding = Array.from({ length: 32 }, () => video.send('{"type":"pause"}'));
+  const retired = outstanding.map((operation) => assert.rejects(operation, /closed/));
+  outbound.splice(0);
+  await assert.rejects(video.send('{"type":"resume"}'), /queue is full/);
+  const closing = video.close();
+  assert.equal(outbound.shift().type, "socket-close");
+  await Promise.all(retired);
+  receive({ type: "socket-closed", id: videoRequest.id, code: 1000, reason: "" });
+  await closing;
+  assert.equal(video.readyState, WebSocket.CLOSED);
+  assert.equal(video.close(), closing);
 });

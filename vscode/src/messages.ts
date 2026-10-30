@@ -11,6 +11,55 @@ export interface AutomationActivity {
   detail?: string;
 }
 
+export interface WorkspaceInspectionState {
+  schema: string;
+  scope: { sessionId: string; viewId: string };
+  generation: number;
+  root: string | null;
+  exclusions: readonly string[];
+  status: string;
+  inspection: unknown;
+  error: { code: string; message: string; status?: number } | null;
+}
+
+export interface CanonicalInvocationMetadata {
+  "ailoha.executionContext": {
+    contextRef: string;
+    scope: { sessionId: string; viewId: string };
+    scopeEpoch: string;
+    revision: string;
+    selection: {
+      workspaceId: null; applicationId: null; targetHostId: string; targetId: string;
+      surfaceId: string | null; agentId: string | null; runtimeInstanceId: string | null;
+    };
+  };
+  "ailoha.agentExchange"?: {
+    requestId: string; commitAttempted: boolean; admitted: boolean; completed: boolean;
+    effectMayBeUnknown: boolean; errorCode?: string;
+  };
+}
+
+export interface SemanticInspectionState {
+  schema: string;
+  scope: { sessionId: string; viewId: string };
+  generation: number;
+  status: string;
+  selection: unknown;
+  appAvailable: boolean;
+  binding?: {
+    token: string | null;
+    available: boolean;
+    discovery: "idle" | "complete" | "unavailable" | "error";
+    candidates: readonly { token: string; agentId: string; runtimeInstanceId: string;
+      registrationVersion: 2 | 3; targetHostId: string; targetId: string }[] | null;
+    message: string;
+  };
+  lens: string;
+  operation: string | null;
+  result: unknown;
+  error: { code: string; message: string; status?: number; _meta?: CanonicalInvocationMetadata } | null;
+}
+
 export type WebviewMessage =
   | { type: "ready" }
   | {
@@ -20,6 +69,7 @@ export type WebviewMessage =
       method?: string;
       body?: string;
     }
+  | { type: "api-cancel"; id: string }
   | {
       type: "socket-open";
       id: string;
@@ -27,12 +77,15 @@ export type WebviewMessage =
       query?: string;
     }
   | { type: "socket-close"; id: string }
+  | { type: "socket-send"; id: string; requestId: string; data: string }
   | { type: "save"; id: string; suggestedName: string; bytes: ArrayBuffer }
   | { type: "copy"; id: string; text: string }
   | { type: "view-title"; title: string; description?: string };
 
 export type ExtensionMessage =
   | { type: "context"; sessionId: string; instanceId: string }
+  | { type: "workspace-inspection"; state: WorkspaceInspectionState }
+  | { type: "semantic-inspection"; state: SemanticInspectionState }
   | {
       type: "api-result";
       id: string;
@@ -42,7 +95,7 @@ export type ExtensionMessage =
       body: ArrayBuffer | null;
     }
   | { type: "api-error"; id: string; message: string }
-  | { type: "socket-opened"; id: string }
+  | { type: "socket-opened"; id: string; protocol?: string }
   | { type: "socket-message"; id: string; data: string | ArrayBuffer }
   | { type: "socket-error"; id: string; message: string }
   | { type: "socket-closed"; id: string; code: number; reason: string }

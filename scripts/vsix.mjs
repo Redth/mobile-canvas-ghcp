@@ -92,6 +92,22 @@ export function readVsixIdentity(directory) {
 	};
 }
 
+export function verifyDevelopmentFiles(paths, { verifiedAilohaGraph = false } = {}) {
+  for (const path of paths) {
+    const pinnedGraphMap = verifiedAilohaGraph
+      && path.startsWith("extension/dist/node_modules/@ailoha/cli/")
+      && path.endsWith(".map");
+    if (
+      path.startsWith("extension/src/")
+      || path.startsWith("extension/test/")
+      || path.startsWith("extension/.vscode-test/")
+      || (path.endsWith(".map") && !pinnedGraphMap)
+    ) {
+      throw new Error(`VSIX contains development-only file ${path}`);
+    }
+  }
+}
+
 // vsce refuses to publish an extension carrying user-provided SVG images, and
 // it refuses at publish time -- long after packaging succeeded and a tag went
 // out. Checking it here fails the pull request that introduces the image

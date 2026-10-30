@@ -1243,22 +1243,34 @@ public sealed partial class AndroidEmulatorBackend : IDeviceBackend, IAsyncDispo
 			await RunAdbAsync(serial, ["shell", "ps", "-A", "-o", "PID,NAME"], cancellationToken)
 				.ConfigureAwait(false));
 
-		var user = PackageListParser.Parse(
-			await RunAdbAsync(serial, ["shell", "pm", "list", "packages", "-3", "-f", "--show-versioncode"], cancellationToken)
-				.ConfigureAwait(false)
-				?? throw new DeviceCapabilityException(
-					$"Could not list packages on '{serial}'. Check that adb is available and the emulator is responding."),
-			AppKinds.User,
-			running);
+		var userOutput = await RunAdbAsync(serial,
+			["shell", "pm", "list", "packages", "-3", "-f", "-U", "--show-versioncode"],
+			cancellationToken).ConfigureAwait(false);
+		if (userOutput is null)
+		{
+			_logger.LogDebug("UID package inventory unavailable; retrying standard user package listing.");
+			userOutput = await RunAdbAsync(serial,
+				["shell", "pm", "list", "packages", "-3", "-f", "--show-versioncode"],
+				cancellationToken).ConfigureAwait(false);
+		}
+		userOutput = userOutput ?? throw new DeviceCapabilityException(
+			$"Could not list packages on '{serial}'. Check that adb is available and the emulator is responding.");
+		var user = PackageListParser.Parse(userOutput, AppKinds.User, running);
 
 		if (!includeSystem)
 			return user;
 
-		var system = PackageListParser.Parse(
-			await RunAdbAsync(serial, ["shell", "pm", "list", "packages", "-s", "-f", "--show-versioncode"], cancellationToken)
-				.ConfigureAwait(false),
-			AppKinds.System,
-			running);
+		var systemOutput = await RunAdbAsync(serial,
+			["shell", "pm", "list", "packages", "-s", "-f", "-U", "--show-versioncode"],
+			cancellationToken).ConfigureAwait(false);
+		if (systemOutput is null)
+		{
+			_logger.LogDebug("UID package inventory unavailable; retrying standard system package listing.");
+			systemOutput = await RunAdbAsync(serial,
+				["shell", "pm", "list", "packages", "-s", "-f", "--show-versioncode"],
+				cancellationToken).ConfigureAwait(false);
+		}
+		var system = PackageListParser.Parse(systemOutput, AppKinds.System, running);
 
 		return [.. user, .. system];
 	}

@@ -151,13 +151,13 @@
     ></aside>
 
     <main class="workspace">
-      <section id="empty-state" class="empty-state">
+      <section id="empty-state" class="empty-state" role="status" aria-live="polite">
         <div class="empty-card">
           <div class="empty-icon" aria-hidden="true">
             <svg class="icon"><use id="empty-state-icon" href="#icon-device"></use></svg>
           </div>
           <h2 id="empty-state-title">Opening live view…</h2>
-          <p id="empty-state-detail">Connecting to the device catalog.</p>
+          <p id="empty-state-detail">Preparing the runtime and local device services. First use may take longer.</p>
           <button id="empty-state-action" class="button primary empty-action hidden" type="button"
                   data-empty-action="create">
             <svg class="icon" aria-hidden="true"><use id="empty-state-action-icon" href="#icon-plus"></use></svg>
@@ -212,31 +212,6 @@
             <div id="device-frame" class="device-frame">
               <canvas id="device-screen" width="180" height="400" tabindex="0"
                       aria-label="Interactive device screen"></canvas>
-              <div id="stream-overlay" class="stream-overlay" data-tone="accent" data-busy="true"
-                   role="status" aria-live="polite" aria-atomic="true">
-                <section class="stream-status-card" aria-labelledby="stream-overlay-title">
-                  <div class="stream-status-icon" aria-hidden="true">
-                    <svg class="icon stream-status-glyph">
-                      <use id="stream-overlay-icon" href="#icon-device"></use>
-                    </svg>
-                    <span class="stream-overlay-spinner"></span>
-                  </div>
-                  <div class="stream-status-copy">
-                    <span id="stream-overlay-eyebrow" class="stream-status-eyebrow">Live view</span>
-                    <h2 id="stream-overlay-title" class="stream-status-title">Connecting to device</h2>
-                    <p id="stream-overlay-detail" class="stream-status-detail">
-                      Waiting for the first frame.
-                    </p>
-                  </div>
-                  <button id="stream-overlay-action" class="button primary stream-status-action hidden"
-                          type="button">
-                    <svg class="icon" aria-hidden="true">
-                      <use id="stream-overlay-action-icon" href="#icon-refresh"></use>
-                    </svg>
-                    <span id="stream-overlay-action-text">Try again</span>
-                  </button>
-                </section>
-              </div>
               <div id="input-indicator" class="input-indicator" aria-hidden="true"></div>
               <!--
                 The remote-control layer. It sits above the screen but never takes pointer events, so
@@ -259,6 +234,26 @@
               <button id="side-button" class="side-button" data-action="lock" type="button" aria-label="Press Lock" title="Lock">
                 <span class="side-button-cap" aria-hidden="true"></span>
               </button>
+            </div>
+            <div id="stream-overlay" class="stream-overlay" data-tone="accent" data-busy="true"
+                 role="status" aria-live="polite" aria-atomic="true">
+              <section class="stream-status-card" aria-labelledby="stream-overlay-title">
+                <div class="stream-status-icon" aria-hidden="true">
+                  <svg class="icon stream-status-glyph">
+                    <use id="stream-overlay-icon" href="#icon-device"></use>
+                  </svg>
+                  <span class="stream-overlay-spinner"></span>
+                </div>
+                <div class="stream-status-copy">
+                  <span id="stream-overlay-eyebrow" class="stream-status-eyebrow">Live view</span>
+                  <h2 id="stream-overlay-title" class="stream-status-title">Connecting to device</h2>
+                  <p id="stream-overlay-detail" class="stream-status-detail">Waiting for the first frame.</p>
+                </div>
+                <button id="stream-overlay-action" class="button primary stream-status-action hidden" type="button">
+                  <svg class="icon" aria-hidden="true"><use id="stream-overlay-action-icon" href="#icon-refresh"></use></svg>
+                  <span id="stream-overlay-action-text">Try again</span>
+                </button>
+              </section>
             </div>
             <p id="automation-live" class="visually-hidden" role="status" aria-live="polite"></p>
           </div>
@@ -340,6 +335,8 @@
           <p>The device is still running. Reopen Mobile Canvas to reconnect.</p>
         </div>
       </section>
+      <aside id="workspace-inspection" class="workspace-inspection" aria-label="Workspace" hidden></aside>
+      <aside id="semantic-inspection" class="semantic-inspection" aria-label="Read-only live inspection" hidden></aside>
     </main>
   </div>
 
