@@ -40,7 +40,7 @@ jobs:
         include:
           # One macOS runner can cross-compile both architectures. Keeping them
           # together avoids competing for two scarce macOS hosted runners.
-          - { key: osx,         rids: "osx-arm64 osx-x64", os: macos-14 }
+          - { key: osx,         rids: "osx-arm64 osx-x64", os: macos-15 }
           - { key: win-x64,     rids: "win-x64",           os: windows-latest }
           - { key: linux-x64,   rids: "linux-x64",         os: ubuntu-latest }
           # ARM runners are not offered on every plan, so these may be skipped
