@@ -17,6 +17,7 @@ export const scenario = {
   fencedAppResponses: process.env.AILOHA_TEST_FENCED_APP_RESPONSES === "1",
   platform: process.env.AILOHA_TEST_APP_PLATFORM ?? "ios",
   focusedText: false,
+  continuousInput: false,
   recordingEnabled: false,
   targets: new Map(), providerId: "synthetic-provider", nativeId: "native-deployment-not-opaque-target",
   // This is the new unpublished source contract, not the pinned preview3 native runtime.
@@ -94,8 +95,12 @@ function mergedCapabilities(values) {
   return [...groups.values()];
 }
 function targetCapabilities() {
-  return captures.map((capability) => capability.id === "surface.input" && scenario.focusedText
-    ? { ...capability, features: [...capability.features, "typeFocusedText"] } : capability);
+  return captures.map((capability) => capability.id === "surface.input" && (scenario.focusedText || scenario.continuousInput)
+    ? { ...capability, features: [
+      ...capability.features,
+      ...(scenario.focusedText ? ["typeFocusedText"] : []),
+      ...(scenario.continuousInput ? ["getContinuousInputEndpoint"] : []),
+    ] } : capability);
 }
 function providerRecords() {
   const fencedFeatures = scenario.fencedAppResponses ? [
@@ -727,6 +732,23 @@ export async function openTargetHostTransport(leaseId) {
     },
     async websocket(path, callbacks) {
       scenario.calls.push({ websocket: path });
+      if (path.endsWith("/input")) {
+        if (!scenario.continuousInput) throw new Error("Continuous input not advertised by synthetic host");
+        const reply = (message) => queueMicrotask(() => callbacks.onMessage(new TextEncoder().encode(JSON.stringify(message)), false));
+        return {
+          readyState: 1,
+          send(text) {
+            const message = JSON.parse(text);
+            if (message.type === "hello") {
+              reply({ type: "ready", resumeFromSequence: 0, geometryRevision: scenario.geometryRevision, maxInFlight: 8, maxActivePointers: 1 });
+              return;
+            }
+            scenario.calls.push({ continuousInput: path, geometryRevision: message.geometryRevision, actions: message.actions });
+            reply({ type: "ack", acknowledgedSequence: message.sequence });
+          },
+          async close() { scenario.calls.push({ continuousInputClosed: path }); },
+        };
+      }
       let next = 0;
       let active = true;
       let nextTimer;

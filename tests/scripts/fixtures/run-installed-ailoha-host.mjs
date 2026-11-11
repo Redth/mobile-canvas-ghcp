@@ -14,6 +14,7 @@ import { copilotUi } from "./copilot-sdk-double.mjs";
 
 const focusedText = process.argv.includes("--focused-text");
 scenario.focusedText = focusedText;
+scenario.continuousInput = true;
 const root = resolve(process.argv[2]);
 const host = process.argv[3];
 const source = join(dirname(fileURLToPath(import.meta.url)), "../../..");
@@ -49,6 +50,31 @@ let recordThroughHost;
 let stopThroughHost;
 const logs = [];
 const units = [];
+
+// Live touch reaches the device through the host's own panel API in both hosts, as one continuous
+// input channel bound to the observed surface and geometry.
+async function checkLiveTouch(request) {
+  const display = await (await request("/api/v1/devices/opaque%2Ftarget/display")).json();
+  const observed = { surfaceId: display.surfaceId, geometryRevision: display.geometryRevision, coordinate: display.coordinate };
+  const touch = async (phase, point) => {
+    const response = await request("/api/v1/devices/opaque%2Ftarget/input/touch", "POST", { ...point, phase, ...observed });
+    const body = await response.json();
+    assert.equal(response.status, 200, `${phase}: ${body.message ?? ""}`);
+    assert.equal(JSON.stringify(body).includes("connectionRef"), false);
+    return body;
+  };
+  await touch("prepare");
+  await touch("down", { x: 4, y: 4 });
+  await touch("move", { x: 20, y: 10 });
+  assert.equal((await touch("up", { x: 20, y: 10 })).released, true);
+  const stale = await request("/api/v1/devices/opaque%2Ftarget/input/touch", "POST",
+    { x: 4, y: 4, phase: "down", ...observed, geometryRevision: display.geometryRevision + 1 });
+  assert.equal(stale.status, 409);
+  const live = scenario.calls.filter((call) => call.continuousInput);
+  assert.deepEqual(live.slice(-3).map((call) => call.actions.map((action) => action.type)),
+    [["pointerDown"], ["pointerMove"], ["pointerUp"]]);
+  assert.equal(live.every((call) => call.geometryRevision === display.geometryRevision), true);
+}
 
 async function waitFor(condition) {
   const deadline = Date.now() + 10_000;
@@ -1026,6 +1052,7 @@ try {
       assert.equal((await response.json()).outputPath, outputPath);
     };
     stopThroughHost = () => action("stop_recording", { deviceId: "opaque/target" });
+    await checkLiveTouch(requestFromHost);
     const socketUrl = new URL("/ws/video?deviceId=opaque%2Ftarget", url);
     socketUrl.protocol = "ws:";
     const socket = new WebSocket(socketUrl, "ailoha.video.v1", { headers: { Cookie: cookie } });
@@ -1149,6 +1176,7 @@ try {
     assert.equal((await api("/api/v1/devices/opaque%2Ftarget/shutdown", "POST")).status, 200);
     assert.equal((await api("/api/v1/devices/opaque%2Ftarget/boot", "POST")).status, 200);
     const display = await (await api("/api/v1/devices/opaque%2Ftarget/display")).json();
+    await checkLiveTouch(api);
     await api("/api/v1/devices/opaque%2Ftarget/input/tap", "POST", { x: 12, y: 10, geometryRevision: display.geometryRevision });
     for (const [kind, input] of [
       ["key", { keyCode: 40 }], ["button", { button: "SIDE" }],
@@ -1405,6 +1433,10 @@ try {
   assert.equal(scenario.videos.size, 0);
   assert.equal(scenario.leases.size, 0);
   assert.equal(scenario.calls.some((call) => call.path === "/api/v1/host/stop"), false);
+  const inputSockets = scenario.calls.filter((call) => call.websocket?.endsWith("/input")).length;
+  assert.equal(inputSockets >= 1, true);
+  assert.equal(scenario.calls.filter((call) => call.continuousInputClosed).length, inputSockets,
+    "every live touch channel is closed so the target's pointer returns to other clients");
   const body = scenario.calls.find((call) => call.path?.endsWith("/input/actions/tap")).body;
   assert.equal(JSON.parse(body).geometryRevision, 13);
   assert.equal(scenario.calls.filter((call) => call.path?.endsWith("/input/actions/key")).length >= 3, true);

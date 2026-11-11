@@ -53,7 +53,7 @@ for (const [host, product] of [
     assert.equal(evidence.creationRecords[2].selectionApplied, false);
     assert.deepEqual(evidence.logs, host === "vscode"
       ? ["invalid_request", ...Array(9).fill("capability_not_supported"),
-        "consent_denied", "ailoha_cli_failed", "GuardedDestinationChanged",
+        "consent_denied", "ailoha_cli_failed", "GuardedDestinationChanged", "stale_geometry",
         ...(focusedText
           ? ["invalid_request"]
           : ["capability_not_supported"])] : []);

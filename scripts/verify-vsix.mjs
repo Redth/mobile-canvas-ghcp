@@ -73,6 +73,7 @@ function verifyExtracted(directory) {
     "extension/dist/lib/ailoha/destructive-consent.mjs",
     "extension/dist/lib/ailoha/mobile-projection.mjs",
     "extension/dist/lib/ailoha/media-adapter.mjs",
+    "extension/dist/lib/ailoha/live-input.mjs",
     "extension/dist/lib/ailoha/reveal-adapter.mjs",
     "extension/dist/lib/ailoha/system-ui-adapter.mjs",
     "extension/dist/lib/ailoha/control-adapter.mjs",

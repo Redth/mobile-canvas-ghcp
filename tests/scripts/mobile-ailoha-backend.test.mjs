@@ -6311,3 +6311,177 @@ test("native failed copy is never a successful zero-byte transfer and still clea
     { code: "artifact_operation_failed" });
   assert.deepEqual(actions, ["stage", "continue", "cleanup"]);
 });
+
+function liveTouchFixture(options = {}) {
+  const channels = [];
+  const state = fixture({
+    ...options,
+    media: {
+      supported() { return { screenshot: true, tap: true, longPress: true, swipe: true, liveStream: true, liveTouch: options.liveTouch ?? true }; },
+      async openLiveInput(invocation) {
+        state.calls.push(["live-open", invocation.targetId, invocation.geometry.geometryRevision]);
+        const channel = {
+          open: true,
+          async send(actions) {
+            if (!channel.open) throw new MobileAilohaError("live_input_closed", "closed");
+            state.calls.push(["live-send", actions.map(({ type, x, y }) => [type, x, y])]);
+            if (options.refuse?.(actions)) {
+              channel.open = false;
+              throw new MobileAilohaError("live_input_rejected", "refused", 400);
+            }
+          },
+          async close() {
+            if (!channel.open && channel.closed) return;
+            channel.open = false;
+            channel.closed = true;
+            state.calls.push(["live-close"]);
+          },
+        };
+        channels.push(channel);
+        return channel;
+      },
+      ...options.media,
+    },
+  });
+  return { ...state, channels };
+}
+
+async function touchRequest(backend, deviceId, phase, display, point = { x: 10, y: 30 }, extra = {}) {
+  const response = await backend.request(`/api/v1/devices/${encodeURIComponent(deviceId)}/input/touch`, {
+    method: "POST",
+    body: JSON.stringify({
+      ...(point ? point : {}), phase, surfaceId: display.surfaceId, geometryRevision: display.geometryRevision,
+      coordinate: display.coordinate, ...extra,
+    }),
+  });
+  return { status: response.status, body: await response.json() };
+}
+
+test("live touch streams down, move and up over one owned channel without re-reading the target", async (t) => {
+  const state = liveTouchFixture();
+  t.after(() => state.backend.dispose());
+  await state.backend.select("one");
+  const display = await state.backend.display("one");
+  assert.equal((await state.backend.getDevice("one")).capabilities.liveTouch, true);
+  const reads = state.calls.filter(([kind]) => kind === "get").length;
+  assert.equal((await touchRequest(state.backend, "one", "down", display)).status, 200);
+  assert.equal((await touchRequest(state.backend, "one", "move", display, { x: 12, y: 40 })).status, 200);
+  assert.equal((await touchRequest(state.backend, "one", "move", display, { x: 14, y: 50 })).status, 200);
+  const up = await touchRequest(state.backend, "one", "up", display, { x: 14, y: 50 });
+  assert.equal(up.status, 200);
+  assert.equal(up.body.released, true);
+  assert.deepEqual(state.calls.filter(([kind]) => kind.startsWith("live-")), [
+    ["live-open", "one", display.geometryRevision],
+    ["live-send", [["pointerDown", 10, 30]]],
+    ["live-send", [["pointerMove", 12, 40]]],
+    ["live-send", [["pointerMove", 14, 50]]],
+    ["live-send", [["pointerUp", 14, 50]]],
+  ]);
+  assert.equal(state.calls.filter(([kind]) => kind === "get").length, reads);
+  await touchRequest(state.backend, "one", "down", display);
+  await touchRequest(state.backend, "one", "up", display);
+  assert.equal(state.calls.filter(([kind]) => kind === "live-open").length, 1, "back-to-back gestures reuse the warm channel");
+});
+
+test("live touch phases outside the press's geometry, bounds or selection never reach the device", async (t) => {
+  const state = liveTouchFixture();
+  t.after(() => state.backend.dispose());
+  await state.backend.select("one");
+  const display = await state.backend.display("one");
+  assert.equal((await touchRequest(state.backend, "one", "down", { ...display, geometryRevision: display.geometryRevision + 1 })).body.code, "stale_geometry");
+  assert.equal((await touchRequest(state.backend, "one", "down", display, { x: 1_000, y: 30 })).body.code, "invalid_coordinates");
+  assert.equal(state.calls.some(([kind]) => kind === "live-send"), false);
+
+  await touchRequest(state.backend, "one", "down", display);
+  const stale = await touchRequest(state.backend, "one", "move", { ...display, geometryRevision: display.geometryRevision + 1 }, { x: 12, y: 40 });
+  assert.equal(stale.body.code, "stale_geometry");
+  assert.deepEqual(state.calls.filter(([kind]) => kind === "live-close").length, 1, "a refused phase retires the channel so the host lifts the finger");
+  assert.equal((await touchRequest(state.backend, "one", "move", display, { x: 12, y: 40 })).body.code, "touch_not_active");
+  assert.equal((await touchRequest(state.backend, "one", "up", display)).body.released, false);
+
+  await touchRequest(state.backend, "one", "down", display);
+  await state.backend.select("two");
+  assert.equal(state.calls.filter(([kind]) => kind === "live-close").length, 2, "a new selection lifts the finger");
+  assert.equal((await touchRequest(state.backend, "one", "move", display, { x: 12, y: 40 })).body.code, "touch_not_active");
+  assert.equal(state.calls.filter(([kind]) => kind === "live-send").length, 2);
+});
+
+test("a refused live batch retires the gesture instead of leaving a finger down", async (t) => {
+  const state = liveTouchFixture({ refuse: (actions) => actions[0].type === "pointerMove" });
+  t.after(() => state.backend.dispose());
+  await state.backend.select("one");
+  const display = await state.backend.display("one");
+  await touchRequest(state.backend, "one", "down", display);
+  assert.equal((await touchRequest(state.backend, "one", "move", display, { x: 12, y: 40 })).body.code, "live_input_rejected");
+  assert.equal(state.channels[0].closed, true);
+  assert.equal((await touchRequest(state.backend, "one", "up", display)).body.released, false);
+});
+
+test("warming opens the channel without touching, and discrete or agent input retires it first", async (t) => {
+  const state = liveTouchFixture();
+  t.after(() => state.backend.dispose());
+  await state.backend.select("one");
+  const display = await state.backend.display("one");
+  assert.equal((await touchRequest(state.backend, "one", "prepare", display, null)).status, 200);
+  assert.deepEqual(state.calls.filter(([kind]) => kind.startsWith("live-")), [["live-open", "one", display.geometryRevision]]);
+  await touchRequest(state.backend, "one", "down", display);
+  await touchRequest(state.backend, "one", "prepare", display, null);
+  await touchRequest(state.backend, "one", "up", display);
+  assert.equal(state.calls.filter(([kind]) => kind === "live-open").length, 1);
+  await state.backend.input("tap", "one", { x: 10, y: 30, ...display });
+  const order = state.calls.map(([kind]) => kind).filter((kind) => ["live-close", "tap"].includes(kind));
+  assert.deepEqual(order, ["live-close", "tap"]);
+  await touchRequest(state.backend, "one", "down", display);
+  await state.backend.dispose();
+  assert.equal(state.calls.filter(([kind]) => kind === "live-close").length, 2);
+});
+
+test("targets without continuous input keep discrete replay and refuse live touch", async (t) => {
+  const state = liveTouchFixture({ liveTouch: false });
+  t.after(() => state.backend.dispose());
+  await state.backend.select("one");
+  const display = await state.backend.display("one");
+  assert.equal((await state.backend.getDevice("one")).capabilities.liveTouch, false);
+  const refused = await touchRequest(state.backend, "one", "down", display);
+  assert.equal(refused.status, 501);
+  assert.equal(state.calls.some(([kind]) => kind.startsWith("live-")), false);
+  assert.equal((await touchRequest(state.backend, "one", "down", display, { x: 1, y: 1 }, { phase: "hover" })).body.code, "invalid_request");
+});
+
+test("a selection attempt retires a held live touch before it can fail, and touch input is captured at call time", async (t) => {
+  const state = liveTouchFixture();
+  t.after(() => state.backend.dispose());
+  await state.backend.select("one");
+  const display = await state.backend.display("one");
+  await touchRequest(state.backend, "one", "down", display);
+  await assert.rejects(state.backend.select("missing"));
+  assert.equal(state.calls.filter(([kind]) => kind === "live-close").length, 1);
+  assert.equal((await touchRequest(state.backend, "one", "move", display, { x: 12, y: 40 })).body.code, "touch_not_active");
+
+  const observed = { surfaceId: display.surfaceId, geometryRevision: display.geometryRevision, coordinate: display.coordinate };
+  const input = { phase: "down", x: 10, y: 30, ...observed };
+  const pressing = state.backend.touch("one", input);
+  input.x = 11;
+  input.phase = "cancel";
+  await pressing;
+  assert.deepEqual(state.calls.filter(([kind]) => kind === "live-send").at(-1), ["live-send", [["pointerDown", 10, 30]]]);
+});
+
+test("a press during discrete input is refused instead of reclaiming the device pointer", async (t) => {
+  const gate = deferred();
+  const state = liveTouchFixture({ controls: {
+    supported() { return { key: true }; },
+    async key() { await gate.promise; },
+  } });
+  t.after(() => state.backend.dispose());
+  await state.backend.select("one");
+  const display = await state.backend.display("one");
+  const key = state.backend.input("key", "one", { keyCode: 40 });
+  await new Promise((resolve) => setTimeout(resolve, 10));
+  assert.equal((await touchRequest(state.backend, "one", "down", display)).body.code, "live_input_busy");
+  assert.equal((await touchRequest(state.backend, "one", "prepare", display, null)).status, 200);
+  assert.equal(state.calls.some(([kind]) => kind === "live-open"), false);
+  gate.resolve();
+  await key;
+  assert.equal((await touchRequest(state.backend, "one", "down", display)).status, 200);
+});

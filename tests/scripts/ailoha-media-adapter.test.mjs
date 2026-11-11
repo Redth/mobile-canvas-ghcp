@@ -96,14 +96,14 @@ test("input success false and mismatched geometry are explicit operational failu
   await assert.rejects(stale.adapter.tap(invocation, { x: 1, y: 2, duration: 0 }), { code: "invalid_media_response" });
 });
 
-test("video preserves omitted rate/profile defaults and registers acquired identity before other IO", async () => {
+test("video requests the legacy 60 fps ceiling, keeps profile defaults and registers identity before other IO", async () => {
   const { adapter, calls } = fixture();
   let acquired;
   const descriptor = await adapter.createVideo(invocation, (value) => {
     acquired = value;
     assert.equal(calls.length, 1);
   });
-  assert.equal(calls[0].options.body, undefined);
+  assert.deepEqual(JSON.parse(calls[0].options.body), { maxFramesPerSecond: 60 });
   assert.equal(acquired.videoSessionId, video.videoSessionId);
   const messages = [];
   const socket = await adapter.attachVideo(invocation, descriptor, { onMessage: (data) => messages.push(data), onError() {} });
@@ -147,12 +147,17 @@ test("support needs exact operation and surface feature evidence, not capability
   const surface = { capabilities: [{ id: "surface.input", version: 1, features: ["tap.point", "long-press.point", "gesture", "swipe.point"] }] };
   const capabilities = [
     { id: "surface.capture", version: 1, features: ["captureTargetScreenshot", "createLiveVideoSession", "getLiveVideoSession", "stopLiveVideoSession"] },
-    { id: "surface.input", version: 1, features: ["tapTargetElement", "performTargetGesture"] },
+    { id: "surface.input", version: 1, features: ["tapTargetElement", "performTargetGesture", "getContinuousInputEndpoint"] },
   ];
   assert.equal(Object.values(adapter.supported(capabilities, surface)).every((value) => value === true), true);
   const unsupported = adapter.supported(capabilities.map((capability) => ({ ...capability, version: 2 })), surface);
   assert.equal(Object.values(unsupported).every((value) => value === false), true);
   assert.equal(adapter.supported(capabilities, { capabilities: [] }).tap, false);
+  assert.equal(adapter.supported(capabilities, { capabilities: [] }).liveTouch, false);
+  const discreteOnly = capabilities.map((capability) => capability.id !== "surface.input" ? capability
+    : { ...capability, features: ["tapTargetElement", "performTargetGesture"] });
+  assert.equal(adapter.supported(discreteOnly, surface).liveTouch, false);
+  assert.equal(adapter.supported(discreteOnly, surface).tap, true);
 });
 
 test("accepted video recovery keeps slash/dot/percent opaque IDs independent of filesystem paths", async () => {
@@ -250,3 +255,55 @@ test("lost202 video cleanup recovers by its accepted operation and never repeats
     await assert.rejects(state.adapter.deleteVideo(invocation, descriptor), { code: "video_delete_uncertain" });
     assert.equal(deletes, 1);
   });
+
+test("video inspection reports only the owned session's capture source, detail and effective rate", async () => {
+  const described = { ...video, state: "streaming", source: "idb", sourceDetail: "Framebuffer capture unavailable: denied.", maxFramesPerSecond: 60 };
+  const { adapter } = fixture({
+    async response(url) {
+      if (url.endsWith("/video/sessions")) return response(video, 201, `${path}/video/sessions/opaque%2Fvideo`);
+      return response(described);
+    },
+  });
+  const descriptor = await adapter.createVideo(invocation);
+  assert.deepEqual({ ...await adapter.inspectVideo(invocation, descriptor) },
+    { source: "idb", sourceDetail: "Framebuffer capture unavailable: denied.", maxFramesPerSecond: 60 });
+  const other = fixture({
+    async response(url) {
+      if (url.endsWith("/video/sessions")) return response(video, 201, `${path}/video/sessions/opaque%2Fvideo`);
+      return response({ ...described, targetId: "other" });
+    },
+  });
+  await assert.rejects(other.adapter.inspectVideo(invocation, await other.adapter.createVideo(invocation)), { code: "invalid_media_response" });
+});
+
+test("live input opens the fixed owned continuous input channel at the captured geometry", async () => {
+  const sent = [];
+  const { adapter, calls } = fixture({
+    async websocket(url, listeners) {
+      calls.push({ url });
+      return {
+        send(text) {
+          const message = JSON.parse(text);
+          sent.push(message);
+          if (message.type === "hello") {
+            queueMicrotask(() => listeners.onMessage(new TextEncoder().encode(JSON.stringify({
+              type: "ready", resumeFromSequence: 0, geometryRevision: 7, maxInFlight: 8, maxActivePointers: 1,
+            })), false));
+          } else {
+            queueMicrotask(() => listeners.onMessage(new TextEncoder().encode(JSON.stringify({
+              type: "ack", acknowledgedSequence: message.sequence,
+            })), false));
+          }
+        },
+        async close() { calls.push({ close: true }); },
+      };
+    },
+  });
+  const channel = await adapter.openLiveInput(invocation);
+  assert.equal(calls[0].url, "/ws/v1/targets/opaque%2Ftarget/surfaces/opaque%2Fsurface/input");
+  assert.deepEqual(sent[0], { type: "hello", nextSequence: 0, lastAcknowledgedSequence: -1, geometryRevision: 7 });
+  await channel.send([{ type: "pointerDown", pointerId: 0, x: 1, y: 2 }]);
+  assert.deepEqual(sent[1], { type: "input", sequence: 0, geometryRevision: 7, actions: [{ type: "pointerDown", pointerId: 0, x: 1, y: 2 }] });
+  await channel.close();
+  assert.deepEqual(calls.at(-1), { close: true });
+});

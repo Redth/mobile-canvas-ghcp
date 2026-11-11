@@ -840,10 +840,45 @@ compatibility-choice tuple, with the shared 64-receipt admission bound.
 Preparation observes even immediate submission failures before handing off the
 receipt; an admitted intent counts only once against that bound.
 
+Live touch: when a target advertises `surface.input`
+`getContinuousInputEndpoint` and its surface advertises `tap.point`, the device
+reports `capabilities.liveTouch` and the shared panel streams the pointer and
+wheel (as a virtual finger) through `POST /api/v1/devices/{id}/input/touch` with
+`phase` `prepare`, `down`, `move`, `up` or `cancel`, matching the legacy
+real-time path. Every phase carries the observed `surfaceId`, `geometryRevision`
+and `coordinate`. The press captures and checks the selection, surface and
+observed geometry like discrete input, reusing the capture made for the panel's
+display or video while that snapshot, selection generation and geometry remain
+current; later phases proceed only while they still match, and points must lie
+inside the observed logical bounds. The host owns one
+`/ws/v1/targets/{t}/surfaces/{s}/input` (`ailoha.input.v1`) channel per
+captured geometry: it sends `hello` at the captured revision, refuses a `ready`
+at another revision, and settles each batch only on its own acknowledgement. Any
+refusal, `geometryChanged`, `pointersReleased`, disconnect, timeout, selection
+change, detach or disposal retires the channel, and the Target Host releases a
+held pointer when the socket ends. The renderer never sees the channel, its
+credentials or the connection evidence. Moves are coalesced to the newest point
+with one request in flight, and the newest point is sent before the lift.
+
+An open continuous input socket owns the target's `TargetInputArbiter`, which
+refuses discrete tap, gesture, fill, focus, scroll and focused text from every
+client. The panel therefore warms the channel (`prepare`) only while the pointer
+is over the device, and the host lets it lapse 2.5 s after warming or a gesture
+ends. In-process discrete input and native UI taps retire it first and suppress
+warming until they finish. Targets without continuous input keep the discrete
+tap/swipe replay after release.
+
 PNG capture validates its 201 artifact/Location, ownership, MIME and applicable
-size/digest before reading content. Video session creation preserves omitted
-encoder settings; the renderer receives only owned session/geometry/source
-projection and ALHV units. Host callbacks buffer bounded early messages before
+size/digest before reading content. Video session creation requests
+`maxFramesPerSecond: 60` to match the legacy live view (the Target Host
+otherwise defaults the capture backend to 30 fps) and leaves the other encoder
+settings omitted; the renderer receives only owned session/geometry/source
+projection and ALHV units. The capture backend is chosen only when the stream
+opens, so after the Target Host's `ready` the host reads the owned session back
+and publishes its `source`, `sourceDetail` and effective `maxFramesPerSecond` as
+a scoped `video-source` panel event for that `videoSessionId`. The owned video
+channel itself is unchanged. The panel names the real source and shows a
+fallback's reason (for example idb after framebuffer capture failed). Host callbacks buffer bounded early messages before
 that descriptor. Created sessions register captured cleanup: socket close,
 session DELETE, then authoritative operation wait before lease release. A lost
 202 cleanup body retains validated operation Location and retries only GET/wait,
@@ -1004,7 +1039,8 @@ receipt can prove a completed copy or justify invented output metadata.
 Implemented: authoritative advertised catalogs and compatible create+boot,
 inventory/select, advertised start/stop/reboot and provider-owned window reveal,
 PNG screenshot,
-basic geometry-bound pointer gestures, shared ALHV WebCodecs display, and
+basic geometry-bound pointer gestures, live touch over the continuous input
+channel, shared ALHV WebCodecs display, and
 advertised reset/delete when the host can obtain genuine captured approval,
 target-host recording through the verified scoped CLI when it advertises
 canonical recovery, [read-only explicit-root workspace/application evidence](ailoha-workspace-inspection.md),

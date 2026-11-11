@@ -7,8 +7,11 @@ const {
   ailohaDisplayGeometry,
   ailohaInputPayload,
   captureCanvasInvocation,
+  describeCaptureSource,
   isCanvasInvocationCurrent,
+  liveTouchRequest,
   pointInLogicalBounds,
+  usesAilohaLiveTouch,
 } = await import(productModule("web/ailoha-canvas-state.js"));
 const { supportsLegacyStreamOptions, shouldRetainAilohaStream, canUseDeviceCapability } = await import(productModule("web/canvas-state.js"));
 
@@ -167,3 +170,39 @@ for (const action of ["erase", "delete"]) {
     assert.equal(current.selected.id, "new-selection");
   });
 }
+
+test("live touch is used only for Ailoha surfaces that advertise continuous input", () => {
+  assert.equal(usesAilohaLiveTouch({ backend: "ailoha", capabilities: { liveTouch: true } }), true);
+  assert.equal(usesAilohaLiveTouch({ backend: "ailoha", capabilities: { liveTouch: false, tap: true } }), false);
+  assert.equal(usesAilohaLiveTouch({ backend: "legacy", capabilities: { liveTouch: true } }), false);
+  assert.equal(usesAilohaLiveTouch(null), false);
+});
+
+test("live touch requests stay bound to the captured device, surface and geometry revision", () => {
+  const invocation = captureCanvasInvocation(state());
+  const down = liveTouchRequest(invocation, { x: 1, y: 25 }, "down");
+  assert.equal(down.path, "/api/v1/devices/opaque/input/touch");
+  assert.deepEqual(down.body, { x: 1, y: 25, phase: "down", surfaceId: "surface", geometryRevision: 13, coordinate: "window" });
+  assert.deepEqual(liveTouchRequest(invocation, null, "prepare").body,
+    { phase: "prepare", surfaceId: "surface", geometryRevision: 13, coordinate: "window" });
+  assert.throws(() => liveTouchRequest({ ...invocation, display: null }, { x: 1, y: 2 }, "down"));
+  const legacy = liveTouchRequest({ deviceId: "a/b", backend: "legacy" }, { x: 1, y: 2 }, "move");
+  assert.deepEqual(legacy, { path: "/api/v1/devices/a%2Fb/input/touch", body: { x: 1, y: 2, phase: "move" } });
+});
+
+test("capture source names the real backend and keeps a fallback reason visible", () => {
+  assert.equal(describeCaptureSource(null), null);
+  const primary = describeCaptureSource({ source: "framebuffer", maxFramesPerSecond: 60 });
+  assert.deepEqual({ ...primary }, {
+    source: "framebuffer", label: "Simulator framebuffer · 60 fps", detail: "Simulator framebuffer",
+    degraded: false, reason: "",
+  });
+  const fallback = describeCaptureSource({ source: "idb", sourceDetail: " Framebuffer capture failed: denied. " });
+  assert.equal(fallback.label, "idb (fallback)");
+  assert.equal(fallback.degraded, true);
+  assert.equal(fallback.reason, "Framebuffer capture failed: denied.");
+  assert.equal(describeCaptureSource({ source: "idb" }).reason, "");
+  assert.equal(describeCaptureSource({ pending: true }).degraded, false);
+  assert.equal(describeCaptureSource({ source: "screencapturekit", sourceDetail: "ok" }).reason, "");
+  assert.equal(describeCaptureSource({ source: "png", sourceDetail: "Screenshot polling fallback." }).reason, "Screenshot polling fallback.");
+});

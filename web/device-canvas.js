@@ -27,7 +27,10 @@ import {
   ailohaDisplayGeometry,
   ailohaInputPayload,
   captureCanvasInvocation,
+  describeCaptureSource,
   isCanvasInvocationCurrent,
+  liveTouchRequest,
+  usesAilohaLiveTouch,
   pointInLogicalBounds,
 } from "./ailoha-canvas-state.js";
 import { createAilohaVideoPlayer } from "./ailoha-video-player.js";
@@ -73,6 +76,8 @@ const elements = {
   actualFps: document.querySelector("#actual-fps"),
   encodeSize: document.querySelector("#encode-size"),
   captureSource: document.querySelector("#capture-source"),
+  captureReasonField: document.querySelector("#capture-reason-field"),
+  captureReason: document.querySelector("#capture-reason"),
   geometry: document.querySelector("#geometry"),
   udid: document.querySelector("#udid"),
   udidLabel: document.querySelector("#udid-label"),
@@ -159,6 +164,7 @@ const state = {
   socket: null,
   decoder: null,
   ailohaPlayer: null,
+  ailohaVideoSessionId: null,
   awaitingRotatedFrame: false,
   rotationFrameRevision: null,
   rotationRecoveryStarted: false,
@@ -1274,6 +1280,7 @@ function startAilohaStream() {
           onError(error) { if (current()) showStreamFailure(error); },
         });
         state.ailohaPlayer = player;
+        state.ailohaVideoSessionId = descriptor.context?.videoSessionId ?? null;
         const connection = player.attach({
           protocol: socket.protocol,
           send(text, scope) {
@@ -1285,10 +1292,7 @@ function startAilohaStream() {
         });
         socket.ailohaConnection = connection;
         void connection.start();
-        applyCaptureSource({
-          source: descriptor.source ?? "ailoha",
-          sourceDetail: descriptor.sourceDetail ?? "Owned Ailoha Target Host ALHV stream.",
-        });
+        applyCaptureSource(descriptor.source !== undefined ? descriptor : { pending: true });
         return;
       }
       void socket.ailohaConnection.receive(event.data);
@@ -1318,6 +1322,7 @@ function stopStream() {
   if (state.ailohaPlayer) {
     const player = state.ailohaPlayer;
     state.ailohaPlayer = null;
+    state.ailohaVideoSessionId = null;
     void player.dispose().catch((error) => console.error("Owned Ailoha player cleanup failed.", error));
   }
   // The parser holds a pending flush timer that would otherwise fire into a closed decoder.
@@ -1553,28 +1558,19 @@ function drawScreenSource(source, sourceX, sourceY, sourceWidth, sourceHeight) {
 }
 
 // The stream can silently degrade to idb when ScreenCaptureKit is unavailable, which reads as a
-// quality regression rather than a fixable permission problem. Name the active backend, and carry
-// the reason in the tooltip so a denied TCC prompt explains itself.
-const CAPTURE_SOURCE_LABELS = {
-  framebuffer: "Simulator framebuffer",
-  screencapturekit: "ScreenCaptureKit",
-  idb: "idb (fallback)",
-  png: "Screenshots (fallback)",
-};
-const PRIMARY_CAPTURE_SOURCES = new Set(["framebuffer", "screencapturekit", "emulator-grpc"]);
-
+// quality regression rather than a fixable permission problem. Name the active backend, and show the
+// fallback reason so a denied TCC prompt explains itself.
 function applyCaptureSource(descriptor) {
   if (!elements.captureSource) return;
-  if (!descriptor) {
-    elements.captureSource.value = "—";
-    elements.captureSource.title = "";
-    elements.captureSource.classList.remove("field-degraded");
-    return;
+  const capture = describeCaptureSource(descriptor);
+  elements.captureSource.value = capture?.label ?? "—";
+  elements.captureSource.title = capture?.detail ?? "";
+  elements.captureSource.classList.toggle("field-degraded", capture?.degraded === true);
+  if (elements.captureReason) {
+    elements.captureReason.value = capture?.reason ?? "";
+    elements.captureReason.title = capture?.reason ?? "";
+    elements.captureReasonField.classList.toggle("hidden", !capture?.reason);
   }
-  const source = descriptor.source || "unknown";
-  elements.captureSource.value = CAPTURE_SOURCE_LABELS[source] || source;
-  elements.captureSource.title = descriptor.sourceDetail || elements.captureSource.value;
-  elements.captureSource.classList.toggle("field-degraded", !PRIMARY_CAPTURE_SOURCES.has(source));
 }
 
 function canvasContext() {
@@ -1959,6 +1955,11 @@ function connectAutomationEvents() {
       }
       return;
     }
+    if (activity.kind === "video-source") {
+      if (addressed && state.ailohaPlayer && activity.deviceId === state.selected?.id
+        && activity.videoSessionId === state.ailohaVideoSessionId) applyCaptureSource(activity);
+      return;
+    }
     if (transport && !addressed) return;
     if (addressed) {
       const changedTarget = activity.kind === "selection" && state.selected?.id !== activity.deviceId;
@@ -2227,20 +2228,85 @@ const liveTouch = {
   sent: 0,
   started: 0,
   finish: null,
+  // Ailoha gestures stay bound to the selection, surface and geometry captured at the press.
+  gesture: null,
 };
 
-function postTouch(point, phase) {
-  return api(`/api/v1/devices/${encodeURIComponent(state.selected.id)}/input/touch`, {
-    method: "POST",
-    body: JSON.stringify({ x: point.x, y: point.y, phase }),
-  });
+function postTouch(point, phase, gesture = liveTouch.gesture) {
+  if (!gesture?.invocation) {
+    return api(`/api/v1/devices/${encodeURIComponent(state.selected.id)}/input/touch`, {
+      method: "POST",
+      body: JSON.stringify({ x: point.x, y: point.y, phase }),
+    });
+  }
+  const { path, body } = liveTouchRequest(gesture.invocation, point, phase);
+  const started = performance.now();
+  return api(path, { method: "POST", body: JSON.stringify(body) }).then(
+    (response) => {
+      gesture.roundTrips.push(performance.now() - started);
+      return response;
+    },
+    (error) => {
+      gesture.error ??= error;
+      throw error;
+    },
+  );
 }
 
-function beginTouch(point, label) {
+// Opening Ailoha's continuous input channel is the expensive part of a gesture, so it is warmed while
+// the pointer is over the device and the press only has to send the finger down. The host lets the
+// channel lapse shortly after warming stops, which returns the device's pointer to other clients.
+const LIVE_TOUCH_WARM_INTERVAL_MS = 1500;
+let liveTouchWarmAt = 0;
+let liveTouchWarmTimer = null;
+let liveTouchWarming = false;
+
+function startLiveTouchWarmth() {
+  warmLiveTouch();
+  clearInterval(liveTouchWarmTimer);
+  liveTouchWarmTimer = usesAilohaLiveTouch(state.selected)
+    ? setInterval(warmLiveTouch, LIVE_TOUCH_WARM_INTERVAL_MS) : null;
+}
+
+function stopLiveTouchWarmth() {
+  clearInterval(liveTouchWarmTimer);
+  liveTouchWarmTimer = null;
+}
+
+function warmLiveTouch() {
+  if (!usesAilohaLiveTouch(state.selected) || state.selected.state !== "booted" || !state.display
+    || liveTouch.active || state.awaitingRotatedFrame || state.detached || !state.panelVisible
+    || liveTouchWarming) return;
+  const now = performance.now();
+  if (now < liveTouchWarmAt) return;
+  liveTouchWarmAt = now + LIVE_TOUCH_WARM_INTERVAL_MS - 100;
+  let request;
+  try { request = liveTouchRequest(captureCanvasInvocation(state), null, "prepare"); }
+  catch { return; }
+  // One warm request at a time: the host serializes touch phases, so a backlog would delay a press.
+  liveTouchWarming = true;
+  void api(request.path, { method: "POST", body: JSON.stringify(request.body) }).catch(() => {
+    liveTouchWarmAt = performance.now() + 5000;
+  }).finally(() => { liveTouchWarming = false; });
+}
+
+function beginTouch(point, label, invocation = null) {
   if (!state.selected || state.selected.state !== "booted") {
     showError(new Error(`Boot the ${selectedNoun()} before sending input.`));
     return false;
   }
+  if (invocation) {
+    if (state.awaitingRotatedFrame) {
+      showError(new Error("Wait for a frame at the rotated geometry before sending input."));
+      return false;
+    }
+    try { liveTouchRequest(invocation, point, "down"); }
+    catch (error) {
+      showError(error);
+      return false;
+    }
+  }
+  liveTouch.gesture = invocation ? { invocation, error: null, roundTrips: [], lastSent: point } : null;
   liveTouch.active = true;
   liveTouch.pending = null;
   liveTouch.finish = null;
@@ -2260,8 +2326,11 @@ function beginTouch(point, label) {
 function pumpTouch() {
   const next = liveTouch.pending;
   liveTouch.pending = null;
-  if (next && liveTouch.active) {
+  const gesture = liveTouch.gesture;
+  const current = !gesture || (!gesture.error && isCanvasInvocationCurrent(gesture.invocation, state));
+  if (next && liveTouch.active && current) {
     liveTouch.sent += 1;
+    if (gesture) gesture.lastSent = next;
     postTouch(next, "move").catch(() => undefined).then(pumpTouch);
     return;
   }
@@ -2286,14 +2355,30 @@ function endTouch(point, label) {
   if (!liveTouch.active) return;
   liveTouch.active = false;
   liveTouch.pending = null;
+  const gesture = liveTouch.gesture;
   const elapsed = Math.round(performance.now() - liveTouch.started);
+  const visible = () => !gesture || isCanvasInvocationCurrent(gesture.invocation, state);
+  // Coalescing can leave the newest position unsent when the device acknowledges slowly. An Ailoha
+  // gesture moves there before lifting so the device sees the drag rather than a press and release.
+  const settle = () => gesture && !gesture.error && visible()
+    && (gesture.lastSent?.x !== point.x || gesture.lastSent?.y !== point.y)
+    ? postTouch(point, "move", gesture).catch(() => undefined)
+    : Promise.resolve();
   const release = () =>
-    postTouch(point, "up")
+    settle().then(() => postTouch(point, "up", gesture))
       .then(() => {
-        setInputStatus("success", `${label} sent`, `${elapsed} ms`);
+        if (!visible()) return;
+        if (gesture?.error) throw gesture.error;
+        // A live Ailoha gesture reports how quickly the device acknowledged each step; the time
+        // since the press would mostly measure how long the person held their finger down.
+        const latency = gesture?.roundTrips.length
+          ? `${Math.round(gesture.roundTrips.reduce((sum, value) => sum + value, 0) / gesture.roundTrips.length)} ms/step`
+          : `${elapsed} ms`;
+        setInputStatus("success", `${label} sent`, latency);
         settleInputIndicator(true);
       })
       .catch((error) => {
+        if (!visible()) return;
         setInputStatus("error", `${label} failed`);
         settleInputIndicator(false);
         showError(error);
@@ -2305,7 +2390,8 @@ function endTouch(point, label) {
 
 elements.canvas.addEventListener("pointerdown", (event) => {
   if (!state.display || (event.pointerType === "mouse" && event.button !== 0)) return;
-  if (state.selected?.backend === "ailoha" && !state.selected.capabilities.tap) {
+  if (state.selected?.backend === "ailoha" && !state.selected.capabilities.tap
+    && !usesAilohaLiveTouch(state.selected)) {
     showError(new Error("This Ailoha surface does not advertise coordinate tap input."));
     return;
   }
@@ -2321,13 +2407,22 @@ elements.canvas.addEventListener("pointerdown", (event) => {
     invocation: captureCanvasInvocation(state),
   };
   showInputIndicator(event.clientX, event.clientY);
-  if (state.selected.backend === "ailoha") return;
+  if (state.selected.backend === "ailoha") {
+    if (!usesAilohaLiveTouch(state.selected)) return;
+    state.pointer.live = true;
+    if (!beginTouch(point, "Touch down", state.pointer.invocation)) state.pointer = null;
+    return;
+  }
   if (!beginTouch(point, "Touch down")) {
     state.pointer = null;
   }
 });
 
+elements.canvas.addEventListener("pointerenter", startLiveTouchWarmth);
+elements.canvas.addEventListener("pointerleave", stopLiveTouchWarmth);
+
 elements.canvas.addEventListener("pointermove", (event) => {
+  if (!state.pointer && !liveTouchWarmTimer) startLiveTouchWarmth();
   if (state.pointer?.id !== event.pointerId || !state.display) return;
   event.preventDefault();
   positionInputIndicator(event.clientX, event.clientY);
@@ -2335,7 +2430,7 @@ elements.canvas.addEventListener("pointermove", (event) => {
   if (Math.hypot(point.x - state.pointer.point.x, point.y - state.pointer.point.y) >= 1) {
     state.pointer.moved = true;
   }
-  if (state.pointer.invocation.backend === "ailoha") return;
+  if (state.pointer.invocation.backend === "ailoha" && !state.pointer.live) return;
   moveTouch(point);
 });
 
@@ -2353,7 +2448,7 @@ elements.canvas.addEventListener("pointerup", (event) => {
   positionInputIndicator(event.clientX, event.clientY);
 
   const label = distance >= 6 ? "Drag" : duration > 0.45 ? "Long press" : "Tap";
-  if (pointer.invocation.backend === "ailoha") {
+  if (pointer.invocation.backend === "ailoha" && !pointer.live) {
     const payload = distance >= 6
       ? { startX: pointer.point.x, startY: pointer.point.y, endX: end.x, endY: end.y, duration }
       : { x: pointer.point.x, y: pointer.point.y, duration: duration > 0.45 ? duration : 0 };
@@ -2376,15 +2471,18 @@ elements.canvas.addEventListener("contextmenu", (event) => event.preventDefault(
 elements.canvas.addEventListener("wheel", (event) => {
   event.preventDefault();
   if (!state.display) return;
-  if (state.selected?.backend === "ailoha" && !state.selected.capabilities.swipe) return;
+  if (state.selected?.backend === "ailoha" && !state.selected.capabilities.swipe
+    && !usesAilohaLiveTouch(state.selected)) return;
 
   const point = logicalPoint(event);
   if (!state.wheel) {
     // Start mid-screen so there is travel available in both directions before clamping.
     const originY = state.display.pointY ?? 0;
     const origin = { x: point.x, y: originY + state.display.pointHeight / 2 };
-    state.wheel = { origin, cursor: { ...origin }, invocation: captureCanvasInvocation(state) };
-    if (state.selected.backend !== "ailoha" && !beginTouch(origin, "Scroll")) {
+    const invocation = captureCanvasInvocation(state);
+    const live = state.selected.backend !== "ailoha" || usesAilohaLiveTouch(state.selected);
+    state.wheel = { origin, cursor: { ...origin }, invocation, live };
+    if (live && !beginTouch(origin, "Scroll", invocation.backend === "ailoha" ? invocation : null)) {
       state.wheel = null;
       return;
     }
@@ -2399,7 +2497,7 @@ elements.canvas.addEventListener("wheel", (event) => {
     )),
   };
   showInputIndicator(event.clientX, event.clientY);
-  if (state.wheel.invocation.backend !== "ailoha") moveTouch(state.wheel.cursor);
+  if (state.wheel.live) moveTouch(state.wheel.cursor);
 
   clearTimeout(state.wheelTimer);
   state.wheelTimer = setTimeout(flushWheel, 90);
@@ -2413,7 +2511,7 @@ function flushWheel() {
     settleInputIndicator(true);
     return;
   }
-  if (wheel.invocation.backend === "ailoha") {
+  if (!wheel.live) {
     void sendInput("swipe", {
       startX: wheel.origin.x, startY: wheel.origin.y,
       endX: wheel.cursor.x, endY: wheel.cursor.y, duration: 0.35,
