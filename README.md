@@ -70,7 +70,7 @@ preview wires the same scoped Ailoha backend into the installed canvas, VS Code
 view/Chat tools, and MCP entrypoints. It does not change the product version,
 identifiers, Marketplace package, or stable runtime channel.
 
-The source now pins the anonymously published `@ailoha/cli@0.2.5-preview.3`
+The source now pins the anonymously published `@ailoha/cli@0.2.5-preview.5`
 launcher graph in both hosts, including its exact tarball integrity and source
 provenance. Once a reviewed host package is installed in a separately qualified
 environment,

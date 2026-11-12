@@ -1,9 +1,9 @@
 {
   "schema": "mobile-canvas.ailoha-runtime/v1",
-  "version": "0.2.5-preview.4",
-  "sourceSha": "e31559ba06a3d926fa5903db3227e36ce519c8c9",
-  "tarball": "https://registry.npmjs.org/@ailoha/cli/-/cli-0.2.5-preview.4.tgz",
-  "integrity": "sha512-6I8td1eDpEerSjdiIMNciIPRGc5ixhiZyFMyb1drfmPFDNQiIpZq9B4ZSAtycw6KyvLUwsxWu4viNwCU+lzGMw==",
-  "sourceRunId": "41132135307",
+  "version": "0.2.5-preview.5",
+  "sourceSha": "fa5b02162737520630a0531edeb5a696cba4f90c",
+  "tarball": "https://registry.npmjs.org/@ailoha/cli/-/cli-0.2.5-preview.5.tgz",
+  "integrity": "sha512-v0dH0Bv4VhsSfCk7KtA5iFUwW/l6loH9uIN0infYCwY4cjcjMuNCkXhtujVZbOAVgXzIEeu55S1AST6TPdqNtw==",
+  "sourceRunId": "43128854290",
   "sourceRunAttempt": "1"
 }
