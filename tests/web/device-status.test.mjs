@@ -15,7 +15,7 @@ function rule(selector) {
   return match[1];
 }
 
-test("device status surface has semantic copy, iconography, and an in-frame action", () => {
+test("device status surface has semantic copy, iconography, and a stage-level action outside fitted pixels", () => {
   assert.match(
     html,
     /id="stream-overlay"[^>]+role="status"[^>]+aria-live="polite"[^>]+aria-atomic="true"/,
@@ -28,6 +28,10 @@ test("device status surface has semantic copy, iconography, and an in-frame acti
   assert.match(html, /id="stream-overlay-action"[^>]+type="button"/);
   assert.match(html, /<symbol id="icon-alert"/);
   assert.match(html, /<symbol id="icon-link-off"/);
+  assert.ok(html.indexOf('id="stream-overlay"') > html.indexOf('id="side-button"'));
+  assert.match(rule(".stage-viewport"), /position:\s*relative/);
+  assert.match(rule(".stream-overlay"), /inset:\s*var\(--status-top-reserve/);
+  assert.match(rule(".stream-status-card"), /overflow-wrap:\s*anywhere/);
 });
 
 test("inactive device screens use a compact host-themed status surface", () => {

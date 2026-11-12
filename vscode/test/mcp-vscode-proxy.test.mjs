@@ -2,6 +2,28 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { McpVsCodeContextProxy } from "../../lib/mcp-vscode-proxy.mjs";
 
+test("readonly App tools never follow devices or emit automation, even when selectors are rejected downstream", async () => {
+  const effects = [];
+  const proxy = new McpVsCodeContextProxy({
+    sessionId: "trusted-session", instanceId: "trusted-view",
+    selectDevice: async (...args) => effects.push(["select", ...args]),
+    refreshView: async () => effects.push(["refresh"]),
+    showAutomation: async (...args) => effects.push(["automation", ...args]),
+  });
+  for (const name of ["mobile_app_tree", "mobile_app_query", "mobile_app_status"]) {
+    for (const rejected of [false, true]) {
+      const message = { jsonrpc: "2.0", id: `${name}-${rejected}`, method: "tools/call",
+        params: { name, arguments: rejected ? { deviceId: "must-not-follow", sessionId: "must-not-adopt" } : {} } };
+      const original = structuredClone(message);
+      assert.deepEqual(await proxy.clientMessage(message), original);
+      await proxy.serverMessage({ jsonrpc: "2.0", id: message.id,
+        result: rejected ? { isError: true, content: [{ type: "text", text: "invalid_request" }] }
+          : { structuredContent: { selection: { targetId: "selected" } } } });
+    }
+  }
+  assert.deepEqual(effects, []);
+});
+
 test("injects the VS Code context into selection tools", async () => {
   const selected = [];
   const proxy = new McpVsCodeContextProxy({

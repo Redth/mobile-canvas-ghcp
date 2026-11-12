@@ -50,6 +50,35 @@ The consequences are strict:
 
 ## The approach
 
+### Plugin MCP descriptors are not source-workspace launchers
+
+The root `.mcp.json` is the GitHub/Claude plugin descriptor. Its
+`${CLAUDE_PLUGIN_ROOT}/scripts/mcp.mjs` argument requires the installed plugin
+loader's root expansion. A source-workspace loader that discovers this file
+without expanding the plugin root fails in Node before `scripts/mcp.mjs` runs;
+that `MODULE_NOT_FOUND` is not an Ailoha acquisition or context failure.
+Do not rename the variable, assume workspace cwd is the plugin directory, or
+add a duplicate global server to hide the failure.
+
+The documented Copilot CLI precedence gives `.mcp.json` priority over
+`.github/mcp.json` in the same directory, so adding the latter at the repository
+root does not fix this case. A source-only developer configuration needs a
+host-supported, more-specific override for the existing server using the
+literal absolute path to this checkout's `scripts/mcp.mjs`; support for such an
+override must be established for that host. The GitHub App repository
+configuration reference does not advertise an arbitrary MCP override field.
+This remaining source autodiscovery/loader boundary is not repaired by changing
+the shared plugin descriptor or normal-user configuration.
+
+In Ailoha mode the installed plugin's no-argument MCP bootstrap remains empty
+and SDK-owned. Separately, VS Code's MCP definition provider remains dormant
+without acquiring the SDK until its own Mobile view has first opened a
+canonical context. That view's context-ready event refreshes the definitions;
+later cleanup/context errors remain explicit rather than becoming an empty
+success or adopting another view.
+
+See [the official MCP configuration precedence](https://docs.github.com/en/copilot/how-tos/copilot-cli/customize-copilot/add-mcp-servers).
+
 `runtimes/manifest.json` pins every executable by version, RID, release asset,
 uncompressed size, and SHA-256. Release CI publishes each gzip stream as a
 GitHub Release asset:

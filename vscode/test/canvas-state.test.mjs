@@ -34,6 +34,12 @@ test("gates destructive actions on backend capabilities", () => {
   assert.equal(canUseDeviceCapability(undefined, "delete"), false);
   assert.equal(canUseDeviceCapability({ capabilities: { delete: false } }, "delete"), false);
   assert.equal(canUseDeviceCapability({ capabilities: { delete: true } }, "delete"), true);
+  const errored = { backend: "ailoha", state: "unknown", targetStatus: "error", isAvailable: false,
+    providerState: "ready", capabilities: { delete: true, boot: true } };
+  assert.equal(canUseDeviceCapability(errored, "delete"), true);
+  assert.equal(canUseDeviceCapability(errored, "boot"), false);
+  assert.equal(canUseDeviceCapability({ ...errored, providerState: "unavailable" }, "delete"), false);
+  assert.equal(canUseDeviceCapability({ ...errored, capabilities: { delete: false } }, "delete"), false);
 });
 
 test("presents readable device state labels", () => {

@@ -18,9 +18,24 @@ import {
   readStoredDeviceId,
   resumeAuthenticatedPanel,
   shouldRetainDeviceFrame,
+  shouldRetainAilohaStream,
   shouldDrainIdleDecoder,
   storeDeviceId,
+  supportsLegacyStreamOptions,
 } from "./canvas-state.js";
+import {
+  ailohaDisplayGeometry,
+  ailohaInputPayload,
+  captureCanvasInvocation,
+  describeCaptureSource,
+  isCanvasInvocationCurrent,
+  liveTouchRequest,
+  usesAilohaLiveTouch,
+  pointInLogicalBounds,
+} from "./ailoha-canvas-state.js";
+import { createAilohaVideoPlayer } from "./ailoha-video-player.js";
+import { createWorkspaceInspectionView } from "./ailoha-workspace-view.js";
+import { createSemanticInspectionView } from "./ailoha-semantic-view.js";
 
 const elements = {
   list: document.querySelector("#device-list"),
@@ -61,6 +76,8 @@ const elements = {
   actualFps: document.querySelector("#actual-fps"),
   encodeSize: document.querySelector("#encode-size"),
   captureSource: document.querySelector("#capture-source"),
+  captureReasonField: document.querySelector("#capture-reason-field"),
+  captureReason: document.querySelector("#capture-reason"),
   geometry: document.querySelector("#geometry"),
   udid: document.querySelector("#udid"),
   udidLabel: document.querySelector("#udid-label"),
@@ -97,8 +114,47 @@ const elements = {
 };
 
 const transport = window.mobileCanvasTransport || null;
+let panelPreferenceReady = false;
+const workspaceInspection = createWorkspaceInspectionView({
+  element: document.querySelector("#workspace-inspection"),
+  preferenceId: panelPreferenceId,
+  chooseRoot: Boolean(transport?.onWorkspaceInspectionChanged),
+  async request(path, options) {
+    const response = await sendApiRequest(path, options);
+    let value = await response.json();
+    if (value.code === "workspace_view_changed") {
+      const current = await (await sendApiRequest("/api/v1/workspace/inspection")).json();
+      value = { ...current, status: "error", inspection: null, error: { code: value.code, message: value.message } };
+    }
+    if (value.schema !== "mobile-canvas.workspace-view/v1") {
+      throw new Error(formatUserFacingMessage(value.message || "Invalid workspace inspection response."));
+    }
+    return value;
+  },
+});
+transport?.onWorkspaceInspectionChanged?.((snapshot) => {
+  try { workspaceInspection.acceptState(snapshot); }
+  catch (error) { showError(error); }
+});
+const semanticInspection = createSemanticInspectionView({
+  element: document.querySelector("#semantic-inspection"),
+  preferenceId: panelPreferenceId,
+  async request(path, options) {
+    const response = await sendApiRequest(path, options);
+    const value = await response.json();
+    if (value.schema !== "mobile-canvas.semantic-inspection/v1") {
+      throw new Error(formatUserFacingMessage(value.message || "Invalid semantic inspection response."));
+    }
+    return value;
+  },
+});
+transport?.onSemanticInspectionChanged?.((snapshot) => {
+  try { semanticInspection.acceptState(snapshot); }
+  catch (error) { showError(error); }
+});
 let bootstrapExchange = null;
 let panelVisibilityVersion = 0;
+let panelOwnerTransition = Promise.resolve();
 
 const state = {
   catalog: null,
@@ -107,6 +163,11 @@ const state = {
   display: null,
   socket: null,
   decoder: null,
+  ailohaPlayer: null,
+  ailohaVideoSessionId: null,
+  awaitingRotatedFrame: false,
+  rotationFrameRevision: null,
+  rotationRecoveryStarted: false,
   pngTimer: null,
   frameCounter: 0,
   frameClock: performance.now(),
@@ -119,6 +180,8 @@ const state = {
   inputIndicatorTimer: null,
   inputQueue: Promise.resolve(),
   recording: false,
+  recordingPending: false,
+  recordingUncertain: false,
   detached: false,
   activeScale: null,
   scaleTimer: null,
@@ -132,6 +195,7 @@ const state = {
   followTarget: null,
   panelVisible: !document.hidden,
 };
+panelPreferenceReady = true;
 
 const framePrimer = createFramePrimer({
   capture: async (deviceId) => {
@@ -229,6 +293,7 @@ async function refresh() {
   elements.list.setAttribute("aria-busy", "true");
   try {
     await loadCatalog();
+    semanticInspection.setActive(state.catalog?.backend === "ailoha");
 
     if (state.selected) {
       const updated = state.catalog.devices.find((device) => device.id === state.selected.id);
@@ -237,6 +302,7 @@ async function refresh() {
         return;
       }
       state.selected = null;
+      semanticInspection.setTarget(null);
     }
 
     const selectionResponse = await api("/api/v1/selection");
@@ -246,15 +312,16 @@ async function refresh() {
       return;
     }
 
-    const storedDeviceId = readStoredDeviceId(localStorage, canvasInstanceId());
+    const storedDeviceId = readStoredDeviceId(localStorage, canvasPreferenceId());
     const storedDevice = state.catalog.devices.find((device) => device.id === storedDeviceId);
     if (storedDevice) {
       await selectDevice(storedDevice, true);
       return;
     }
-    if (storedDeviceId) clearStoredDeviceId(localStorage, canvasInstanceId());
+    if (storedDeviceId) clearStoredDeviceId(localStorage, canvasPreferenceId());
 
-    const booted = state.catalog.devices.find((device) => device.state === "booted");
+    const booted = state.catalog.backend === "ailoha"
+      ? null : state.catalog.devices.find((device) => device.state === "booted");
     if (booted) {
       await selectDevice(booted, true);
       return;
@@ -263,6 +330,7 @@ async function refresh() {
     showEmptySelection();
   } finally {
     elements.list.removeAttribute("aria-busy");
+    if (state.catalog?.backend === "ailoha") void semanticInspection.load();
   }
 }
 
@@ -273,6 +341,9 @@ const loadCatalog = createLatestCatalogLoader(
   },
   (catalog) => {
     state.catalog = catalog;
+    if (catalog.backend === "ailoha") {
+      document.querySelector("#create-button").disabled = creatablePlatforms(catalog).length === 0;
+    }
     renderDiagnostics();
     renderDeviceList();
     populateCreateOptions();
@@ -481,11 +552,50 @@ function closeDevicePopover() {
 }
 
 async function selectDevice(device, persist) {
+  if (!persist && state.awaitingRotatedFrame && shouldRetainAilohaStream(state.selected, device)) {
+    const original = captureCanvasInvocation(state);
+    const sameOriginalSelection = () => state.selected?.backend === "ailoha"
+      && state.selected.id === original.deviceId
+      && state.selected.targetHostId === original.targetHostId
+      && state.display?.surfaceId === original.surfaceId
+      && state.selectionVersion === original.selectionVersion;
+    try {
+      const response = await api("/api/v1/selection");
+      const canonical = await response.json();
+      if (!sameOriginalSelection()) return;
+      if (!canonical.hasSelection || !shouldRetainAilohaStream(state.selected, canonical.device)) {
+        throw new Error("The original Ailoha selection is no longer bound to this view.");
+      }
+      return;
+    } catch (error) {
+      if (sameOriginalSelection()) {
+        state.awaitingRotatedFrame = true;
+        state.rotationFrameRevision = null;
+        state.rotationRecoveryStarted = false;
+        cancelPointer();
+        stopStream();
+        clearScreen();
+        setInputStatus("error", "Live view unavailable");
+        showDeviceStatus("error", { detail: error.message || String(error) });
+      }
+      throw error;
+    }
+  }
+  const recoveringRotatedView = state.awaitingRotatedFrame;
+  const changedAilohaSelection = !persist && state.selected?.backend === "ailoha"
+    && state.selected.id === device.id && !shouldRetainAilohaStream(state.selected, device);
   const selectionVersion = ++state.selectionVersion;
   // Recorded before the first await so a selection announcement that races this request can tell it
   // is watching work already under way rather than starting a second switch to the same device.
   state.selectionTarget = device.id;
   stopStream();
+  if (state.selected?.backend === "ailoha") {
+    state.awaitingRotatedFrame = true;
+    clearScreen();
+    setInputStatus("pending", "Waiting for the selected live frame");
+  }
+  state.rotationFrameRevision = null;
+  state.rotationRecoveryStarted = false;
   if (persist) {
     setInputStatus("pending", "Selecting device");
     const response = await api("/api/v1/selection", {
@@ -493,18 +603,34 @@ async function selectDevice(device, persist) {
       body: JSON.stringify({ deviceId: device.id }),
     });
     device = await response.json();
+  } else if (changedAilohaSelection) {
+    const response = await api("/api/v1/selection");
+    const canonical = await response.json();
+    if (selectionVersion !== state.selectionVersion) return;
+    if (!canonical.hasSelection || canonical.device?.id !== device.id
+      || canonical.device?.targetHostId !== device.targetHostId
+      || canonical.device?.provider !== device.provider
+      || canonical.device?.surfaceId !== device.surfaceId) {
+      throw new Error("The changed Ailoha selection is not bound to this view.");
+    }
+    device = canonical.device;
   }
   if (selectionVersion !== state.selectionVersion) return;
 
+  state.awaitingRotatedFrame = device.backend === "ailoha"
+    && (recoveringRotatedView || state.selected?.backend === "ailoha");
   const retainFrame = shouldRetainDeviceFrame(state.frameDeviceId, device.id);
   state.selected = device;
-  storeDeviceId(localStorage, canvasInstanceId(), device.id);
+  semanticInspection.setTarget(device);
+  state.display = null;
+  setRecordingState(false);
+  storeDeviceId(localStorage, canvasPreferenceId(), device.id);
   // A cursor left over from the previous device would point at coordinates that no longer mean
   // anything, so drop the overlay whenever the selection changes.
   endAutomation();
   // Reusing the selected device is a refresh/reconnect, so keep its last frame visible. A genuinely
   // different selection must not inherit pixels from the previous device.
-  if (!retainFrame) clearScreen();
+  if (!retainFrame || state.awaitingRotatedFrame) clearScreen();
   elements.empty.classList.add("hidden");
   elements.detached.classList.add("hidden");
   elements.view.classList.remove("hidden");
@@ -515,7 +641,7 @@ async function selectDevice(device, persist) {
   renderDeviceList();
   updateControlAvailability();
 
-  if (device.state === "booted") {
+  if (device.state === "booted" && (device.backend !== "ailoha" || device.isAvailable)) {
     const displayResponse = await api(`/api/v1/devices/${encodeURIComponent(device.id)}/display`);
     const display = await displayResponse.json();
     if (
@@ -523,10 +649,13 @@ async function selectDevice(device, persist) {
       || state.selected?.id !== device.id
     ) return;
     state.display = display;
-    elements.geometry.value =
-      `${state.display.pointWidth}x${state.display.pointHeight} pt @${state.display.scale}x`;
+    if (state.awaitingRotatedFrame) state.rotationFrameRevision = display.geometryRevision;
+    elements.geometry.value = device.backend === "ailoha"
+      ? `${display.pointWidth}x${display.pointHeight} pt (${display.coordinate}, revision ${display.geometryRevision})`
+      : `${display.pointWidth}x${display.pointHeight} pt @${display.scale}x`;
     fitDeviceScreen();
-    setInputStatus("ready", "Input ready");
+    setInputStatus(state.awaitingRotatedFrame ? "pending" : "ready",
+      state.awaitingRotatedFrame ? "Waiting for a frame at the rotated geometry" : "Input ready");
     startStream();
     await updateRecordingStatus(device.id, selectionVersion);
   } else {
@@ -563,7 +692,17 @@ function showLoadingSelection() {
     tone: "accent",
     icon: "#icon-device",
     title: "Opening live view…",
-    detail: "Connecting to the device catalog.",
+    detail: "Preparing the runtime and local device services. First use may take longer.",
+  });
+  elements.empty.classList.remove("hidden");
+}
+
+function showLoadingCatalog() {
+  configureEmptyState({
+    tone: "accent",
+    icon: "#icon-device",
+    title: "Loading devices…",
+    detail: "Reading device inventory and checking each target's capabilities.",
   });
   elements.empty.classList.remove("hidden");
 }
@@ -574,6 +713,7 @@ function showEmptySelection() {
   stopStream();
   endAutomation();
   state.selected = null;
+  semanticInspection.setTarget(null);
   state.display = null;
   clearScreen();
   elements.view.classList.add("hidden");
@@ -649,7 +789,10 @@ function selectedNoun() {
 
 function updateControlAvailability() {
   const booted = state.selected?.state === "booted";
-  const canBoot = canBootDeviceState(state.selected?.state);
+  const available = state.selected?.isAvailable !== false && state.selected?.targetStatus !== "error";
+  const canBoot = state.selected?.backend === "ailoha"
+    ? available && state.selected.state === "shutdown"
+    : canBootDeviceState(state.selected?.state);
   const capabilities = state.selected?.capabilities || {};
   for (const button of document.querySelectorAll("[data-action]")) {
     const action = button.dataset.action;
@@ -659,12 +802,13 @@ function updateControlAvailability() {
     const wrongPlatform = Boolean(
       state.selected && button.dataset.platform && button.dataset.platform !== state.selected.platform);
     button.hidden = wrongPlatform ||
-      Boolean(state.selected && capability && capabilities[capability] === false);
+      Boolean(state.selected && capability && (state.selected.backend === "ailoha"
+        ? !canUseDeviceCapability(state.selected, capability) : capabilities[capability] === false));
 
     const needsBooted =
       ["home", "back", "apps", "lock", "rotate", "screenshot", "record", "restart", "shutdown"].includes(action);
     button.disabled = !state.selected ||
-      (action === "boot" ? !canBoot : needsBooted && !booted);
+      (action === "boot" ? !canBoot : needsBooted && (!booted || !available));
 
     if (action === "reveal") {
       const description = state.selected?.platform === "android"
@@ -690,6 +834,11 @@ function updateControlAvailability() {
   elements.copyUdid.title = identifier.copy;
   elements.copyUdid.setAttribute("aria-label", identifier.copy);
   elements.copyUdid.disabled = !state.selected;
+  if (state.selected?.backend === "ailoha") {
+    elements.copyUdid.disabled = !state.selected.nativeId;
+  }
+  elements.fps.disabled = !supportsLegacyStreamOptions(state.selected);
+  elements.scale.disabled = !supportsLegacyStreamOptions(state.selected);
 }
 
 const MAX_SCREEN_WIDTH = 480;
@@ -818,11 +967,12 @@ function setLinkExpanded(expanded) {
  * the auto scale actually lands in a different bucket rather than on every resize observation.
  */
 function reconcileAutoScale() {
-  if (elements.scale.value !== "auto" || !state.socket) return;
+  if (!supportsLegacyStreamOptions(state.selected) || elements.scale.value !== "auto" || !state.socket) return;
   if (resolveScale() === state.activeScale) return;
   clearTimeout(state.scaleTimer);
   state.scaleTimer = setTimeout(() => {
-    if (elements.scale.value === "auto" && resolveScale() !== state.activeScale) startStream();
+    if (supportsLegacyStreamOptions(state.selected)
+      && elements.scale.value === "auto" && resolveScale() !== state.activeScale) startStream();
   }, 400);
 }
 
@@ -854,6 +1004,7 @@ function fitDeviceScreen() {
   // clientHeight excludes neither padding nor the reserve we may have written on a previous pass,
   // so measure the unreserved height once and drive both passes from it.
   const fullHeight = stage.clientHeight;
+  stage.style.setProperty("--status-top-reserve", `${pillReserve(stage.clientWidth, fullHeight, stage)}px`);
   const unreserved = measureFit(aspect, stage.clientWidth - chromeX, fullHeight - chromeY);
   if (!unreserved) return;
 
@@ -926,10 +1077,13 @@ function showDeviceStatus(kind, overrides = {}) {
   const base = deviceStatusPresentation(kind, {
     deviceName: state.selected?.deviceTypeName || state.selected?.name,
     platform: state.selected?.platform,
-    detail: overrides.detail,
+    detail: overrides.detail ?? (kind === "unavailable" ? state.selected?.unavailableReason : undefined),
   });
   const presentation = { ...base, ...overrides };
-  const action = overrides.action === undefined ? base.action : overrides.action;
+  let action = overrides.action === undefined ? base.action : overrides.action;
+  if (action?.id === "boot" && !canUseDeviceCapability(state.selected, "boot")) {
+    action = { id: "refresh", label: "Refresh devices", icon: "#icon-refresh" };
+  }
 
   elements.frame.dataset.status = kind;
   elements.overlay.dataset.busy = presentation.busy ? "true" : "false";
@@ -970,12 +1124,16 @@ function startStream() {
   if (!state.panelVisible || !state.selected || state.selected.state !== "booted") return;
 
   const deviceId = state.selected.id;
-  const retainFrame = shouldRetainDeviceFrame(state.frameDeviceId, deviceId);
+  const retainFrame = !state.awaitingRotatedFrame && shouldRetainDeviceFrame(state.frameDeviceId, deviceId);
   if (retainFrame) hideDeviceStatus();
   else showDeviceStatus("connecting");
   setStreamMode("connecting");
   state.frameClock = performance.now();
 
+  if (state.selected.backend === "ailoha") {
+    startAilohaStream();
+    return;
+  }
   if (!("VideoDecoder" in window) || !state.selected.capabilities.liveStream) {
     startPngFallback("PNG");
     return;
@@ -1042,8 +1200,117 @@ function startStream() {
   }
 }
 
+function startAilohaStream() {
+  const invocation = captureCanvasInvocation(state);
+  if (!state.selected.capabilities.liveStream) {
+    showStreamFailure(new Error("This Ailoha target does not advertise live display. Supported screenshots remain available."));
+    return;
+  }
+  let socket;
+  let player = null;
+  const current = () => state.socket === socket
+    && state.panelVisible && !state.detached
+    && state.selected?.id === invocation.deviceId
+    && state.selected?.targetHostId === invocation.targetHostId
+    && state.selectionVersion === invocation.selectionVersion;
+  try {
+    socket = createSocket("video", new URLSearchParams({ deviceId: invocation.deviceId }));
+    state.socket = socket;
+    socket.binaryType = "arraybuffer";
+  } catch (error) {
+    showStreamFailure(error);
+    return;
+  }
+  socket.addEventListener("message", (event) => {
+    if (!current()) return;
+    try {
+      if (!player) {
+        if (typeof event.data !== "string") throw new Error("Ailoha live display requires an owned session descriptor first.");
+        const descriptor = JSON.parse(event.data);
+        if (descriptor.type !== "mobile-canvas-video") throw new Error("Invalid owned Ailoha video descriptor.");
+        player = createAilohaVideoPlayer({
+          context: descriptor.context,
+          observedGeometry: descriptor.geometry,
+          isCurrent: current,
+          onGeometry(geometry) {
+            if (!current()) return;
+            if (state.awaitingRotatedFrame
+              && (state.rotationFrameRevision !== invocation.geometryRevision
+                || geometry.geometryRevision !== invocation.geometryRevision)) return;
+            cancelPointer();
+            state.display = ailohaDisplayGeometry(geometry, invocation.surfaceId);
+            elements.geometry.value = state.display
+              ? `${state.display.pointWidth}x${state.display.pointHeight} pt (${state.display.coordinate}, revision ${state.display.geometryRevision})`
+              : "Geometry unavailable";
+            setInputStatus(state.awaitingRotatedFrame ? "pending" : state.display ? "ready" : "idle",
+              state.awaitingRotatedFrame ? "Waiting for a frame at the rotated geometry"
+                : state.display ? "Geometry-bound input ready" : "Waiting for authoritative geometry");
+            fitDeviceScreen();
+          },
+          present(frame, metadata) {
+            if (!current() || state.ailohaPlayer !== player) return false;
+            if (state.awaitingRotatedFrame
+              && (state.rotationFrameRevision !== invocation.geometryRevision
+                || metadata.geometry?.geometryRevision !== invocation.geometryRevision)) return false;
+            const visible = frame.visibleRect ?? { x: 0, y: 0, width: frame.codedWidth, height: frame.codedHeight };
+            state.display = ailohaDisplayGeometry(metadata.geometry, invocation.surfaceId);
+            if (!state.display || (state.awaitingRotatedFrame
+              && !isCanvasInvocationCurrent(invocation, state))) return false;
+            if (elements.canvas.width !== visible.width || elements.canvas.height !== visible.height) {
+              elements.canvas.width = visible.width;
+              elements.canvas.height = visible.height;
+              state.canvasContext = null;
+              fitDeviceScreen();
+            }
+            canvasContext().drawImage(frame, visible.x, visible.y, visible.width, visible.height,
+              0, 0, visible.width, visible.height);
+            state.frameDeviceId = invocation.deviceId;
+            state.framePainted = true;
+            if (state.awaitingRotatedFrame) {
+              state.awaitingRotatedFrame = false;
+              state.rotationRecoveryStarted = false;
+              setInputStatus("ready", "Geometry-bound input ready");
+            }
+            hideDeviceStatus();
+            elements.encodeSize.textContent = `${visible.width}x${visible.height}`;
+            setStreamMode("ALHV H.264");
+            countFrame();
+            return true;
+          },
+          onError(error) { if (current()) showStreamFailure(error); },
+        });
+        state.ailohaPlayer = player;
+        state.ailohaVideoSessionId = descriptor.context?.videoSessionId ?? null;
+        const connection = player.attach({
+          protocol: socket.protocol,
+          send(text, scope) {
+            let result;
+            if (!current() || !scope.commit(() => { result = socket.send(text); })) return false;
+            return result;
+          },
+          close: () => socket.close(),
+        });
+        socket.ailohaConnection = connection;
+        void connection.start();
+        applyCaptureSource(descriptor.source !== undefined ? descriptor : { pending: true });
+        return;
+      }
+      void socket.ailohaConnection.receive(event.data);
+    } catch (error) {
+      if (current()) showStreamFailure(error);
+    }
+  });
+  socket.addEventListener("error", (event) => {
+    if (current()) showStreamFailure(new Error(event.message || "The owned Ailoha live transport failed."));
+  });
+  socket.addEventListener("close", () => {
+    if (current()) showStreamFailure(new Error("Ailoha live display disconnected. No legacy fallback or automatic session creation was attempted."));
+  });
+}
+
 function showStreamFailure(error) {
   stopStream();
+  state.rotationRecoveryStarted = false;
   showDeviceStatus("error", { detail: error.message || String(error) });
   setStreamMode("offline");
   setInputStatus("error", "Live view unavailable");
@@ -1052,6 +1319,12 @@ function showStreamFailure(error) {
 
 function stopStream() {
   framePrimer.invalidate();
+  if (state.ailohaPlayer) {
+    const player = state.ailohaPlayer;
+    state.ailohaPlayer = null;
+    state.ailohaVideoSessionId = null;
+    void player.dispose().catch((error) => console.error("Owned Ailoha player cleanup failed.", error));
+  }
   // The parser holds a pending flush timer that would otherwise fire into a closed decoder.
   if (state.parser) {
     state.parser.dispose();
@@ -1060,7 +1333,10 @@ function stopStream() {
   if (state.socket) {
     const socket = state.socket;
     state.socket = null;
-    socket.close();
+    const closing = socket.close();
+    if (closing && typeof closing.then === "function") {
+      void closing.catch((error) => console.error("Owned video socket cleanup failed.", error));
+    }
   }
   if (state.decoder) {
     state.decoder.close();
@@ -1282,28 +1558,19 @@ function drawScreenSource(source, sourceX, sourceY, sourceWidth, sourceHeight) {
 }
 
 // The stream can silently degrade to idb when ScreenCaptureKit is unavailable, which reads as a
-// quality regression rather than a fixable permission problem. Name the active backend, and carry
-// the reason in the tooltip so a denied TCC prompt explains itself.
-const CAPTURE_SOURCE_LABELS = {
-  framebuffer: "Simulator framebuffer",
-  screencapturekit: "ScreenCaptureKit",
-  idb: "idb (fallback)",
-  png: "Screenshots (fallback)",
-};
-const PRIMARY_CAPTURE_SOURCES = new Set(["framebuffer", "screencapturekit", "emulator-grpc"]);
-
+// quality regression rather than a fixable permission problem. Name the active backend, and show the
+// fallback reason so a denied TCC prompt explains itself.
 function applyCaptureSource(descriptor) {
   if (!elements.captureSource) return;
-  if (!descriptor) {
-    elements.captureSource.value = "—";
-    elements.captureSource.title = "";
-    elements.captureSource.classList.remove("field-degraded");
-    return;
+  const capture = describeCaptureSource(descriptor);
+  elements.captureSource.value = capture?.label ?? "—";
+  elements.captureSource.title = capture?.detail ?? "";
+  elements.captureSource.classList.toggle("field-degraded", capture?.degraded === true);
+  if (elements.captureReason) {
+    elements.captureReason.value = capture?.reason ?? "";
+    elements.captureReason.title = capture?.reason ?? "";
+    elements.captureReasonField.classList.toggle("hidden", !capture?.reason);
   }
-  const source = descriptor.source || "unknown";
-  elements.captureSource.value = CAPTURE_SOURCE_LABELS[source] || source;
-  elements.captureSource.title = descriptor.sourceDetail || elements.captureSource.value;
-  elements.captureSource.classList.toggle("field-degraded", !PRIMARY_CAPTURE_SOURCES.has(source));
 }
 
 function canvasContext() {
@@ -1385,6 +1652,12 @@ function countFrame() {
 async function lifecycle(action) {
   const device = state.selected;
   if (!device) return;
+  if (device.backend === "ailoha" && (!canUseDeviceCapability(device, ACTION_CAPABILITY[action])
+    || (action === "boot" ? device.state !== "shutdown"
+      : ["restart", "shutdown"].includes(action) && device.state !== "booted"))) {
+    throw new Error(device.unavailableReason || "This action is unavailable for the selected target's current state and capabilities. Refresh devices.");
+  }
+  const selectionVersion = state.selectionVersion;
 
   const disruptive = action !== "reveal" || device.platform === "android";
   const label = action === "reveal" ? "Show device window" : formatAction(action);
@@ -1410,15 +1683,21 @@ async function lifecycle(action) {
       `/api/v1/devices/${encodeURIComponent(device.id)}/${action}`,
       { method: "POST" },
     );
-    state.selected = await response.json();
+    const result = await response.json();
+    if (state.selected?.id !== device.id || state.selectionVersion !== selectionVersion) return;
+    state.selected = result;
+    semanticInspection.setTarget(result);
     await refresh();
     showToast(`${label} complete`);
   } catch (error) {
-    if (disruptive) {
+    if (disruptive && state.selected?.id === device.id && state.selectionVersion === selectionVersion) {
       showDeviceStatus("error", {
         title: `${label} failed`,
-        detail: error.message || String(error),
-        action: {
+        detail: `${error.message || String(error)}${device.backend === "ailoha"
+          && ["operation_failed", "http_error", "ailoha_operation_failed"].includes(error.code) ? ` (${error.code})` : ""}`,
+        action: device.backend === "ailoha" ? {
+          id: "refresh", label: "Refresh devices", icon: "#icon-refresh",
+        } : {
           id: `lifecycle:${action}`,
           label: "Try again",
           icon: "#icon-refresh",
@@ -1429,23 +1708,34 @@ async function lifecycle(action) {
   }
 }
 
-function sendInput(kind, payload, label = formatAction(kind)) {
+function sendInput(kind, payload, label = formatAction(kind), captured) {
   if (!state.selected || state.selected.state !== "booted") {
     return Promise.reject(new Error(`Boot the ${selectedNoun()} before sending input.`));
   }
 
+  const invocation = captured ?? captureCanvasInvocation(state);
+  if (invocation.backend === "ailoha" && state.awaitingRotatedFrame && kind !== "rotate") {
+    return Promise.reject(new Error("Wait for a frame at the rotated geometry before sending input."));
+  }
+  const body = JSON.stringify(ailohaInputPayload(invocation, payload));
   const operation = async () => {
+    if (invocation.backend === "ailoha" && state.awaitingRotatedFrame && kind !== "rotate") {
+      throw new Error("Wait for a frame at the rotated geometry before sending input.");
+    }
+    if (invocation.backend === "ailoha" && !isCanvasInvocationCurrent(invocation, state)) {
+      throw new Error("The selected Ailoha surface or geometry changed before queued input could be sent.");
+    }
     const started = performance.now();
     setInputStatus("pending", `${label} in progress`);
     try {
-      await api(`/api/v1/devices/${encodeURIComponent(state.selected.id)}/input/${kind}`, {
+      await api(`/api/v1/devices/${encodeURIComponent(invocation.deviceId)}/input/${kind}`, {
         method: "POST",
-        body: JSON.stringify(payload),
+        body,
       });
       const elapsed = Math.round(performance.now() - started);
-      setInputStatus("success", `${label} sent`, `${elapsed} ms`);
+      if (isCanvasInvocationCurrent(invocation, state)) setInputStatus("success", `${label} sent`, `${elapsed} ms`);
     } catch (error) {
-      setInputStatus("error", `${label} failed`);
+      if (isCanvasInvocationCurrent(invocation, state)) setInputStatus("error", `${label} failed`);
       throw error;
     }
   };
@@ -1456,31 +1746,137 @@ function sendInput(kind, payload, label = formatAction(kind)) {
 }
 
 async function rotateDevice() {
+  const invocation = captureCanvasInvocation(state);
+  if (invocation.backend === "ailoha") {
+    if (state.awaitingRotatedFrame) throw new Error("Wait for the rotated live frame before rotating again.");
+    state.awaitingRotatedFrame = true;
+    state.rotationFrameRevision = null;
+    state.rotationRecoveryStarted = false;
+    stopStream();
+  }
+  const stillSelected = () => state.selected?.id === invocation.deviceId
+    && state.selectionVersion === invocation.selectionVersion
+    && (invocation.backend !== "ailoha"
+      || (state.selected.targetHostId === invocation.targetHostId
+        && state.display?.surfaceId === invocation.surfaceId));
   const target = state.display?.orientation?.startsWith("landscape")
     ? "portrait"
     : "landscape-left";
-  const deviceId = state.selected.id;
+  const deviceId = invocation.deviceId;
 
-  await sendInput("rotate", { orientation: target }, "Rotate");
+  if (invocation.backend === "ailoha") {
+    cancelPointer();
+    canvasContext().clearRect(0, 0, elements.canvas.width, elements.canvas.height);
+    state.frameDeviceId = null;
+    showDeviceStatus("connecting");
+  }
+  try {
+    await sendInput("rotate", { orientation: target }, "Rotate");
+  } catch (error) {
+    if (invocation.backend === "ailoha" && stillSelected()) {
+      showDeviceStatus("error", { detail: error.message || String(error) });
+    }
+    throw error;
+  }
+  if (invocation.backend === "ailoha" && stillSelected()) {
+    setInputStatus("pending", "Waiting for rotated geometry");
+  }
 
   // Both platforms acknowledge the rotation request before their display geometry changes. Wait for
   // the new orientation so the replacement stream and pointer mapping start with the right dimensions.
-  for (let attempt = 0; attempt < 20 && state.selected?.id === deviceId; attempt++) {
-    const response = await api(`/api/v1/devices/${encodeURIComponent(deviceId)}/display`);
-    const display = await response.json();
-    state.display = display;
-    elements.geometry.value =
-      `${display.pointWidth}x${display.pointHeight} pt @${display.scale}x`;
-
+  let settledRotation = false;
+  for (let attempt = 0; attempt < 20 && stillSelected(); attempt++) {
+    let display;
+    try {
+      const response = await api(`/api/v1/devices/${encodeURIComponent(deviceId)}/display`);
+      display = await response.json();
+    } catch (error) {
+      if (invocation.backend === "ailoha" && stillSelected()) {
+        setInputStatus("error", "Rotated geometry unavailable");
+        showDeviceStatus("error", { detail: error.message || String(error) });
+      }
+      throw error;
+    }
+    if (invocation.backend === "ailoha" && !stillSelected()) return;
     const settled = target === "portrait"
       ? display.orientation === "portrait"
       : display.orientation?.startsWith("landscape");
-    if (settled) break;
+    const settledAiloha = invocation.backend !== "ailoha" || (settled
+      && display.surfaceId === invocation.surfaceId
+      && Number.isInteger(display.geometryRevision)
+      && display.geometryRevision > invocation.geometryRevision);
+    if (invocation.backend === "ailoha" && !settledAiloha) {
+      await new Promise((resolve) => setTimeout(resolve, 100));
+      continue;
+    }
+    if (invocation.backend === "ailoha") cancelPointer();
+    state.display = display;
+    elements.geometry.value =
+      invocation.backend === "ailoha"
+        ? `${display.pointWidth}x${display.pointHeight} pt (${display.coordinate}, revision ${display.geometryRevision})`
+        : `${display.pointWidth}x${display.pointHeight} pt @${display.scale}x`;
+
+    if (settledAiloha && settled) {
+      settledRotation = true;
+      break;
+    }
     await new Promise((resolve) => setTimeout(resolve, 100));
   }
 
+  if (invocation.backend === "ailoha") {
+    if (!stillSelected()) return;
+    if (!settledRotation) {
+      setInputStatus("error", "Rotated geometry unavailable");
+      showDeviceStatus("error", { detail: "Ailoha did not report the rotated display geometry." });
+      throw new Error("Ailoha did not report the rotated display geometry.");
+    }
+    state.rotationFrameRevision = state.display.geometryRevision;
+    canvasContext().clearRect(0, 0, elements.canvas.width, elements.canvas.height);
+    state.frameDeviceId = null;
+    state.rotationRecoveryStarted = true;
+    startStream();
+    fitDeviceScreen();
+    return;
+  }
   startStream();
   fitDeviceScreen();
+}
+
+async function retryStream() {
+  if (!state.awaitingRotatedFrame || state.selected?.backend !== "ailoha") {
+    startStream();
+    return;
+  }
+  if (state.rotationRecoveryStarted) throw new Error("The owned replacement stream is already pending.");
+  const invocation = captureCanvasInvocation(state);
+  if (!state.panelVisible || state.detached || !isCanvasInvocationCurrent(invocation, state)) {
+    throw new Error("The original Ailoha view is no longer current.");
+  }
+  state.rotationRecoveryStarted = true;
+  try {
+    const response = await api(`/api/v1/devices/${encodeURIComponent(invocation.deviceId)}/display`);
+    const display = await response.json();
+    if (!state.panelVisible || state.detached || !isCanvasInvocationCurrent(invocation, state)
+      || display.backend !== "ailoha" || display.surfaceId !== invocation.surfaceId
+      || !Number.isInteger(display.geometryRevision) || display.geometryRevision < 0
+      || !["window", "screen"].includes(display.coordinate)
+      || !(display.pointWidth > 0 && display.pointHeight > 0)) {
+      throw new Error("The original Ailoha surface is no longer available for stream recovery.");
+    }
+    state.display = display;
+    state.rotationFrameRevision = display.geometryRevision;
+    elements.geometry.value =
+      `${display.pointWidth}x${display.pointHeight} pt (${display.coordinate}, revision ${display.geometryRevision})`;
+    startStream();
+    fitDeviceScreen();
+  } catch (error) {
+    if (isCanvasInvocationCurrent(invocation, state)) {
+      state.rotationRecoveryStarted = false;
+      setInputStatus("error", "Live view unavailable");
+      showDeviceStatus("error", { detail: error.message || String(error) });
+    }
+    throw error;
+  }
 }
 
 function setInputStatus(status, message, latency = "") {
@@ -1490,18 +1886,8 @@ function setInputStatus(status, message, latency = "") {
   elements.inputLatencyWrap.classList.toggle("hidden", latency === "");
 }
 
-function logicalPoint(event) {
-  const bounds = elements.canvas.getBoundingClientRect();
-  return {
-    x: Math.max(0, Math.min(
-      state.display.pointWidth,
-      (event.clientX - bounds.left) / bounds.width * state.display.pointWidth,
-    )),
-    y: Math.max(0, Math.min(
-      state.display.pointHeight,
-      (event.clientY - bounds.top) / bounds.height * state.display.pointHeight,
-    )),
-  };
+function logicalPoint(event, display = state.display) {
+  return pointInLogicalBounds(event, elements.canvas.getBoundingClientRect(), display);
 }
 
 /*
@@ -1555,8 +1941,28 @@ function connectAutomationEvents() {
     }
     // Events reach every canvas on the host, so a panel first works out whether it is the audience.
     const addressed = addressedToThisCanvas(activity);
+    if (activity.kind === "workspace-inspection") {
+      if (addressed) {
+        try { workspaceInspection.acceptState(activity.state); }
+        catch (error) { showError(error); }
+      }
+      return;
+    }
+    if (activity.kind === "semantic-inspection") {
+      if (addressed) {
+        try { semanticInspection.acceptState(activity.state); }
+        catch (error) { showError(error); }
+      }
+      return;
+    }
+    if (activity.kind === "video-source") {
+      if (addressed && state.ailohaPlayer && activity.deviceId === state.selected?.id
+        && activity.videoSessionId === state.ailohaVideoSessionId) applyCaptureSource(activity);
+      return;
+    }
     if (transport && !addressed) return;
     if (addressed) {
+      const changedTarget = activity.kind === "selection" && state.selected?.id !== activity.deviceId;
       if (activity.kind === "selection") {
         automation.selectionGeneration += 1;
       }
@@ -1564,6 +1970,7 @@ function connectAutomationEvents() {
       // keeps the panel from sitting on the device the person last picked while work happens
       // somewhere else.
       await followSelection(activity.deviceId).catch(showError);
+      if (changedTarget && state.catalog?.backend === "ailoha") void semanticInspection.load();
     }
     if (activity.kind === "selection") return;
     if (!state.selected || activity.deviceId !== state.selected.id) return;
@@ -1609,7 +2016,7 @@ async function followSelection(deviceId) {
     // A device the agent created moments ago is not in the catalog this panel loaded.
     await loadCatalog();
     // A later announcement overtook this one while the catalog loaded; that one wins.
-    if (state.followTarget !== deviceId) return;
+    if (state.followTarget !== deviceId || state.selectionTarget === deviceId || state.selected?.id === deviceId) return;
     device = state.catalog?.devices?.find((entry) => entry.id === deviceId);
   }
   if (device) await selectDevice(device, false);
@@ -1637,6 +2044,7 @@ async function reconcileCanvasSelection(socket) {
     || automation.selectionGeneration !== generation
   ) return;
   if (selection?.hasSelection && selection.device) {
+    if (state.socket && shouldRetainAilohaStream(state.selected, selection.device)) return;
     await reconcileAnnouncedSelection(
       selection.device.id,
       () =>
@@ -1820,20 +2228,85 @@ const liveTouch = {
   sent: 0,
   started: 0,
   finish: null,
+  // Ailoha gestures stay bound to the selection, surface and geometry captured at the press.
+  gesture: null,
 };
 
-function postTouch(point, phase) {
-  return api(`/api/v1/devices/${encodeURIComponent(state.selected.id)}/input/touch`, {
-    method: "POST",
-    body: JSON.stringify({ x: point.x, y: point.y, phase }),
-  });
+function postTouch(point, phase, gesture = liveTouch.gesture) {
+  if (!gesture?.invocation) {
+    return api(`/api/v1/devices/${encodeURIComponent(state.selected.id)}/input/touch`, {
+      method: "POST",
+      body: JSON.stringify({ x: point.x, y: point.y, phase }),
+    });
+  }
+  const { path, body } = liveTouchRequest(gesture.invocation, point, phase);
+  const started = performance.now();
+  return api(path, { method: "POST", body: JSON.stringify(body) }).then(
+    (response) => {
+      gesture.roundTrips.push(performance.now() - started);
+      return response;
+    },
+    (error) => {
+      gesture.error ??= error;
+      throw error;
+    },
+  );
 }
 
-function beginTouch(point, label) {
+// Opening Ailoha's continuous input channel is the expensive part of a gesture, so it is warmed while
+// the pointer is over the device and the press only has to send the finger down. The host lets the
+// channel lapse shortly after warming stops, which returns the device's pointer to other clients.
+const LIVE_TOUCH_WARM_INTERVAL_MS = 1500;
+let liveTouchWarmAt = 0;
+let liveTouchWarmTimer = null;
+let liveTouchWarming = false;
+
+function startLiveTouchWarmth() {
+  warmLiveTouch();
+  clearInterval(liveTouchWarmTimer);
+  liveTouchWarmTimer = usesAilohaLiveTouch(state.selected)
+    ? setInterval(warmLiveTouch, LIVE_TOUCH_WARM_INTERVAL_MS) : null;
+}
+
+function stopLiveTouchWarmth() {
+  clearInterval(liveTouchWarmTimer);
+  liveTouchWarmTimer = null;
+}
+
+function warmLiveTouch() {
+  if (!usesAilohaLiveTouch(state.selected) || state.selected.state !== "booted" || !state.display
+    || liveTouch.active || state.awaitingRotatedFrame || state.detached || !state.panelVisible
+    || liveTouchWarming) return;
+  const now = performance.now();
+  if (now < liveTouchWarmAt) return;
+  liveTouchWarmAt = now + LIVE_TOUCH_WARM_INTERVAL_MS - 100;
+  let request;
+  try { request = liveTouchRequest(captureCanvasInvocation(state), null, "prepare"); }
+  catch { return; }
+  // One warm request at a time: the host serializes touch phases, so a backlog would delay a press.
+  liveTouchWarming = true;
+  void api(request.path, { method: "POST", body: JSON.stringify(request.body) }).catch(() => {
+    liveTouchWarmAt = performance.now() + 5000;
+  }).finally(() => { liveTouchWarming = false; });
+}
+
+function beginTouch(point, label, invocation = null) {
   if (!state.selected || state.selected.state !== "booted") {
     showError(new Error(`Boot the ${selectedNoun()} before sending input.`));
     return false;
   }
+  if (invocation) {
+    if (state.awaitingRotatedFrame) {
+      showError(new Error("Wait for a frame at the rotated geometry before sending input."));
+      return false;
+    }
+    try { liveTouchRequest(invocation, point, "down"); }
+    catch (error) {
+      showError(error);
+      return false;
+    }
+  }
+  liveTouch.gesture = invocation ? { invocation, error: null, roundTrips: [], lastSent: point } : null;
   liveTouch.active = true;
   liveTouch.pending = null;
   liveTouch.finish = null;
@@ -1853,8 +2326,11 @@ function beginTouch(point, label) {
 function pumpTouch() {
   const next = liveTouch.pending;
   liveTouch.pending = null;
-  if (next && liveTouch.active) {
+  const gesture = liveTouch.gesture;
+  const current = !gesture || (!gesture.error && isCanvasInvocationCurrent(gesture.invocation, state));
+  if (next && liveTouch.active && current) {
     liveTouch.sent += 1;
+    if (gesture) gesture.lastSent = next;
     postTouch(next, "move").catch(() => undefined).then(pumpTouch);
     return;
   }
@@ -1879,14 +2355,30 @@ function endTouch(point, label) {
   if (!liveTouch.active) return;
   liveTouch.active = false;
   liveTouch.pending = null;
+  const gesture = liveTouch.gesture;
   const elapsed = Math.round(performance.now() - liveTouch.started);
+  const visible = () => !gesture || isCanvasInvocationCurrent(gesture.invocation, state);
+  // Coalescing can leave the newest position unsent when the device acknowledges slowly. An Ailoha
+  // gesture moves there before lifting so the device sees the drag rather than a press and release.
+  const settle = () => gesture && !gesture.error && visible()
+    && (gesture.lastSent?.x !== point.x || gesture.lastSent?.y !== point.y)
+    ? postTouch(point, "move", gesture).catch(() => undefined)
+    : Promise.resolve();
   const release = () =>
-    postTouch(point, "up")
+    settle().then(() => postTouch(point, "up", gesture))
       .then(() => {
-        setInputStatus("success", `${label} sent`, `${elapsed} ms`);
+        if (!visible()) return;
+        if (gesture?.error) throw gesture.error;
+        // A live Ailoha gesture reports how quickly the device acknowledged each step; the time
+        // since the press would mostly measure how long the person held their finger down.
+        const latency = gesture?.roundTrips.length
+          ? `${Math.round(gesture.roundTrips.reduce((sum, value) => sum + value, 0) / gesture.roundTrips.length)} ms/step`
+          : `${elapsed} ms`;
+        setInputStatus("success", `${label} sent`, latency);
         settleInputIndicator(true);
       })
       .catch((error) => {
+        if (!visible()) return;
         setInputStatus("error", `${label} failed`);
         settleInputIndicator(false);
         showError(error);
@@ -1898,6 +2390,11 @@ function endTouch(point, label) {
 
 elements.canvas.addEventListener("pointerdown", (event) => {
   if (!state.display || (event.pointerType === "mouse" && event.button !== 0)) return;
+  if (state.selected?.backend === "ailoha" && !state.selected.capabilities.tap
+    && !usesAilohaLiveTouch(state.selected)) {
+    showError(new Error("This Ailoha surface does not advertise coordinate tap input."));
+    return;
+  }
   event.preventDefault();
   elements.canvas.focus();
   elements.canvas.setPointerCapture(event.pointerId);
@@ -1907,14 +2404,25 @@ elements.canvas.addEventListener("pointerdown", (event) => {
     point,
     moved: false,
     started: performance.now(),
+    invocation: captureCanvasInvocation(state),
   };
   showInputIndicator(event.clientX, event.clientY);
+  if (state.selected.backend === "ailoha") {
+    if (!usesAilohaLiveTouch(state.selected)) return;
+    state.pointer.live = true;
+    if (!beginTouch(point, "Touch down", state.pointer.invocation)) state.pointer = null;
+    return;
+  }
   if (!beginTouch(point, "Touch down")) {
     state.pointer = null;
   }
 });
 
+elements.canvas.addEventListener("pointerenter", startLiveTouchWarmth);
+elements.canvas.addEventListener("pointerleave", stopLiveTouchWarmth);
+
 elements.canvas.addEventListener("pointermove", (event) => {
+  if (!state.pointer && !liveTouchWarmTimer) startLiveTouchWarmth();
   if (state.pointer?.id !== event.pointerId || !state.display) return;
   event.preventDefault();
   positionInputIndicator(event.clientX, event.clientY);
@@ -1922,6 +2430,7 @@ elements.canvas.addEventListener("pointermove", (event) => {
   if (Math.hypot(point.x - state.pointer.point.x, point.y - state.pointer.point.y) >= 1) {
     state.pointer.moved = true;
   }
+  if (state.pointer.invocation.backend === "ailoha" && !state.pointer.live) return;
   moveTouch(point);
 });
 
@@ -1929,7 +2438,7 @@ elements.canvas.addEventListener("pointerup", (event) => {
   if (state.pointer?.id !== event.pointerId || !state.display) return;
   event.preventDefault();
   const pointer = state.pointer;
-  const end = logicalPoint(event);
+  const end = logicalPoint(event, pointer.invocation.display);
   const duration = (performance.now() - pointer.started) / 1000;
   const distance = Math.hypot(end.x - pointer.point.x, end.y - pointer.point.y);
   state.pointer = null;
@@ -1939,6 +2448,17 @@ elements.canvas.addEventListener("pointerup", (event) => {
   positionInputIndicator(event.clientX, event.clientY);
 
   const label = distance >= 6 ? "Drag" : duration > 0.45 ? "Long press" : "Tap";
+  if (pointer.invocation.backend === "ailoha" && !pointer.live) {
+    const payload = distance >= 6
+      ? { startX: pointer.point.x, startY: pointer.point.y, endX: end.x, endY: end.y, duration }
+      : { x: pointer.point.x, y: pointer.point.y, duration: duration > 0.45 ? duration : 0 };
+    void sendInput(distance >= 6 ? "swipe" : "tap", payload, label, pointer.invocation)
+      .then(() => { if (isCanvasInvocationCurrent(pointer.invocation, state)) settleInputIndicator(true); })
+      .catch((error) => {
+        if (isCanvasInvocationCurrent(pointer.invocation, state)) { settleInputIndicator(false); showError(error); }
+      });
+    return;
+  }
   endTouch(end, label);
 });
 
@@ -1951,13 +2471,18 @@ elements.canvas.addEventListener("contextmenu", (event) => event.preventDefault(
 elements.canvas.addEventListener("wheel", (event) => {
   event.preventDefault();
   if (!state.display) return;
+  if (state.selected?.backend === "ailoha" && !state.selected.capabilities.swipe
+    && !usesAilohaLiveTouch(state.selected)) return;
 
   const point = logicalPoint(event);
   if (!state.wheel) {
     // Start mid-screen so there is travel available in both directions before clamping.
-    const origin = { x: point.x, y: state.display.pointHeight / 2 };
-    state.wheel = { origin, cursor: { ...origin } };
-    if (!beginTouch(origin, "Scroll")) {
+    const originY = state.display.pointY ?? 0;
+    const origin = { x: point.x, y: originY + state.display.pointHeight / 2 };
+    const invocation = captureCanvasInvocation(state);
+    const live = state.selected.backend !== "ailoha" || usesAilohaLiveTouch(state.selected);
+    state.wheel = { origin, cursor: { ...origin }, invocation, live };
+    if (live && !beginTouch(origin, "Scroll", invocation.backend === "ailoha" ? invocation : null)) {
       state.wheel = null;
       return;
     }
@@ -1966,13 +2491,13 @@ elements.canvas.addEventListener("wheel", (event) => {
   const delta = event.deltaY || event.deltaX;
   state.wheel.cursor = {
     x: state.wheel.origin.x,
-    y: Math.max(1, Math.min(
-      state.display.pointHeight - 1,
+    y: Math.max((state.wheel.invocation.display.pointY ?? 0) + 1, Math.min(
+      (state.wheel.invocation.display.pointY ?? 0) + state.wheel.invocation.display.pointHeight - 1,
       state.wheel.cursor.y - delta,
     )),
   };
   showInputIndicator(event.clientX, event.clientY);
-  moveTouch(state.wheel.cursor);
+  if (state.wheel.live) moveTouch(state.wheel.cursor);
 
   clearTimeout(state.wheelTimer);
   state.wheelTimer = setTimeout(flushWheel, 90);
@@ -1984,6 +2509,17 @@ function flushWheel() {
   state.wheelTimer = null;
   if (!wheel) {
     settleInputIndicator(true);
+    return;
+  }
+  if (!wheel.live) {
+    void sendInput("swipe", {
+      startX: wheel.origin.x, startY: wheel.origin.y,
+      endX: wheel.cursor.x, endY: wheel.cursor.y, duration: 0.35,
+    }, "Scroll", wheel.invocation)
+      .then(() => { if (isCanvasInvocationCurrent(wheel.invocation, state)) settleInputIndicator(true); })
+      .catch((error) => {
+        if (isCanvasInvocationCurrent(wheel.invocation, state)) { settleInputIndicator(false); showError(error); }
+      });
     return;
   }
   endTouch(wheel.cursor, "Scroll");
@@ -2002,12 +2538,20 @@ const keyCodes = {
 
 elements.canvas.addEventListener("keydown", (event) => {
   if (event.isComposing || event.metaKey || event.ctrlKey || event.altKey) return;
-
   if (keyCodes[event.key]) {
     event.preventDefault();
+    if (state.selected?.capabilities?.key === false) {
+      showError(new Error("This target does not advertise keyboard input."));
+      return;
+    }
     sendInput("key", { keyCode: keyCodes[event.key] }, event.key).catch(showError);
   } else if (event.key.length === 1) {
     event.preventDefault();
+    if (state.selected?.capabilities?.text === false
+      || (state.selected?.backend === "ailoha" && state.selected?.capabilities?.text !== true)) {
+      showError(new Error("This target does not advertise cursor-preserving text input."));
+      return;
+    }
     sendInput("text", { text: event.key }, "Type").catch(showError);
   }
 });
@@ -2016,6 +2560,11 @@ elements.canvas.addEventListener("paste", (event) => {
   const text = event.clipboardData?.getData("text");
   if (!text) return;
   event.preventDefault();
+  if (state.selected?.capabilities?.text === false
+    || (state.selected?.backend === "ailoha" && state.selected?.capabilities?.text !== true)) {
+    showError(new Error("This target does not advertise cursor-preserving text input."));
+    return;
+  }
   sendInput("text", { text }, "Paste").catch(showError);
 });
 
@@ -2031,7 +2580,7 @@ elements.overlayAction.addEventListener("click", () => {
       return;
     }
     if (action === "retry-stream") {
-      startStream();
+      await retryStream();
       return;
     }
     if (action === "refresh") {
@@ -2207,6 +2756,7 @@ elements.createRuntime.addEventListener("change", populateCreateOptions);
 elements.createForm.addEventListener("submit", (event) => {
   event.preventDefault();
   runBusy(elements.createSubmit, async () => {
+    const selectionVersion = state.selectionVersion;
     const response = await api("/api/v1/devices", {
       method: "POST",
       body: JSON.stringify({
@@ -2216,30 +2766,44 @@ elements.createForm.addEventListener("submit", (event) => {
         deviceTypeId: elements.createDeviceType.value,
       }),
     });
-    state.selected = await response.json();
+    const created = await response.json();
+    const applySelection = !state.detached && selectionVersion === state.selectionVersion && created.selectionApplied !== false;
     elements.createDialog.close();
-    await refresh();
-    showToast(`${state.selected.name} created and started`);
+    if (created.backend === "ailoha") {
+      if (applySelection) await selectDevice(created, false);
+      await loadCatalog();
+    } else {
+      if (applySelection) {
+        state.selected = created;
+        semanticInspection.setTarget(created);
+      }
+      await refresh();
+    }
+    showToast(`${created.name} created and started${created.selectionApplied === false ? "; current selection unchanged" : ""}`);
   }).catch(showError);
 });
 
 document.querySelector("#erase-button").addEventListener("click", async (event) => {
   const trigger = event.currentTarget;
+  const captured = state.selected?.backend === "ailoha" ? captureCanvasInvocation(state) : null;
   // Stacking a second modal on the data dialog would leave the destructive sheet visible behind the
   // confirmation, so hand the top layer over first.
   elements.dataDialog.close();
-  if (!await requestConfirmation({
+  if (!captured && !await requestConfirmation({
     title: `Erase ${state.selected.name}?`,
     message: `All content and settings on this ${selectedNoun()} will be permanently removed.`,
     action: `Erase ${selectedNoun()}`,
   })) return;
 
   runBusy(trigger, async () => {
-    const response = await api(`/api/v1/devices/${encodeURIComponent(state.selected.id)}/erase`, {
+    const response = await api(`/api/v1/devices/${encodeURIComponent(captured?.deviceId ?? state.selected.id)}/erase`, {
       method: "POST",
       body: JSON.stringify({ confirm: true }),
     });
-    state.selected = await response.json();
+    const device = await response.json();
+    if (captured && !isDestructiveSelectionCurrent(captured)) return;
+    state.selected = device;
+    semanticInspection.setTarget(device);
     await refresh();
     showToast(`${capitalize(selectedNoun())} erased`);
   }).catch(showError);
@@ -2247,27 +2811,38 @@ document.querySelector("#erase-button").addEventListener("click", async (event) 
 
 document.querySelector("#delete-button").addEventListener("click", async (event) => {
   const trigger = event.currentTarget;
+  const captured = state.selected?.backend === "ailoha" ? captureCanvasInvocation(state) : null;
   const noun = selectedNoun();
   elements.dataDialog.close();
-  if (!await requestConfirmation({
+  if (!captured && !await requestConfirmation({
     title: `Delete ${state.selected.name}?`,
     message: `The ${selectedNoun()} and all of its data will be permanently deleted.`,
     action: `Delete ${selectedNoun()}`,
   })) return;
 
   runBusy(trigger, async () => {
-    await api(`/api/v1/devices/${encodeURIComponent(state.selected.id)}`, {
+    await api(`/api/v1/devices/${encodeURIComponent(captured?.deviceId ?? state.selected.id)}`, {
       method: "DELETE",
       body: JSON.stringify({ confirm: true }),
     });
+    if (captured && !isDestructiveSelectionCurrent(captured)) return;
     stopStream();
     state.selected = null;
+    semanticInspection.setTarget(null);
     elements.view.classList.add("hidden");
     elements.empty.classList.remove("hidden");
     await refresh();
     showToast(`${capitalize(noun)} deleted`);
   }).catch(showError);
 });
+
+function isDestructiveSelectionCurrent(captured) {
+  return state.panelVisible && !state.detached
+    && state.selected?.backend === captured.backend
+    && state.selected?.id === captured.deviceId
+    && state.selected?.targetHostId === captured.targetHostId
+    && state.selectionVersion === captured.selectionVersion;
+}
 
 elements.copyUdid.addEventListener("click", async () => {
   const identifier = identifierLabels(state.selected?.platform);
@@ -2295,10 +2870,11 @@ async function runBusy(button, operation) {
 }
 
 async function downloadScreenshot() {
-  const response = await api(`/api/v1/devices/${encodeURIComponent(state.selected.id)}/screenshot`);
+  const device = state.selected;
+  const response = await api(`/api/v1/devices/${encodeURIComponent(device.id)}/screenshot`);
   const blob = await response.blob();
   const suggestedName =
-    `${state.selected.name.replaceAll(/\W+/g, "-").toLowerCase()}-${Date.now()}.png`;
+    `${device.name.replaceAll(/\W+/g, "-").toLowerCase()}-${Date.now()}.png`;
   if (transport?.saveBlob) {
     if (await transport.saveBlob(blob, suggestedName)) showToast("Screenshot saved");
     return;
@@ -2323,35 +2899,49 @@ async function updateRecordingStatus(
     selectionVersion !== state.selectionVersion
     || state.selected?.id !== deviceId
   ) return;
-  setRecordingState(status.isRecording);
+  setRecordingState(status.isRecording, state.selected?.backend === "ailoha" && Boolean(status.outputPath));
 }
 
-function setRecordingState(isRecording) {
+function setRecordingState(isRecording, pending = false, uncertain = false) {
   state.recording = isRecording;
+  state.recordingPending = pending;
+  state.recordingUncertain = uncertain;
   elements.record.classList.toggle("recording", isRecording);
-  elements.record.setAttribute("aria-label", isRecording ? "Stop recording" : "Start recording");
-  elements.record.title = isRecording ? "Stop recording" : "Start recording";
+  const label = isRecording ? "Stop recording" : uncertain ? "Resolve recording"
+    : pending ? "Save recording" : "Start recording";
+  elements.record.setAttribute("aria-label", label);
+  elements.record.title = label;
 }
 
 async function toggleRecording() {
-  const operation = state.recording ? "stop" : "start";
-  const response = await api(
-    `/api/v1/devices/${encodeURIComponent(state.selected.id)}/recording/${operation}`,
-    {
+  const deviceId = state.selected.id;
+  const selectionVersion = state.selectionVersion;
+  const operation = state.recording || state.recordingPending ? "stop" : "start";
+  let response;
+  try {
+    response = await api(`/api/v1/devices/${encodeURIComponent(deviceId)}/recording/${operation}`, {
       method: "POST",
-      ...(state.recording ? {} : { body: JSON.stringify({ timeoutSeconds: 180 }) }),
-    },
-  );
+      ...(operation === "stop" ? {} : { body: JSON.stringify({ timeoutSeconds: 180 }) }),
+    });
+  } catch (error) {
+    if (selectionVersion === state.selectionVersion
+      && state.selected?.id === deviceId && state.selected.backend === "ailoha") {
+      setRecordingState(false, true, true);
+    }
+    throw error;
+  }
   const status = await response.json();
-  setRecordingState(status.isRecording);
+  if (selectionVersion !== state.selectionVersion || state.selected?.id !== deviceId) return;
+  setRecordingState(status.isRecording, operation === "start" && state.selected?.backend === "ailoha");
   showToast(
-    state.recording
+    operation === "start"
       ? "Recording started"
       : `Recording saved to ${status.outputPath}`,
   );
 }
 
 async function detach() {
+  workspaceInspection.setVisible(false);
   state.selectionVersion += 1;
   state.selectionTarget = null;
   stopStream();
@@ -2363,7 +2953,7 @@ async function detach() {
   clearTimeout(automation.retryTimer);
   socket?.close();
   await api("/api/v1/canvas/detach", { method: "POST" });
-  clearStoredDeviceId(localStorage, canvasInstanceId());
+  clearStoredDeviceId(localStorage, canvasPreferenceId());
   state.detached = true;
   transport?.setViewTitle?.("Device", "Detached");
   elements.view.classList.add("hidden");
@@ -2524,6 +3114,7 @@ function createSocket(channel, query) {
   const protocol = location.protocol === "https:" ? "wss:" : "ws:";
   return new WebSocket(
     `${protocol}//${location.host}/ws/${channel}${query ? `?${query}` : ""}`,
+    channel === "video" && state.selected?.backend === "ailoha" ? "ailoha.video.v1" : [],
   );
 }
 
@@ -2535,10 +3126,22 @@ function canvasInstanceId() {
   return instanceId;
 }
 
+function canvasPreferenceId() {
+  const instance = canvasInstanceId();
+  return state.catalog?.backend === "ailoha"
+    ? `${instance}:ailoha:${state.catalog.targetHostId}` : instance;
+}
+
+function panelPreferenceId() {
+  return panelPreferenceReady && sessionStorage.getItem("mobile-canvas-instance") ? canvasPreferenceId() : null;
+}
+
 function setPanelVisible(visible) {
   if (state.panelVisible === visible) return;
   const visibilityVersion = ++panelVisibilityVersion;
   state.panelVisible = visible;
+  workspaceInspection.setVisible(visible);
+  semanticInspection.setVisible(visible);
   if (!visible) {
     stopStream();
     clearTimeout(automation.retryTimer);
@@ -2546,6 +3149,13 @@ function setPanelVisible(visible) {
     automation.socket = null;
     socket?.close();
     endAutomation();
+    if (!transport && state.catalog?.backend === "ailoha" && !state.detached) {
+      panelOwnerTransition = panelOwnerTransition.then(() => api("/api/v1/canvas/suspend", { method: "POST" }));
+      void panelOwnerTransition.catch((error) => {
+        if (visibilityVersion === panelVisibilityVersion && !state.panelVisible) showCanvasError(error);
+        else console.error("A retired panel suspension failed.", error);
+      });
+    }
     return;
   }
   if (!state.detached) {
@@ -2554,18 +3164,27 @@ function setPanelVisible(visible) {
       && state.panelVisible
       && !state.detached;
     void resumeAuthenticatedPanel({
-      authenticate: () => transport ? Promise.resolve() : api("/api/v1/status"),
+      authenticate: () => transport ? Promise.resolve()
+        : state.catalog?.backend === "ailoha"
+          ? resumeAilohaPanelOwner()
+          : api("/api/v1/status"),
       isActive,
       // A device can finish booting while its host session is hidden. Re-read its state before
       // deciding whether a stream can start instead of reconnecting from the stale "booting" record.
       refresh,
       resume: () => {
         connectAutomationEvents();
+        if (state.catalog?.backend === "ailoha" && !transport) void workspaceInspection.load();
       },
     }).catch((error) => {
       if (isActive()) showCanvasError(error);
     });
   }
+}
+
+function resumeAilohaPanelOwner() {
+  panelOwnerTransition = panelOwnerTransition.then(() => api("/api/v1/canvas/resume", { method: "POST" }));
+  return panelOwnerTransition;
 }
 
 document.addEventListener("visibilitychange", () => setPanelVisible(!document.hidden));
@@ -2606,6 +3225,12 @@ function findStartCodes(bytes) {
 showLoadingSelection();
 
 bootstrap()
-  .then(refresh)
+  .then(() => {
+    showLoadingCatalog();
+    return refresh();
+  })
+  .then(async () => {
+    if (state.catalog?.backend === "ailoha" && !transport) await workspaceInspection.load();
+  })
   .then(connectAutomationEvents)
   .catch(showCanvasError);

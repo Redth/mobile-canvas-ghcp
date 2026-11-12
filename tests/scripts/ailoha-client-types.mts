@@ -3,13 +3,36 @@ import {
   connectTargetHost,
   type Operation,
   type OperationStatus,
+  type CatalogDescriptor,
+  type RuntimeDescriptor,
+  type TargetTypeDescriptor,
+  type TemplateDescriptor,
+  type ProviderDiagnostics,
   type SucceededOperation,
   type TargetHostConnection,
+  type TargetCatalogSnapshot,
 } from "../../lib/ailoha/index.mjs";
 
 async function exercise(connection: TargetHostConnection, signal: AbortSignal) {
   const client = await connectTargetHost(connection, { signal, timeoutMs: 1000 });
   try {
+    const snapshot: TargetCatalogSnapshot = await client.getTargetCatalogSnapshot({ providerId: "provider/opaque", signal });
+    void snapshot.providers[0]?.targets[0]?.capabilities;
+    // @ts-expect-error A catalog read is not mutation authority and takes no context/selection token.
+    await client.getTargetCatalogSnapshot({ expectedRevision: "1" });
+    const catalogs: CatalogDescriptor[] = await client.listProviderCatalogs("provider/opaque", { signal });
+    const runtimes: RuntimeDescriptor[] = await client.listProviderRuntimes("provider/opaque", { signal });
+    const types: TargetTypeDescriptor[] = await client.listProviderTargetTypes("provider/opaque", { signal });
+    const templates: TemplateDescriptor[] = await client.listProviderTemplates("provider/opaque", { signal });
+    const diagnostics: ProviderDiagnostics = await client.getProviderDiagnostics("provider/opaque", { signal });
+    void [catalogs, runtimes, types, templates, diagnostics];
+    // @ts-expect-error Catalog lookup requires an explicit provider identity.
+    await client.listProviderRuntimes();
+    // @ts-expect-error Provider catalog reads do not accept mutation options.
+    await client.listProviderTargetTypes("provider/opaque", { confirmed: true });
+    // @ts-expect-error Runtime metadata is JSON, not arbitrary executable values.
+    const invalidRuntime: RuntimeDescriptor = { runtimeId: "runtime", providerId: "provider", name: "", platform: "ios", version: "", metadata: { callback: () => {} } };
+    void invalidRuntime;
     const created: Operation = await client.createTarget({
       providerId: "provider/opaque",
       targetTypeId: "type/opaque",
@@ -25,8 +48,8 @@ async function exercise(connection: TargetHostConnection, signal: AbortSignal) {
     });
     await client.stopTarget("target/opaque", { signal });
     await client.rebootTarget("target/opaque", { request: {} });
-    await client.resetTarget("target/opaque", { confirmed: true, signal, request: { reason: "reset" } });
-    await client.deleteTarget("target/opaque", { confirmed: true, signal });
+    await client.resetTarget("target/opaque", { confirmed: true, signal, timeoutMs: 100, request: { reason: "reset" } });
+    await client.deleteTarget("target/opaque", { confirmed: true, signal, timeoutMs: 100 });
     const operations: Operation[] = await client.listOperations({ signal, targetId: "target/opaque", status: "cancelling" });
     const operation: Operation = await client.getOperation(created.operationId, { signal });
     const cancellation: Operation = await client.cancelOperation(accepted.operationId, { signal });

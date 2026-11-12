@@ -8,8 +8,39 @@ verifies its pinned runtime on first use.
 The [approved Ailoha integration roadmap](ailoha-integration-roadmap.md) keeps
 VS Code and the GitHub canvas as hosts of the same Mobile Canvas product. The
 [compatibility baseline](compatibility-baseline.md) records the extension's
-current public IDs and behavior that an engine migration must preserve; Ailoha
-is not yet the runtime behind this extension.
+current public IDs and behavior that an engine migration must preserve. The
+production default remains the legacy runtime; a bounded Ailoha source-preview
+adapter is now wired into the actual view, Chat tools and MCP entrypoint.
+
+### Ailoha source-preview opt-in
+
+Set the application setting `"mobileCanvas.backend": "ailoha"` and reload the
+VS Code window, or start the host with `MOBILE_CANVAS_BACKEND=ailoha`.
+Opt-in requires a prepared, approved public Ailoha SDK graph; until that release
+gate is supplied it reports unavailable instead of starting legacy. It keeps
+existing extension/view/tool identities and uses a unique live window/view
+context, not a workspace preference hash.
+
+The source slice supports authoritative provider/runtime/device-type/template
+catalogs, compatible iOS/Android create+boot, inventory/select, advertised start/stop/reboot, PNG
+screenshots, observed-geometry pointer gestures and ALHV WebCodecs display.
+Create controls require genuine compatibility and capability evidence. Creation
+uses one canonical `start: true` operation, preserves native deployment IDs and
+cannot overwrite a view selection changed while that operation was pending.
+The VS Code MCP adapter follows a newly created device; raw named-context MCP
+creation does not change presentation selection. Both retain the existing `ios` default.
+API cancellation is correlated to its request ID and stops only that caller.
+The Ailoha bridge uses the shared scoped backend API with the captured signal;
+cancelled creation keeps accepted/unknown operation receipts for safe recovery
+without replay or late selection. Other requests and shared initialization remain
+independent; the production legacy HTTP adapter is unchanged.
+`#mobileDevice` and `#mobileScreenshot` use that captured owner;
+`#mobileUiTree`, recording, app deployment/inspection and broader controls report
+unsupported. Static unbound MCP cannot choose the first view; the extension
+supplies its named context explicitly. See the
+[shared adapter contract](ailoha-protocol-adapter.md) for tests and outstanding
+public SDK/native artifact gates. No default cutover or Marketplace publication
+is part of this source preview.
 
 ## Install
 
@@ -121,7 +152,7 @@ Dependencies are restored through
 `https://packagefeedproxy.microsoft.io/npm/`, configured in `vscode/.npmrc`.
 
 ```bash
-npm ci --prefix vscode --ignore-scripts
+npm ci --prefix vscode --ignore-scripts --omit=optional
 npm test --prefix vscode
 npm run package --prefix vscode
 ./scripts/release.sh

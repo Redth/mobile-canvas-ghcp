@@ -1,0 +1,961 @@
+{
+  "schema": "ailoha.workspace.inspection/v1",
+  "workspace": {
+    "workspaceId": "workspace-e146530e2dc18377a740c62d",
+    "root": "/workspace-inspection-fixture",
+    "repositoryMarker": "not-observed"
+  },
+  "scan": {
+    "complete": true,
+    "limits": {
+      "maxDepth": 24,
+      "maxCandidateFiles": 5000,
+      "maxFileBytes": 1048576,
+      "maxTotalBytes": 33554432,
+      "maxEnumerationEntries": 50000,
+      "maxIgnoreRules": 2000,
+      "maxIgnoreEvaluations": 250000,
+      "maxSourceTokens": 100000,
+      "maxManifestDepth": 64,
+      "maxDiagnostics": 200
+    },
+    "enumerationEntriesVisited": 30,
+    "ignoreRuleEvaluations": 143,
+    "candidateFilesConsidered": 18,
+    "candidateFilesRead": 16,
+    "bytesRead": 10332,
+    "skippedEntries": 1,
+    "skipped": [
+      {
+        "path": "ignored",
+        "reason": "excluded-or-ignored"
+      }
+    ]
+  },
+  "applications": [
+    {
+      "applicationId": "app-f2b3793d81f39f5f2ddb24eb",
+      "relativeRoot": "expo/ios",
+      "primaryManifest": "expo/ios/Consumer.xcodeproj/project.pbxproj",
+      "framework": "swift",
+      "variant": "swiftui",
+      "role": "application",
+      "nativeTarget": {
+        "targetId": "000000000000000000000078",
+        "name": "IndependentApp",
+        "productType": "com.apple.product-type.application",
+        "bundleId": "org.example.repeated"
+      },
+      "targetPlatforms": [
+        "ios"
+      ],
+      "nativeWrappers": [],
+      "evidence": [
+        {
+          "evidenceId": "e-45b38a86777f82576ae95e4d",
+          "kind": "source-reference",
+          "path": "expo/ios/Consumer.xcodeproj/project.pbxproj",
+          "location": {
+            "line": null,
+            "field": "/objects/000000000000000000000078/buildPhases"
+          },
+          "observation": "Known Swift startup files are read only through literal target/source references."
+        },
+        {
+          "evidenceId": "e-73a0803406c94b3a49498b6b",
+          "kind": "native-target",
+          "path": "expo/ios/Consumer.xcodeproj/project.pbxproj",
+          "location": {
+            "line": 25,
+            "field": "/objects/000000000000000000000078"
+          },
+          "observation": "Literal Xcode native target identity; it is not a bundle or workspace identity."
+        },
+        {
+          "evidenceId": "e-75a284922597e3d6a94594e9",
+          "kind": "role",
+          "path": "expo/ios/Consumer.xcodeproj/project.pbxproj",
+          "location": {
+            "line": 25,
+            "field": "/objects/000000000000000000000078/productType"
+          },
+          "observation": "Static Xcode product role; frameworks, tests, extensions, and tools are not GUI application recommendations."
+        },
+        {
+          "evidenceId": "e-49fbd68a9a46881e2438a0cc",
+          "kind": "dependency",
+          "path": "expo/ios/Consumer.xcodeproj/project.pbxproj",
+          "location": {
+            "line": 33,
+            "field": "/objects/00000000000000000000007F/productName"
+          },
+          "observation": "Swift agent product dependency declared for this native target; acquisition and linking are not verified."
+        },
+        {
+          "evidenceId": "e-4f3491c13b85bc13426e9b0f",
+          "kind": "debug-guard",
+          "path": "expo/ios/IndependentAppApp.swift",
+          "location": {
+            "line": 7,
+            "field": null
+          },
+          "observation": "Recognized DEBUG syntactic guard; production linkage and release stripping are not verified."
+        },
+        {
+          "evidenceId": "e-449913776c38c7a627143cfa",
+          "kind": "startup",
+          "path": "expo/ios/IndependentAppApp.swift",
+          "location": {
+            "line": 7,
+            "field": null
+          },
+          "observation": "Known Swift agent startup syntax; execution is not evaluated."
+        }
+      ],
+      "instrumentation": {
+        "dependency": {
+          "state": "declared",
+          "packageId": "AilohaAgent",
+          "declarations": [
+            {
+              "path": "expo/ios/Consumer.xcodeproj/project.pbxproj",
+              "location": {
+                "line": 33,
+                "field": "/objects/00000000000000000000007F/productName"
+              },
+              "versionExpression": "0.1.0",
+              "conditional": false
+            }
+          ],
+          "evidenceIds": [
+            "e-49fbd68a9a46881e2438a0cc"
+          ]
+        },
+        "startup": {
+          "state": "observed",
+          "evidenceIds": [
+            "e-449913776c38c7a627143cfa"
+          ]
+        },
+        "debugGuard": {
+          "state": "observed",
+          "evidenceIds": [
+            "e-4f3491c13b85bc13426e9b0f"
+          ]
+        },
+        "liveConnection": {
+          "state": "not-evaluated"
+        },
+        "correlation": {
+          "state": "not-evaluated"
+        }
+      },
+      "liveCapabilityEvidence": null,
+      "launchProfiles": [],
+      "recommendedSkillIds": [
+        "ailoha-swift-devflow"
+      ],
+      "missingSteps": []
+    },
+    {
+      "applicationId": "app-252a84188333517bd7c7cbce",
+      "relativeRoot": "expo",
+      "primaryManifest": "expo/package.json",
+      "framework": "react-native",
+      "variant": "expo",
+      "role": "application",
+      "nativeTarget": null,
+      "targetPlatforms": [
+        "android",
+        "ios"
+      ],
+      "nativeWrappers": [
+        {
+          "relativeRoot": "expo/android",
+          "primaryManifest": "expo/android/app/build.gradle",
+          "evidenceIds": [
+            "e-7f48db2804e08a77b3d147f2"
+          ],
+          "applicationId": null,
+          "nativeTarget": null
+        },
+        {
+          "relativeRoot": "expo/ios",
+          "primaryManifest": "expo/ios/Consumer.xcodeproj/project.pbxproj",
+          "evidenceIds": [
+            "e-7e5d06ece3056aa264b4750e"
+          ],
+          "applicationId": "app-9871cf20ff083809f9686cba",
+          "nativeTarget": {
+            "targetId": "000000000000000000000064",
+            "name": "ExpoWrapper",
+            "productType": "com.apple.product-type.application",
+            "bundleId": "org.example.repeated"
+          }
+        }
+      ],
+      "evidence": [
+        {
+          "evidenceId": "e-8b93c8cc1d72a48994a0f57e",
+          "kind": "debug-guard",
+          "path": "expo/App.tsx",
+          "location": {
+            "line": 2,
+            "field": null
+          },
+          "observation": "Recognized debug-only syntactic guard; release stripping is not verified."
+        },
+        {
+          "evidenceId": "e-08462637fedd5cc221776884",
+          "kind": "startup",
+          "path": "expo/App.tsx",
+          "location": {
+            "line": 2,
+            "field": null
+          },
+          "observation": "Agent startup call syntax; execution is not evaluated."
+        },
+        {
+          "evidenceId": "e-7f48db2804e08a77b3d147f2",
+          "kind": "native-wrapper",
+          "path": "expo/android/app/build.gradle",
+          "location": {
+            "line": 1,
+            "field": null
+          },
+          "observation": "Framework native module has a static build reference to this application's root."
+        },
+        {
+          "evidenceId": "e-900cea4d843ddd9859792016",
+          "kind": "framework",
+          "path": "expo/app.json",
+          "location": {
+            "line": null,
+            "field": "/expo"
+          },
+          "observation": "Static Expo application configuration."
+        },
+        {
+          "evidenceId": "e-7e5d06ece3056aa264b4750e",
+          "kind": "native-wrapper",
+          "path": "expo/ios/Consumer.xcodeproj/project.pbxproj",
+          "location": {
+            "line": 14,
+            "field": "/objects/000000000000000000000064/buildPhases"
+          },
+          "observation": "Native application target has confined literal framework build/owner references; hooks are not executed."
+        },
+        {
+          "evidenceId": "e-79343a18ff42a92bade6907e",
+          "kind": "development-build",
+          "path": "expo/package.json",
+          "location": {
+            "line": null,
+            "field": null
+          },
+          "observation": "Expo development-client dependency declared; no native build was verified."
+        },
+        {
+          "evidenceId": "e-80805c197fff8a36227bfdab",
+          "kind": "framework",
+          "path": "expo/package.json",
+          "location": {
+            "line": null,
+            "field": "/dependencies"
+          },
+          "observation": "Expo and React Native evidence grouped as one project."
+        },
+        {
+          "evidenceId": "e-022bc1357cc15212f0b375b0",
+          "kind": "dependency",
+          "path": "expo/package.json",
+          "location": {
+            "line": null,
+            "field": "/dependencies/@ailoha~1react-native"
+          },
+          "observation": "Agent package declaration; installation is not evaluated."
+        }
+      ],
+      "instrumentation": {
+        "dependency": {
+          "state": "declared",
+          "packageId": "@ailoha/react-native",
+          "declarations": [
+            {
+              "path": "expo/package.json",
+              "location": {
+                "line": null,
+                "field": "/dependencies/@ailoha~1react-native"
+              },
+              "versionExpression": "^0.1.0",
+              "conditional": false
+            }
+          ],
+          "evidenceIds": [
+            "e-022bc1357cc15212f0b375b0"
+          ]
+        },
+        "startup": {
+          "state": "observed",
+          "evidenceIds": [
+            "e-08462637fedd5cc221776884"
+          ]
+        },
+        "debugGuard": {
+          "state": "observed",
+          "evidenceIds": [
+            "e-8b93c8cc1d72a48994a0f57e"
+          ]
+        },
+        "liveConnection": {
+          "state": "not-evaluated"
+        },
+        "correlation": {
+          "state": "not-evaluated"
+        }
+      },
+      "liveCapabilityEvidence": null,
+      "launchProfiles": [
+        {
+          "name": "start",
+          "source": "expo/package.json",
+          "location": {
+            "line": null,
+            "field": "/scripts"
+          },
+          "requiresWorkspaceTrust": true,
+          "evaluated": false
+        }
+      ],
+      "recommendedSkillIds": [
+        "ailoha-reactnative-devflow"
+      ],
+      "missingSteps": []
+    },
+    {
+      "applicationId": "app-a7ea1b377def16cf6134dabb",
+      "relativeRoot": "maui",
+      "primaryManifest": "maui/Consumer.csproj",
+      "framework": "maui",
+      "variant": null,
+      "role": "application",
+      "nativeTarget": null,
+      "targetPlatforms": [
+        "android",
+        "ios"
+      ],
+      "nativeWrappers": [],
+      "evidence": [
+        {
+          "evidenceId": "e-d4eedca2468cf051c1f2fbb0",
+          "kind": "role",
+          "path": "maui/Consumer.csproj",
+          "location": {
+            "line": 2,
+            "field": "OutputType"
+          },
+          "observation": "Literal project output role."
+        },
+        {
+          "evidenceId": "e-7e5a012adf51c43a05930d45",
+          "kind": "framework",
+          "path": "maui/Consumer.csproj",
+          "location": {
+            "line": 2,
+            "field": "UseMaui"
+          },
+          "observation": "Static project indicators; imported and conditional values are not evaluated."
+        },
+        {
+          "evidenceId": "e-c02a4cc040958a807e420d22",
+          "kind": "dependency",
+          "path": "maui/Consumer.csproj",
+          "location": {
+            "line": 4,
+            "field": "PackageReference"
+          },
+          "observation": "Agent package declaration; restoration is not evaluated."
+        },
+        {
+          "evidenceId": "e-f9797e775eda2a4676544b74",
+          "kind": "debug-guard",
+          "path": "maui/MauiProgram.cs",
+          "location": {
+            "line": 4,
+            "field": null
+          },
+          "observation": "Recognized debug-only syntactic guard; release stripping is not verified."
+        },
+        {
+          "evidenceId": "e-3c1f75cffadec183bbd9e4e2",
+          "kind": "startup",
+          "path": "maui/MauiProgram.cs",
+          "location": {
+            "line": 4,
+            "field": null
+          },
+          "observation": "Agent startup call syntax; execution is not evaluated."
+        }
+      ],
+      "instrumentation": {
+        "dependency": {
+          "state": "declared",
+          "packageId": "Ailoha.Agent.Maui",
+          "declarations": [
+            {
+              "path": "maui/Consumer.csproj",
+              "location": {
+                "line": 4,
+                "field": "PackageReference"
+              },
+              "versionExpression": "0.1.0",
+              "conditional": false
+            }
+          ],
+          "evidenceIds": [
+            "e-c02a4cc040958a807e420d22"
+          ]
+        },
+        "startup": {
+          "state": "observed",
+          "evidenceIds": [
+            "e-3c1f75cffadec183bbd9e4e2"
+          ]
+        },
+        "debugGuard": {
+          "state": "observed",
+          "evidenceIds": [
+            "e-f9797e775eda2a4676544b74"
+          ]
+        },
+        "liveConnection": {
+          "state": "not-evaluated"
+        },
+        "correlation": {
+          "state": "not-evaluated"
+        }
+      },
+      "liveCapabilityEvidence": null,
+      "launchProfiles": [],
+      "recommendedSkillIds": [
+        "ailoha-maui-devflow"
+      ],
+      "missingSteps": []
+    },
+    {
+      "applicationId": "app-2d6f6d1f696d74c06d47546a",
+      "relativeRoot": "native",
+      "primaryManifest": "native/Consumer.xcodeproj/project.pbxproj",
+      "framework": "swift",
+      "variant": "swiftui",
+      "role": "application",
+      "nativeTarget": {
+        "targetId": "000000000000000000000064",
+        "name": "PhoneApp",
+        "productType": "com.apple.product-type.application",
+        "bundleId": "org.example.repeated"
+      },
+      "targetPlatforms": [
+        "ios"
+      ],
+      "nativeWrappers": [],
+      "evidence": [
+        {
+          "evidenceId": "e-6428634677a1870ee15ebe7f",
+          "kind": "source-reference",
+          "path": "native/Consumer.xcodeproj/project.pbxproj",
+          "location": {
+            "line": null,
+            "field": "/objects/000000000000000000000064/buildPhases"
+          },
+          "observation": "Known Swift startup files are read only through literal target/source references."
+        },
+        {
+          "evidenceId": "e-7201d830f815facacc409483",
+          "kind": "native-target",
+          "path": "native/Consumer.xcodeproj/project.pbxproj",
+          "location": {
+            "line": 14,
+            "field": "/objects/000000000000000000000064"
+          },
+          "observation": "Literal Xcode native target identity; it is not a bundle or workspace identity."
+        },
+        {
+          "evidenceId": "e-28d5b8a20626b5e3087f3580",
+          "kind": "role",
+          "path": "native/Consumer.xcodeproj/project.pbxproj",
+          "location": {
+            "line": 14,
+            "field": "/objects/000000000000000000000064/productType"
+          },
+          "observation": "Static Xcode product role; frameworks, tests, extensions, and tools are not GUI application recommendations."
+        },
+        {
+          "evidenceId": "e-fd1ebf0eace45d6b7552dbc6",
+          "kind": "dependency",
+          "path": "native/Consumer.xcodeproj/project.pbxproj",
+          "location": {
+            "line": 22,
+            "field": "/objects/00000000000000000000006B/productName"
+          },
+          "observation": "Swift agent product dependency declared for this native target; acquisition and linking are not verified."
+        },
+        {
+          "evidenceId": "e-af1c062c24e586caaba6c588",
+          "kind": "debug-guard",
+          "path": "native/PhoneAppApp.swift",
+          "location": {
+            "line": 7,
+            "field": null
+          },
+          "observation": "Recognized DEBUG syntactic guard; production linkage and release stripping are not verified."
+        },
+        {
+          "evidenceId": "e-f07cc0e23ddf0c39dcbe3331",
+          "kind": "startup",
+          "path": "native/PhoneAppApp.swift",
+          "location": {
+            "line": 7,
+            "field": null
+          },
+          "observation": "Known Swift agent startup syntax; execution is not evaluated."
+        }
+      ],
+      "instrumentation": {
+        "dependency": {
+          "state": "declared",
+          "packageId": "AilohaAgent",
+          "declarations": [
+            {
+              "path": "native/Consumer.xcodeproj/project.pbxproj",
+              "location": {
+                "line": 22,
+                "field": "/objects/00000000000000000000006B/productName"
+              },
+              "versionExpression": "0.1.0",
+              "conditional": false
+            }
+          ],
+          "evidenceIds": [
+            "e-fd1ebf0eace45d6b7552dbc6"
+          ]
+        },
+        "startup": {
+          "state": "observed",
+          "evidenceIds": [
+            "e-f07cc0e23ddf0c39dcbe3331"
+          ]
+        },
+        "debugGuard": {
+          "state": "observed",
+          "evidenceIds": [
+            "e-af1c062c24e586caaba6c588"
+          ]
+        },
+        "liveConnection": {
+          "state": "not-evaluated"
+        },
+        "correlation": {
+          "state": "not-evaluated"
+        }
+      },
+      "liveCapabilityEvidence": null,
+      "launchProfiles": [],
+      "recommendedSkillIds": [
+        "ailoha-swift-devflow"
+      ],
+      "missingSteps": []
+    },
+    {
+      "applicationId": "app-5a8399654317b40464e8e8e3",
+      "relativeRoot": "native",
+      "primaryManifest": "native/Consumer.xcodeproj/project.pbxproj",
+      "framework": "swift",
+      "variant": "swiftui",
+      "role": "application",
+      "nativeTarget": {
+        "targetId": "000000000000000000000078",
+        "name": "DesktopApp",
+        "productType": "com.apple.product-type.application",
+        "bundleId": "org.example.repeated"
+      },
+      "targetPlatforms": [
+        "macos"
+      ],
+      "nativeWrappers": [],
+      "evidence": [
+        {
+          "evidenceId": "e-6f256ffb3ed6296ff01a6d28",
+          "kind": "source-reference",
+          "path": "native/Consumer.xcodeproj/project.pbxproj",
+          "location": {
+            "line": null,
+            "field": "/objects/000000000000000000000078/buildPhases"
+          },
+          "observation": "Known Swift startup files are read only through literal target/source references."
+        },
+        {
+          "evidenceId": "e-b685d4632341e0ea0ebd7a1d",
+          "kind": "native-target",
+          "path": "native/Consumer.xcodeproj/project.pbxproj",
+          "location": {
+            "line": 25,
+            "field": "/objects/000000000000000000000078"
+          },
+          "observation": "Literal Xcode native target identity; it is not a bundle or workspace identity."
+        },
+        {
+          "evidenceId": "e-24bc79417abfb6798f2b7058",
+          "kind": "role",
+          "path": "native/Consumer.xcodeproj/project.pbxproj",
+          "location": {
+            "line": 25,
+            "field": "/objects/000000000000000000000078/productType"
+          },
+          "observation": "Static Xcode product role; frameworks, tests, extensions, and tools are not GUI application recommendations."
+        },
+        {
+          "evidenceId": "e-afe13dd2c100205adeb4e685",
+          "kind": "dependency",
+          "path": "native/Consumer.xcodeproj/project.pbxproj",
+          "location": {
+            "line": 33,
+            "field": "/objects/00000000000000000000007F/productName"
+          },
+          "observation": "Swift agent product dependency declared for this native target; acquisition and linking are not verified."
+        },
+        {
+          "evidenceId": "e-ba919a50db4e0b80eb687600",
+          "kind": "debug-guard",
+          "path": "native/DesktopAppApp.swift",
+          "location": {
+            "line": 7,
+            "field": null
+          },
+          "observation": "Recognized DEBUG syntactic guard; production linkage and release stripping are not verified."
+        },
+        {
+          "evidenceId": "e-e345924ca18a2359197fb423",
+          "kind": "startup",
+          "path": "native/DesktopAppApp.swift",
+          "location": {
+            "line": 7,
+            "field": null
+          },
+          "observation": "Known Swift agent startup syntax; execution is not evaluated."
+        }
+      ],
+      "instrumentation": {
+        "dependency": {
+          "state": "declared",
+          "packageId": "AilohaAgent",
+          "declarations": [
+            {
+              "path": "native/Consumer.xcodeproj/project.pbxproj",
+              "location": {
+                "line": 33,
+                "field": "/objects/00000000000000000000007F/productName"
+              },
+              "versionExpression": "0.1.0",
+              "conditional": false
+            }
+          ],
+          "evidenceIds": [
+            "e-afe13dd2c100205adeb4e685"
+          ]
+        },
+        "startup": {
+          "state": "observed",
+          "evidenceIds": [
+            "e-e345924ca18a2359197fb423"
+          ]
+        },
+        "debugGuard": {
+          "state": "observed",
+          "evidenceIds": [
+            "e-ba919a50db4e0b80eb687600"
+          ]
+        },
+        "liveConnection": {
+          "state": "not-evaluated"
+        },
+        "correlation": {
+          "state": "not-evaluated"
+        }
+      },
+      "liveCapabilityEvidence": null,
+      "launchProfiles": [],
+      "recommendedSkillIds": [
+        "ailoha-swift-devflow"
+      ],
+      "missingSteps": []
+    },
+    {
+      "applicationId": "app-c2d34ec9779ff52e08f4d310",
+      "relativeRoot": "native",
+      "primaryManifest": "native/Consumer.xcodeproj/project.pbxproj",
+      "framework": "swift",
+      "variant": "xcode",
+      "role": "library",
+      "nativeTarget": {
+        "targetId": "00000000000000000000008C",
+        "name": "SharedLibrary",
+        "productType": "com.apple.product-type.framework",
+        "bundleId": "org.example.repeated"
+      },
+      "targetPlatforms": [
+        "ios"
+      ],
+      "nativeWrappers": [],
+      "evidence": [
+        {
+          "evidenceId": "e-7b0c7a683ab3daae2f5e9081",
+          "kind": "native-target",
+          "path": "native/Consumer.xcodeproj/project.pbxproj",
+          "location": {
+            "line": 36,
+            "field": "/objects/00000000000000000000008C"
+          },
+          "observation": "Literal Xcode native target identity; it is not a bundle or workspace identity."
+        },
+        {
+          "evidenceId": "e-26f0a8abfa8f279569b7d3ad",
+          "kind": "role",
+          "path": "native/Consumer.xcodeproj/project.pbxproj",
+          "location": {
+            "line": 36,
+            "field": "/objects/00000000000000000000008C/productType"
+          },
+          "observation": "Static Xcode product role; frameworks, tests, extensions, and tools are not GUI application recommendations."
+        },
+        {
+          "evidenceId": "e-43720c87fb97025b55b38dd7",
+          "kind": "dependency",
+          "path": "native/Consumer.xcodeproj/project.pbxproj",
+          "location": {
+            "line": 44,
+            "field": "/objects/000000000000000000000093/productName"
+          },
+          "observation": "Swift agent product dependency declared for this native target; acquisition and linking are not verified."
+        }
+      ],
+      "instrumentation": {
+        "dependency": {
+          "state": "declared",
+          "packageId": "AilohaAgent",
+          "declarations": [
+            {
+              "path": "native/Consumer.xcodeproj/project.pbxproj",
+              "location": {
+                "line": 44,
+                "field": "/objects/000000000000000000000093/productName"
+              },
+              "versionExpression": "0.1.0",
+              "conditional": false
+            }
+          ],
+          "evidenceIds": [
+            "e-43720c87fb97025b55b38dd7"
+          ]
+        },
+        "startup": {
+          "state": "unknown",
+          "evidenceIds": []
+        },
+        "debugGuard": {
+          "state": "unknown",
+          "evidenceIds": []
+        },
+        "liveConnection": {
+          "state": "not-evaluated"
+        },
+        "correlation": {
+          "state": "not-evaluated"
+        }
+      },
+      "liveCapabilityEvidence": null,
+      "launchProfiles": [],
+      "recommendedSkillIds": [],
+      "missingSteps": []
+    },
+    {
+      "applicationId": "app-0ed708c09fb59f6925b0918b",
+      "relativeRoot": "react-native",
+      "primaryManifest": "react-native/package.json",
+      "framework": "react-native",
+      "variant": "bare",
+      "role": "application",
+      "nativeTarget": null,
+      "targetPlatforms": [],
+      "nativeWrappers": [],
+      "evidence": [
+        {
+          "evidenceId": "e-8a272c98d9dde1b369d763f8",
+          "kind": "framework",
+          "path": "react-native/package.json",
+          "location": {
+            "line": null,
+            "field": "/dependencies"
+          },
+          "observation": "React Native package declaration."
+        }
+      ],
+      "instrumentation": {
+        "dependency": {
+          "state": "not-observed",
+          "packageId": "@ailoha/react-native",
+          "declarations": [],
+          "evidenceIds": []
+        },
+        "startup": {
+          "state": "not-observed",
+          "evidenceIds": []
+        },
+        "debugGuard": {
+          "state": "not-observed",
+          "evidenceIds": []
+        },
+        "liveConnection": {
+          "state": "not-evaluated"
+        },
+        "correlation": {
+          "state": "not-evaluated"
+        }
+      },
+      "liveCapabilityEvidence": null,
+      "launchProfiles": [],
+      "recommendedSkillIds": [
+        "ailoha-reactnative-devflow"
+      ],
+      "missingSteps": [
+        {
+          "code": "review-agent-declaration",
+          "description": "Review an agent dependency declaration: none was observed in the inspected local manifest.",
+          "evidenceIds": [],
+          "requiresApproval": true,
+          "requiresMutation": true
+        },
+        {
+          "code": "review-debug-startup",
+          "description": "Review debug-only agent startup wiring: no call was observed in the known startup files.",
+          "evidenceIds": [],
+          "requiresApproval": true,
+          "requiresMutation": true
+        }
+      ]
+    },
+    {
+      "applicationId": "app-c3a80675b18fee17a75135e4",
+      "relativeRoot": "swiftpm",
+      "primaryManifest": "swiftpm/Package.swift",
+      "framework": "swift",
+      "variant": "swiftpm",
+      "role": "unknown",
+      "nativeTarget": null,
+      "targetPlatforms": [],
+      "nativeWrappers": [],
+      "evidence": [
+        {
+          "evidenceId": "e-9b1c817c0d32feadd6a22428",
+          "kind": "unknown",
+          "path": "swiftpm/Package.swift",
+          "location": {
+            "line": null,
+            "field": null
+          },
+          "observation": "Static Swift/Xcode evidence does not conclusively identify an application or its instrumentation."
+        }
+      ],
+      "instrumentation": {
+        "dependency": {
+          "state": "unknown",
+          "packageId": "AilohaAgent",
+          "declarations": [],
+          "evidenceIds": []
+        },
+        "startup": {
+          "state": "unknown",
+          "evidenceIds": []
+        },
+        "debugGuard": {
+          "state": "unknown",
+          "evidenceIds": []
+        },
+        "liveConnection": {
+          "state": "not-evaluated"
+        },
+        "correlation": {
+          "state": "not-evaluated"
+        }
+      },
+      "liveCapabilityEvidence": null,
+      "launchProfiles": [],
+      "recommendedSkillIds": [],
+      "missingSteps": []
+    }
+  ],
+  "coverage": [
+    {
+      "framework": "maui",
+      "level": "app-level",
+      "observation": "Literal project declarations and known startup files; no MSBuild evaluation."
+    },
+    {
+      "framework": "react-native",
+      "level": "app-level",
+      "observation": "Package/config grouping and known startup syntax; no JavaScript evaluation."
+    },
+    {
+      "framework": "expo",
+      "level": "app-level",
+      "observation": "React Native variant with static development-client and autolinking diagnostics."
+    },
+    {
+      "framework": "android",
+      "level": "recognition-only",
+      "observation": "Static Gradle indicators and conservative native-wrapper ownership."
+    },
+    {
+      "framework": "flutter",
+      "level": "recognition-only",
+      "observation": "Static pubspec indicators and conservative Android/iOS-wrapper ownership."
+    },
+    {
+      "framework": "winui",
+      "level": "recognition-only",
+      "observation": "Static project indicators; startup onboarding is not evaluated."
+    },
+    {
+      "framework": "wpf",
+      "level": "recognition-only",
+      "observation": "Static project indicators; startup onboarding is not evaluated."
+    },
+    {
+      "framework": "swift-xcode",
+      "level": "app-level",
+      "observation": "Literal native application targets, confined references, and known Swift startup syntax; no Xcode/SwiftPM evaluation."
+    }
+  ],
+  "diagnostics": [
+    {
+      "code": "native-wrapper-ownership-unknown",
+      "severity": "info",
+      "path": "expo/ios/Consumer.xcodeproj/project.pbxproj",
+      "location": {
+        "line": 25,
+        "field": "/objects/000000000000000000000078/buildPhases"
+      },
+      "message": "iOS wrapper ownership is missing, conflicting, foreign, or dynamic; this native application remains separate."
+    },
+    {
+      "code": "swiftpm-gui-role-not-evaluated",
+      "severity": "info",
+      "path": "swiftpm/Package.swift",
+      "location": {
+        "line": null,
+        "field": null
+      },
+      "message": "Package.swift is a presence marker only; a SwiftPM library or executable is not GUI application proof."
+    }
+  ]
+}

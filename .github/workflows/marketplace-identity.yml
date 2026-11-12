@@ -37,7 +37,7 @@ jobs:
           cache-dependency-path: vscode/package-lock.json
 
       - name: Install vsce
-        run: npm ci --prefix vscode --ignore-scripts
+        run: npm ci --prefix vscode --ignore-scripts --omit=optional
 
       - name: Sign in to Azure
         uses: azure/login@v2

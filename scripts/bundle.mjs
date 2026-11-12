@@ -5,7 +5,7 @@
 // architecture on its own runner; the manifest is merged rather than replaced
 // so `--rid osx-x64` never discards what `--rid osx-arm64` already wrote.
 //
-// Usage: node scripts/bundle.mjs --rid osx-arm64 [--from .build/bin]
+// Usage: node scripts/bundle.mjs --rid osx-arm64 [--from .build/bin] [--out .build/review/runtimes]
 
 import { createHash } from "node:crypto";
 import {
@@ -22,7 +22,6 @@ import { fileURLToPath } from "node:url";
 import { sourceHash } from "./source-hash.mjs";
 
 const packageRoot = dirname(dirname(fileURLToPath(import.meta.url)));
-const runtimesDir = join(packageRoot, "runtimes");
 
 // .NET runtime identifier -> the `${process.platform}-${process.arch}` value
 // Node reports on that machine, which is what the resolver looks up.
@@ -45,6 +44,7 @@ function parseArgs(argv) {
 }
 
 const args = parseArgs(process.argv.slice(2));
+const runtimesDir = resolve(packageRoot, args.out ?? "runtimes");
 const rid = args.rid;
 if (!rid) {
   console.error("usage: node scripts/bundle.mjs --rid <rid> [--from <dir>]");

@@ -9,7 +9,10 @@ import type {
   ExtensionMessage,
   SocketChannel,
   WebviewMessage,
+  WorkspaceInspectionState,
+  SemanticInspectionState,
 } from "./messages";
+import type { WorkspaceRootAdapter, WorkspaceRootError } from "./workspaceRoots";
 
 const execFileAsync = promisify(execFile);
 const REQUEST_TIMEOUT_MS = 120_000;
@@ -19,6 +22,42 @@ const ALLOWED_METHODS = new Set(["GET", "POST", "DELETE"]);
 interface CanvasOpenResult {
   url: string;
   title?: string;
+  cookieName?: string;
+}
+
+export interface AilohaConnectionRef {
+  readonly schema?: string;
+  readonly serviceId: string;
+  readonly pid: number;
+  readonly startedAt: string;
+  readonly processStartedAt: string;
+}
+
+export interface AilohaCanvasHost {
+  readonly connectionRef?: AilohaConnectionRef;
+  cancelPendingApprovals?(): void;
+  openCanvas(input?: { deviceId?: string }): Promise<CanvasOpenResult>;
+  closeCanvas(): Promise<void>;
+  invokeAction(name: string, input: Record<string, unknown>, options?: { signal?: AbortSignal }): Promise<unknown>;
+  request(path: string, options: { method: string; body?: string; signal?: AbortSignal }): Promise<Response>;
+  workspaceInspection?: {
+    snapshot(): WorkspaceInspectionState;
+    subscribe(listener: (state: WorkspaceInspectionState) => void): () => void;
+    bindRoot(path: string, exclusions?: string[]): WorkspaceInspectionState;
+    clearRoot(error?: WorkspaceRootError): WorkspaceInspectionState;
+    inspect(): Promise<WorkspaceInspectionState>;
+    request(method: string, body?: string): Promise<WorkspaceInspectionState>;
+    cancel(): WorkspaceInspectionState;
+    invalidate(): WorkspaceInspectionState;
+    setVisible(visible: boolean): WorkspaceInspectionState;
+  };
+  semanticInspection?: {
+    snapshot(): SemanticInspectionState;
+    subscribe(listener: (state: SemanticInspectionState) => void): () => void;
+    request(method: string, body?: string): Promise<SemanticInspectionState>;
+    invalidate(): SemanticInspectionState;
+    setVisible(visible: boolean): SemanticInspectionState;
+  };
 }
 
 interface HostConnection {
@@ -44,6 +83,7 @@ export class HostBridge implements vscode.Disposable {
   private readonly sockets = new Map<string, WebSocket>();
   private readonly openingSockets = new Set<string>();
   private readonly cancelledSockets = new Set<string>();
+  private readonly apiRequests = new Map<string, AbortController>();
   // Sockets we tore down on purpose. `ws` aborts a still-connecting handshake by emitting
   // `error` before `close`, and switching devices closes the previous video socket while it
   // is usually still connecting. Without this set our own teardown is indistinguishable from
@@ -55,19 +95,52 @@ export class HostBridge implements vscode.Disposable {
   private disposed = false;
   private signalOffset = 0;
   private selectionToRestore: string | undefined;
+  private visibilityTask: Promise<void> = Promise.resolve();
+  private visibilityNeedsCleanup = false;
+  private visible = true;
+  private readonly inspectionSubscription?: () => void;
+  private readonly semanticSubscription?: () => void;
+  private readonly workspaceSubscription?: vscode.Disposable;
 
   constructor(
-    private readonly command: string,
+    private readonly command: string | undefined,
     private readonly sessionId: string,
     private readonly instanceId: string,
     private readonly webview: MessageSink,
     private readonly output: LogSink,
     private readonly refreshSignal?: string,
+    private readonly ailohaHost?: AilohaCanvasHost,
+    private readonly onContextReady?: () => void,
+    private readonly workspaceRoots?: WorkspaceRootAdapter,
   ) {
+    const inspection = ailohaHost?.workspaceInspection;
+    if (inspection) {
+      this.inspectionSubscription = inspection.subscribe((state) => {
+        void Promise.resolve(this.post({ type: "workspace-inspection", state })).then((delivered) => {
+          if (!delivered && !this.disposed) this.output.appendLine("Mobile Canvas workspace evidence was declined by its view.");
+        }).catch(() => {
+          this.output.appendLine("Mobile Canvas workspace evidence could not be delivered to its view.");
+        });
+      });
+      this.workspaceSubscription = workspaceRoots?.onDidChange((reason) => {
+        this.reconcileWorkspaceRoot(reason !== "editor");
+      });
+    }
+    if (ailohaHost?.semanticInspection) {
+      this.semanticSubscription = ailohaHost.semanticInspection.subscribe((state) => {
+        void Promise.resolve(this.post({ type: "semantic-inspection", state })).then((delivered) => {
+          if (!delivered && !this.disposed) this.output.appendLine("Mobile Canvas semantic inspection was declined by its view.");
+        }).catch(() => this.output.appendLine("Mobile Canvas semantic inspection could not be delivered to its view."));
+      });
+    }
     if (refreshSignal) {
       this.signalOffset = readFileSync(refreshSignal, "utf8").length;
       watchFile(refreshSignal, { interval: 250 }, this.onRefreshSignal);
     }
+  }
+
+  get connectionRef(): AilohaConnectionRef | undefined {
+    return this.ailohaHost?.connectionRef;
   }
 
   async handleMessage(message: WebviewMessage): Promise<void> {
@@ -78,7 +151,15 @@ export class HostBridge implements vscode.Disposable {
     try {
       switch (message.type) {
         case "ready":
+          this.reconcileWorkspaceRoot();
+          if (this.ailohaHost?.workspaceInspection) {
+            await this.post({ type: "workspace-inspection", state: this.ailohaHost.workspaceInspection.snapshot() });
+          }
+          if (this.ailohaHost?.semanticInspection) {
+            await this.post({ type: "semantic-inspection", state: this.ailohaHost.semanticInspection.snapshot() });
+          }
           await this.connect();
+          if (this.ailohaHost) this.onContextReady?.();
           await this.post({
             type: "context",
             sessionId: this.sessionId,
@@ -88,11 +169,17 @@ export class HostBridge implements vscode.Disposable {
         case "api":
           await this.forwardApi(message);
           break;
+        case "api-cancel":
+          this.apiRequests.get(message.id)?.abort();
+          break;
         case "socket-open":
           await this.openSocket(message.id, message.channel, message.query);
           break;
         case "socket-close":
           this.closeSocket(message.id);
+          break;
+        case "socket-send":
+          await this.sendSocket(message);
           break;
         case "save":
           await this.save(message.id, message.suggestedName, message.bytes);
@@ -103,10 +190,12 @@ export class HostBridge implements vscode.Disposable {
           break;
       }
     } catch (error) {
-      const text = errorMessage(error);
+      const text = this.ailohaHost ? ailohaErrorMessage(error) : errorMessage(error);
       if (message.type === "socket-open") {
         await this.post({ type: "socket-error", id: message.id, message: text });
         await this.post({ type: "socket-closed", id: message.id, code: 1006, reason: "" });
+      } else if (message.type === "socket-send") {
+        await this.post({ type: "operation-error", id: message.requestId, message: text });
       } else if ("id" in message) {
         await this.post({ type: "operation-error", id: message.id, message: text });
       } else {
@@ -117,13 +206,46 @@ export class HostBridge implements vscode.Disposable {
   }
 
   async setVisible(visible: boolean): Promise<void> {
+    if (!visible) this.cancelApiRequests();
+    this.visible = visible;
+    this.ailohaHost?.workspaceInspection?.setVisible(visible);
+    this.ailohaHost?.semanticInspection?.setVisible(visible);
+    if (visible) this.reconcileWorkspaceRoot();
+    const previous = this.visibilityTask;
+    const task = previous.then(
+      () => this.applyVisibility(visible),
+      () => this.applyVisibility(visible),
+    );
+    this.visibilityTask = task;
+    return task;
+  }
+
+  private async applyVisibility(visible: boolean): Promise<void> {
+    if (this.disposed) return;
+    if (visible && this.ailohaHost && this.visibilityNeedsCleanup) {
+      await this.ailohaHost.closeCanvas();
+      this.invalidateConnection();
+      this.visibilityNeedsCleanup = false;
+    }
     if (!visible) {
+      this.ailohaHost?.cancelPendingApprovals?.();
       this.closeSockets();
+      if (this.ailohaHost) {
+        this.visibilityNeedsCleanup = true;
+        this.selectionToRestore = await this.readSelectedDeviceId();
+        await this.closeCanvas();
+        this.invalidateConnection();
+        this.visibilityNeedsCleanup = false;
+      }
     }
     await this.post({ type: "visibility", visible });
   }
 
   async restart(): Promise<void> {
+    this.cancelApiRequests();
+    this.ailohaHost?.workspaceInspection?.invalidate();
+    this.ailohaHost?.semanticInspection?.invalidate();
+    this.ailohaHost?.cancelPendingApprovals?.();
     this.selectionToRestore = await this.readSelectedDeviceId();
     await this.closeCanvas();
     this.invalidateConnection();
@@ -180,10 +302,15 @@ export class HostBridge implements vscode.Disposable {
   }
 
   dispose(): void {
+    this.cancelApiRequests();
     if (this.disposed) {
       return;
     }
     this.disposed = true;
+    this.semanticSubscription?.();
+    this.ailohaHost?.workspaceInspection?.setVisible(false);
+    this.inspectionSubscription?.();
+    this.workspaceSubscription?.dispose();
     if (this.refreshSignal) {
       unwatchFile(this.refreshSignal, this.onRefreshSignal);
     }
@@ -199,6 +326,8 @@ export class HostBridge implements vscode.Disposable {
    * `canvas open` can race the previous bridge's still-in-flight close and get torn down by it.
    */
   closed(): Promise<void> {
+    const host = this.ailohaHost;
+    if (host) return (this.closeTask ?? Promise.resolve()).then(() => host.closeCanvas());
     return this.closeTask ?? Promise.resolve();
   }
 
@@ -209,6 +338,7 @@ export class HostBridge implements vscode.Disposable {
     const pending = this.connectPromise ??= this.openCanvas();
     try {
       const connection = await pending;
+      if (this.disposed) throw new Error("The Mobile Canvas view is closed.");
       if (this.connectPromise === pending) {
         this.connection = connection;
       }
@@ -223,8 +353,13 @@ export class HostBridge implements vscode.Disposable {
   }
 
   private async openCanvas(): Promise<HostConnection> {
-    const { stdout } = await execFileAsync(
-      this.command,
+    let result: CanvasOpenResult;
+    if (this.ailohaHost) {
+      result = await this.ailohaHost.openCanvas();
+    } else {
+      if (!this.command) throw new Error("The legacy Mobile Canvas runtime is unavailable.");
+      const { stdout } = await execFileAsync(
+        this.command,
       [
         "canvas",
         "open",
@@ -239,8 +374,9 @@ export class HostBridge implements vscode.Disposable {
         maxBuffer: 8 * 1024 * 1024,
         timeout: REQUEST_TIMEOUT_MS,
       },
-    );
-    const result = JSON.parse(stdout) as CanvasOpenResult;
+      );
+      result = JSON.parse(stdout) as CanvasOpenResult;
+    }
     const canvasUrl = new URL(result.url);
     if (canvasUrl.protocol !== "http:" || !isLoopback(canvasUrl.hostname)) {
       throw new Error("The Mobile Canvas host must use a loopback HTTP address.");
@@ -273,7 +409,8 @@ export class HostBridge implements vscode.Disposable {
 
     const setCookie = response.headers.get("set-cookie");
     const cookie = setCookie?.split(";", 1)[0];
-    if (!cookie?.startsWith("mobile_device_session=")) {
+    const cookieName = this.ailohaHost ? result.cookieName : "mobile_device_session";
+    if (!cookieName || !cookie?.startsWith(`${cookieName}=`)) {
       throw new Error("The Mobile Canvas host did not establish a panel session.");
     }
 
@@ -285,13 +422,44 @@ export class HostBridge implements vscode.Disposable {
   private async forwardApi(
     message: Extract<WebviewMessage, { type: "api" }>,
   ): Promise<void> {
+    if (this.apiRequests.has(message.id) || this.apiRequests.size >= 64) {
+      throw new Error("The bounded API request pool is full or this request ID is already pending.");
+    }
+    const controller = new AbortController();
+    const signal = AbortSignal.any([controller.signal, AbortSignal.timeout(API_REQUEST_TIMEOUT_MS)]);
+    this.apiRequests.set(message.id, controller);
+    try {
+      if (signal.aborted) throw new DOMException("The captured Mobile Canvas request was aborted.", "AbortError");
+      await this.forwardApiRequest(message, signal);
+    } finally {
+      if (this.apiRequests.get(message.id) === controller) this.apiRequests.delete(message.id);
+    }
+  }
+
+  private cancelApiRequests(): void {
+    for (const controller of this.apiRequests.values()) controller.abort();
+  }
+
+  private async forwardApiRequest(
+    message: Extract<WebviewMessage, { type: "api" }>,
+    signal: AbortSignal,
+  ): Promise<void> {
+    if (this.ailohaHost?.workspaceInspection && message.path.startsWith("/api/v1/workspace/")) {
+      await this.forwardWorkspace(message);
+      return;
+    }
+    if (this.ailohaHost?.semanticInspection && message.path.startsWith("/api/v1/semantic/")) {
+      await this.forwardSemantic(message);
+      return;
+    }
     const method = (message.method ?? "GET").toUpperCase();
     if (!ALLOWED_METHODS.has(method)) {
       throw new Error(`Unsupported Mobile Canvas HTTP method: ${method}`);
     }
 
-    for (let attempt = 0; attempt < 2; attempt += 1) {
+    for (let attempt = 0; attempt < (this.ailohaHost ? 1 : 2); attempt += 1) {
       const connection = await this.connect();
+      if (signal.aborted) throw new DOMException("The captured Mobile Canvas request was aborted.", "AbortError");
       const url = this.apiUrl(message.path, connection);
       const headers: Record<string, string> = { Cookie: connection.cookie };
       if (message.body !== undefined) {
@@ -299,19 +467,17 @@ export class HostBridge implements vscode.Disposable {
       }
 
       try {
-        const response = await fetch(url, {
-          method,
-          headers,
-          body: message.body,
-          signal: AbortSignal.timeout(API_REQUEST_TIMEOUT_MS),
-        });
-        if (response.status === 401 && attempt === 0) {
+        const response = this.ailohaHost
+          ? await this.ailohaHost.request(message.path, { method, body: message.body, signal })
+          : await fetch(url, { method, headers, body: message.body, signal });
+        if (!this.ailohaHost && response.status === 401 && attempt === 0) {
           this.invalidateConnection(connection);
           continue;
         }
         const body = response.status === 204 || response.status === 205 || response.status === 304
           ? null
           : await response.arrayBuffer();
+        if (signal.aborted) throw new DOMException("The captured Mobile Canvas request was aborted.", "AbortError");
         const responseHeaders = Object.fromEntries(response.headers.entries());
         delete responseHeaders["set-cookie"];
         delete responseHeaders["set-cookie2"];
@@ -325,8 +491,8 @@ export class HostBridge implements vscode.Disposable {
         });
         return;
       } catch (error) {
-        this.invalidateConnection(connection);
-        if (method === "GET" && attempt === 0 && isConnectionFailure(error)) {
+        if (!signal.aborted) this.invalidateConnection(connection);
+        if (!signal.aborted && !this.ailohaHost && method === "GET" && attempt === 0 && isConnectionFailure(error)) {
           continue;
         }
         await this.post({
@@ -339,15 +505,98 @@ export class HostBridge implements vscode.Disposable {
     }
   }
 
+  private reconcileWorkspaceRoot(retire = false): void {
+    const inspection = this.ailohaHost?.workspaceInspection;
+    if (!inspection || !this.workspaceRoots || this.disposed) return;
+    if (retire) inspection.clearRoot();
+    if (!this.visible) return;
+    const inferred = this.workspaceRoots.infer();
+    if (inferred && "path" in inferred) {
+      if (inspection.snapshot().root !== inferred.path) inspection.bindRoot(inferred.path);
+    } else if (inferred && "error" in inferred) {
+      inspection.clearRoot(inferred.error);
+    }
+  }
+
+  private async forwardWorkspace(message: Extract<WebviewMessage, { type: "api" }>): Promise<void> {
+    const inspection = this.ailohaHost?.workspaceInspection;
+    if (!inspection) throw new Error("Workspace inspection is not available in this host.");
+    const method = (message.method ?? "GET").toUpperCase();
+    let result: WorkspaceInspectionState | WorkspaceRootError;
+    if (message.path === "/api/v1/workspace/inspection" && ["GET", "POST", "DELETE"].includes(method)) {
+      try {
+        result = await inspection.request(method, message.body);
+      } catch (error) {
+        result = {
+          code: isRecord(error) && typeof error.code === "string" ? error.code : "workspace_request_failed",
+          message: ailohaErrorMessage(error),
+          status: isRecord(error) && typeof error.status === "number" ? error.status : 500,
+        };
+      }
+
+    } else if (message.body?.trim() && message.body.trim() !== "{}") {
+      result = { code: "workspace_root_authority_required", message: "Renderer requests cannot supply or enlarge the trusted workspace root.", status: 403 };
+    } else if (message.path === "/api/v1/workspace/open" && method === "POST") {
+      await this.workspaceRoots?.openFolder();
+      if (this.disposed) return;
+      this.reconcileWorkspaceRoot();
+      result = inspection.snapshot();
+    } else if (message.path === "/api/v1/workspace/root" && method === "POST") {
+      const generation = inspection.snapshot().generation;
+      const choice = await this.workspaceRoots?.choose();
+      if (this.disposed) return;
+      result = !this.visible || generation !== inspection.snapshot().generation ? inspection.snapshot()
+        : choice && "path" in choice ? inspection.bindRoot(choice.path)
+          : choice && "error" in choice ? inspection.clearRoot(choice.error)
+            : this.workspaceRoots ? inspection.snapshot() : inspection.clearRoot({
+              code: "workspace_root_unsupported", message: "This host has no trusted workspace-folder adapter.",
+            });
+    } else {
+      result = { code: "workspace_request_unsupported", message: "Use the named read-only workspace inspection routes.", status: 400 };
+    }
+    const status = "schema" in result ? result.error?.status ?? 200 : result.status ?? 400;
+    if (!("schema" in result)) this.output.appendLine(`Mobile Canvas workspace: ${result.code}: ${result.message}`);
+    const response = new Response(JSON.stringify(result), { status, headers: { "Content-Type": "application/json" } });
+    await this.post({
+      type: "api-result", id: message.id, status, statusText: response.statusText,
+      headers: Object.fromEntries(response.headers), body: await response.arrayBuffer(),
+    });
+  }
+
+  private async forwardSemantic(message: Extract<WebviewMessage, { type: "api" }>): Promise<void> {
+    const semantic = this.ailohaHost?.semanticInspection;
+    if (!semantic) throw new Error("Semantic inspection is unavailable.");
+    const method = (message.method ?? "GET").toUpperCase();
+    let result: SemanticInspectionState | { code: string; message: string; status: number };
+    if (message.path !== "/api/v1/semantic/inspection" || !["GET", "POST", "DELETE"].includes(method)) {
+      result = { code: "semantic_request_unsupported", message: "Use the named read-only semantic inspection route.", status: 400 };
+    } else {
+      try { result = await semantic.request(method, message.body); }
+      catch (error) {
+        result = {
+          code: isRecord(error) && typeof error.code === "string" ? error.code : "semantic_request_failed",
+          message: ailohaErrorMessage(error),
+          status: isRecord(error) && typeof error.status === "number" ? error.status : 500,
+        };
+      }
+    }
+    const status = "schema" in result ? result.error?.status ?? 200 : result.status;
+    const response = new Response(JSON.stringify(result), { status, headers: { "Content-Type": "application/json" } });
+    await this.post({
+      type: "api-result", id: message.id, status, statusText: response.statusText,
+      headers: Object.fromEntries(response.headers), body: await response.arrayBuffer(),
+    });
+  }
+
   private async get(path: string): Promise<Response> {
-    for (let attempt = 0; attempt < 2; attempt += 1) {
+    for (let attempt = 0; attempt < (this.ailohaHost ? 1 : 2); attempt += 1) {
       const connection = await this.connect();
       try {
         const response = await fetch(this.apiUrl(path, connection), {
           headers: { Cookie: connection.cookie },
           signal: AbortSignal.timeout(API_REQUEST_TIMEOUT_MS),
         });
-        if (response.status === 401 && attempt === 0) {
+        if (!this.ailohaHost && response.status === 401 && attempt === 0) {
           this.invalidateConnection(connection);
           continue;
         }
@@ -358,7 +607,7 @@ export class HostBridge implements vscode.Disposable {
         }
         return response;
       } catch (error) {
-        if (!isConnectionFailure(error) || attempt > 0) {
+        if (this.ailohaHost || !isConnectionFailure(error) || attempt > 0) {
           throw error;
         }
         this.invalidateConnection(connection);
@@ -404,15 +653,24 @@ export class HostBridge implements vscode.Disposable {
       const url = this.apiUrl(`/ws/${channel}`, connection);
       url.search = query ?? "";
       url.protocol = "ws:";
-      const socket = new WebSocket(url, { headers: { Cookie: connection.cookie } });
+      const protocols = this.ailohaHost && channel === "video" ? ["ailoha.video.v1"] : [];
+      const socket = new WebSocket(url, protocols, {
+        headers: { Cookie: connection.cookie },
+        maxPayload: 8 * 1024 * 1024 + 28,
+        perMessageDeflate: false,
+        followRedirects: false,
+        handshakeTimeout: REQUEST_TIMEOUT_MS,
+      });
       this.sockets.set(id, socket);
       let opened = false;
 
       socket.on("open", () => {
+        if (this.sockets.get(id) !== socket || this.discarded.has(socket) || this.disposed) return;
         opened = true;
-        void this.post({ type: "socket-opened", id });
+        void this.postSocket({ type: "socket-opened", id, protocol: socket.protocol }, socket);
       });
       socket.on("message", (data, isBinary) => {
+        if (this.sockets.get(id) !== socket || this.discarded.has(socket) || this.disposed) return;
         if (
           channel === "events"
           && (
@@ -421,7 +679,7 @@ export class HostBridge implements vscode.Disposable {
           )
         ) return;
         const payload = isBinary ? toArrayBuffer(data) : data.toString();
-        void this.post({ type: "socket-message", id, data: payload });
+        void this.postSocket({ type: "socket-message", id, data: payload }, socket);
       });
       socket.on("error", (error) => {
         // A socket we retired reports the aborted handshake as an error. That is our doing,
@@ -432,23 +690,72 @@ export class HostBridge implements vscode.Disposable {
         if (!opened) {
           this.invalidateConnection(connection);
         }
-        void this.post({ type: "socket-error", id, message: error.message });
+        void this.postSocket({ type: "socket-error", id, message: this.ailohaHost ? "The owned Ailoha panel socket failed." : error.message }, socket);
       });
       socket.on("close", (code, reason) => {
         if (this.sockets.get(id) !== socket) {
           return;
         }
         this.sockets.delete(id);
-        void this.post({
+        void this.postSocket({
           type: "socket-closed",
           id,
           code,
-          reason: reason.toString(),
-        });
+          reason: this.ailohaHost ? "" : reason.toString(),
+        }, socket);
       });
     } finally {
       this.openingSockets.delete(id);
       this.cancelledSockets.delete(id);
+    }
+  }
+
+  private async sendSocket(
+    message: Extract<WebviewMessage, { type: "socket-send" }>,
+  ): Promise<void> {
+    const socket = this.sockets.get(message.id);
+    if (!this.ailohaHost || !socket || socket.protocol !== "ailoha.video.v1" || socket.readyState !== WebSocket.OPEN) {
+      await this.post({ type: "operation-error", id: message.requestId, message: "The owned Ailoha video channel is not open." });
+      return;
+    }
+    if (typeof message.data !== "string" || Buffer.byteLength(message.data) > 64 * 1024) {
+      await this.post({ type: "operation-error", id: message.requestId, message: "Ailoha video controls must be bounded UTF-8 JSON text." });
+      return;
+    }
+    await new Promise<void>((resolve) => {
+      socket.send(message.data, (error) => {
+        void Promise.resolve(this.post(error
+          ? { type: "operation-error", id: message.requestId, message: "The owned Ailoha control send failed." }
+          : { type: "operation-result", id: message.requestId })).then(
+          (delivered) => {
+            if (!delivered) {
+              this.output.appendLine("Mobile Canvas: the owned Ailoha renderer declined a control result.");
+              this.discard(socket);
+            }
+            resolve();
+          },
+          () => {
+            this.output.appendLine("Mobile Canvas: the owned Ailoha renderer control result failed.");
+            this.discard(socket);
+            resolve();
+          },
+        );
+      });
+    });
+  }
+
+  private async postSocket(message: ExtensionMessage, socket: WebSocket): Promise<void> {
+    try {
+      const delivered = await this.post(message);
+      if (!delivered && this.ailohaHost) {
+        this.output.appendLine("Mobile Canvas: the owned Ailoha renderer declined a socket message.");
+        if (!this.discarded.has(socket) && socket.readyState !== WebSocket.CLOSED) this.discard(socket);
+      }
+    } catch {
+      this.output.appendLine(this.ailohaHost
+        ? "Mobile Canvas: the owned Ailoha renderer socket delivery failed."
+        : "Mobile Canvas: renderer socket delivery failed.");
+      if (!this.discarded.has(socket) && socket.readyState !== WebSocket.CLOSED) this.discard(socket);
     }
   }
 
@@ -523,8 +830,14 @@ export class HostBridge implements vscode.Disposable {
     try {
       await this.connectPromise;
     } catch {
+      if (this.ailohaHost) await this.ailohaHost.closeCanvas();
       return;
     }
+    if (this.ailohaHost) {
+      await this.ailohaHost.closeCanvas();
+      return;
+    }
+    if (!this.command) throw new Error("The legacy Mobile Canvas runtime is unavailable.");
     await execFileAsync(
       this.command,
       [
@@ -608,6 +921,7 @@ export class HostBridge implements vscode.Disposable {
   }
 
   private post(message: ExtensionMessage): Thenable<boolean> {
+    if (this.disposed) return Promise.resolve(false);
     return this.webview.postMessage(message);
   }
 
@@ -677,6 +991,13 @@ function errorMessage(error: unknown): string {
     }
   }
   return error instanceof Error ? error.message : String(error);
+}
+
+function ailohaErrorMessage(error: unknown): string {
+  if (isRecord(error) && error.name === "MobileAilohaError" && typeof error.message === "string") {
+    return error.message;
+  }
+  return "The owned Ailoha bridge request failed; the legacy engine was not used.";
 }
 
 function isConnectionFailure(error: unknown): boolean {

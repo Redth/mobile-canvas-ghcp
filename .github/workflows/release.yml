@@ -40,7 +40,7 @@ jobs:
         include:
           # One macOS runner can cross-compile both architectures. Keeping them
           # together avoids competing for two scarce macOS hosted runners.
-          - { key: osx,         rids: "osx-arm64 osx-x64", os: macos-14 }
+          - { key: osx,         rids: "osx-arm64 osx-x64", os: macos-15 }
           - { key: win-x64,     rids: "win-x64",           os: windows-latest }
           - { key: linux-x64,   rids: "linux-x64",         os: ubuntu-latest }
           # ARM runners are not offered on every plan, so these may be skipped
@@ -104,7 +104,12 @@ jobs:
         with:
           node-version: 22
           cache: npm
-          cache-dependency-path: vscode/package-lock.json
+          cache-dependency-path: |
+            package-lock.json
+            vscode/package-lock.json
+
+      - name: Install host packaging dependencies
+        run: npm ci --ignore-scripts --omit=optional
 
       - uses: actions/download-artifact@v4
         with:
@@ -204,7 +209,7 @@ jobs:
 
       - name: Package VS Code extension
         run: |
-          npm ci --prefix vscode --ignore-scripts
+          npm ci --prefix vscode --ignore-scripts --omit=optional
           npm run package --prefix vscode
 
       - name: Package platform-specific VS Code extensions
@@ -347,7 +352,7 @@ jobs:
       # The extension's own devDependencies are what pin vsce; --ignore-scripts
       # because nothing here needs the build hooks.
       - name: Install vsce
-        run: npm ci --prefix vscode --ignore-scripts
+        run: npm ci --prefix vscode --ignore-scripts --omit=optional
 
       # Azure DevOps retires global PATs on 1 December 2026, so the publish
       # authenticates as an Entra identity instead. vsce resolves that token

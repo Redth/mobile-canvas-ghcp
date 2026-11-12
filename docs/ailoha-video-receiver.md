@@ -84,6 +84,14 @@ without decoding/presenting them; their commit guard is disabled. A positively
 consumed keyframe enables dependent units. `canPresent:false` also identifies
 config-only units, not pictures. No codec implementation is provided here.
 
+Picture scopes also expose `retainPresentation()`. It returns an independent,
+immutable owner/geometry guard for a bounded decoder handoff after the ordinary
+callback scope expires. Only current, decodable picture units can retain it;
+config-only units cannot. Call its idempotent `release()` when output is
+presented/retired. Geometry/drop/replacement/close invalidates all retained
+guards. Each attachment admits at most 64 retained owners and 16 MiB of retained
+encoded payload; retaining ownership does not authorize later unguarded paint.
+
 `scope.geometry` is an immutable, revision-bound geometry snapshot, or `null`.
 Ready contains no bounds: reconnect reuses observed geometry only at a matching
 revision. Disable coordinate use when null. An omitted bounds coordinate has
@@ -124,8 +132,47 @@ control, geometry, reconnect, and stale-generation retirement. Plugin and VSIX
 verifiers require the receiver; build checks validate its syntax. These checks
 carry only the non-secret session/owner projection, not private HTTP credentials.
 
-Production legacy video remains unchanged. Integration still needs both trusted
-production host adapters, a shared codec/presentation consumer
-with actual consumption accounting and guarded geometry, and gated end-to-end
-runtime evidence. Ailoha rights/public-artifact readiness remain independent
-product gates; synthetic receiver tests do not satisfy them.
+## Shared player and installed consumers
+
+`web/ailoha-video-player.js` is consumed by the opt-in branch of the shared
+device renderer in both installed hosts. It ACKs configuration separately and
+ACKs pictures only after a bounded, owned WebCodecs handoff or safe retirement,
+not by socket arrival or unconditional waiting for a displayed picture. This
+lets a window of one progress when H.264 reorders/buffers output.
+
+The player retains only eight pending pictures and 16 MiB of copied encoded
+data, with a five-second output lifetime and bounded decoded dimensions.
+The ALHV wire remains complete Annex B access units, byte-for-byte unchanged.
+The decoder-local adapter caches bounded SPS/PPS, validates their identities and
+required profile/chroma/bit-depth fields, and builds an
+`AVCDecoderConfigurationRecord` for `VideoDecoderConfig.description`.
+That description selects AVC under the
+[WebCodecs AVC registration](https://www.w3.org/TR/webcodecs-avc-codec-registration/):
+decoder chunks therefore use four-byte big-endian NAL lengths, not Annex B
+start codes. Parameter-set bytes move only into the description; other NAL
+bytes are preserved. A single AUD is placed first in the canonical decoder
+access unit, including combined config/key input with prepended SEI.
+Malformed/missing parameter sets, incompatible SPS/PPS references or multiple/
+late delimiters fail explicitly. There is no encoder-only `avc.format` option,
+browser-version branch, second decoder-format attempt or recreated stream.
+Combined config+key units cache and decode their picture. Idle flush drains
+buffered/reordered pictures and requires a new key afterward.
+
+Decoder timestamps identify access-unit sequence plus decoder generation, not
+the source PTS. Original transport timestamps remain `bigint`; subtraction and
+range checks precede conversion of the separately retained decoder-local clock.
+Equal PTS and B-picture timestamp backtracking therefore cannot merge owners.
+Every deferred paint uses its retained geometry/owner guard, and every output
+frame closes even when stale.
+
+Actual prepared GitHub and VS Code copies are tested with window-one config,
+combined key/config, equal PTS, delayed/reordered output, drop/geometry change,
+queue exhaustion and close/reopen. Own-generated real baseline and High/two-B
+H.264 fixtures were also decoded by Chrome through each prepared player, with
+reference I420-plane comparisons. Those tests do not establish device, RGB
+conversion, release artifact or full product parity.
+
+Production legacy video remains unchanged. The installed opt-in host/runtime,
+HTTP/WS and resource cleanup contracts are described in
+[the protocol adapter](ailoha-protocol-adapter.md). Public SDK pins, native
+artifact/source provenance and release/device evidence remain independent gates.
