@@ -22,6 +22,6 @@
     "mcp"
   ],
   "logo": "assets/preview.png",
-  "extensions": "extensions",
+  "extensions": "com.github.copilot/extensions",
   "mcpServers": "./.mcp.json"
 }

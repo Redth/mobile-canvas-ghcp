@@ -31,7 +31,9 @@
   },
   "files": [
     "extension.mjs",
-    "extensions/",
+    "plugin.json",
+    "mcp.json",
+    "com.github.copilot/",
     "lib/",
     "runtimes/",
     "scripts/",
