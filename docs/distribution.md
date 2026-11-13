@@ -25,6 +25,10 @@ versioned engine, verified applicable terms, and product parity.
 A Copilot plugin install is a **plain file copy**. Verified against a real
 install directory:
 
+- The plugin root uses the portable Agent Plugins 1.0 `plugin.json` and
+  `mcp.json` manifests. Copilot-specific canvas files live under
+  `com.github.copilot/`; `.github/plugin/plugin.json` remains the marketplace
+  loader's legacy manifest.
 - `~/.copilot/installed-plugins/*/` contains no `node_modules`, so
   **`npm install` never runs**. A declared npm dependency is never fetched.
 - `@github/copilot-sdk` resolves because the app injects it from
@@ -37,7 +41,8 @@ install directory:
 - A plugin's `extensions` field names **container directories**. The loader
   scans each container's immediate child directories for `extension.mjs`; it
   does not load an entrypoint placed directly at the configured path. The
-  plugin therefore exposes `extensions/mobile-canvas/extension.mjs`, which
+  plugin therefore exposes
+  `com.github.copilot/extensions/mobile-canvas/extension.mjs`, which
   imports the shared root entrypoint used by source installs.
 
 The consequences are strict:
@@ -163,7 +168,7 @@ the universal VSIX, and all six target-specific VSIXs as separate artifacts.
 
 `assets/icon.svg` is the only hand-drawn icon artwork. `npm run icons` renders it
 into the 128 px shared canvas icon at `assets/icon.png`, the byte-identical
-plugin copy at `extensions/mobile-canvas/assets/icon.png` that
+plugin copy at `com.github.copilot/extensions/mobile-canvas/assets/icon.png` that
 `scripts/verify-plugin.mjs` compares, and the 256 px Marketplace icon at
 `vscode/media/icon.png` that `vscode/package.json` declares and
 `scripts/verify-vsix.mjs` requires. Rendering uses `rsvg-convert` from librsvg.

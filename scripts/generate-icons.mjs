@@ -15,7 +15,7 @@ const source = join(root, "assets", "icon.svg");
 // The plugin copy is not generated from the SVG a second time: verify-plugin.mjs requires the two
 // files to be byte-identical, so it is always copied from the shared render.
 const renders = [
-  { path: join(root, "assets", "icon.png"), size: 128, copies: [join(root, "extensions", "mobile-canvas", "assets", "icon.png")] },
+  { path: join(root, "assets", "icon.png"), size: 128, copies: [join(root, "com.github.copilot", "extensions", "mobile-canvas", "assets", "icon.png")] },
   { path: join(root, "vscode", "media", "icon.png"), size: 256, copies: [] },
 ];
 

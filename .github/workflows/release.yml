@@ -297,6 +297,7 @@ jobs:
             vscode/package.json
             vscode/package-lock.json
             Directory.Build.props
+            plugin.json
             .github/plugin/plugin.json
             .github/plugin/marketplace.json
             .claude-plugin/plugin.json

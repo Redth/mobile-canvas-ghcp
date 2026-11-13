@@ -13,6 +13,8 @@ const scriptRoot = join(dirname(fileURLToPath(import.meta.url)), "..");
 const root = resolve(process.argv[2] ?? scriptRoot);
 const manifestPath = join(root, ".github", "plugin", "plugin.json");
 const manifest = JSON.parse(readFileSync(manifestPath, "utf8"));
+const agentManifest = JSON.parse(readFileSync(join(root, "plugin.json"), "utf8"));
+const agentMcp = JSON.parse(readFileSync(join(root, "mcp.json"), "utf8"));
 const marketplace = JSON.parse(
   readFileSync(join(root, ".github", "plugin", "marketplace.json"), "utf8"),
 );
@@ -29,6 +31,118 @@ const fail = (message) => {
   console.error(`FAIL ${message}`);
   failures += 1;
 };
+
+const manifestFields = new Set([
+  "$schema",
+  "name",
+  "version",
+  "description",
+  "author",
+  "homepage",
+  "repository",
+  "license",
+  "keywords",
+  "extensions",
+]);
+if (
+  agentManifest.$schema !== "https://agent-plugins.org/schemas/1.0.0/plugin.schema.json"
+) {
+  fail("plugin.json must target the Agent Plugins 1.0.0 manifest schema");
+}
+if (
+  typeof agentManifest.name !== "string"
+  || !/^(?!.*(?:--|\.\.))[a-z0-9](?:[a-z0-9.-]*[a-z0-9])?$/.test(agentManifest.name)
+  || agentManifest.name.length > 64
+) {
+  fail("plugin.json name must satisfy the Agent Plugins name constraints");
+}
+for (const key of Object.keys(agentManifest)) {
+  if (!manifestFields.has(key)) {
+    fail(`plugin.json has non-standard top-level field ${key}`);
+  }
+}
+for (const key of ["version", "description", "homepage", "repository", "license"]) {
+  if (typeof agentManifest[key] !== "undefined" && typeof agentManifest[key] !== "string") {
+    fail(`plugin.json ${key} must be a string`);
+  }
+}
+if (
+  typeof agentManifest.keywords !== "undefined"
+  && (
+    !Array.isArray(agentManifest.keywords)
+    || agentManifest.keywords.some((keyword) => typeof keyword !== "string")
+  )
+) {
+  fail("plugin.json keywords must be an array of strings");
+}
+if (typeof agentManifest.author !== "undefined") {
+  const authorFields = new Set(["name", "email", "url"]);
+  if (
+    !agentManifest.author
+    || typeof agentManifest.author !== "object"
+    || Array.isArray(agentManifest.author)
+    || Object.entries(agentManifest.author).some(
+      ([key, value]) => !authorFields.has(key) || typeof value !== "string",
+    )
+  ) {
+    fail("plugin.json author must contain only string name, email, or url fields");
+  }
+}
+if (agentManifest.name !== manifest.name) {
+  fail("plugin.json name must match the Copilot plugin name");
+}
+if (agentManifest.version !== packageManifest.version) {
+  fail("plugin.json version must match package.json");
+}
+if (
+  !Array.isArray(agentManifest.keywords)
+  || !agentManifest.keywords.includes("canvas")
+) {
+  fail('plugin.json must include the exact "canvas" keyword');
+}
+if (
+  typeof agentManifest.extensions !== "undefined"
+  && (
+    agentManifest.extensions === null
+    || typeof agentManifest.extensions !== "object"
+    || Array.isArray(agentManifest.extensions)
+    || Object.values(agentManifest.extensions).some(
+      (value) => !value || typeof value !== "object" || Array.isArray(value),
+    )
+  )
+) {
+  fail("plugin.json extensions must be an object when present");
+}
+
+if (
+  agentMcp.$schema !== "https://agent-plugins.org/schemas/1.0.0/mcp.schema.json"
+  || Object.keys(agentMcp).some((key) => !["$schema", "mcpServers"].includes(key))
+  || !agentMcp.mcpServers
+  || typeof agentMcp.mcpServers !== "object"
+  || Array.isArray(agentMcp.mcpServers)
+) {
+  fail("mcp.json must use the Agent Plugins 1.0.0 schema and mcpServers object");
+} else {
+  const server = agentMcp.mcpServers["mobile-canvas"];
+  if (
+    Object.keys(agentMcp.mcpServers).length !== 1
+    || !server
+    || Object.keys(server).some((key) => !["type", "command", "args", "env", "cwd"].includes(key))
+    || server.type !== "stdio"
+    || server.command !== "node"
+    || !Array.isArray(server.args)
+    || server.args.length !== 1
+    || server.args[0] !== "${PLUGIN_ROOT}/scripts/mcp.mjs"
+    || server.cwd !== "${PLUGIN_ROOT}"
+    || (server.env && (
+      typeof server.env !== "object"
+      || Array.isArray(server.env)
+      || Object.values(server.env).some((value) => typeof value !== "string")
+    ))
+  ) {
+    fail("mcp.json must configure the packaged mobile-canvas stdio server");
+  }
+}
 
 try {
   assertDarwinHelperEntries(runtimeManifest, { context: "Copilot plugin runtime manifest" });
@@ -75,6 +189,8 @@ if (manifest.logo !== requiredLogo) {
 
 if (containers.some((entry) => typeof entry !== "string" || entry.length === 0)) {
   fail("plugin.json must configure at least one extension container path");
+} else if (containers.some((entry) => !entry.startsWith("com.github.copilot/"))) {
+  fail("Copilot-specific files must live under the com.github.copilot namespace");
 } else {
   const discovered = [];
   for (const relative of containers) {
