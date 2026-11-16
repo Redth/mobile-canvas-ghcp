@@ -170,8 +170,8 @@ autoscale/session recreation is revived.
 ## Public installation gate
 
 `lib/ailoha/runtime-package.json` now pins the actual anonymously published
-`@ailoha/cli@0.2.5-preview.6` root tarball, integrity and source
-`15d11f418173514a8c3f24ad4b367fbd15a4f4e8`, publication run `43937071349`
+`@ailoha/cli@0.2.5-preview.7` root tarball, integrity and source
+`977a4f8c68a7d2cf1c5769e802ceb21100a7b771`, publication run `43975235170`
 attempt `1`. Both host locks and prepared byte-graph receipts must agree.
 No private/fixture pin, PATH CLI or sibling checkout substitutes for that
 official graph. Metadata/import/package checks do not acquire or start its

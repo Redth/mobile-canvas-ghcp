@@ -17,9 +17,9 @@ const packageRoot = dirname(requireProduct.resolve("@ailoha/cli/package.json"));
 const manifest = JSON.parse(readFileSync(join(packageRoot, "package.json"), "utf8"));
 const pin = JSON.parse(readFileSync(new URL("./runtime-package.json", sdkModule), "utf8"));
 const runtimePins = JSON.parse(readFileSync(join(packageRoot, "runtime-pins.json"), "utf8"));
-const expectedGraph = { files: 539, bytes: 4600599, sha256: "e2c04c850dd3f276bf50f6bf12b2bdbea0b60210a6a210003fd8521c0cf7c8a2" };
+const expectedGraph = { files: 539, bytes: 4600656, sha256: "cd0f28e1cd01064c3968ebeec418b743256ba6cbf45e1b6a97ed13d8ed0ebdf3" };
 
-test("the complete official preview6 small graph matches its qualified publication bytes", () => {
+test("the complete official preview7 small graph matches its qualified publication bytes", () => {
   const hash = createHash("sha256");
   let files = 0;
   let bytes = 0;
@@ -44,12 +44,12 @@ test("the complete official preview6 small graph matches its qualified publicati
 });
 
 test("both host locks use the exact anonymously published official SDK and approved source pin", () => {
-  assert.equal(pin.version, "0.2.5-preview.6");
-  assert.equal(pin.sourceSha, "15d11f418173514a8c3f24ad4b367fbd15a4f4e8");
-  assert.equal(pin.sourceRunId, "43937071349");
+  assert.equal(pin.version, "0.2.5-preview.7");
+  assert.equal(pin.sourceSha, "977a4f8c68a7d2cf1c5769e802ceb21100a7b771");
+  assert.equal(pin.sourceRunId, "43975235170");
   assert.equal(pin.sourceRunAttempt, "1");
-  assert.equal(pin.tarball, "https://registry.npmjs.org/@ailoha/cli/-/cli-0.2.5-preview.6.tgz");
-  assert.equal(pin.integrity, "sha512-vSTTYFooeuYwz+FEU5OwHv5+Ow17ylt+Upd+IHm2Slp/WRkgswTibW28DzGQviL9VPKL40Er+CQOF1UHszSpUg==");
+  assert.equal(pin.tarball, "https://registry.npmjs.org/@ailoha/cli/-/cli-0.2.5-preview.7.tgz");
+  assert.equal(pin.integrity, "sha512-flg0Wlsf9mT2rT3SMbzg7TTSHzDARRC7DBCFnXznAzQINepfs4SVCPv1GqRYeMUCj+YhKLMBPLmb8spFA/e/Yw==");
   for (const host of [root, join(root, "vscode")]) {
     const pkg = JSON.parse(readFileSync(join(host, "package.json"), "utf8"));
     const lock = JSON.parse(readFileSync(join(host, "package-lock.json"), "utf8"));
