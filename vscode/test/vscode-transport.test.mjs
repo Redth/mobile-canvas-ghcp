@@ -59,6 +59,13 @@ test("bridges bootstrap, API responses, and socket frames", async () => {
   assert.equal(inspectionState.root, "/explicit-root");
   assert.equal(outbound.length, 0);
 
+  receive({ type: "host-progress", stage: "host" });
+  const stages = [];
+  transport.onHostProgress((stage) => stages.push(stage));
+  receive({ type: "host-progress", stage: "connecting" });
+  receive({ type: "host-progress", stage: 7 });
+  assert.deepEqual(stages, ["host", "connecting"]);
+
   const bootstrap = transport.bootstrap();
   assert.equal(outbound.shift().type, "ready");
   receive({ type: "context", sessionId: "session", instanceId: "view" });

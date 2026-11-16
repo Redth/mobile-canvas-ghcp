@@ -84,6 +84,7 @@ export type WebviewMessage =
 
 export type ExtensionMessage =
   | { type: "context"; sessionId: string; instanceId: string }
+  | { type: "host-progress"; stage: string }
   | { type: "workspace-inspection"; state: WorkspaceInspectionState }
   | { type: "semantic-inspection"; state: SemanticInspectionState }
   | {

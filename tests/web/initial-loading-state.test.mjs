@@ -31,7 +31,9 @@ test("script drives the loading presentation into the empty state before bootstr
   assert.match(loadingBody[1], /elements\.empty\.classList\.remove\("hidden"\)/);
   // showLoadingSelection must actually run before the async catalog/selection resolution kicks off,
   // otherwise the loading copy would never reach the screen.
-  assert.match(script, /showLoadingSelection\(\);\s*\n\s*bootstrap\(\)/);
+  const start = script.match(/\nshowLoadingSelection\(\);\n([\s\S]*?)\nbootstrap\(\)/);
+  assert.ok(start, "showLoadingSelection must run before bootstrap starts");
+  assert.doesNotMatch(start[1], /\bawait\b|\.then\(/, "nothing asynchronous may delay the loading copy");
 });
 
 test("configureEmptyState renders without an action so the loading state has no dead create button", () => {
@@ -55,4 +57,21 @@ test("initial runtime preparation and inventory checking have separate truthful 
   assert.match(script, /Reading device inventory and checking each target's capabilities/);
   assert.match(script, /bootstrap\(\)\s*\.then\(\(\) => \{\s*showLoadingCatalog\(\);\s*return refresh\(\);/);
   assert.match(html, /id="empty-state"[^>]+role="status"[^>]+aria-live="polite"/);
+});
+
+test("a slow first connection names its current step and how long it has waited", async () => {
+  const { liveViewProgress, LIVE_VIEW_STEP_COUNT } = await import("../../web/canvas-state.js");
+  const host = liveViewProgress("host", 500);
+  assert.match(host.detail, /Starting the device host/);
+  assert.equal(host.step, `Step 1 of ${LIVE_VIEW_STEP_COUNT}`);
+  assert.equal(host.elapsed, "", "a quick step shows no counter");
+  const capture = liveViewProgress("capture", 23_400);
+  assert.match(capture.detail, /screen capture/);
+  assert.equal(capture.elapsed, "23 s");
+  const order = ["connecting", "catalog", "selecting", "session", "frame"].map((stage) => liveViewProgress(stage).step);
+  assert.deepEqual(order, [1, 2, 3, 4, 5].map((step) => `Step ${step} of ${LIVE_VIEW_STEP_COUNT}`));
+  assert.equal(liveViewProgress("unknown"), null);
+  // The per-second counter is decorative; stage changes are what assistive technology announces.
+  assert.match(html, /id="empty-state-progress"[^>]*aria-hidden="true"/);
+  assert.match(html, /id="stream-overlay-progress"[^>]*aria-hidden="true"/);
 });

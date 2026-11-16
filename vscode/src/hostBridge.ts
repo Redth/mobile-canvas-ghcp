@@ -37,6 +37,7 @@ export interface AilohaCanvasHost {
   readonly connectionRef?: AilohaConnectionRef;
   cancelPendingApprovals?(): void;
   openCanvas(input?: { deviceId?: string }): Promise<CanvasOpenResult>;
+  subscribeProgress?(listener: (stage: string) => void): () => void;
   closeCanvas(): Promise<void>;
   invokeAction(name: string, input: Record<string, unknown>, options?: { signal?: AbortSignal }): Promise<unknown>;
   request(path: string, options: { method: string; body?: string; signal?: AbortSignal }): Promise<Response>;
@@ -100,6 +101,7 @@ export class HostBridge implements vscode.Disposable {
   private visible = true;
   private readonly inspectionSubscription?: () => void;
   private readonly semanticSubscription?: () => void;
+  private readonly progressSubscription?: () => void;
   private readonly workspaceSubscription?: vscode.Disposable;
 
   constructor(
@@ -131,6 +133,12 @@ export class HostBridge implements vscode.Disposable {
         void Promise.resolve(this.post({ type: "semantic-inspection", state })).then((delivered) => {
           if (!delivered && !this.disposed) this.output.appendLine("Mobile Canvas semantic inspection was declined by its view.");
         }).catch(() => this.output.appendLine("Mobile Canvas semantic inspection could not be delivered to its view."));
+      });
+    }
+    if (ailohaHost?.subscribeProgress) {
+      // Host start happens while this view already shows its loading state, so each step is passed on.
+      this.progressSubscription = ailohaHost.subscribeProgress((stage) => {
+        void Promise.resolve(this.post({ type: "host-progress", stage })).catch(() => undefined);
       });
     }
     if (refreshSignal) {
@@ -308,6 +316,7 @@ export class HostBridge implements vscode.Disposable {
     }
     this.disposed = true;
     this.semanticSubscription?.();
+    this.progressSubscription?.();
     this.ailohaHost?.workspaceInspection?.setVisible(false);
     this.inspectionSubscription?.();
     this.workspaceSubscription?.dispose();

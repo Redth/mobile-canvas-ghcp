@@ -331,3 +331,33 @@ function storageKey(instanceId) {
 function capitalize(value) {
   return value[0].toUpperCase() + value.slice(1);
 }
+
+// The steps a live view passes through before its first frame. A first connection can spend a long
+// time in one of them (runtime download, host start, a just-booted simulator's screen capture), so
+// the panel names the current step instead of looking stuck.
+const LIVE_VIEW_STAGES = Object.freeze({
+  runtime: { step: 1, text: "Checking the device runtime…" },
+  context: { step: 1, text: "Preparing this view…" },
+  host: { step: 1, text: "Starting the device host. The first start can take a minute." },
+  connecting: { step: 1, text: "Connecting to the device host…" },
+  catalog: { step: 2, text: "Checking which devices are available…" },
+  selecting: { step: 3, text: "Selecting the device…" },
+  display: { step: 3, text: "Reading the screen size…" },
+  session: { step: 4, text: "Starting live video…" },
+  capture: { step: 4, text: "Starting screen capture. This can take a minute." },
+  frame: { step: 5, text: "Waiting for the first frame…" },
+});
+export const LIVE_VIEW_STEP_COUNT = 5;
+
+export function liveViewProgress(stage, elapsedMs = 0) {
+  const entry = LIVE_VIEW_STAGES[stage];
+  if (!entry) return null;
+  const seconds = Math.floor(Math.max(0, elapsedMs) / 1000);
+  return Object.freeze({
+    stage,
+    detail: entry.text,
+    step: `Step ${entry.step} of ${LIVE_VIEW_STEP_COUNT}`,
+    // A visible running count only once a step is slow enough to wonder about.
+    elapsed: seconds >= 3 ? `${seconds} s` : "",
+  });
+}

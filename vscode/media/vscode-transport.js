@@ -13,6 +13,8 @@
   let inspectionState = null;
   let semanticHandler = null;
   let semanticState = null;
+  let hostProgressHandler = null;
+  let hostProgress = null;
   let refreshPending = false;
   const queuedAutomation = [];
 
@@ -143,6 +145,12 @@
         semanticState = message.state;
         semanticHandler?.(semanticState);
         break;
+      case "host-progress":
+        if (typeof message.stage === "string") {
+          hostProgress = message.stage;
+          hostProgressHandler?.(hostProgress);
+        }
+        break;
       case "context":
         context = { sessionId: message.sessionId, instanceId: message.instanceId };
         resolveContext?.(context);
@@ -201,6 +209,10 @@
   });
 
   window.mobileCanvasTransport = {
+    onHostProgress(handler) {
+      hostProgressHandler = handler;
+      if (hostProgress) handler(hostProgress);
+    },
     async bootstrap() {
       if (context) return context;
       if (!contextPromise) {

@@ -141,6 +141,15 @@ if (args[1] === "open") {
       selection: null, observed: null,
     };
     contexts.push(context);
+  } else if (input.expected && context.state !== "open") {
+    if (input.expected.scopeEpoch !== context.scopeEpoch || input.expected.revision !== context.revision) {
+      process.stdout.write(JSON.stringify({ ok: false, context: null, error: { code: "ContextRevisionConflict", message: "Synthetic CAS conflict" } }));
+      process.exit(0);
+    }
+    Object.assign(context, {
+      scopeEpoch: randomUUID(), revision: "0", state: "open", selection: null, observed: null,
+      owner: { processId: input.ownerProcessId, processStartedAt: "2026-10-09T23:00:00Z" },
+    });
   }
 } else {
   const contextRef = input?.contextRef ?? args[2];
@@ -160,13 +169,23 @@ if (args[1] === "select") {
   }
   context.revision = String(BigInt(context.revision) + 1n);
 }
+if (args[1] === "close") {
+  if (input.expected.scopeEpoch !== context.scopeEpoch || input.expected.revision !== context.revision) {
+    process.stdout.write(JSON.stringify({ ok: false, context: null, error: { code: "ContextRevisionConflict", message: "Synthetic CAS conflict" } }));
+    process.exit(0);
+  }
+  context.state = "closed";
+  context.selection = null;
+  context.observed = null;
+  context.revision = String(BigInt(context.revision) + 1n);
+}
 if (args[1] === "detach") {
   context.state = "detached";
   context.selection = null;
   context.observed = null;
   context.revision = String(BigInt(context.revision) + 1n);
 }
-if (["open", "select", "detach"].includes(args[1])) {
+if (["open", "select", "close", "detach"].includes(args[1])) {
   const pending = `${path}.${process.pid}.${randomUUID()}.pending`;
   try {
     writeFileSync(pending, JSON.stringify(contexts), { flag: "wx" });

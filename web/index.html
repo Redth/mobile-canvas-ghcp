@@ -158,6 +158,7 @@
           </div>
           <h2 id="empty-state-title">Opening live view…</h2>
           <p id="empty-state-detail">Preparing the runtime and local device services. First use may take longer.</p>
+          <p id="empty-state-progress" class="status-progress" aria-hidden="true"></p>
           <button id="empty-state-action" class="button primary empty-action hidden" type="button"
                   data-empty-action="create">
             <svg class="icon" aria-hidden="true"><use id="empty-state-action-icon" href="#icon-plus"></use></svg>
@@ -227,6 +228,27 @@
                   <path d="M5.4 2 18.4 13.35c.78.68.33 1.96-.68 2.07l-5.22.63a1.2 1.2 0 0 0-.88.63l-2.4 4.6c-.45.86-1.75.58-1.82-.4L5.4 2z" />
                 </svg>
               </div>
+              <div id="stream-overlay" class="stream-overlay" data-tone="accent" data-busy="true"
+                   role="status" aria-live="polite" aria-atomic="true">
+                <section class="stream-status-card" aria-labelledby="stream-overlay-title">
+                  <div class="stream-status-icon" aria-hidden="true">
+                    <svg class="icon stream-status-glyph">
+                      <use id="stream-overlay-icon" href="#icon-device"></use>
+                    </svg>
+                    <span class="stream-overlay-spinner"></span>
+                  </div>
+                  <div class="stream-status-copy">
+                    <span id="stream-overlay-eyebrow" class="stream-status-eyebrow">Live view</span>
+                    <h2 id="stream-overlay-title" class="stream-status-title">Connecting to device</h2>
+                    <p id="stream-overlay-detail" class="stream-status-detail">Waiting for the first frame.</p>
+                    <p id="stream-overlay-progress" class="status-progress" aria-hidden="true"></p>
+                  </div>
+                  <button id="stream-overlay-action" class="button primary stream-status-action hidden" type="button">
+                    <svg class="icon" aria-hidden="true"><use id="stream-overlay-action-icon" href="#icon-refresh"></use></svg>
+                    <span id="stream-overlay-action-text">Try again</span>
+                  </button>
+                </section>
+              </div>
               <!--
                 The sleep/wake key, hung off the right edge where it sits on the hardware. Purely
                 decorative chrome would be a lie, so this is the real Lock button.
@@ -234,26 +256,6 @@
               <button id="side-button" class="side-button" data-action="lock" type="button" aria-label="Press Lock" title="Lock">
                 <span class="side-button-cap" aria-hidden="true"></span>
               </button>
-            </div>
-            <div id="stream-overlay" class="stream-overlay" data-tone="accent" data-busy="true"
-                 role="status" aria-live="polite" aria-atomic="true">
-              <section class="stream-status-card" aria-labelledby="stream-overlay-title">
-                <div class="stream-status-icon" aria-hidden="true">
-                  <svg class="icon stream-status-glyph">
-                    <use id="stream-overlay-icon" href="#icon-device"></use>
-                  </svg>
-                  <span class="stream-overlay-spinner"></span>
-                </div>
-                <div class="stream-status-copy">
-                  <span id="stream-overlay-eyebrow" class="stream-status-eyebrow">Live view</span>
-                  <h2 id="stream-overlay-title" class="stream-status-title">Connecting to device</h2>
-                  <p id="stream-overlay-detail" class="stream-status-detail">Waiting for the first frame.</p>
-                </div>
-                <button id="stream-overlay-action" class="button primary stream-status-action hidden" type="button">
-                  <svg class="icon" aria-hidden="true"><use id="stream-overlay-action-icon" href="#icon-refresh"></use></svg>
-                  <span id="stream-overlay-action-text">Try again</span>
-                </button>
-              </section>
             </div>
             <p id="automation-live" class="visually-hidden" role="status" aria-live="polite"></p>
           </div>

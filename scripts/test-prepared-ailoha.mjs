@@ -47,6 +47,7 @@ const tests = [
   "tests/scripts/ailoha-system-ui-adapter.test.mjs",
   "tests/scripts/ailoha-control-adapter.test.mjs",
   "tests/scripts/ailoha-canvas-host.test.mjs",
+  "tests/scripts/ailoha-host-recovery.test.mjs",
   "tests/scripts/ailoha-context-adapter.test.mjs",
   "tests/scripts/ailoha-workspace-inspection.test.mjs",
   "tests/scripts/ailoha-semantic-inspection.test.mjs",

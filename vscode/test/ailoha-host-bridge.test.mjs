@@ -60,6 +60,7 @@ function fixture(options = {}) {
   let closes = 0;
   const adapter = {
     openCanvas: (input) => host.openCanvas(input),
+    subscribeProgress: (listener) => host.subscribeProgress(listener),
     invokeAction: (name, input) => host.invokeAction(name, input),
     request: (path, options) => host.request(path, options),
     async closeCanvas() {
@@ -93,6 +94,21 @@ test("compiled Ailoha bridge correlates actual control sends and retirement to i
   await state.bridge.handleMessage({ type: "socket-send", id: "video-one", requestId: "stale-send", data: '{"type":"ack","sequence":0}' });
   assert.equal(state.messages.find((message) => message.id === "stale-send").type, "operation-error");
   assert.equal(state.calls.filter(([name]) => name === "send").length, 1);
+});
+
+test("compiled VS Code bridge shows host start-up steps in the waiting view before its context", async (t) => {
+  const state = fixture();
+  t.after(async () => { state.bridge.dispose(); await state.bridge.closed(); });
+  await state.bridge.handleMessage({ type: "ready" });
+  const progress = state.messages.findIndex((message) => message.type === "host-progress" && message.stage === "ready");
+  const context = state.messages.findIndex((message) => message.type === "context");
+  assert.equal(progress >= 0 && progress < context, true);
+  state.bridge.dispose();
+  const count = state.messages.length;
+  await state.host.closeCanvas();
+  await state.host.openCanvas();
+  assert.equal(state.messages.slice(count).some((message) => message.type === "host-progress"), false,
+    "a disposed bridge stops forwarding progress");
 });
 
 test("compiled VS Code bridge routes reveal and System UI negatives through the bound host API", async (t) => {

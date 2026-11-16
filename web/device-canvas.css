@@ -1160,18 +1160,26 @@ summary:focus-visible,
   touch-action: none;
 }
 
+/*
+ * Status lives on the device's own screen: it covers exactly the area the live picture would, inside
+ * the frame's 6px bezel, at every panel size. Its text is laid out at normal size rather than scaled
+ * with device pixels, and a screen too small for the card scrolls it instead of spilling past the
+ * frame.
+ */
 .stream-overlay {
   --status-accent: var(--accent-fg);
   --status-tint: var(--accent-muted);
   position: absolute;
-  inset: var(--status-top-reserve, 0px) 0 0;
+  inset: 6px;
   z-index: 2;
   display: grid;
   align-items: safe center;
   justify-items: center;
-  padding: clamp(14px, 6%, 24px);
-  border-radius: var(--control-radius);
+  padding: clamp(8px, 6%, 24px);
+  border-radius: var(--screen-radius);
   overflow: auto;
+  overscroll-behavior: contain;
+  container-type: inline-size;
   background: linear-gradient(180deg, var(--canvas-subtle), var(--canvas-inset));
   color: var(--fg-default);
   text-align: center;
@@ -1198,7 +1206,8 @@ summary:focus-visible,
   gap: 12px;
   width: min(100%, 272px);
   min-width: 0;
-  overflow-wrap: anywhere;
+  /* Whole words wrap first; only a word wider than the screen is broken. */
+  overflow-wrap: break-word;
   padding: 20px;
   border: 1px solid var(--border-default);
   border-radius: var(--control-radius);
@@ -1260,6 +1269,49 @@ summary:focus-visible,
   font-weight: 600;
   line-height: 1.35;
   text-wrap: balance;
+}
+
+/* A phone screen in a narrow panel has no room for card chrome, so the status sits on the screen. */
+@container (max-width: 260px) {
+  .stream-status-card {
+    gap: 8px;
+    padding: 0;
+    border: 0;
+    background: none;
+  }
+
+  .stream-status-eyebrow {
+    display: none;
+  }
+
+  .stream-status-icon {
+    width: 32px;
+    height: 32px;
+  }
+
+  .stream-status-title {
+    font-size: 14px;
+  }
+}
+
+@container (max-width: 150px) {
+  .stream-status-icon {
+    display: none;
+  }
+}
+
+.status-progress,
+.empty-state .status-progress {
+  margin: 0;
+  min-height: 1.5em;
+  color: var(--fg-muted);
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+  line-height: 1.5;
+}
+
+.status-progress:empty {
+  display: none;
 }
 
 .stream-status-detail {

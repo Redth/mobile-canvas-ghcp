@@ -572,7 +572,7 @@ opt-in `open`/`select_device` and `mobile_device_select` accept an additive
 MCP identifiers are unchanged.
 
 The context adapter uses only the verified canonical CLI launch and
-`context open/get/select/detach` with returned opaque `contextRef`, string
+`context open/get/select/close/detach` with returned opaque `contextRef`, string
 `scopeEpoch`/`revision`, and whole-tuple CAS. The owner PID is the product process,
 not the Target Host. A unique live session/window ID plus its view ID defines
 scope; workspace preference hashes are not view identity. Ordinary reads cannot
@@ -624,6 +624,43 @@ tools remain unchanged. VS Code supplies its actual window/view binding and
 refreshes definitions after a genuine context open. Binding discovery itself
 cannot create or reopen authority: before a trusted view opens it reports
 `context_not_bound`, and a retired view reports `context_retired`.
+
+#### Recovering a view after its Target Host goes away
+
+A view's context is stored per (session, view) and outlives both the product
+process and the Target Host. Only an explicit open of that view (the GitHub
+`open_canvas` call or a VS Code view load) may recover it; background binding,
+bound MCP and SDK tools never do:
+
+- **A previous process left the authority open.** `context open` reports
+  `ContextRevisionConflict`/`ContextAlreadyOpen` with the current identity. The
+  explicit open retires it with `context close` using exactly that identity
+  (the tombstone may still name the previous owner; scope, reference and epoch
+  must match), then reopens with the retired identity and gets a new epoch.
+- **The selected Target Host exited or was replaced.** An explicit open first
+  probes the current owner's host status. Only an unreachable transport or a
+  different host identity counts as lost; a slow probe keeps the owner. A lost
+  owner is retired (cleanup failures against the vanished host are reported,
+  not fatal), and the new owner's `ensureTargetHost` for the stored host
+  reports `RuntimeHostNotFound`/`RuntimeHostChanged`. The view authority is then
+  replaced (close + reopen, new epoch, no selection), a host is ensured without
+  a pinned identity, and the open re-selects its requested device. The lost
+  host's uncertain video creation is cleared because its sessions no longer
+  exist.
+
+Every intent captured against the old epoch or host incarnation stays refused:
+accepted receipts are still recovered only by original-ID GET on their own
+incarnation, and nothing is replayed into the new authority.
+
+Host start-up reports `runtime`, `context`, `host`, `connecting` and `ready`
+through `subscribeProgress`. VS Code forwards them to its waiting view as
+`host-progress` messages. The GitHub App starts the host before the panel loads,
+so its panel begins at the catalog step. The shared panel names each step
+(host, devices, selection, live video, screen capture, first frame), shows
+`Step n of 5` and, once a step takes three seconds or more, a running count of
+seconds. The count is `aria-hidden`; step changes are what the live region
+announces. Status overlays sit on the device screen inside the frame at every
+panel size, and scroll when a very small screen cannot fit them.
 
 ### Optional selected-view App MCP reads
 

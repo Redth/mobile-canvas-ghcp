@@ -17,6 +17,9 @@ export const scenario = {
   fencedAppResponses: process.env.AILOHA_TEST_FENCED_APP_RESPONSES === "1",
   platform: process.env.AILOHA_TEST_APP_PLATFORM ?? "ios",
   focusedText: false,
+  // A Target Host that exited: its transports fail and ensuring it by identity reports it missing.
+  lostHostId: null,
+  hostIncarnation: 0,
   continuousInput: false,
   recordingEnabled: false,
   targets: new Map(), providerId: "synthetic-provider", nativeId: "native-deployment-not-opaque-target",
@@ -190,6 +193,12 @@ export async function getVerifiedCliLaunch({ expectedVersion }) {
 }
 export async function ensureTargetHost(options) {
   scenario.calls.push({ ensure: structuredClone(options) });
+  if (scenario.lostHostId) {
+    if (options.targetHostId === scenario.lostHostId) {
+      throw Object.assign(new Error("synthetic host is gone"), { name: "RuntimeDeliveryError", code: "RuntimeHostNotFound" });
+    }
+    if (options.targetHostId === undefined) scenario.lostHostId = null;
+  }
   if (scenario.ensureFailureCode) {
     const error = new Error("synthetic private runtime diagnostic");
     Object.assign(error, { name: "RuntimeDeliveryError", code: scenario.ensureFailureCode });
@@ -233,9 +242,13 @@ export async function releaseRuntimeLease(leaseId) {
 }
 export async function openTargetHostTransport(leaseId) {
   let closed = false;
+  const incarnation = scenario.hostIncarnation;
   const transport = Object.freeze({
     get closed() { return closed; },
     async response(path, options = {}) {
+      if (incarnation !== scenario.hostIncarnation) {
+        throw Object.assign(new Error("synthetic connection refused"), { name: "TargetHostTransportError", code: "TargetHostRequestFailed" });
+      }
       const body = options.body === undefined || typeof options.body === "string"
         ? options.body : Buffer.from(options.body).toString("utf8");
       if (scenario.beforeMutationAdmission && (path.endsWith("/actions/reset")

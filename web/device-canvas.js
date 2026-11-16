@@ -14,6 +14,7 @@ import {
   deviceStatusPresentation,
   formatDeviceState,
   formatUserFacingMessage,
+  liveViewProgress,
   organizeDiagnostics,
   readStoredDeviceId,
   resumeAuthenticatedPanel,
@@ -51,6 +52,7 @@ const elements = {
   emptyIcon: document.querySelector("#empty-state-icon"),
   emptyTitle: document.querySelector("#empty-state-title"),
   emptyDetail: document.querySelector("#empty-state-detail"),
+  emptyProgress: document.querySelector("#empty-state-progress"),
   emptyAction: document.querySelector("#empty-state-action"),
   emptyActionIcon: document.querySelector("#empty-state-action-icon"),
   emptyActionText: document.querySelector("#empty-state-action-text"),
@@ -67,6 +69,7 @@ const elements = {
   overlayEyebrow: document.querySelector("#stream-overlay-eyebrow"),
   overlayTitle: document.querySelector("#stream-overlay-title"),
   overlayDetail: document.querySelector("#stream-overlay-detail"),
+  overlayProgress: document.querySelector("#stream-overlay-progress"),
   overlayAction: document.querySelector("#stream-overlay-action"),
   overlayActionIcon: document.querySelector("#stream-overlay-action-icon"),
   overlayActionText: document.querySelector("#stream-overlay-action-text"),
@@ -598,6 +601,7 @@ async function selectDevice(device, persist) {
   state.rotationRecoveryStarted = false;
   if (persist) {
     setInputStatus("pending", "Selecting device");
+    setLiveViewStage("selecting");
     const response = await api("/api/v1/selection", {
       method: "POST",
       body: JSON.stringify({ deviceId: device.id }),
@@ -642,6 +646,8 @@ async function selectDevice(device, persist) {
   updateControlAvailability();
 
   if (device.state === "booted" && (device.backend !== "ailoha" || device.isAvailable)) {
+    if (!retainFrame || state.awaitingRotatedFrame) showDeviceStatus("connecting");
+    setLiveViewStage("display");
     const displayResponse = await api(`/api/v1/devices/${encodeURIComponent(device.id)}/display`);
     const display = await displayResponse.json();
     if (
@@ -694,7 +700,9 @@ function showLoadingSelection() {
     title: "Opening live view…",
     detail: "Preparing the runtime and local device services. First use may take longer.",
   });
+  elements.empty.dataset.loading = "true";
   elements.empty.classList.remove("hidden");
+  setLiveViewStage("connecting");
 }
 
 function showLoadingCatalog() {
@@ -704,7 +712,54 @@ function showLoadingCatalog() {
     title: "Loading devices…",
     detail: "Reading device inventory and checking each target's capabilities.",
   });
+  elements.empty.dataset.loading = "true";
   elements.empty.classList.remove("hidden");
+  setLiveViewStage("catalog");
+}
+
+/*
+ * Names the step a live view is waiting on, with a running count once a step is slow, so a long first
+ * connection reads as progress. It renders into whichever loading surface is showing: the empty
+ * state before a device is on screen, or the device's own status overlay while it connects.
+ */
+const liveViewStage = { stage: null, startedAt: 0, timer: null };
+
+function setLiveViewStage(stage) {
+  if (liveViewStage.stage !== stage) {
+    liveViewStage.stage = stage;
+    liveViewStage.startedAt = performance.now();
+  }
+  renderLiveViewStage();
+  liveViewStage.timer ??= setInterval(renderLiveViewStage, 1000);
+}
+
+function clearLiveViewStage() {
+  clearInterval(liveViewStage.timer);
+  liveViewStage.timer = null;
+  liveViewStage.stage = null;
+  setText(elements.emptyProgress, "");
+  setText(elements.overlayProgress, "");
+}
+
+function renderLiveViewStage() {
+  const progress = liveViewProgress(liveViewStage.stage, performance.now() - liveViewStage.startedAt);
+  if (!progress) {
+    clearLiveViewStage();
+    return;
+  }
+  const line = [progress.step, progress.elapsed].filter(Boolean).join(" · ");
+  const overlayShowing = !elements.view.classList.contains("hidden")
+    && !elements.overlay.classList.contains("hidden") && elements.frame.dataset.status === "connecting";
+  const emptyShowing = !elements.empty.classList.contains("hidden") && elements.empty.dataset.loading === "true";
+  if (overlayShowing) {
+    setText(elements.overlayDetail, progress.detail);
+    setText(elements.overlayProgress, line);
+  } else if (emptyShowing) {
+    setText(elements.emptyDetail, progress.detail);
+    setText(elements.emptyProgress, line);
+  } else {
+    clearLiveViewStage();
+  }
 }
 
 function showEmptySelection() {
@@ -739,6 +794,8 @@ function showEmptySelection() {
 
 function configureEmptyState({ tone, icon, title, detail, action }) {
   elements.empty.dataset.tone = tone;
+  elements.empty.dataset.loading = "false";
+  setText(elements.emptyProgress, "");
   elements.emptyIcon.setAttribute("href", icon);
   setText(elements.emptyTitle, title);
   setText(elements.emptyDetail, detail);
@@ -1004,7 +1061,6 @@ function fitDeviceScreen() {
   // clientHeight excludes neither padding nor the reserve we may have written on a previous pass,
   // so measure the unreserved height once and drive both passes from it.
   const fullHeight = stage.clientHeight;
-  stage.style.setProperty("--status-top-reserve", `${pillReserve(stage.clientWidth, fullHeight, stage)}px`);
   const unreserved = measureFit(aspect, stage.clientWidth - chromeX, fullHeight - chromeY);
   if (!unreserved) return;
 
@@ -1085,6 +1141,8 @@ function showDeviceStatus(kind, overrides = {}) {
     action = { id: "refresh", label: "Refresh devices", icon: "#icon-refresh" };
   }
 
+  if (kind !== "connecting") clearLiveViewStage();
+  else setText(elements.overlayProgress, "");
   elements.frame.dataset.status = kind;
   elements.overlay.dataset.busy = presentation.busy ? "true" : "false";
   elements.overlay.dataset.tone = presentation.tone;
@@ -1115,6 +1173,7 @@ function setText(element, value) {
 }
 
 function hideDeviceStatus() {
+  clearLiveViewStage();
   elements.overlay.classList.add("hidden");
   elements.frame.dataset.status = "streaming";
 }
@@ -1126,7 +1185,10 @@ function startStream() {
   const deviceId = state.selected.id;
   const retainFrame = !state.awaitingRotatedFrame && shouldRetainDeviceFrame(state.frameDeviceId, deviceId);
   if (retainFrame) hideDeviceStatus();
-  else showDeviceStatus("connecting");
+  else {
+    showDeviceStatus("connecting");
+    setLiveViewStage("session");
+  }
   setStreamMode("connecting");
   state.frameClock = performance.now();
 
@@ -1181,7 +1243,9 @@ function startStream() {
     }
   });
   socket.addEventListener("open", () => {
-    if (state.socket === socket) setStreamMode("H.264");
+    if (state.socket !== socket) return;
+    setStreamMode("H.264");
+    if (liveViewStage.stage === "session") setLiveViewStage("frame");
   });
   socket.addEventListener("error", () => {
     if (state.socket === socket) startPngFallback("PNG");
@@ -1228,12 +1292,14 @@ function startAilohaStream() {
         if (typeof event.data !== "string") throw new Error("Ailoha live display requires an owned session descriptor first.");
         const descriptor = JSON.parse(event.data);
         if (descriptor.type !== "mobile-canvas-video") throw new Error("Invalid owned Ailoha video descriptor.");
+        if (liveViewStage.stage === "session") setLiveViewStage("capture");
         player = createAilohaVideoPlayer({
           context: descriptor.context,
           observedGeometry: descriptor.geometry,
           isCurrent: current,
           onGeometry(geometry) {
             if (!current()) return;
+            if (liveViewStage.stage === "capture") setLiveViewStage("frame");
             if (state.awaitingRotatedFrame
               && (state.rotationFrameRevision !== invocation.geometryRevision
                 || geometry.geometryRevision !== invocation.geometryRevision)) return;
@@ -3223,6 +3289,15 @@ function findStartCodes(bytes) {
 }
 
 showLoadingSelection();
+
+// A host adapter that starts the device host while this panel is already showing (VS Code) reports
+// each start-up step, so a first-use runtime download or host start is visible as it happens.
+const HOST_START_STAGES = new Set(["runtime", "context", "host", "connecting"]);
+transport?.onHostProgress?.((stage) => {
+  if (HOST_START_STAGES.has(stage) && (liveViewStage.stage === null || HOST_START_STAGES.has(liveViewStage.stage))) {
+    setLiveViewStage(stage);
+  }
+});
 
 bootstrap()
   .then(() => {

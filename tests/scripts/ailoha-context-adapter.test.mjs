@@ -14,13 +14,21 @@ const document = {
 function fixture(options = {}) {
   const calls = [];
   let current = structuredClone(document);
+  if (options.leftover) current = { ...current, owner: { processId: 4242, processStartedAt: "2026-10-09T00:00:00Z" }, revision: "3" };
   const runCli = async (args) => {
     calls.push(args);
+    options.beforeReply?.(args);
     if (options.reply) return JSON.stringify(options.reply);
     const requestIndex = args.indexOf("--request-json");
     const input = requestIndex >= 0 ? JSON.parse(args[requestIndex + 1]) : null;
     switch (args[1]) {
       case "open":
+        if (options.leftover && !input.expected) {
+          return JSON.stringify({ ok: false, context: null, error: {
+            code: "ContextRevisionConflict", message: "Stale intent was not retried.",
+            current: { contextRef: current.contextRef, scopeEpoch: current.scopeEpoch, revision: current.revision, state: current.state },
+          } });
+        }
         if (calls.length > 1 && current.state === "open") {
           return JSON.stringify({ ok: false, context: null, error: {
             code: "ContextAlreadyOpen", message: "Retire the current authority before reopening it.",
@@ -33,7 +41,14 @@ function fixture(options = {}) {
           current.state = "open";
           current.scopeEpoch = "new-epoch";
           current.revision = "0";
+          current.owner = structuredClone(document.owner);
         }
+        break;
+      case "close":
+        assert.equal(input.contextRef, current.contextRef);
+        assert.deepEqual(input.expected, { scopeEpoch: current.scopeEpoch, revision: current.revision });
+        current = { ...current, state: "closed", selection: null, observed: null,
+          revision: String(BigInt(current.revision) + 1n) };
         break;
       case "select":
         if (input.expected.revision !== current.revision) {
@@ -320,6 +335,46 @@ test("an already-open authority is an explicit conflict, not an idempotent reope
     current: { contextRef: document.contextRef, scopeEpoch: document.scopeEpoch, revision: "1", state: "open" },
   } } });
   await assert.rejects(store.binding(), { code: "ContextAlreadyOpen" });
+});
+
+test("an explicit open retires a view authority left by a previous process through its exact identity", async () => {
+  const state = fixture({ leftover: true });
+  const binding = await state.store.binding();
+  assert.equal(binding.scopeEpoch, "new-epoch");
+  assert.deepEqual(state.calls.map((args) => args[1]), ["open", "close", "open"]);
+  const reopen = JSON.parse(state.calls[2][state.calls[2].indexOf("--request-json") + 1]);
+  assert.deepEqual(reopen.expected, { scopeEpoch: document.scopeEpoch, revision: "4" });
+  assert.equal((await state.store.readSnapshot()).selection, null);
+
+  const background = fixture({ leftover: true });
+  await assert.rejects(background.store.binding({ allowReopen: false }), { code: "ContextRevisionConflict" });
+  assert.deepEqual(background.calls.map((args) => args[1]), ["open"]);
+});
+
+test("replacing a live authority retires every snapshot captured against the old epoch", async () => {
+  let observed;
+  let store;
+  let before;
+  const state = fixture({
+    beforeReply(args) {
+      // The reopen must not start while snapshots of the retired epoch still look current.
+      if (args[1] === "open" && before) observed = store.isCurrentSnapshot(before);
+    },
+  });
+  store = state.store;
+  await state.store.binding();
+  state.externalSelection("old-host-target");
+  before = await state.store.readSnapshot();
+  assert.equal(before.selection.targetId, "old-host-target");
+  let changes = 0;
+  state.store.onChange(() => { changes += 1; });
+  await state.store.replace();
+  const after = await state.store.readSnapshot();
+  assert.equal(after.selection, null);
+  assert.equal(after.identity.scopeEpoch, "new-epoch");
+  assert.equal(state.store.isCurrentSnapshot(before), false);
+  assert.equal(observed, false);
+  assert.equal(changes > 0, true);
 });
 
 test("cached scopes reject conflicting explicit ref/epoch without new CLI or host selection IO", async () => {

@@ -101,7 +101,10 @@ async (page) => {
       const action = document.querySelector("#stream-overlay-action");
       const rect = action.getBoundingClientRect();
       const bounds = overlay.getBoundingClientRect();
+      const frame = document.querySelector("#device-frame").getBoundingClientRect();
       return {
+        withinFrame: bounds.left >= frame.left - 1 && bounds.right <= frame.right + 1
+          && bounds.top >= frame.top - 1 && bounds.bottom <= frame.bottom + 1,
         overlayWidth: bounds.width, stageWidth: viewport.getBoundingClientRect().width,
         actionHeight: rect.height, actionTop: rect.top, actionBottom: rect.bottom,
         overlayTop: bounds.top, overlayBottom: bounds.bottom,
@@ -111,7 +114,7 @@ async (page) => {
         injected: overlay.querySelectorAll("img").length,
       };
     });
-    verify(!layout.insideFrame && layout.overlayWidth >= layout.stageWidth - 2
+    verify(layout.insideFrame && layout.withinFrame
       && layout.actionHeight >= 44 && layout.horizontalOverflow <= 1
       && layout.actionTop >= layout.overlayTop - 1 && layout.actionBottom <= layout.overlayBottom + 1
       && layout.text === longText && layout.injected === 0,

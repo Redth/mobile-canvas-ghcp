@@ -16,11 +16,13 @@ function fixture(options = {}) {
   let generation = 0;
   const host = createAilohaCanvasHost({
     scope: { sessionId: "unique-session", viewId: "unique-view" },
-    createBackend: async ({ scope }) => {
+    createBackend: async ({ scope, onProgress }) => {
       const id = ++generation;
       calls.push(["create", id, scope]);
+      onProgress?.("host");
       if (options.startWait) await options.startWait.promise;
       return {
+        async hostLost() { calls.push(["probe", id]); return options.hostLost?.(id) ?? false; },
         connectionRef: Object.freeze({
           serviceId: `service-${id}`, pid: 12345,
           startedAt: "2026-10-09T23:00:00Z", processStartedAt: "2026-10-09T22:59:59Z",
@@ -55,7 +57,11 @@ function fixture(options = {}) {
             async close() { calls.push(["video-close", id]); },
           };
         },
-        async dispose() { calls.push(["dispose", id]); if (options.closeWait) await options.closeWait.promise; },
+        async dispose() {
+          calls.push(["dispose", id]);
+          if (options.closeWait) await options.closeWait.promise;
+          if (options.disposeFailure?.(id)) throw new Error("synthetic cleanup on a vanished host failed");
+        },
       };
     },
   });
@@ -276,4 +282,40 @@ test("a caller disconnect while the request body is incomplete never starts back
   assert.equal(calls.some(([kind]) => kind === "dispose"), false);
   const next = await fetch(new URL("/api/v1/catalog", url), { headers: { Cookie: cookie } });
   assert.equal(next.status, 200);
+});
+
+test("an explicit reopen replaces an owner whose Target Host is gone, and a live owner is kept", async (t) => {
+  let lost = false;
+  const { host, calls } = fixture({ hostLost: () => lost, disposeFailure: (id) => id === 1 });
+  t.after(() => host.closeCanvas());
+  const stages = [];
+  const unsubscribe = host.subscribeProgress((stage) => stages.push(stage));
+  await host.openCanvas({ deviceId: "target" });
+  assert.deepEqual(stages, ["host", "ready"]);
+  await host.openCanvas({ deviceId: "target" });
+  assert.equal(calls.filter(([kind]) => kind === "create").length, 1, "a responsive host keeps its owner");
+  lost = true;
+  await host.openCanvas({ deviceId: "target" });
+  lost = false;
+  assert.deepEqual(calls.filter(([kind]) => ["create", "dispose", "select"].includes(kind)).map(([kind, id]) => [kind, id]), [
+    ["create", 1], ["select", 1], ["select", 1], ["dispose", 1], ["create", 2], ["select", 2],
+  ]);
+  assert.equal((await host.invokeAction("get_selected_device", {})).generation, 2);
+  unsubscribe();
+});
+
+test("concurrent reopens share one retirement of a lost owner before its replacement starts", async (t) => {
+  let lost = false;
+  const { host, calls } = fixture({ hostLost: () => lost });
+  t.after(() => host.closeCanvas());
+  await host.openCanvas({ deviceId: "target" });
+  lost = true;
+  const first = host.openCanvas({ deviceId: "target" });
+  const second = host.openCanvas({ deviceId: "target" });
+  await new Promise((resolve) => setTimeout(resolve, 20));
+  assert.equal(calls.filter(([kind]) => kind === "probe").length, 1);
+  lost = false;
+  await Promise.all([first, second]);
+  const lifecycle = calls.filter(([kind]) => ["create", "dispose"].includes(kind)).map(([kind, id]) => `${kind}${id}`);
+  assert.deepEqual(lifecycle, ["create1", "dispose1", "create2"]);
 });
