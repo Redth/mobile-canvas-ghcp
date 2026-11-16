@@ -36,6 +36,16 @@ public sealed class IosSimulatorBackend : IDeviceBackend, IAsyncDisposable
 	private readonly ConcurrentDictionary<string, bool> _removingInputSessions =
 		new(StringComparer.OrdinalIgnoreCase);
 	private readonly SemaphoreSlim _inputRemovalGate = new(1, 1);
+
+	// The bundled HID helper attaches to a simulator for as long as it runs. Holding it after nobody is
+	// driving the device would keep it attached to a simulator another engine may be using, so an idle
+	// helper is released and starts again on the next input.
+	internal static readonly TimeSpan InputIdleRelease = TimeSpan.FromMinutes(2);
+	private const string BundledHidRoute = "bundled CoreSimulator HID";
+	private static readonly TimeSpan InputIdleSweep = TimeSpan.FromSeconds(30);
+	private readonly ConcurrentDictionary<string, long> _lastInput = new(StringComparer.OrdinalIgnoreCase);
+	private readonly Timer _idleInputSweep;
+	private readonly Func<long> _clock;
 	private static readonly TimeSpan BootedCacheLifetime = TimeSpan.FromSeconds(15);
 	private static readonly TimeSpan FramebufferStartupTimeout = TimeSpan.FromSeconds(15);
 	private static readonly TimeSpan FramebufferRetryTimeout = TimeSpan.FromSeconds(8);
@@ -55,10 +65,25 @@ public sealed class IosSimulatorBackend : IDeviceBackend, IAsyncDisposable
 	internal IosSimulatorBackend(
 		IProcessRunner processRunner,
 		Func<CancellationToken, Task<string>> resolveDeveloperDirectory)
+		: this(processRunner, resolveDeveloperDirectory, new CoreSimulatorHidManager(), static () => Environment.TickCount64)
+	{
+	}
+
+	internal IosSimulatorBackend(
+		IProcessRunner processRunner,
+		Func<CancellationToken, Task<string>> resolveDeveloperDirectory,
+		CoreSimulatorHidManager hid,
+		Func<long> clock)
 	{
 		_processRunner = processRunner;
 		_resolveDeveloperDirectory = resolveDeveloperDirectory;
-		_hid = new CoreSimulatorHidManager();
+		_hid = hid;
+		_clock = clock;
+		_idleInputSweep = new Timer(
+			static state => _ = ((IosSimulatorBackend)state!).ReleaseIdleInputAsync(),
+			this,
+			InputIdleSweep,
+			InputIdleSweep);
 		_companions = new IdbCompanionManager(processRunner);
 		_accessibility = new NativeAccessibilityReader(processRunner);
 		_recordings = new IosRecordingManager(processRunner);
@@ -350,6 +375,7 @@ public sealed class IosSimulatorBackend : IDeviceBackend, IAsyncDisposable
 				acquired = true;
 				enteredTouchGate = true;
 				ThrowIfInputSessionsAreBeingRemoved(device.NativeId);
+				MarkInput(device.NativeId);
 				if (touch.Phase == IosHidTouchPhase.Down)
 				{
 					if (_activeTouches.ContainsKey(device.NativeId))
@@ -2381,8 +2407,58 @@ public sealed class IosSimulatorBackend : IDeviceBackend, IAsyncDisposable
 
 	#endregion
 
+	internal void MarkInput(string nativeId) => _lastInput[nativeId] = _clock();
+
+	public Task ReleaseInputAsync(string deviceId, CancellationToken cancellationToken = default) =>
+		ReleaseHidAsync(DeviceIdentity.GetNativeId(deviceId), idleBefore: null);
+
+	internal async Task ReleaseIdleInputAsync()
+	{
+		var idleBefore = _clock() - (long)InputIdleRelease.TotalMilliseconds;
+		foreach (var (nativeId, last) in _lastInput)
+		{
+			if (last <= idleBefore)
+				await ReleaseHidAsync(nativeId, idleBefore).ConfigureAwait(false);
+		}
+	}
+
+	/// <summary>
+	/// Ends the device's bundled HID helper. It runs under the device's input gate so no send is cut off
+	/// mid-flight; a device that is busy right now is left for the next sweep. Ending the helper lifts
+	/// any contact it still holds, so a touch abandoned by a closed view is cleared with it.
+	/// </summary>
+	private async Task ReleaseHidAsync(string nativeId, long? idleBefore)
+	{
+		if (_removingInputSessions.ContainsKey(nativeId))
+			return;
+		var gate = _inputGates.GetOrAdd(nativeId, static _ => new SemaphoreSlim(1, 1));
+		if (!await gate.WaitAsync(0).ConfigureAwait(false))
+			return;
+		try
+		{
+			if (idleBefore is { } limit && _lastInput.TryGetValue(nativeId, out var last) && last > limit)
+				return;
+			// Only the bundled helper lifts a held contact when it ends. A touch held through idb is
+			// left alone so it can still be moved or released normally.
+			if (_activeTouches.TryGetValue(nativeId, out var active) && active.Name != BundledHidRoute)
+				return;
+			_activeTouches.TryRemove(nativeId, out _);
+			_lastInput.TryRemove(nativeId, out _);
+			await _hid.RemoveAsync(nativeId).ConfigureAwait(false);
+		}
+		catch (Exception exception) when (exception is not OutOfMemoryException)
+		{
+			// Best effort: the next input replaces a helper that failed to stop.
+		}
+		finally
+		{
+			gate.Release();
+		}
+	}
+
 	public async ValueTask DisposeAsync()
 	{
+		await _idleInputSweep.DisposeAsync().ConfigureAwait(false);
 		await _recordings.DisposeAsync().ConfigureAwait(false);
 		await _hid.DisposeAsync().ConfigureAwait(false);
 		await _companions.DisposeAsync().ConfigureAwait(false);
@@ -2409,6 +2485,7 @@ public sealed class IosSimulatorBackend : IDeviceBackend, IAsyncDisposable
 		try
 		{
 			ThrowIfInputSessionsAreBeingRemoved(device.NativeId);
+			MarkInput(device.NativeId);
 			return await SendInputCoreAsync(device, events, cancellationToken).ConfigureAwait(false);
 		}
 		finally
@@ -2428,7 +2505,7 @@ public sealed class IosSimulatorBackend : IDeviceBackend, IAsyncDisposable
 					.ConfigureAwait(false);
 				await session.SendAsync(events, cancellationToken).ConfigureAwait(false);
 				return new ActiveHidRoute(
-					"bundled CoreSimulator HID",
+					BundledHidRoute,
 					session.SendAsync);
 			},
 			async () =>

@@ -621,6 +621,23 @@ public sealed class DeviceServiceTests
 		Assert.Equal(0, backend.LastNetwork?.LatencyMs);
 	}
 
+	[Fact]
+	public async Task ReleaseUnviewedInputAsync_ReleasesOnlyWhenNoOtherOpenCanvasShowsTheDevice()
+	{
+		var backend = new FakeBackend();
+		var service = new DeviceService([backend]);
+		var closing = new CanvasContextKey("session", "closing");
+		var other = new CanvasContextKey("session", "other");
+		await service.SelectAsync(closing, FakeBackend.Device.Id);
+		await service.SelectAsync(other, FakeBackend.Device.Id);
+
+		await service.ReleaseUnviewedInputAsync(closing, FakeBackend.Device.Id, key => key == other);
+		Assert.Empty(backend.ReleasedInput);
+
+		await service.ReleaseUnviewedInputAsync(closing, FakeBackend.Device.Id, _ => false);
+		Assert.Equal([FakeBackend.Device.Id], backend.ReleasedInput);
+	}
+
 	private sealed class FakeBackend : IDeviceBackend
 	{
 		public static DeviceTarget Device { get; } = new()
@@ -637,6 +654,12 @@ public sealed class DeviceServiceTests
 
 		public string Platform => DevicePlatforms.Ios;
 		public bool IsDeleted { get; set; }
+		public List<string> ReleasedInput { get; } = [];
+		public Task ReleaseInputAsync(string deviceId, CancellationToken cancellationToken = default)
+		{
+			ReleasedInput.Add(deviceId);
+			return Task.CompletedTask;
+		}
 		public List<string> BootedDeviceIds { get; } = [];
 		public Task<DeviceCatalog> GetCatalogAsync(CancellationToken cancellationToken = default) =>
 			Task.FromResult(new DeviceCatalog { Devices = [Device] });

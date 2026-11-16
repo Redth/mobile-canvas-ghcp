@@ -242,7 +242,7 @@ internal static class DeviceApi
 
 		app.MapPost(
 			"/api/v1/canvas/close",
-			(CanvasCloseRequest request, CanvasBootstrapStore store, DeviceService devices, HttpContext context) =>
+			async (CanvasCloseRequest request, CanvasBootstrapStore store, DeviceService devices, HttpContext context) =>
 			{
 				RequireControl(context);
 				ValidateCanvasContext(request.SessionId, request.InstanceId);
@@ -250,17 +250,22 @@ internal static class DeviceApi
 				// Host applications restore an open renderer without invoking canvas.open again.
 				// Keep its grant and selection until explicit detach, but rotate the browser session.
 				store.Close(key);
+				if (devices.GetSelectedId(key) is { } deviceId)
+					await devices.ReleaseUnviewedInputAsync(key, deviceId, store.HasSession).ConfigureAwait(false);
 				return Results.NoContent();
 			});
 
 		app.MapPost(
 			"/api/v1/canvas/detach",
-			(CanvasBootstrapStore store, DeviceService devices, HttpContext context) =>
+			async (CanvasBootstrapStore store, DeviceService devices, HttpContext context) =>
 			{
 				var key = RequireCanvasContext(context);
+				var deviceId = devices.GetSelectedId(key);
 				devices.Detach(key);
 				store.Detach(key);
 				context.Response.Cookies.Delete(SessionCookie);
+				if (deviceId is not null)
+					await devices.ReleaseUnviewedInputAsync(key, deviceId, store.HasSession).ConfigureAwait(false);
 				return Results.NoContent();
 			});
 

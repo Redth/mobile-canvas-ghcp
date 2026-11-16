@@ -1,6 +1,7 @@
 using System.Text;
 using System.Text.Json;
 using System.Threading.Channels;
+using MobileCanvas.Core;
 using MobileCanvas.iOS;
 
 namespace MobileCanvas.Tests;
@@ -231,6 +232,46 @@ public sealed class CoreSimulatorHidSessionTests
 		var replacement = await manager.GetAsync("TEST-UDID", CancellationToken.None);
 		Assert.NotSame(first, replacement);
 		Assert.Equal(2, starts);
+	}
+
+	[Fact]
+	public async Task Backend_ReleasesHidHelperOnRequestAndAfterIdle_AndRestartsItLazily()
+	{
+		var processes = new List<FakeHidProcess>();
+		var manager = new CoreSimulatorHidManager(
+			"/tmp/mobile-screencap",
+			async (_, udid, cancellationToken) =>
+			{
+				var process = new FakeHidProcess();
+				processes.Add(process);
+				return await StartReadyAsync(process, udid, cancellationToken);
+			});
+		long now = 0;
+		await using var backend = new IosSimulatorBackend(
+			new NoProcessRunner(), _ => Task.FromResult("/tmp"), manager, () => now);
+
+		await manager.GetAsync("ABCD-1234", CancellationToken.None);
+		backend.MarkInput("ABCD-1234");
+		await backend.ReleaseInputAsync("ios:core-simulator:ABCD-1234");
+		Assert.True(processes[0].InputClosed, "closing the last view ends its helper");
+
+		await manager.GetAsync("ABCD-1234", CancellationToken.None);
+		backend.MarkInput("ABCD-1234");
+		now = (long)(IosSimulatorBackend.InputIdleRelease.TotalMilliseconds / 2);
+		await backend.ReleaseIdleInputAsync();
+		Assert.False(processes[1].InputClosed, "a recently used helper is kept for the next input");
+		now = (long)IosSimulatorBackend.InputIdleRelease.TotalMilliseconds + 1;
+		await backend.ReleaseIdleInputAsync();
+		Assert.True(processes[1].InputClosed, "an idle helper is released");
+
+		await manager.GetAsync("ABCD-1234", CancellationToken.None);
+		Assert.Equal(3, processes.Count);
+	}
+
+	private sealed class NoProcessRunner : IProcessRunner
+	{
+		public Task<ProcessResult> RunAsync(ProcessRequest request, CancellationToken cancellationToken = default) =>
+			throw new InvalidOperationException("Releasing input must not run a process.");
 	}
 
 	private static async Task<CoreSimulatorHidSession> StartReadyAsync(

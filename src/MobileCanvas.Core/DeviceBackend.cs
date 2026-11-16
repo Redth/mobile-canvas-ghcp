@@ -19,6 +19,12 @@ public interface IDeviceBackend
 	Task<DeviceTarget> RevealAsync(string deviceId, CancellationToken cancellationToken = default);
 	Task TapAsync(string deviceId, TapRequest request, CancellationToken cancellationToken = default);
 
+	/// <summary>
+	/// Releases helper processes kept alive to deliver input to <paramref name="deviceId"/> once no view
+	/// is watching it. They start again on the next input, so this only ends idle ownership of the device.
+	/// </summary>
+	Task ReleaseInputAsync(string deviceId, CancellationToken cancellationToken = default) => Task.CompletedTask;
+
 	Task TouchAsync(string deviceId, TouchRequest request, CancellationToken cancellationToken = default);
 	Task SwipeAsync(string deviceId, SwipeRequest request, CancellationToken cancellationToken = default);
 	Task TypeTextAsync(string deviceId, string text, CancellationToken cancellationToken = default);
