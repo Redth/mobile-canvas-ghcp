@@ -359,14 +359,14 @@ and the shared `web/ailoha-video-player.js`. Legacy remains the default; an
 Ailoha refusal, timeout or operational failure never invokes the legacy engine.
 
 **The official SDK source/package pin is now present.** Both manifests and locks
-pin `@ailoha/cli@0.2.5-preview.5`; `lib/ailoha/runtime-package.json` records its
+pin `@ailoha/cli@0.2.5-preview.6`; `lib/ailoha/runtime-package.json` records its
 actual public npm URL, SHA-512 SRI, source
-`fa5b02162737520630a0531edeb5a696cba4f90c`, and publication run `43128854290`
-attempt `1`. The downloaded root is 1,000,048 bytes with SHA-256
-`67e907667dbe2c611470f062016aef91b9824d6a361c63f7df4adbca7b3d804a`.
+`15d11f418173514a8c3f24ad4b367fbd15a4f4e8`, and publication run `43937071349`
+attempt `1`. The downloaded root is 1,000,579 bytes with SHA-256
+`a613a598732df7439a9d7d326431b36f9be8bffb73ad834692872286aee572e1`.
 This is the actual anonymous registry publication, not an earlier local pack.
-Its complete small graph is 539 files / 4,599,001 bytes, graph SHA-256
-`52e6d2803a00715b8a86cf3862a2ce1d6457a36d96f9df55a1023a7d8845808e`.
+Its complete small graph is 539 files / 4,600,599 bytes, graph SHA-256
+`e2c04c850dd3f276bf50f6bf12b2bdbea0b60210a6a210003fd8521c0cf7c8a2`.
 It covers five Target Host RIDs and six CLI packages; Linux musl is CLI-only,
 and Windows ARM64 remains deferred. Missing official graph/pin still reports
 `ailoha_runtime_unavailable`. Normal installs must
@@ -1592,10 +1592,11 @@ Both hosts use this shared client/backend. Clearly synthetic source-contract
 fixtures cover 54 targets, old-peer refusal, exact shape/bounds, failure,
 cancellation and context retirement through shared HTTP/SDK/named MCP and the
 compiled VS Code bridge. These fixtures are **not** installed-host acceptance.
-The approved official graph now pins preview5 source
-`fa5b02162737520630a0531edeb5a696cba4f90c` / run `43128854290` attempt `1`
+The approved official graph now pins preview6 source
+`15d11f418173514a8c3f24ad4b367fbd15a4f4e8` / run `43937071349` attempt `1`
 (preview4 source `e31559ba06a3d926fa5903db3227e36ce519c8c9` / run `41132135307`
-first published the target catalog contract; preview5 changes no contract).
+first published the target catalog contract; preview5 and preview6 change no
+contract, apart from preview6's clearer `RuntimeHostIncompatible` message).
 Preview3 source D1 remains an explicit unsupported old-peer regression, not a
 fanout fallback. Prior local engine and consumer review packages are historical,
 not relabeled as this publication.
