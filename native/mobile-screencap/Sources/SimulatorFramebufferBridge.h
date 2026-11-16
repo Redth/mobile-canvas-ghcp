@@ -20,6 +20,10 @@ typedef void (^MCSimulatorFrameRenderedHandler)(void);
                   frameRenderedHandler:(MCSimulatorFrameRenderedHandler)frameRenderedHandler
                                  error:(NSError **)error;
 
+/// Re-reads the display's current IOSurface from the descriptor rather than trusting the last
+/// surface-change callback, so a replaced surface is noticed even when no callback arrives.
+- (id _Nullable)liveSurface;
+
 - (void)stop;
 
 - (instancetype)init NS_UNAVAILABLE;

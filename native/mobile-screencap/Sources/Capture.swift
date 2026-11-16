@@ -6,9 +6,14 @@ import VideoToolbox
 
 /// Writes bytes to a file descriptor, tolerating partial writes and treating a closed
 /// pipe as a normal shutdown rather than a crash.
+///
+/// A write blocks while the reader is not draining the pipe. Writes are serialized on their own
+/// lock, and the closed/byte-count state lives behind a separate lock, so status and stats reads
+/// never wait behind a blocked write.
 final class ByteSink: @unchecked Sendable {
 	private let fd: Int32
-	private let lock = NSLock()
+	private let writeLock = NSLock()
+	private let stateLock = NSLock()
 	private var isClosed = false
 	private var totalBytes: UInt64 = 0
 
@@ -17,20 +22,24 @@ final class ByteSink: @unchecked Sendable {
 	}
 
 	func write(_ bytes: UnsafePointer<UInt8>, _ count: Int) {
-		lock.lock()
-		defer { lock.unlock() }
-		guard !isClosed else { return }
+		writeLock.lock()
+		defer { writeLock.unlock() }
+		guard !closed else { return }
 
 		var offset = 0
 		while offset < count {
 			let written = Foundation.write(fd, bytes + offset, count - offset)
 			if written > 0 {
 				offset += written
+				stateLock.lock()
 				totalBytes += UInt64(written)
+				stateLock.unlock()
 				continue
 			}
 			if written < 0 && errno == EINTR { continue }
+			stateLock.lock()
 			isClosed = true
+			stateLock.unlock()
 			return
 		}
 	}
@@ -43,14 +52,14 @@ final class ByteSink: @unchecked Sendable {
 	}
 
 	var closed: Bool {
-		lock.lock()
-		defer { lock.unlock() }
+		stateLock.lock()
+		defer { stateLock.unlock() }
 		return isClosed
 	}
 
 	var bytesWritten: UInt64 {
-		lock.lock()
-		defer { lock.unlock() }
+		stateLock.lock()
+		defer { stateLock.unlock() }
 		return totalBytes
 	}
 }
@@ -76,12 +85,30 @@ final class H264Encoder: @unchecked Sendable {
 	private var frameIndex: Int64 = 0
 	private let startCode: [UInt8] = [0x00, 0x00, 0x00, 0x01]
 
+	private let outputQueue: DispatchQueue?
+	private let counterLock = NSLock()
+	private var inFlight = 0
+
 	private(set) var encodedFrames = 0
 	private(set) var keyFrames = 0
 
-	init(options: EncoderOptions, sink: ByteSink) throws {
+	/// Frames submitted to VideoToolbox whose output has not been written yet. Callers that pass an
+	/// `outputQueue` use this to skip frames while a reader is not draining stdout.
+	var pendingFrames: Int {
+		counterLock.lock()
+		defer { counterLock.unlock() }
+		return inFlight
+	}
+
+	/// - Parameter outputQueue: When set, encoded frames are written to the sink on this serial
+	///   queue instead of on VideoToolbox's output callback. VideoToolbox can deliver that callback
+	///   synchronously inside `VTCompressionSessionEncodeFrame`, so a blocking write there stalls
+	///   the submitting thread. Sharing one queue across successive encoders keeps their output in
+	///   order. Without it, a stalled reader back-pressures into the encoder as before.
+	init(options: EncoderOptions, sink: ByteSink, outputQueue: DispatchQueue? = nil) throws {
 		self.options = options
 		self.sink = sink
+		self.outputQueue = outputQueue
 
 		var created: VTCompressionSession?
 		let status = VTCompressionSessionCreate(
@@ -115,17 +142,29 @@ final class H264Encoder: @unchecked Sendable {
 		VTSessionSetProperty(session, key: key, value: value)
 	}
 
-	func encode(_ pixelBuffer: CVPixelBuffer, forceKeyFrame: Bool = false) {
+	/// Encodes one frame. Sources with a fixed cadence omit `presentationTime` and get synthetic
+	/// 1/fps timestamps; sources with variable cadence pass wall-clock seconds so rate control and
+	/// the one-second keyframe interval track real time.
+	func encode(_ pixelBuffer: CVPixelBuffer, forceKeyFrame: Bool = false, presentationTime: Double? = nil) {
 		guard let session else { return }
 		let timescale = CMTimeScale(options.framesPerSecond * 1000)
-		let pts = CMTime(value: frameIndex * 1000, timescale: timescale)
-		let duration = CMTime(value: 1000, timescale: timescale)
+		let pts = presentationTime.map { CMTime(seconds: $0, preferredTimescale: 1_000_000) }
+			?? CMTime(value: frameIndex * 1000, timescale: timescale)
+		let duration = presentationTime == nil
+			? CMTime(value: 1000, timescale: timescale)
+			: CMTime.invalid
 		let frameProperties = forceKeyFrame
 			? [kVTEncodeFrameOptionKey_ForceKeyFrame: true] as CFDictionary
 			: nil
 		frameIndex += 1
 
-		VTCompressionSessionEncodeFrame(
+		counterLock.lock()
+		inFlight += 1
+		counterLock.unlock()
+		// VideoToolbox may or may not invoke the handler when submission fails, so release the
+		// in-flight slot exactly once from whichever side finishes the frame.
+		let slot = InFlightSlot()
+		let status = VTCompressionSessionEncodeFrame(
 			session,
 			imageBuffer: pixelBuffer,
 			presentationTimeStamp: pts,
@@ -133,9 +172,33 @@ final class H264Encoder: @unchecked Sendable {
 			frameProperties: frameProperties,
 			infoFlagsOut: nil
 		) { [weak self] status, _, sampleBuffer in
-			guard status == noErr, let sampleBuffer else { return }
-			self?.emit(sampleBuffer)
+			guard let self else { return }
+			guard status == noErr, let sampleBuffer, let payload = self.payload(sampleBuffer) else {
+				self.release(slot)
+				return
+			}
+			if let outputQueue = self.outputQueue {
+				outputQueue.async {
+					self.write(payload)
+					self.release(slot)
+				}
+			} else {
+				self.write(payload)
+				self.release(slot)
+			}
 		}
+		if status != noErr {
+			release(slot)
+		}
+	}
+
+	private func release(_ slot: InFlightSlot) {
+		counterLock.lock()
+		if !slot.released {
+			slot.released = true
+			inFlight -= 1
+		}
+		counterLock.unlock()
 	}
 
 	func finish() {
@@ -145,7 +208,14 @@ final class H264Encoder: @unchecked Sendable {
 		self.session = nil
 	}
 
-	private func emit(_ sampleBuffer: CMSampleBuffer) {
+	private func write(_ payload: [UInt8]) {
+		sink.write(payload)
+		counterLock.lock()
+		encodedFrames += 1
+		counterLock.unlock()
+	}
+
+	private func payload(_ sampleBuffer: CMSampleBuffer) -> [UInt8]? {
 		let isKeyFrame = Self.isKeyFrame(sampleBuffer)
 		var payload: [UInt8] = []
 
@@ -153,10 +223,12 @@ final class H264Encoder: @unchecked Sendable {
 		// bytes, can resynchronise on the next second instead of never recovering.
 		if isKeyFrame, let format = CMSampleBufferGetFormatDescription(sampleBuffer) {
 			payload.append(contentsOf: parameterSets(format))
+			counterLock.lock()
 			keyFrames += 1
+			counterLock.unlock()
 		}
 
-		guard let blockBuffer = CMSampleBufferGetDataBuffer(sampleBuffer) else { return }
+		guard let blockBuffer = CMSampleBufferGetDataBuffer(sampleBuffer) else { return nil }
 		var totalLength = 0
 		var dataPointer: UnsafeMutablePointer<Int8>?
 		guard
@@ -167,7 +239,7 @@ final class H264Encoder: @unchecked Sendable {
 				totalLengthOut: &totalLength,
 				dataPointerOut: &dataPointer) == noErr,
 			let base = dataPointer
-		else { return }
+		else { return nil }
 
 		// VideoToolbox emits AVCC (length-prefixed NAL units); the wire format is Annex-B.
 		let headerLength = Self.nalHeaderLength(sampleBuffer)
@@ -186,9 +258,7 @@ final class H264Encoder: @unchecked Sendable {
 			}
 		}
 
-		guard !payload.isEmpty else { return }
-		sink.write(payload)
-		encodedFrames += 1
+		return payload.isEmpty ? nil : payload
 	}
 
 	private func parameterSets(_ format: CMFormatDescription) -> [UInt8] {
@@ -247,6 +317,10 @@ final class H264Encoder: @unchecked Sendable {
 		}
 		return true
 	}
+}
+
+private final class InFlightSlot: @unchecked Sendable {
+	var released = false
 }
 
 /// Receives ScreenCaptureKit frames and forwards complete ones to the encoder.

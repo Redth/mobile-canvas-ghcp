@@ -732,20 +732,14 @@ public sealed class IosSimulatorBackend : IDeviceBackend, IAsyncDisposable
 		CancellationToken cancellationToken)
 	{
 		var windows = await ScreenCaptureHelper.ListAsync(cancellationToken).ConfigureAwait(false);
-		if (windows.Count == 0)
-		{
-			return new CaptureWindowResult(
-				null,
-				"No simulator windows are open. Use Show simulator window to make this fallback available.");
-		}
-
 		var match = windows.FirstOrDefault(window =>
 			string.Equals(window.Udid, nativeId, StringComparison.OrdinalIgnoreCase));
 		if (match is null)
 		{
+			var hostName = await TryResolveHostDisplayNameAsync(cancellationToken).ConfigureAwait(false);
 			return new CaptureWindowResult(
 				null,
-				"The simulator host app is not showing this device. Use Show simulator window to make this fallback available.");
+				DescribeMissingCaptureWindow(hostName, windows.Count > 0));
 		}
 
 		if (!match.HasExactGeometry)
@@ -758,6 +752,35 @@ public sealed class IosSimulatorBackend : IDeviceBackend, IAsyncDisposable
 		}
 
 		return new CaptureWindowResult(match, null);
+	}
+
+	private async Task<string?> TryResolveHostDisplayNameAsync(CancellationToken cancellationToken)
+	{
+		try
+		{
+			var host = await SimulatorHostLocator.ResolveSelectedAsync(_processRunner, cancellationToken)
+				.ConfigureAwait(false);
+			return host.DisplayName;
+		}
+		catch (Exception exception) when (exception is not OperationCanceledException)
+		{
+			return null;
+		}
+	}
+
+	/// <summary>
+	/// Names the host app that would have to show the device. Xcode 27 replaced Simulator.app with
+	/// Device Hub, so a generic "simulator window" hint points at an app that no longer exists.
+	/// </summary>
+	internal static string DescribeMissingCaptureWindow(string? hostDisplayName, bool anyWindows)
+	{
+		var host = string.IsNullOrWhiteSpace(hostDisplayName) ? "The simulator host app" : hostDisplayName;
+		return anyWindows
+			? $"{host} is not showing this device. Use Show simulator window to open it in {HostObject(hostDisplayName)} and make this fallback available."
+			: $"{host} has no device windows open. Use Show simulator window to open this device in {HostObject(hostDisplayName)} and make this fallback available.";
+
+		static string HostObject(string? name) =>
+			string.IsNullOrWhiteSpace(name) ? "the simulator host app" : name;
 	}
 
 	private readonly record struct CaptureWindowResult(

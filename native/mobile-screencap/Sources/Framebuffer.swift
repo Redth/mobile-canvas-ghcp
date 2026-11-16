@@ -31,6 +31,8 @@ enum FramebufferCommand {
 		let signals = installSignalHandlers(stopper)
 		_ = signals
 
+		// `ready` goes out before anything is written to stdout. A host that only starts reading
+		// stdout after `ready` would otherwise fill the pipe with the first keyframe and wedge here.
 		Events.emit([
 			"type": "ready",
 			"source": "framebuffer",
@@ -40,8 +42,10 @@ enum FramebufferCommand {
 			"sourceWidth": ready.sourceWidth,
 			"sourceHeight": ready.sourceHeight,
 			"fps": fps,
+			"idleFps": FramePacer.idleFramesPerSecond,
 			"bitrate": bitrate,
 		])
+		capture.beginStreaming()
 
 		while !stopper.stopped {
 			try? await Task.sleep(nanoseconds: 2_000_000_000)
@@ -56,6 +60,11 @@ enum FramebufferCommand {
 				"source": "framebuffer",
 				"received": stats.receivedFrames,
 				"encoded": stats.encodedFrames,
+				"changed": stats.changedFrames,
+				"polled": stats.polledFrames,
+				"idle": stats.idleFrames,
+				"throttled": stats.throttledTicks,
+				"backpressure": stats.backpressureFrames,
 				"dropped": stats.droppedFrames,
 				"bytes": stats.bytesWritten,
 				"surfaceChanges": stats.surfaceChanges,
@@ -84,14 +93,38 @@ private struct FramebufferReady {
 }
 
 private struct FramebufferStats {
-	let receivedFrames: UInt64
-	let encodedFrames: Int
-	let droppedFrames: UInt64
-	let bytesWritten: UInt64
-	let surfaceChanges: UInt64
+	var receivedFrames: UInt64 = 0
+	var encodedFrames = 0
+	/// Encoded because the surface changed (seed or callback).
+	var changedFrames: UInt64 = 0
+	/// Subset of `changedFrames` found only by the seed poll, with no SimulatorKit callback.
+	var polledFrames: UInt64 = 0
+	/// Unchanged frames re-encoded for the idle floor.
+	var idleFrames: UInt64 = 0
+	/// Ticks that saw a change inside the frame interval; a later tick encodes it.
+	var throttledTicks: UInt64 = 0
+	/// Frames skipped because the encoder's output was not being drained.
+	var backpressureFrames: UInt64 = 0
+	/// Frames lost to a failed pixel transfer.
+	var droppedFrames: UInt64 = 0
+	var bytesWritten: UInt64 = 0
+	var surfaceChanges: UInt64 = 0
 }
 
+/// Streams the simulator's IOSurface through the shared H.264 encoder.
+///
+/// All capture state is confined to `queue`. Nothing that can block on stdout runs there or under
+/// a lock: encoded frames are written on `outputQueue`, and the capture queue skips frames while
+/// too many are unwritten rather than waiting on a reader that has stopped draining. `statsLock`
+/// only guards counters and the stop flag, so `start`, `stats` and `stop` can never wedge behind a
+/// stalled pipe.
 private final class FramebufferCapture: @unchecked Sendable {
+	/// How often the descriptor is asked for its live surface, in case a replacement (rotation,
+	/// display change) arrives without a surface-change callback.
+	private static let surfaceRevalidationInterval = 0.25
+	private static let maximumPendingFrames = 2
+	private static let stopTimeout = DispatchTimeInterval.seconds(1)
+
 	private let udid: String
 	private let developerDirectory: String
 	private let fps: Int
@@ -99,21 +132,37 @@ private final class FramebufferCapture: @unchecked Sendable {
 	private let maxHeight: Int?
 	private let sink: ByteSink
 	private let onFailure: @Sendable (String, Bool) -> Void
-	private let lock = NSLock()
-	private let frameQueue = DispatchQueue(
+	private let queue = DispatchQueue(
 		label: "dev.mobilecanvas.framebuffer.frames",
 		qos: .userInteractive)
+	/// Shared by every encoder this capture creates, so a replacement encoder's parameter sets can
+	/// never overtake the previous encoder's last frames.
+	private let outputQueue = DispatchQueue(
+		label: "dev.mobilecanvas.framebuffer.output",
+		qos: .userInteractive)
+	private let clockOrigin = ProcessInfo.processInfo.systemUptime
 
+	private let statsLock = NSLock()
+	private var counters = FramebufferStats()
+	private var didStop = false
+	private var callbackSeen = false
+	private var callbackTickScheduled = false
+	private var activeEncoder: H264Encoder?
+	private var retiredEncodedFrames = 0
+
+	// Confined to `queue`.
 	private var framebuffer: MCSimulatorFramebuffer?
 	private var currentSurface: IOSurface?
+	private var currentSurfaceID: IOSurfaceID = 0
 	private var sourceBuffer: CVPixelBuffer?
 	private var transformer: PixelBufferTransformer?
 	private var encoder: H264Encoder?
-	private var lastEncodedAt = -Double.infinity
-	private var didStop = false
-	private var receivedFrames: UInt64 = 0
-	private var droppedFrames: UInt64 = 0
-	private var surfaceChanges: UInt64 = 0
+	private var pacer: FramePacer
+	private var timer: DispatchSourceTimer?
+	private var lastSurfaceCheckAt = -Double.infinity
+	private var catchUpTickScheduled = false
+	/// Set by `beginStreaming`; callbacks registered during `start` must not encode before `ready`.
+	private var streaming = false
 
 	init(
 		udid: String,
@@ -131,119 +180,246 @@ private final class FramebufferCapture: @unchecked Sendable {
 		self.maxHeight = maxHeight
 		self.sink = sink
 		self.onFailure = onFailure
+		pacer = FramePacer(framesPerSecond: fps)
 	}
 
+	/// Attaches to the display and prepares the encoder without writing any output.
 	func start() throws -> FramebufferReady {
 		guard MCSimulatorFramebuffer.isSupported else {
 			throw HelperError("CoreSimulator framebuffer APIs are unavailable")
 		}
+		return try queue.sync {
+			let framebuffer = try MCSimulatorFramebuffer(
+				udid: udid,
+				developerDirectory: developerDirectory)
+			self.framebuffer = framebuffer
 
-		let framebuffer = try MCSimulatorFramebuffer(
-			udid: udid,
-			developerDirectory: developerDirectory)
-		self.framebuffer = framebuffer
+			_ = try framebuffer.start(
+				surfaceChangedHandler: { [weak self] surface in
+					self?.surfaceChanged(surface)
+				},
+				frameRenderedHandler: { [weak self] in
+					self?.frameRendered()
+				})
 
-		_ = try framebuffer.start(
-			surfaceChangedHandler: { [weak self] surface in
-				self?.surfaceChanged(surface)
-			},
-			frameRenderedHandler: { [weak self] in
-				self?.frameRendered()
-			})
+			guard let surface = (framebuffer.liveSurface() ?? framebuffer.currentSurface) as? IOSurface else {
+				framebuffer.stop()
+				self.framebuffer = nil
+				throw HelperError("the simulator main display has no IOSurface")
+			}
 
-		guard let surface = framebuffer.currentSurface as? IOSurface else {
-			framebuffer.stop()
-			throw HelperError("the simulator main display has no IOSurface")
+			do {
+				return try configure(surface)
+			} catch {
+				framebuffer.stop()
+				self.framebuffer = nil
+				throw error
+			}
 		}
+	}
 
-		lock.lock()
-		do {
-			let ready = try configure(surface)
-			encodeCurrentFrame(force: true)
-			lock.unlock()
-			return ready
-		} catch {
-			lock.unlock()
-			framebuffer.stop()
-			throw error
+	/// Encodes the current picture immediately, so a static screen still produces a first frame,
+	/// then starts the seed poll at the requested frame rate.
+	func beginStreaming() {
+		queue.async { [self] in
+			guard !isStopped else { return }
+			streaming = true
+			lastSurfaceCheckAt = now()
+			encodeCurrent(now: now(), forceKeyFrame: true, kind: .change)
+
+			let interval = 1.0 / Double(fps)
+			let timer = DispatchSource.makeTimerSource(flags: .strict, queue: queue)
+			timer.schedule(
+				deadline: .now() + interval,
+				repeating: interval,
+				leeway: .microseconds(500))
+			timer.setEventHandler { [weak self] in
+				self?.tick()
+			}
+			self.timer = timer
+			timer.resume()
 		}
 	}
 
 	func stop() {
-		lock.lock()
+		statsLock.lock()
 		if didStop {
-			lock.unlock()
+			statsLock.unlock()
 			return
 		}
 		didStop = true
-		let encoder = self.encoder
-		self.encoder = nil
-		transformer = nil
-		sourceBuffer = nil
-		currentSurface = nil
-		let framebuffer = self.framebuffer
-		self.framebuffer = nil
-		lock.unlock()
+		statsLock.unlock()
 
-		framebuffer?.stop()
-		encoder?.finish()
+		// Teardown runs on the capture queue; bound the wait so a wedged private API call cannot
+		// hang the exit.
+		let finished = DispatchSemaphore(value: 0)
+		queue.async { [self] in
+			timer?.cancel()
+			timer = nil
+			framebuffer?.stop()
+			framebuffer = nil
+			encoder?.finish()
+			encoder = nil
+			transformer = nil
+			sourceBuffer = nil
+			currentSurface = nil
+			finished.signal()
+		}
+		_ = finished.wait(timeout: .now() + Self.stopTimeout)
 	}
 
 	var stats: FramebufferStats {
-		lock.lock()
-		defer { lock.unlock() }
-		return FramebufferStats(
-			receivedFrames: receivedFrames,
-			encodedFrames: encoder?.encodedFrames ?? 0,
-			droppedFrames: droppedFrames,
-			bytesWritten: sink.bytesWritten,
-			surfaceChanges: surfaceChanges)
+		statsLock.lock()
+		defer { statsLock.unlock() }
+		var snapshot = counters
+		snapshot.encodedFrames = retiredEncodedFrames + (activeEncoder?.encodedFrames ?? 0)
+		snapshot.bytesWritten = sink.bytesWritten
+		return snapshot
+	}
+
+	private var isStopped: Bool {
+		statsLock.lock()
+		defer { statsLock.unlock() }
+		return didStop
+	}
+
+	private func now() -> Double {
+		ProcessInfo.processInfo.systemUptime - clockOrigin
 	}
 
 	private func surfaceChanged(_ value: Any?) {
 		guard let surface = value as? IOSurface else { return }
-		frameQueue.async { [weak self] in
-			self?.processSurfaceChanged(surface)
-		}
-	}
-
-	private func processSurfaceChanged(_ surface: IOSurface) {
-		lock.lock()
-		guard !didStop else {
-			lock.unlock()
-			return
-		}
-		surfaceChanges += 1
-		do {
-			_ = try configure(surface)
-			encodeCurrentFrame(force: true)
-			lock.unlock()
-		} catch {
-			lock.unlock()
-			onFailure("framebuffer surface update failed: \(error.localizedDescription)", true)
+		queue.async { [weak self] in
+			self?.replaceSurface(surface)
 		}
 	}
 
 	private func frameRendered() {
-		frameQueue.async { [weak self] in
-			self?.processFrameRendered()
+		statsLock.lock()
+		counters.receivedFrames += 1
+		callbackSeen = true
+		let schedule = !callbackTickScheduled
+		callbackTickScheduled = true
+		statsLock.unlock()
+
+		// Callbacks can arrive in bursts; one queued tick absorbs all of them.
+		if schedule {
+			queue.async { [weak self] in
+				self?.tick()
+			}
 		}
 	}
 
-	private func processFrameRendered() {
-		lock.lock()
-		guard !didStop else {
-			lock.unlock()
+	private func tick() {
+		statsLock.lock()
+		let stopped = didStop
+		let sawCallback = callbackSeen
+		callbackSeen = false
+		callbackTickScheduled = false
+		statsLock.unlock()
+		guard !stopped, streaming, let framebuffer else { return }
+
+		if sawCallback {
+			pacer.noteCallback()
+		}
+
+		let time = now()
+		if time - lastSurfaceCheckAt >= Self.surfaceRevalidationInterval {
+			lastSurfaceCheckAt = time
+			if let live = framebuffer.liveSurface() as? IOSurface,
+				IOSurfaceGetID(unsafeBitCast(live, to: IOSurfaceRef.self)) != currentSurfaceID
+			{
+				replaceSurface(live)
+				return
+			}
+		}
+
+		guard let currentSurface else { return }
+		let seed = IOSurfaceGetSeed(unsafeBitCast(currentSurface, to: IOSurfaceRef.self))
+		switch pacer.decide(now: time, seed: seed) {
+		case .encodeChange:
+			encodeCurrent(now: time, seed: seed, kind: pacer.hasPendingCallback ? .change : .polledChange)
+		case .encodeIdle:
+			encodeCurrent(now: time, seed: seed, kind: .idle)
+		case .throttled:
+			statsLock.lock()
+			counters.throttledTicks += 1
+			statsLock.unlock()
+			scheduleCatchUpTick(after: pacer.timeUntilNextFrame(now: time))
+		case .unchanged:
+			break
+		}
+
+		if sink.closed {
+			fail("client disconnected", failed: false)
+		}
+	}
+
+	/// A change that arrives just inside the frame interval would otherwise wait for the next timer
+	/// tick, which can be almost a whole interval away and costs a frame under animation.
+	private func scheduleCatchUpTick(after delay: Double) {
+		guard !catchUpTickScheduled else { return }
+		catchUpTickScheduled = true
+		queue.asyncAfter(deadline: .now() + max(0, delay)) { [weak self] in
+			guard let self else { return }
+			catchUpTickScheduled = false
+			tick()
+		}
+	}
+
+	private func replaceSurface(_ surface: IOSurface) {
+		guard !isStopped else { return }
+		statsLock.lock()
+		counters.surfaceChanges += 1
+		statsLock.unlock()
+		do {
+			_ = try configure(surface)
+			pacer.invalidate()
+			if streaming {
+				encodeCurrent(now: now(), forceKeyFrame: true, kind: .change)
+			}
+		} catch {
+			fail("framebuffer surface update failed: \(error)", failed: true)
+		}
+	}
+
+	private enum FrameKind {
+		case change
+		case polledChange
+		case idle
+	}
+
+	private func encodeCurrent(now time: Double, seed: UInt32? = nil, forceKeyFrame: Bool = false, kind: FrameKind) {
+		guard let currentSurface, let sourceBuffer, let transformer, let encoder else { return }
+		if encoder.pendingFrames >= Self.maximumPendingFrames {
+			// Leave the pacer untouched so the next tick retries once the reader catches up.
+			statsLock.lock()
+			counters.backpressureFrames += 1
+			statsLock.unlock()
 			return
 		}
-		receivedFrames += 1
-		encodeCurrentFrame(force: false)
-		let disconnected = sink.closed
-		lock.unlock()
 
-		if disconnected {
-			onFailure("client disconnected", false)
+		let encodedSeed = seed ?? IOSurfaceGetSeed(unsafeBitCast(currentSurface, to: IOSurfaceRef.self))
+		guard let outputBuffer = transformer.transform(sourceBuffer) else {
+			statsLock.lock()
+			counters.droppedFrames += 1
+			statsLock.unlock()
+			return
 		}
+		pacer.didEncode(now: time, seed: encodedSeed)
+		encoder.encode(outputBuffer, forceKeyFrame: forceKeyFrame, presentationTime: time)
+
+		statsLock.lock()
+		switch kind {
+		case .change:
+			counters.changedFrames += 1
+		case .polledChange:
+			counters.changedFrames += 1
+			counters.polledFrames += 1
+		case .idle:
+			counters.idleFrames += 1
+		}
+		statsLock.unlock()
 	}
 
 	private func configure(_ surface: IOSurface) throws -> FramebufferReady {
@@ -272,21 +448,30 @@ private final class FramebufferCapture: @unchecked Sendable {
 			transformer?.outputHeight != dimensions.height
 
 		currentSurface = surface
+		currentSurfaceID = IOSurfaceGetID(surfaceReference)
 		sourceBuffer = pixelBuffer
 		if dimensionsChanged {
+			// Finishing hands the old encoder's remaining frames to `outputQueue` ahead of the new
+			// parameter sets without waiting for them to be written.
 			encoder?.finish()
 			transformer = try PixelBufferTransformer(
 				sourceWidth: sourceWidth,
 				sourceHeight: sourceHeight,
 				outputWidth: dimensions.width,
 				outputHeight: dimensions.height)
-			encoder = try H264Encoder(
+			let replacement = try H264Encoder(
 				options: EncoderOptions(
 					width: Int32(dimensions.width),
 					height: Int32(dimensions.height),
 					framesPerSecond: fps,
 					averageBitrate: bitrate),
-				sink: sink)
+				sink: sink,
+				outputQueue: outputQueue)
+			statsLock.lock()
+			retiredEncodedFrames += activeEncoder?.encodedFrames ?? 0
+			activeEncoder = replacement
+			statsLock.unlock()
+			encoder = replacement
 		}
 
 		return FramebufferReady(
@@ -296,25 +481,12 @@ private final class FramebufferCapture: @unchecked Sendable {
 			height: dimensions.height)
 	}
 
-	private func encodeCurrentFrame(force: Bool) {
-		guard let sourceBuffer, let transformer, let encoder else {
-			droppedFrames += 1
-			return
+	private func fail(_ reason: String, failed: Bool) {
+		// The stopper tears down on this queue, so report from elsewhere.
+		let onFailure = self.onFailure
+		DispatchQueue.global(qos: .userInitiated).async {
+			onFailure(reason, failed)
 		}
-
-		let now = ProcessInfo.processInfo.systemUptime
-		let minimumFrameInterval = 1.0 / Double(fps)
-		if !force, now - lastEncodedAt < minimumFrameInterval * 0.9 {
-			droppedFrames += 1
-			return
-		}
-		lastEncodedAt = now
-
-		guard let outputBuffer = transformer.transform(sourceBuffer) else {
-			droppedFrames += 1
-			return
-		}
-		encoder.encode(outputBuffer)
 	}
 
 	private func outputDimensions(sourceWidth: Int, sourceHeight: Int) -> (width: Int, height: Int) {
@@ -329,10 +501,6 @@ private final class FramebufferCapture: @unchecked Sendable {
 
 	private func evenDimension(_ value: Double) -> Int {
 		max(2, Int(value.rounded()) & ~1)
-	}
-
-	deinit {
-		stop()
 	}
 }
 
