@@ -16,6 +16,16 @@ const { createAilohaMcpDispatcher } = await import(productModule("lib/ailoha/mcp
 const root = fileURLToPath(new URL("../..", import.meta.url));
 const pin = { version: "synthetic-only", sourceSha: "a".repeat(40) };
 const payload = { error: "token=private-diagnostic /private/owner", type: "ApplicationOperationError", retryable: false };
+const cliFixtureScript = `
+const fs = require("node:fs");
+const fixture = JSON.parse(fs.readFileSync(process.argv[2], "utf8"));
+process.stdout.write(fixture.stdout);
+process.stderr.write(fixture.stderr, () => {
+  if (fixture.ready) fs.writeFileSync(fixture.ready, "ready");
+});
+process.exitCode = fixture.exit;
+if (fixture.ready) setInterval(() => {}, 1000);
+`;
 
 async function fixture(t) {
   mkdirSync(join(root, ".build"), { recursive: true });
@@ -44,11 +54,16 @@ async function fixture(t) {
   const args = ["app", "query", "--context", snapshot.contextProjection.contextRef,
     "--context-epoch", snapshot.identity.scopeEpoch, "--context-revision", snapshot.identity.revision,
     "--route", "require-agent", "--json"];
-  const cli = (stderr, exit = 1, stdout = "", script) => createVerifiedAilohaCli({ pin, sdk: {
+  // Keep fixture data out of executable source and below Linux's per-argument size limit.
+  let scripts = 0;
+  const cli = (stderr, exit = 1, stdout = "", ready) => createVerifiedAilohaCli({ pin, sdk: {
     async getVerifiedCliLaunch() {
       launches += 1;
-      return { ...pin, file: process.execPath, args: ["-e", script ??
-        `process.stdout.write(${JSON.stringify(stdout)});process.stderr.write(${JSON.stringify(stderr)});process.exitCode=${exit};`, "--"] };
+      const file = join(scratch, `fake-cli-${scripts += 1}.cjs`);
+      const data = `${file}.json`;
+      writeFileSync(file, cliFixtureScript);
+      writeFileSync(data, JSON.stringify({ stderr, exit, stdout, ready }));
+      return { ...pin, file: process.execPath, args: [file, data] };
     },
   } });
   return { ...model, view, snapshot, metadata, respond, sdk, args, cli, scratch,
@@ -65,14 +80,15 @@ function checkReceipt(value, expected, code = "transport-failed") {
   assert.doesNotMatch(JSON.stringify(value), /private-diagnostic|\/private\/owner|capturedAt|observed|provenance|connectionRef|endpointScope/);
 }
 
-function noticeObservedByParent(t, script, expected) {
+function noticeObservedByParent(t, expected) {
   const spawn = ChildProcess.prototype.spawn;
   let timer;
   const observed = new Promise((resolve, reject) => {
     timer = setTimeout(() => reject(new Error("The owned parent did not receive the complete synthetic notice.")), 5000);
     t.mock.method(ChildProcess.prototype, "spawn", function (options) {
       const result = spawn.call(this, options);
-      if (options.args.includes(script)) {
+      if (options.args.some((argument) => argument.endsWith(".cjs") && existsSync(argument)
+        && readFileSync(argument, "utf8") === cliFixtureScript)) {
         let received = "";
         this.stderr.on("data", (chunk) => {
           received += chunk;
@@ -334,10 +350,9 @@ test("CLI cancellation after a complete notice retains original admission eviden
   const f = await fixture(t);
   const ready = join(f.scratch, "ready");
   const notice = JSON.stringify({ _meta: f.metadata });
-  const script = `require("node:fs");process.stderr.write(${JSON.stringify(`${notice}\n`)},()=>require("node:fs").writeFileSync(${JSON.stringify(ready)},"ready"));setInterval(()=>{},1000);`;
-  const observed = noticeObservedByParent(t, script, `${notice}\n`);
+  const observed = noticeObservedByParent(t, `${notice}\n`);
   const caller = new AbortController();
-  const pending = f.cli("", 1, "", script)(f.args, { ...f.options(), signal: caller.signal });
+  const pending = f.cli(`${notice}\n`, 1, "", ready)(f.args, { ...f.options(), signal: caller.signal });
   const rejected = assert.rejects(pending, (error) => {
     checkReceipt(mobileErrorResult(error), f.metadata, "ailoha_cli_cancelled");
     return true;
@@ -359,11 +374,10 @@ test("cancelled CLI rejects two conflicting complete notices instead of discardi
   }));
   const second = nativeInvocationMetadata(f.snapshot, f.view.scope, exchangeOutcome({ requestId: "b".repeat(32) }));
   const notices = `${JSON.stringify({ _meta: first })}\n${JSON.stringify({ _meta: second })}\n`;
-  const script = `process.stderr.write(${JSON.stringify(notices)},()=>require("node:fs").writeFileSync(${JSON.stringify(ready)},"ready"));setInterval(()=>{},1000);`;
-  const observed = noticeObservedByParent(t, script, notices);
+  const observed = noticeObservedByParent(t, notices);
   const caller = new AbortController();
   const before = f.launches();
-  const pending = f.cli("", 1, "", script)(f.args, { ...f.options(), signal: caller.signal });
+  const pending = f.cli(notices, 1, "", ready)(f.args, { ...f.options(), signal: caller.signal });
   const rejected = assert.rejects(pending, (error) => {
     assert.equal(error.code, "invocation_metadata_invalid");
     assert.equal(Object.hasOwn(mobileErrorResult(error), "_meta"), false);
