@@ -15,7 +15,7 @@ function rule(selector) {
   return match[1];
 }
 
-test("device status surface has semantic copy, iconography, and an in-frame action", () => {
+test("device status surface has semantic copy, iconography, and stays on the device screen", () => {
   assert.match(
     html,
     /id="stream-overlay"[^>]+role="status"[^>]+aria-live="polite"[^>]+aria-atomic="true"/,
@@ -28,6 +28,14 @@ test("device status surface has semantic copy, iconography, and an in-frame acti
   assert.match(html, /id="stream-overlay-action"[^>]+type="button"/);
   assert.match(html, /<symbol id="icon-alert"/);
   assert.match(html, /<symbol id="icon-link-off"/);
+  const frame = html.match(/<div id="device-frame"[\s\S]*?id="side-button"/);
+  assert.ok(frame && frame[0].includes('id="stream-overlay"'), "The status overlay must live inside the device frame");
+  assert.match(rule(".device-frame"), /position:\s*relative/);
+  // Covers the screen inside the frame's 6px bezel and scrolls rather than spilling past the frame.
+  assert.match(rule(".stream-overlay"), /inset:\s*6px/);
+  assert.match(rule(".stream-overlay"), /overflow:\s*auto/);
+  assert.match(rule(".stream-overlay"), /border-radius:\s*var\(--screen-radius\)/);
+  assert.match(rule(".stream-status-card"), /overflow-wrap:\s*break-word/);
 });
 
 test("inactive device screens use a compact host-themed status surface", () => {

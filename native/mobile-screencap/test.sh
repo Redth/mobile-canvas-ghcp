@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Builds and runs the native mobile-screencap HID and accessibility tests.
+# Builds and runs the native mobile-screencap HID, accessibility and framebuffer pacing tests.
 #
 # The tests link the HID and accessibility sources plus test-only fakes into their own executable,
 # so nothing under Tests/ is ever compiled into the shipped `mobile-screencap`. They cover the
@@ -47,9 +47,11 @@ mkdir -p "$BUILD_DIR"
 # rebuild into an existing build directory can trip.
 rm -f "$BUILD_DIR"/*.o
 
-# Only the HID sources are under test; capture and encoding keep their own commands and contracts.
+# The HID sources and the framebuffer pacing policy are under test; capture and encoding keep their
+# own commands and contracts.
 SWIFT_SOURCES=(
 	"$SCRIPT_DIR/Sources/DeveloperDirectory.swift"
+	"$SCRIPT_DIR/Sources/FramePacing.swift"
 	"$SCRIPT_DIR/Sources/HidEvents.swift"
 	"$SCRIPT_DIR/Sources/HidCommand.swift"
 	"$SCRIPT_DIR/Sources/HidProtocol.swift"
@@ -58,6 +60,7 @@ SWIFT_SOURCES=(
 	"$SCRIPT_DIR/Tests/HidCommandTestSupport.swift"
 	"$SCRIPT_DIR/Tests/AccessibilityTests.swift"
 	"$SCRIPT_DIR/Tests/HidTests.swift"
+	"$SCRIPT_DIR/Tests/FramePacingTests.swift"
 )
 OBJC_SOURCES=(
 	"$SCRIPT_DIR/Sources/SimulatorDeviceBridge.m"

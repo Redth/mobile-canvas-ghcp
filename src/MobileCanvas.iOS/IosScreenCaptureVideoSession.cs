@@ -1,6 +1,7 @@
 using System.Diagnostics;
 using System.Runtime.CompilerServices;
 using System.Text.Json;
+using System.Threading.Channels;
 using MobileCanvas.Contracts;
 using MobileCanvas.Core;
 
@@ -16,14 +17,26 @@ namespace MobileCanvas.iOS;
 /// </remarks>
 internal sealed class IosScreenCaptureVideoSession : ILiveVideoSession
 {
+	/// <summary>
+	/// Chunks buffered between the stdout pump and the consumer. Once full, the pump stops reading
+	/// and the helper skips frames instead of the host accumulating unbounded video.
+	/// </summary>
+	internal const int OutputChunkCapacity = 64;
+
 	private readonly Process _process;
+	private readonly OutputPump _output;
 	private readonly Action _release;
 	private readonly CancellationTokenSource _stderrPump = new();
 	private bool _disposed;
 
-	private IosScreenCaptureVideoSession(Process process, StreamDescriptor descriptor, Action release)
+	private IosScreenCaptureVideoSession(
+		Process process,
+		OutputPump output,
+		StreamDescriptor descriptor,
+		Action release)
 	{
 		_process = process;
+		_output = output;
 		Descriptor = descriptor;
 		_release = release;
 	}
@@ -80,8 +93,34 @@ internal sealed class IosScreenCaptureVideoSession : ILiveVideoSession
 		// CoreSimulator keeps the IOSurface in native portrait geometry even when the guest is
 		// landscape. Use the panel's long side so scaling stays consistent after the client rotates
 		// that portrait-shaped source into the reported display orientation.
-		AddScaleOption(startInfo, options.Scale, Math.Max(display.PixelWidth, display.PixelHeight));
+		var sourceHeight = Math.Max(display.PixelWidth, display.PixelHeight);
+		if (ResolveFramebufferMaxHeight(options.Scale, sourceHeight) is { } maxHeight)
+		{
+			startInfo.ArgumentList.Add("--max-height");
+			startInfo.ArgumentList.Add(maxHeight.ToString());
+		}
 		return startInfo;
+	}
+
+	/// <summary>
+	/// Long-side ceiling for framebuffer video when the caller's scale does not ask for less.
+	/// </summary>
+	/// <remarks>
+	/// Callers such as the Ailoha adapter leave <see cref="StreamOptions.Scale"/> at 1, which encoded
+	/// a 1320x2868 panel at full size: roughly 450 KB per keyframe at a one-second keyframe cadence,
+	/// even on a static screen. 1920 still exceeds what a side-panel canvas renders.
+	/// </remarks>
+	internal const int DefaultFramebufferMaxHeight = 1920;
+
+	internal static int? ResolveFramebufferMaxHeight(double scale, int sourceHeight)
+	{
+		if (sourceHeight <= 0)
+			return null;
+		var requested = scale is > 0 and < 0.999
+			? Math.Max(64, (int)Math.Round(sourceHeight * scale))
+			: sourceHeight;
+		var capped = Math.Min(requested, DefaultFramebufferMaxHeight);
+		return capped < sourceHeight ? capped : null;
 	}
 
 	internal static ProcessStartInfo CreateScreenCaptureStartInfo(
@@ -130,7 +169,7 @@ internal sealed class IosScreenCaptureVideoSession : ILiveVideoSession
 		}
 	}
 
-	private static async Task<IosScreenCaptureVideoSession> StartProcessAsync(
+	internal static async Task<IosScreenCaptureVideoSession> StartProcessAsync(
 		ProcessStartInfo startInfo,
 		StreamOptions options,
 		DisplayGeometry display,
@@ -148,12 +187,17 @@ internal sealed class IosScreenCaptureVideoSession : ILiveVideoSession
 			throw new InvalidOperationException($"Could not start {ScreenCaptureHelper.ExecutableName}.");
 		}
 
+		// Drain stdout from the moment the helper starts. It may write video before `ready` reaches
+		// stderr, and an unread pipe fills at 64 KB and blocks the helper before it can report ready.
+		// The early bytes, including the first keyframe, stay queued for ReadAsync.
+		var output = OutputPump.Start(process.StandardOutput.BaseStream);
 		try
 		{
 			var ready = await WaitForReadyAsync(process, startupTimeout, cancellationToken)
 				.ConfigureAwait(false);
 			var session = new IosScreenCaptureVideoSession(
 				process,
+				output,
 				new StreamDescriptor
 				{
 					FramesPerSecond = ready.FramesPerSecond,
@@ -169,6 +213,7 @@ internal sealed class IosScreenCaptureVideoSession : ILiveVideoSession
 		catch
 		{
 			ScreenCaptureHelper.TryKill(process);
+			await output.DisposeAsync().ConfigureAwait(false);
 			process.Dispose();
 			release();
 			throw;
@@ -284,25 +329,11 @@ internal sealed class IosScreenCaptureVideoSession : ILiveVideoSession
 		[EnumeratorCancellation] CancellationToken cancellationToken = default)
 	{
 		ObjectDisposedException.ThrowIf(_disposed, this);
-		var stream = _process.StandardOutput.BaseStream;
-		var buffer = new byte[64 * 1024];
-
-		while (!cancellationToken.IsCancellationRequested)
+		var reader = _output.Reader;
+		while (await reader.WaitToReadAsync(cancellationToken).ConfigureAwait(false))
 		{
-			int read;
-			try
-			{
-				read = await stream.ReadAsync(buffer, cancellationToken).ConfigureAwait(false);
-			}
-			catch (IOException)
-			{
-				yield break;
-			}
-
-			if (read == 0)
-				yield break;
-
-			yield return buffer.AsMemory(0, read).ToArray();
+			while (reader.TryRead(out var chunk))
+				yield return chunk;
 		}
 	}
 
@@ -325,6 +356,7 @@ internal sealed class IosScreenCaptureVideoSession : ILiveVideoSession
 		}
 		finally
 		{
+			await _output.DisposeAsync().ConfigureAwait(false);
 			_process.Dispose();
 			_stderrPump.Dispose();
 			_release();
@@ -332,4 +364,95 @@ internal sealed class IosScreenCaptureVideoSession : ILiveVideoSession
 	}
 
 	private readonly record struct ReadyEvent(int FramesPerSecond, int Width, int Height);
+
+	/// <summary>
+	/// Copies the helper's stdout into a bounded channel for the lifetime of the process.
+	/// </summary>
+	private sealed class OutputPump : IAsyncDisposable
+	{
+		private readonly Channel<ReadOnlyMemory<byte>> _channel;
+		private readonly CancellationTokenSource _stop = new();
+		private Task _pump = Task.CompletedTask;
+
+		private OutputPump()
+		{
+			_channel = Channel.CreateBounded<ReadOnlyMemory<byte>>(
+				new BoundedChannelOptions(OutputChunkCapacity)
+				{
+					SingleReader = true,
+					SingleWriter = true,
+					FullMode = BoundedChannelFullMode.Wait,
+				});
+		}
+
+		public ChannelReader<ReadOnlyMemory<byte>> Reader => _channel.Reader;
+
+		public static OutputPump Start(Stream stream)
+		{
+			var pump = new OutputPump();
+			pump._pump = Task.Run(() => pump.PumpAsync(stream));
+			return pump;
+		}
+
+		private async Task PumpAsync(Stream stream)
+		{
+			var buffer = new byte[64 * 1024];
+			Exception? failure = null;
+			try
+			{
+				while (true)
+				{
+					var read = await stream.ReadAsync(buffer, _stop.Token).ConfigureAwait(false);
+					if (read == 0)
+						break;
+					await _channel.Writer.WriteAsync(buffer.AsMemory(0, read).ToArray(), _stop.Token)
+						.ConfigureAwait(false);
+				}
+			}
+			catch (OperationCanceledException)
+			{
+				// Disposed.
+			}
+			catch (IOException)
+			{
+				// The helper exited and closed the pipe.
+			}
+			catch (ObjectDisposedException)
+			{
+				// The process was disposed underneath the read.
+			}
+			catch (Exception exception)
+			{
+				failure = exception;
+			}
+			finally
+			{
+				_channel.Writer.TryComplete(failure);
+			}
+		}
+
+		public async ValueTask DisposeAsync()
+		{
+			await _stop.CancelAsync().ConfigureAwait(false);
+			// Free a writer parked on a full channel, then wait for the pump to observe cancellation.
+			while (_channel.Reader.TryRead(out _))
+			{
+			}
+			try
+			{
+				// Pipe reads do not always observe cancellation; the caller has already killed the
+				// helper, so EOF normally ends the pump, and a wedged one is abandoned.
+				await _pump.WaitAsync(TimeSpan.FromSeconds(3)).ConfigureAwait(false);
+			}
+			catch (Exception)
+			{
+				// The pump reports its own failures through the channel.
+			}
+			_channel.Writer.TryComplete();
+			while (_channel.Reader.TryRead(out _))
+			{
+			}
+			_stop.Dispose();
+		}
+	}
 }

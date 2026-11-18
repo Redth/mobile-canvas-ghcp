@@ -119,6 +119,35 @@ public sealed class DeviceService(IEnumerable<IDeviceBackend> backends)
 	public void Detach(string sessionId, string instanceId) =>
 		_selections.TryRemove(SelectionKey(sessionId, instanceId), out _);
 
+	/// <summary>
+	/// Called when a canvas stops showing <paramref name="deviceId"/>. When no other open canvas
+	/// still shows it, the device's input helpers are released so they do not keep driving a simulator
+	/// nobody is watching. Release is best effort and never fails the close that triggered it.
+	/// </summary>
+	public async Task ReleaseUnviewedInputAsync(
+		CanvasContextKey closed,
+		string deviceId,
+		Func<CanvasContextKey, bool> isOpen)
+	{
+		var closedKey = SelectionKey(closed.SessionId, closed.InstanceId);
+		foreach (var (key, selected) in _selections)
+		{
+			if (key == closedKey || !string.Equals(selected, deviceId, StringComparison.Ordinal))
+				continue;
+			var separator = key.IndexOf('\n', StringComparison.Ordinal);
+			if (isOpen(new CanvasContextKey(key[..separator], key[(separator + 1)..])))
+				return;
+		}
+		try
+		{
+			await GetBackend(deviceId).ReleaseInputAsync(deviceId).ConfigureAwait(false);
+		}
+		catch (Exception exception) when (exception is not OutOfMemoryException)
+		{
+			// The helper is idle-released anyway; a failed early release must not fail a canvas close.
+		}
+	}
+
 	public void Detach(CanvasContextKey key) => Detach(key.SessionId, key.InstanceId);
 
 	public Task<DeviceTarget> BootAsync(string deviceId, CancellationToken cancellationToken = default) =>

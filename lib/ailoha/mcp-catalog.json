@@ -1,0 +1,4368 @@
+{
+  "schemaVersion": 1,
+  "source": "Mobile Canvas metadata-only tools/list; no device operations invoked.",
+  "tools": [
+    {
+      "name": "mobile_device_app_install",
+      "title": "Install app",
+      "description": "Install an app from a host path: a .app bundle on iOS, an .apk on Android. Use this to put a freshly built app on the device without leaving the session.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "path": {
+            "description": "Host path to a .app bundle (iOS) or .apk file (Android).",
+            "type": "string"
+          },
+          "deviceId": {
+            "description": "Provider-qualified device ID.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "path",
+          "deviceId"
+        ]
+      },
+      "annotations": {
+        "title": "Install app",
+        "destructiveHint": false,
+        "openWorldHint": false
+      },
+      "execution": {
+        "taskSupport": "optional"
+      }
+    },
+    {
+      "name": "mobile_device_app_launch",
+      "title": "Launch app",
+      "description": "Launch an app by bundle ID (iOS) or package name (Android). Prefer this over tapping a home screen icon: it does not depend on where the icon sits or whether it is on the first page.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "deviceId": {
+            "description": "Provider-qualified device ID.",
+            "type": "string"
+          },
+          "bundleId": {
+            "description": "Bundle ID on iOS, package name on Android.",
+            "type": "string"
+          },
+          "relaunch": {
+            "description": "Stop the app first, so this is a cold start rather than a bring-to-front.",
+            "type": "boolean",
+            "default": false
+          }
+        },
+        "required": [
+          "deviceId",
+          "bundleId"
+        ]
+      },
+      "annotations": {
+        "title": "Launch app",
+        "destructiveHint": false,
+        "openWorldHint": false
+      },
+      "execution": {
+        "taskSupport": "optional"
+      }
+    },
+    {
+      "name": "mobile_device_app_list",
+      "title": "List installed apps",
+      "description": "List the apps installed on a device, with bundle ID (iOS) or package name (Android), version, and whether each is running. Built-in system apps are excluded unless includeSystem is set, because they outnumber a developer's own apps many times over.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "deviceId": {
+            "description": "Provider-qualified device ID.",
+            "type": "string"
+          },
+          "text": {
+            "description": "Filter by bundle ID or display name; substring and case-insensitive.",
+            "type": [
+              "string",
+              "null"
+            ],
+            "default": null
+          },
+          "includeSystem": {
+            "description": "Include the platform's built-in apps.",
+            "type": "boolean",
+            "default": false
+          },
+          "limit": {
+            "description": "Maximum number of apps to return.",
+            "type": "integer",
+            "default": 100
+          }
+        },
+        "required": [
+          "deviceId"
+        ]
+      },
+      "annotations": {
+        "title": "List installed apps",
+        "destructiveHint": false,
+        "openWorldHint": false,
+        "readOnlyHint": true
+      },
+      "execution": {
+        "taskSupport": "optional"
+      }
+    },
+    {
+      "name": "mobile_device_app_op_list",
+      "title": "List Android app operations",
+      "description": "Report the app operations an Android app is subject to -- the permissions that never appear in a runtime prompt, such as SYSTEM_ALERT_WINDOW, WRITE_SETTINGS and REQUEST_INSTALL_PACKAGES. uidScoped marks a mode set for the whole uid, which overrides the package's own. Android only; on iOS use permission_list.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "deviceId": {
+            "description": "Provider-qualified device ID.",
+            "type": "string"
+          },
+          "bundleId": {
+            "description": "Android package name.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "deviceId",
+          "bundleId"
+        ]
+      },
+      "annotations": {
+        "title": "List Android app operations",
+        "destructiveHint": false,
+        "openWorldHint": false,
+        "readOnlyHint": true
+      },
+      "execution": {
+        "taskSupport": "optional"
+      }
+    },
+    {
+      "name": "mobile_device_app_op_set",
+      "title": "Change an Android app operation",
+      "description": "Put one app operation into a mode, to reach behaviour behind a special-access screen without walking Settings to get there. Modes: allow, deny, ignore (refused silently), default. The mode is read back, because appops accepts a change for an operation the app never declared and drops it while reporting success. Android only.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "deviceId": {
+            "description": "Provider-qualified device ID.",
+            "type": "string"
+          },
+          "bundleId": {
+            "description": "Android package name.",
+            "type": "string"
+          },
+          "operation": {
+            "description": "Operation name, such as SYSTEM_ALERT_WINDOW.",
+            "type": "string"
+          },
+          "mode": {
+            "description": "One of allow, deny, ignore, or default.",
+            "type": "string",
+            "default": "allow"
+          }
+        },
+        "required": [
+          "deviceId",
+          "bundleId",
+          "operation"
+        ]
+      },
+      "annotations": {
+        "title": "Change an Android app operation",
+        "openWorldHint": false
+      },
+      "execution": {
+        "taskSupport": "optional"
+      }
+    },
+    {
+      "name": "mobile_device_app_terminate",
+      "title": "Terminate app",
+      "description": "Stop a running app. Its data is left alone; only the process ends.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "deviceId": {
+            "description": "Provider-qualified device ID.",
+            "type": "string"
+          },
+          "bundleId": {
+            "description": "Bundle ID on iOS, package name on Android.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "deviceId",
+          "bundleId"
+        ]
+      },
+      "annotations": {
+        "title": "Terminate app",
+        "destructiveHint": false,
+        "openWorldHint": false
+      },
+      "execution": {
+        "taskSupport": "optional"
+      }
+    },
+    {
+      "name": "mobile_device_app_uninstall",
+      "title": "Uninstall app",
+      "description": "Uninstall an app and delete its data. This is destructive and cannot be undone, so it requires confirm to be set.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "deviceId": {
+            "description": "Provider-qualified device ID.",
+            "type": "string"
+          },
+          "bundleId": {
+            "description": "Bundle ID on iOS, package name on Android.",
+            "type": "string"
+          },
+          "confirm": {
+            "description": "Must be true; the app's data is deleted with it.",
+            "type": "boolean",
+            "default": false
+          }
+        },
+        "required": [
+          "deviceId",
+          "bundleId"
+        ]
+      },
+      "annotations": {
+        "title": "Uninstall app",
+        "destructiveHint": true,
+        "openWorldHint": false
+      },
+      "execution": {
+        "taskSupport": "optional"
+      }
+    },
+    {
+      "name": "mobile_device_battery_set",
+      "title": "Simulate a battery state",
+      "description": "Simulate a charge level or charging state, to reach low-power behaviour and charging-only code paths. On iOS this is a status bar override, so it is also how a screenshot gets a fixed battery indicator.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "deviceId": {
+            "description": "Provider-qualified device ID.",
+            "type": "string"
+          },
+          "level": {
+            "description": "Charge percentage, 0 to 100.",
+            "type": [
+              "integer",
+              "null"
+            ],
+            "default": null
+          },
+          "state": {
+            "description": "One of charging, discharging, or full.",
+            "type": [
+              "string",
+              "null"
+            ],
+            "default": null
+          }
+        },
+        "required": [
+          "deviceId"
+        ]
+      },
+      "annotations": {
+        "title": "Simulate a battery state",
+        "openWorldHint": false
+      },
+      "execution": {
+        "taskSupport": "optional"
+      }
+    },
+    {
+      "name": "mobile_device_biometric",
+      "title": "Present a biometric scan",
+      "description": "Present a fingerprint or face scan that the device either accepts or rejects, to drive an unlock prompt without any hardware. A rejection is the path worth testing, because it is the one apps most often leave unhandled. On Android the emulator confirms it took the event. On iOS it cannot: the scan is posted to a notification bus that reports nothing back, so 'confirmed' comes back false and the result has to be read from the app itself. The device must already have a biometric enrolled, which is a device setting rather than something this can turn on.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "deviceId": {
+            "description": "Provider-qualified device ID.",
+            "type": "string"
+          },
+          "action": {
+            "description": "Either match to accept the scan, or nomatch to reject it.",
+            "type": "string"
+          },
+          "fingerId": {
+            "description": "Which enrolled finger to present, on Android. Ignored on iOS.",
+            "type": [
+              "integer",
+              "null"
+            ],
+            "default": null
+          }
+        },
+        "required": [
+          "deviceId",
+          "action"
+        ]
+      },
+      "annotations": {
+        "title": "Present a biometric scan",
+        "openWorldHint": false
+      },
+      "execution": {
+        "taskSupport": "optional"
+      }
+    },
+    {
+      "name": "mobile_device_boot",
+      "title": "Boot virtual device",
+      "description": "Boot a device, wait until it is ready, and return its updated deployment record.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "deviceId": {
+            "description": "Provider-qualified device ID.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "deviceId"
+        ]
+      },
+      "outputSchema": {
+        "type": "object",
+        "properties": {
+          "schemaVersion": {
+            "type": "string"
+          },
+          "id": {
+            "type": "string"
+          },
+          "platform": {
+            "type": "string"
+          },
+          "provider": {
+            "type": "string"
+          },
+          "nativeId": {
+            "type": "string"
+          },
+          "udid": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "name": {
+            "type": "string"
+          },
+          "state": {
+            "type": "string"
+          },
+          "isAvailable": {
+            "type": "boolean"
+          },
+          "isVirtual": {
+            "type": "boolean"
+          },
+          "runtimeId": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "runtimeName": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "osVersion": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "deviceTypeId": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "deviceTypeName": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "modelIdentifier": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "architecture": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "deviceSet": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "display": {
+            "type": [
+              "object",
+              "null"
+            ],
+            "properties": {
+              "pixelWidth": {
+                "type": "integer"
+              },
+              "pixelHeight": {
+                "type": "integer"
+              },
+              "pointWidth": {
+                "type": "number"
+              },
+              "pointHeight": {
+                "type": "number"
+              },
+              "scale": {
+                "type": "number"
+              },
+              "orientation": {
+                "type": "string"
+              },
+              "cornerRadius": {
+                "type": [
+                  "number",
+                  "null"
+                ]
+              },
+              "cornerCurve": {
+                "type": "string"
+              }
+            }
+          },
+          "capabilities": {
+            "type": "object",
+            "properties": {
+              "boot": {
+                "type": "boolean"
+              },
+              "shutdown": {
+                "type": "boolean"
+              },
+              "restart": {
+                "type": "boolean"
+              },
+              "erase": {
+                "type": "boolean"
+              },
+              "delete": {
+                "type": "boolean"
+              },
+              "reveal": {
+                "type": "boolean"
+              },
+              "tap": {
+                "type": "boolean"
+              },
+              "longPress": {
+                "type": "boolean"
+              },
+              "swipe": {
+                "type": "boolean"
+              },
+              "scroll": {
+                "type": "boolean"
+              },
+              "text": {
+                "type": "boolean"
+              },
+              "key": {
+                "type": "boolean"
+              },
+              "button": {
+                "type": "boolean"
+              },
+              "rotate": {
+                "type": "boolean"
+              },
+              "screenshot": {
+                "type": "boolean"
+              },
+              "liveStream": {
+                "type": "boolean"
+              },
+              "recording": {
+                "type": "boolean"
+              }
+            }
+          }
+        }
+      },
+      "annotations": {
+        "title": "Boot virtual device",
+        "destructiveHint": false,
+        "idempotentHint": true,
+        "openWorldHint": false
+      },
+      "execution": {
+        "taskSupport": "optional"
+      }
+    },
+    {
+      "name": "mobile_device_call",
+      "title": "Ring, answer or end a call",
+      "description": "Ring the device from a number, or answer, hold or hang up a call already in progress, then read the call list back. Android only. Placing a call needs a number; the other actions apply to the call in progress when no number is given. An incoming call is the classic interruption an app has to survive -- it takes audio focus and moves the app to the background.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "deviceId": {
+            "description": "Provider-qualified device ID.",
+            "type": "string"
+          },
+          "action": {
+            "description": "One of place, accept, hold, or cancel.",
+            "type": "string"
+          },
+          "number": {
+            "description": "The other party's number. Required to place a call, optional afterwards.",
+            "type": [
+              "string",
+              "null"
+            ],
+            "default": null
+          }
+        },
+        "required": [
+          "deviceId",
+          "action"
+        ]
+      },
+      "annotations": {
+        "title": "Ring, answer or end a call",
+        "openWorldHint": false
+      },
+      "execution": {
+        "taskSupport": "optional"
+      }
+    },
+    {
+      "name": "mobile_device_calls",
+      "title": "List phone calls",
+      "description": "List the calls the device's telephony stack currently knows about, with the platform's own state for each such as RINGING or ACTIVE. Android only.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "deviceId": {
+            "description": "Provider-qualified device ID.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "deviceId"
+        ]
+      },
+      "annotations": {
+        "title": "List phone calls",
+        "destructiveHint": false,
+        "openWorldHint": false,
+        "readOnlyHint": true
+      },
+      "execution": {
+        "taskSupport": "optional"
+      }
+    },
+    {
+      "name": "mobile_device_catalog",
+      "title": "Get device catalog",
+      "description": "Get installed runtimes and system images, device types, devices, capabilities, and dependency diagnostics for every supported platform.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {}
+      },
+      "outputSchema": {
+        "type": "object",
+        "properties": {
+          "schemaVersion": {
+            "type": "string"
+          },
+          "devices": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "schemaVersion": {
+                  "type": "string"
+                },
+                "id": {
+                  "type": "string"
+                },
+                "platform": {
+                  "type": "string"
+                },
+                "provider": {
+                  "type": "string"
+                },
+                "nativeId": {
+                  "type": "string"
+                },
+                "udid": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                },
+                "name": {
+                  "type": "string"
+                },
+                "state": {
+                  "type": "string"
+                },
+                "isAvailable": {
+                  "type": "boolean"
+                },
+                "isVirtual": {
+                  "type": "boolean"
+                },
+                "runtimeId": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                },
+                "runtimeName": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                },
+                "osVersion": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                },
+                "deviceTypeId": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                },
+                "deviceTypeName": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                },
+                "modelIdentifier": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                },
+                "architecture": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                },
+                "deviceSet": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                },
+                "display": {
+                  "type": [
+                    "object",
+                    "null"
+                  ],
+                  "properties": {
+                    "pixelWidth": {
+                      "type": "integer"
+                    },
+                    "pixelHeight": {
+                      "type": "integer"
+                    },
+                    "pointWidth": {
+                      "type": "number"
+                    },
+                    "pointHeight": {
+                      "type": "number"
+                    },
+                    "scale": {
+                      "type": "number"
+                    },
+                    "orientation": {
+                      "type": "string"
+                    },
+                    "cornerRadius": {
+                      "type": [
+                        "number",
+                        "null"
+                      ]
+                    },
+                    "cornerCurve": {
+                      "type": "string"
+                    }
+                  }
+                },
+                "capabilities": {
+                  "type": "object",
+                  "properties": {
+                    "boot": {
+                      "type": "boolean"
+                    },
+                    "shutdown": {
+                      "type": "boolean"
+                    },
+                    "restart": {
+                      "type": "boolean"
+                    },
+                    "erase": {
+                      "type": "boolean"
+                    },
+                    "delete": {
+                      "type": "boolean"
+                    },
+                    "reveal": {
+                      "type": "boolean"
+                    },
+                    "tap": {
+                      "type": "boolean"
+                    },
+                    "longPress": {
+                      "type": "boolean"
+                    },
+                    "swipe": {
+                      "type": "boolean"
+                    },
+                    "scroll": {
+                      "type": "boolean"
+                    },
+                    "text": {
+                      "type": "boolean"
+                    },
+                    "key": {
+                      "type": "boolean"
+                    },
+                    "button": {
+                      "type": "boolean"
+                    },
+                    "rotate": {
+                      "type": "boolean"
+                    },
+                    "screenshot": {
+                      "type": "boolean"
+                    },
+                    "liveStream": {
+                      "type": "boolean"
+                    },
+                    "recording": {
+                      "type": "boolean"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "runtimes": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "id": {
+                  "type": "string"
+                },
+                "name": {
+                  "type": "string"
+                },
+                "version": {
+                  "type": "string"
+                },
+                "platform": {
+                  "type": "string"
+                },
+                "isAvailable": {
+                  "type": "boolean"
+                },
+                "supportedArchitectures": {
+                  "type": "array",
+                  "items": {
+                    "type": "string"
+                  }
+                },
+                "supportedDeviceTypeIds": {
+                  "type": "array",
+                  "items": {
+                    "type": "string"
+                  }
+                }
+              }
+            }
+          },
+          "deviceTypes": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "id": {
+                  "type": "string"
+                },
+                "name": {
+                  "type": "string"
+                },
+                "platform": {
+                  "type": "string"
+                },
+                "productFamily": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                },
+                "modelIdentifier": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                },
+                "minimumRuntimeVersion": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                },
+                "maximumRuntimeVersion": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                }
+              }
+            }
+          },
+          "diagnostics": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "platform": {
+                  "type": "string"
+                },
+                "available": {
+                  "type": "boolean"
+                },
+                "ready": {
+                  "type": "boolean"
+                },
+                "checks": {
+                  "type": "array",
+                  "items": {
+                    "type": "object",
+                    "properties": {
+                      "name": {
+                        "type": "string"
+                      },
+                      "status": {
+                        "type": "string"
+                      },
+                      "message": {
+                        "type": "string"
+                      },
+                      "path": {
+                        "type": [
+                          "string",
+                          "null"
+                        ]
+                      },
+                      "version": {
+                        "type": [
+                          "string",
+                          "null"
+                        ]
+                      },
+                      "actions": {
+                        "type": "array",
+                        "items": {
+                          "type": "object",
+                          "properties": {
+                            "type": {
+                              "type": "string"
+                            },
+                            "target": {
+                              "type": "string"
+                            },
+                            "label": {
+                              "type": "string"
+                            }
+                          }
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      },
+      "annotations": {
+        "title": "Get device catalog",
+        "openWorldHint": false,
+        "readOnlyHint": true
+      },
+      "execution": {
+        "taskSupport": "optional"
+      }
+    },
+    {
+      "name": "mobile_device_clipboard_get",
+      "title": "Read the pasteboard",
+      "description": "Read what is on the device's pasteboard. iOS only -- the Android emulator cannot reach its clipboard from outside, and says so rather than returning an empty string that would look like an empty clipboard.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "deviceId": {
+            "description": "Provider-qualified device ID.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "deviceId"
+        ]
+      },
+      "annotations": {
+        "title": "Read the pasteboard",
+        "destructiveHint": false,
+        "openWorldHint": false,
+        "readOnlyHint": true
+      },
+      "execution": {
+        "taskSupport": "optional"
+      }
+    },
+    {
+      "name": "mobile_device_clipboard_set",
+      "title": "Write the pasteboard",
+      "description": "Put text on the device's pasteboard and read it back, so a paste-into-field flow can be driven without typing. iOS only. Note that the Simulator can be set to share its pasteboard with the host Mac, in which case the host can overwrite what is written here.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "deviceId": {
+            "description": "Provider-qualified device ID.",
+            "type": "string"
+          },
+          "text": {
+            "description": "The text to place on the pasteboard.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "deviceId",
+          "text"
+        ]
+      },
+      "annotations": {
+        "title": "Write the pasteboard",
+        "openWorldHint": false
+      },
+      "execution": {
+        "taskSupport": "optional"
+      }
+    },
+    {
+      "name": "mobile_device_crash_report",
+      "title": "Read crash report",
+      "description": "Read one crash report in full, using an ID from mobile_device_crashes.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "deviceId": {
+            "description": "Provider-qualified device ID.",
+            "type": "string"
+          },
+          "crashId": {
+            "description": "Crash ID from mobile_device_crashes.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "deviceId",
+          "crashId"
+        ]
+      },
+      "annotations": {
+        "title": "Read crash report",
+        "destructiveHint": false,
+        "openWorldHint": false,
+        "readOnlyHint": true
+      },
+      "execution": {
+        "taskSupport": "optional"
+      }
+    },
+    {
+      "name": "mobile_device_crashes",
+      "title": "List crash reports",
+      "description": "List crashes and ANRs the device recorded, newest first. These survive the app that produced them, so this finds failures that happened while nothing was watching. Pass an ID from here to mobile_device_crash_report for the full stack.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "deviceId": {
+            "description": "Provider-qualified device ID.",
+            "type": "string"
+          },
+          "text": {
+            "description": "Filter by process name or bundle ID; substring and case-insensitive.",
+            "type": [
+              "string",
+              "null"
+            ],
+            "default": null
+          },
+          "limit": {
+            "description": "Maximum reports to return.",
+            "type": "integer",
+            "default": 25
+          }
+        },
+        "required": [
+          "deviceId"
+        ]
+      },
+      "annotations": {
+        "title": "List crash reports",
+        "destructiveHint": false,
+        "openWorldHint": false,
+        "readOnlyHint": true
+      },
+      "execution": {
+        "taskSupport": "optional"
+      }
+    },
+    {
+      "name": "mobile_device_create",
+      "title": "Create virtual device",
+      "description": "Create and boot a hidden iOS simulator or Android emulator from an installed runtime/system image and device type returned by mobile_device_catalog.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "name": {
+            "description": "Display name for the new device.",
+            "type": "string"
+          },
+          "runtimeId": {
+            "description": "Runtime identifier from the device catalog.",
+            "type": "string"
+          },
+          "deviceTypeId": {
+            "description": "Device type identifier from the device catalog.",
+            "type": "string"
+          },
+          "platform": {
+            "description": "Platform provider; currently ios.",
+            "type": "string",
+            "default": "ios"
+          }
+        },
+        "required": [
+          "name",
+          "runtimeId",
+          "deviceTypeId"
+        ]
+      },
+      "outputSchema": {
+        "type": "object",
+        "properties": {
+          "schemaVersion": {
+            "type": "string"
+          },
+          "id": {
+            "type": "string"
+          },
+          "platform": {
+            "type": "string"
+          },
+          "provider": {
+            "type": "string"
+          },
+          "nativeId": {
+            "type": "string"
+          },
+          "udid": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "name": {
+            "type": "string"
+          },
+          "state": {
+            "type": "string"
+          },
+          "isAvailable": {
+            "type": "boolean"
+          },
+          "isVirtual": {
+            "type": "boolean"
+          },
+          "runtimeId": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "runtimeName": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "osVersion": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "deviceTypeId": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "deviceTypeName": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "modelIdentifier": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "architecture": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "deviceSet": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "display": {
+            "type": [
+              "object",
+              "null"
+            ],
+            "properties": {
+              "pixelWidth": {
+                "type": "integer"
+              },
+              "pixelHeight": {
+                "type": "integer"
+              },
+              "pointWidth": {
+                "type": "number"
+              },
+              "pointHeight": {
+                "type": "number"
+              },
+              "scale": {
+                "type": "number"
+              },
+              "orientation": {
+                "type": "string"
+              },
+              "cornerRadius": {
+                "type": [
+                  "number",
+                  "null"
+                ]
+              },
+              "cornerCurve": {
+                "type": "string"
+              }
+            }
+          },
+          "capabilities": {
+            "type": "object",
+            "properties": {
+              "boot": {
+                "type": "boolean"
+              },
+              "shutdown": {
+                "type": "boolean"
+              },
+              "restart": {
+                "type": "boolean"
+              },
+              "erase": {
+                "type": "boolean"
+              },
+              "delete": {
+                "type": "boolean"
+              },
+              "reveal": {
+                "type": "boolean"
+              },
+              "tap": {
+                "type": "boolean"
+              },
+              "longPress": {
+                "type": "boolean"
+              },
+              "swipe": {
+                "type": "boolean"
+              },
+              "scroll": {
+                "type": "boolean"
+              },
+              "text": {
+                "type": "boolean"
+              },
+              "key": {
+                "type": "boolean"
+              },
+              "button": {
+                "type": "boolean"
+              },
+              "rotate": {
+                "type": "boolean"
+              },
+              "screenshot": {
+                "type": "boolean"
+              },
+              "liveStream": {
+                "type": "boolean"
+              },
+              "recording": {
+                "type": "boolean"
+              }
+            }
+          }
+        }
+      },
+      "annotations": {
+        "title": "Create virtual device",
+        "destructiveHint": false,
+        "openWorldHint": false
+      },
+      "execution": {
+        "taskSupport": "optional"
+      }
+    },
+    {
+      "name": "mobile_device_delete",
+      "title": "Delete virtual device",
+      "description": "Permanently delete a device. Requires confirm=true.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "deviceId": {
+            "description": "Provider-qualified device ID.",
+            "type": "string"
+          },
+          "confirm": {
+            "description": "Must be true to authorize permanent device deletion.",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "deviceId",
+          "confirm"
+        ]
+      },
+      "outputSchema": {
+        "type": "object",
+        "properties": {
+          "success": {
+            "type": "boolean"
+          },
+          "operation": {
+            "type": "string"
+          },
+          "deviceId": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        }
+      },
+      "annotations": {
+        "title": "Delete virtual device",
+        "destructiveHint": true,
+        "idempotentHint": false,
+        "openWorldHint": false
+      },
+      "execution": {
+        "taskSupport": "optional"
+      }
+    },
+    {
+      "name": "mobile_device_display",
+      "title": "Get device display geometry",
+      "description": "Get the display geometry of a booted device: logical point size, pixel size, scale, and orientation. Call this before tapping or swiping so coordinates land where intended; all input takes logical points, not pixels.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "deviceId": {
+            "description": "Provider-qualified device ID.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "deviceId"
+        ]
+      },
+      "annotations": {
+        "title": "Get device display geometry",
+        "destructiveHint": false,
+        "openWorldHint": false,
+        "readOnlyHint": true
+      },
+      "execution": {
+        "taskSupport": "optional"
+      }
+    },
+    {
+      "name": "mobile_device_erase",
+      "title": "Erase virtual device",
+      "description": "Permanently erase all content and settings from a device. Requires confirm=true.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "deviceId": {
+            "description": "Provider-qualified device ID.",
+            "type": "string"
+          },
+          "confirm": {
+            "description": "Must be true to authorize permanent data erasure.",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "deviceId",
+          "confirm"
+        ]
+      },
+      "outputSchema": {
+        "type": "object",
+        "properties": {
+          "schemaVersion": {
+            "type": "string"
+          },
+          "id": {
+            "type": "string"
+          },
+          "platform": {
+            "type": "string"
+          },
+          "provider": {
+            "type": "string"
+          },
+          "nativeId": {
+            "type": "string"
+          },
+          "udid": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "name": {
+            "type": "string"
+          },
+          "state": {
+            "type": "string"
+          },
+          "isAvailable": {
+            "type": "boolean"
+          },
+          "isVirtual": {
+            "type": "boolean"
+          },
+          "runtimeId": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "runtimeName": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "osVersion": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "deviceTypeId": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "deviceTypeName": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "modelIdentifier": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "architecture": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "deviceSet": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "display": {
+            "type": [
+              "object",
+              "null"
+            ],
+            "properties": {
+              "pixelWidth": {
+                "type": "integer"
+              },
+              "pixelHeight": {
+                "type": "integer"
+              },
+              "pointWidth": {
+                "type": "number"
+              },
+              "pointHeight": {
+                "type": "number"
+              },
+              "scale": {
+                "type": "number"
+              },
+              "orientation": {
+                "type": "string"
+              },
+              "cornerRadius": {
+                "type": [
+                  "number",
+                  "null"
+                ]
+              },
+              "cornerCurve": {
+                "type": "string"
+              }
+            }
+          },
+          "capabilities": {
+            "type": "object",
+            "properties": {
+              "boot": {
+                "type": "boolean"
+              },
+              "shutdown": {
+                "type": "boolean"
+              },
+              "restart": {
+                "type": "boolean"
+              },
+              "erase": {
+                "type": "boolean"
+              },
+              "delete": {
+                "type": "boolean"
+              },
+              "reveal": {
+                "type": "boolean"
+              },
+              "tap": {
+                "type": "boolean"
+              },
+              "longPress": {
+                "type": "boolean"
+              },
+              "swipe": {
+                "type": "boolean"
+              },
+              "scroll": {
+                "type": "boolean"
+              },
+              "text": {
+                "type": "boolean"
+              },
+              "key": {
+                "type": "boolean"
+              },
+              "button": {
+                "type": "boolean"
+              },
+              "rotate": {
+                "type": "boolean"
+              },
+              "screenshot": {
+                "type": "boolean"
+              },
+              "liveStream": {
+                "type": "boolean"
+              },
+              "recording": {
+                "type": "boolean"
+              }
+            }
+          }
+        }
+      },
+      "annotations": {
+        "title": "Erase virtual device",
+        "destructiveHint": true,
+        "idempotentHint": true,
+        "openWorldHint": false
+      },
+      "execution": {
+        "taskSupport": "optional"
+      }
+    },
+    {
+      "name": "mobile_device_file_delete",
+      "title": "Delete a file or directory",
+      "description": "Remove a file or directory from the device. Use it to reset one fixture without clearing all of an app's data, which is what uninstalling or wiping would do. Deleting a directory needs recursive, so a mistyped path cannot take a subtree with it. A path that does not exist is an error rather than a quiet success.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "deviceId": {
+            "description": "Provider-qualified device ID.",
+            "type": "string"
+          },
+          "path": {
+            "description": "Path to remove; relative to the app container when bundleId is set.",
+            "type": "string"
+          },
+          "bundleId": {
+            "description": "Scope the path to this app's data container.",
+            "type": [
+              "string",
+              "null"
+            ],
+            "default": null
+          },
+          "recursive": {
+            "description": "Required to delete a directory and everything inside it.",
+            "type": "boolean",
+            "default": false
+          }
+        },
+        "required": [
+          "deviceId",
+          "path"
+        ]
+      },
+      "annotations": {
+        "title": "Delete a file or directory",
+        "destructiveHint": true,
+        "openWorldHint": false
+      },
+      "execution": {
+        "taskSupport": "optional"
+      }
+    },
+    {
+      "name": "mobile_device_file_list",
+      "title": "List device files",
+      "description": "List a directory on a device. With bundleId the path is relative to that app's data container -- where its database, preferences and written files live -- and without it the path is an absolute device path. Prefer bundleId: it is stable across reinstalls, where the container's own path is not.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "deviceId": {
+            "description": "Provider-qualified device ID.",
+            "type": "string"
+          },
+          "bundleId": {
+            "description": "Scope the path to this app's data container.",
+            "type": [
+              "string",
+              "null"
+            ],
+            "default": null
+          },
+          "path": {
+            "description": "Directory to list; relative to the app container when bundleId is set.",
+            "type": [
+              "string",
+              "null"
+            ],
+            "default": null
+          }
+        },
+        "required": [
+          "deviceId"
+        ]
+      },
+      "annotations": {
+        "title": "List device files",
+        "destructiveHint": false,
+        "openWorldHint": false,
+        "readOnlyHint": true
+      },
+      "execution": {
+        "taskSupport": "optional"
+      }
+    },
+    {
+      "name": "mobile_device_file_mkdir",
+      "title": "Create a directory",
+      "description": "Create a directory on the device, along with any missing parent. Use it to prepare a place to push a file into, since a push fails when the destination directory does not exist. A directory that already exists is fine.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "deviceId": {
+            "description": "Provider-qualified device ID.",
+            "type": "string"
+          },
+          "path": {
+            "description": "Directory to create; relative to the app container when bundleId is set.",
+            "type": "string"
+          },
+          "bundleId": {
+            "description": "Scope the path to this app's data container.",
+            "type": [
+              "string",
+              "null"
+            ],
+            "default": null
+          }
+        },
+        "required": [
+          "deviceId",
+          "path"
+        ]
+      },
+      "annotations": {
+        "title": "Create a directory",
+        "destructiveHint": false,
+        "openWorldHint": false
+      },
+      "execution": {
+        "taskSupport": "optional"
+      }
+    },
+    {
+      "name": "mobile_device_file_pull",
+      "title": "Pull file from device",
+      "description": "Copy a file off the device onto this machine, so it can be opened or inspected here. Use it for the database or log an app wrote. An existing file at the destination is overwritten.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "deviceId": {
+            "description": "Provider-qualified device ID.",
+            "type": "string"
+          },
+          "path": {
+            "description": "File to copy; relative to the app container when bundleId is set.",
+            "type": "string"
+          },
+          "output": {
+            "description": "Where to write it on this machine. A directory takes the file's own name.",
+            "type": "string"
+          },
+          "bundleId": {
+            "description": "Scope the path to this app's data container.",
+            "type": [
+              "string",
+              "null"
+            ],
+            "default": null
+          }
+        },
+        "required": [
+          "deviceId",
+          "path",
+          "output"
+        ]
+      },
+      "annotations": {
+        "title": "Pull file from device",
+        "destructiveHint": false,
+        "openWorldHint": false
+      },
+      "execution": {
+        "taskSupport": "optional"
+      }
+    },
+    {
+      "name": "mobile_device_file_push",
+      "title": "Push file to device",
+      "description": "Copy a file from this machine onto the device, so an app can read it. Use it to place a fixture or a seeded database. An existing file at the destination is overwritten.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "deviceId": {
+            "description": "Provider-qualified device ID.",
+            "type": "string"
+          },
+          "input": {
+            "description": "File on this machine to copy.",
+            "type": "string"
+          },
+          "path": {
+            "description": "Destination; relative to the app container when bundleId is set.",
+            "type": "string"
+          },
+          "bundleId": {
+            "description": "Scope the path to this app's data container.",
+            "type": [
+              "string",
+              "null"
+            ],
+            "default": null
+          }
+        },
+        "required": [
+          "deviceId",
+          "input",
+          "path"
+        ]
+      },
+      "annotations": {
+        "title": "Push file to device",
+        "destructiveHint": false,
+        "openWorldHint": false
+      },
+      "execution": {
+        "taskSupport": "optional"
+      }
+    },
+    {
+      "name": "mobile_device_get",
+      "title": "Get virtual device",
+      "description": "Get one virtual device and its native UDID, state, runtime, display, and capabilities.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "deviceId": {
+            "description": "Provider-qualified device ID from mobile_device_list.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "deviceId"
+        ]
+      },
+      "outputSchema": {
+        "type": "object",
+        "properties": {
+          "schemaVersion": {
+            "type": "string"
+          },
+          "id": {
+            "type": "string"
+          },
+          "platform": {
+            "type": "string"
+          },
+          "provider": {
+            "type": "string"
+          },
+          "nativeId": {
+            "type": "string"
+          },
+          "udid": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "name": {
+            "type": "string"
+          },
+          "state": {
+            "type": "string"
+          },
+          "isAvailable": {
+            "type": "boolean"
+          },
+          "isVirtual": {
+            "type": "boolean"
+          },
+          "runtimeId": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "runtimeName": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "osVersion": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "deviceTypeId": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "deviceTypeName": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "modelIdentifier": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "architecture": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "deviceSet": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "display": {
+            "type": [
+              "object",
+              "null"
+            ],
+            "properties": {
+              "pixelWidth": {
+                "type": "integer"
+              },
+              "pixelHeight": {
+                "type": "integer"
+              },
+              "pointWidth": {
+                "type": "number"
+              },
+              "pointHeight": {
+                "type": "number"
+              },
+              "scale": {
+                "type": "number"
+              },
+              "orientation": {
+                "type": "string"
+              },
+              "cornerRadius": {
+                "type": [
+                  "number",
+                  "null"
+                ]
+              },
+              "cornerCurve": {
+                "type": "string"
+              }
+            }
+          },
+          "capabilities": {
+            "type": "object",
+            "properties": {
+              "boot": {
+                "type": "boolean"
+              },
+              "shutdown": {
+                "type": "boolean"
+              },
+              "restart": {
+                "type": "boolean"
+              },
+              "erase": {
+                "type": "boolean"
+              },
+              "delete": {
+                "type": "boolean"
+              },
+              "reveal": {
+                "type": "boolean"
+              },
+              "tap": {
+                "type": "boolean"
+              },
+              "longPress": {
+                "type": "boolean"
+              },
+              "swipe": {
+                "type": "boolean"
+              },
+              "scroll": {
+                "type": "boolean"
+              },
+              "text": {
+                "type": "boolean"
+              },
+              "key": {
+                "type": "boolean"
+              },
+              "button": {
+                "type": "boolean"
+              },
+              "rotate": {
+                "type": "boolean"
+              },
+              "screenshot": {
+                "type": "boolean"
+              },
+              "liveStream": {
+                "type": "boolean"
+              },
+              "recording": {
+                "type": "boolean"
+              }
+            }
+          }
+        }
+      },
+      "annotations": {
+        "title": "Get virtual device",
+        "openWorldHint": false,
+        "readOnlyHint": true
+      },
+      "execution": {
+        "taskSupport": "optional"
+      }
+    },
+    {
+      "name": "mobile_device_get_selected",
+      "title": "Get selected canvas device",
+      "description": "Get the device selected by one canvas panel, including the UDID suitable for deployment commands. Returns hasSelection=false when the canvas has not chosen a device yet.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "sessionId": {
+            "description": "Copilot session ID that owns the canvas.",
+            "type": "string"
+          },
+          "instanceId": {
+            "description": "Stable canvas instance ID.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "sessionId",
+          "instanceId"
+        ]
+      },
+      "outputSchema": {
+        "type": "object",
+        "properties": {
+          "schemaVersion": {
+            "type": "string"
+          },
+          "hasSelection": {
+            "type": "boolean"
+          },
+          "device": {
+            "type": [
+              "object",
+              "null"
+            ],
+            "properties": {
+              "schemaVersion": {
+                "type": "string"
+              },
+              "id": {
+                "type": "string"
+              },
+              "platform": {
+                "type": "string"
+              },
+              "provider": {
+                "type": "string"
+              },
+              "nativeId": {
+                "type": "string"
+              },
+              "udid": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "name": {
+                "type": "string"
+              },
+              "state": {
+                "type": "string"
+              },
+              "isAvailable": {
+                "type": "boolean"
+              },
+              "isVirtual": {
+                "type": "boolean"
+              },
+              "runtimeId": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "runtimeName": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "osVersion": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "deviceTypeId": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "deviceTypeName": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "modelIdentifier": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "architecture": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "deviceSet": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "display": {
+                "type": [
+                  "object",
+                  "null"
+                ],
+                "properties": {
+                  "pixelWidth": {
+                    "type": "integer"
+                  },
+                  "pixelHeight": {
+                    "type": "integer"
+                  },
+                  "pointWidth": {
+                    "type": "number"
+                  },
+                  "pointHeight": {
+                    "type": "number"
+                  },
+                  "scale": {
+                    "type": "number"
+                  },
+                  "orientation": {
+                    "type": "string"
+                  },
+                  "cornerRadius": {
+                    "type": [
+                      "number",
+                      "null"
+                    ]
+                  },
+                  "cornerCurve": {
+                    "type": "string"
+                  }
+                }
+              },
+              "capabilities": {
+                "type": "object",
+                "properties": {
+                  "boot": {
+                    "type": "boolean"
+                  },
+                  "shutdown": {
+                    "type": "boolean"
+                  },
+                  "restart": {
+                    "type": "boolean"
+                  },
+                  "erase": {
+                    "type": "boolean"
+                  },
+                  "delete": {
+                    "type": "boolean"
+                  },
+                  "reveal": {
+                    "type": "boolean"
+                  },
+                  "tap": {
+                    "type": "boolean"
+                  },
+                  "longPress": {
+                    "type": "boolean"
+                  },
+                  "swipe": {
+                    "type": "boolean"
+                  },
+                  "scroll": {
+                    "type": "boolean"
+                  },
+                  "text": {
+                    "type": "boolean"
+                  },
+                  "key": {
+                    "type": "boolean"
+                  },
+                  "button": {
+                    "type": "boolean"
+                  },
+                  "rotate": {
+                    "type": "boolean"
+                  },
+                  "screenshot": {
+                    "type": "boolean"
+                  },
+                  "liveStream": {
+                    "type": "boolean"
+                  },
+                  "recording": {
+                    "type": "boolean"
+                  }
+                }
+              }
+            }
+          }
+        }
+      },
+      "annotations": {
+        "title": "Get selected canvas device",
+        "openWorldHint": false,
+        "readOnlyHint": true
+      },
+      "execution": {
+        "taskSupport": "optional"
+      }
+    },
+    {
+      "name": "mobile_device_hardware_get",
+      "title": "Read simulated hardware state",
+      "description": "Read the simulated battery and network state. The 'unreadable' list names what this platform will not report, which is the difference between a value that is absent and one that is zero.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "deviceId": {
+            "description": "Provider-qualified device ID.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "deviceId"
+        ]
+      },
+      "annotations": {
+        "title": "Read simulated hardware state",
+        "destructiveHint": false,
+        "openWorldHint": false,
+        "readOnlyHint": true
+      },
+      "execution": {
+        "taskSupport": "optional"
+      }
+    },
+    {
+      "name": "mobile_device_list",
+      "title": "List virtual devices",
+      "description": "List local mobile virtual devices across iOS simulators and Android emulators, running ones first, with exact deployment identifiers.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {}
+      },
+      "outputSchema": {
+        "type": "object",
+        "properties": {
+          "result": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "schemaVersion": {
+                  "type": "string"
+                },
+                "id": {
+                  "type": "string"
+                },
+                "platform": {
+                  "type": "string"
+                },
+                "provider": {
+                  "type": "string"
+                },
+                "nativeId": {
+                  "type": "string"
+                },
+                "udid": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                },
+                "name": {
+                  "type": "string"
+                },
+                "state": {
+                  "type": "string"
+                },
+                "isAvailable": {
+                  "type": "boolean"
+                },
+                "isVirtual": {
+                  "type": "boolean"
+                },
+                "runtimeId": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                },
+                "runtimeName": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                },
+                "osVersion": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                },
+                "deviceTypeId": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                },
+                "deviceTypeName": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                },
+                "modelIdentifier": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                },
+                "architecture": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                },
+                "deviceSet": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                },
+                "display": {
+                  "type": [
+                    "object",
+                    "null"
+                  ],
+                  "properties": {
+                    "pixelWidth": {
+                      "type": "integer"
+                    },
+                    "pixelHeight": {
+                      "type": "integer"
+                    },
+                    "pointWidth": {
+                      "type": "number"
+                    },
+                    "pointHeight": {
+                      "type": "number"
+                    },
+                    "scale": {
+                      "type": "number"
+                    },
+                    "orientation": {
+                      "type": "string"
+                    },
+                    "cornerRadius": {
+                      "type": [
+                        "number",
+                        "null"
+                      ]
+                    },
+                    "cornerCurve": {
+                      "type": "string"
+                    }
+                  }
+                },
+                "capabilities": {
+                  "type": "object",
+                  "properties": {
+                    "boot": {
+                      "type": "boolean"
+                    },
+                    "shutdown": {
+                      "type": "boolean"
+                    },
+                    "restart": {
+                      "type": "boolean"
+                    },
+                    "erase": {
+                      "type": "boolean"
+                    },
+                    "delete": {
+                      "type": "boolean"
+                    },
+                    "reveal": {
+                      "type": "boolean"
+                    },
+                    "tap": {
+                      "type": "boolean"
+                    },
+                    "longPress": {
+                      "type": "boolean"
+                    },
+                    "swipe": {
+                      "type": "boolean"
+                    },
+                    "scroll": {
+                      "type": "boolean"
+                    },
+                    "text": {
+                      "type": "boolean"
+                    },
+                    "key": {
+                      "type": "boolean"
+                    },
+                    "button": {
+                      "type": "boolean"
+                    },
+                    "rotate": {
+                      "type": "boolean"
+                    },
+                    "screenshot": {
+                      "type": "boolean"
+                    },
+                    "liveStream": {
+                      "type": "boolean"
+                    },
+                    "recording": {
+                      "type": "boolean"
+                    }
+                  }
+                }
+              }
+            }
+          }
+        },
+        "required": [
+          "result"
+        ]
+      },
+      "annotations": {
+        "title": "List virtual devices",
+        "openWorldHint": false,
+        "readOnlyHint": true
+      },
+      "execution": {
+        "taskSupport": "optional"
+      }
+    },
+    {
+      "name": "mobile_device_location_clear",
+      "title": "Clear the simulated location",
+      "description": "Return an iOS simulator to the host's real position. An Android emulator cannot do this -- it has no position of its own to return to -- and says so.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "deviceId": {
+            "description": "Provider-qualified device ID.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "deviceId"
+        ]
+      },
+      "annotations": {
+        "title": "Clear the simulated location",
+        "openWorldHint": false
+      },
+      "execution": {
+        "taskSupport": "optional"
+      }
+    },
+    {
+      "name": "mobile_device_location_set",
+      "title": "Set the simulated location",
+      "description": "Move the device to a latitude and longitude, to exercise location-dependent behaviour without going there. Neither platform can read a location back, so confirm it through the app under test rather than by reading the device. On Android the fix only reaches an app that is already listening for location: the emulator pushes the position to live listeners rather than storing it, and reports success either way, so set the location after the app has started requesting it.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "deviceId": {
+            "description": "Provider-qualified device ID.",
+            "type": "string"
+          },
+          "latitude": {
+            "description": "Latitude, between -90 and 90.",
+            "type": "number"
+          },
+          "longitude": {
+            "description": "Longitude, between -180 and 180.",
+            "type": "number"
+          }
+        },
+        "required": [
+          "deviceId",
+          "latitude",
+          "longitude"
+        ]
+      },
+      "annotations": {
+        "title": "Set the simulated location",
+        "openWorldHint": false
+      },
+      "execution": {
+        "taskSupport": "optional"
+      }
+    },
+    {
+      "name": "mobile_device_log",
+      "title": "Read device log",
+      "description": "Read recent log output from a device. Filter to one app with bundleId and to the lines that matter with level, both of which filter on the device rather than afterwards: an idle simulator writes tens of thousands of lines a minute. Levels are verbose, debug, info, warning, error and fatal; Apple's log has no warning rung, so asking iOS for warning yields errors and faults.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "deviceId": {
+            "description": "Provider-qualified device ID.",
+            "type": "string"
+          },
+          "bundleId": {
+            "description": "Limit to one app's process, by bundle ID (iOS) or package name (Android).",
+            "type": [
+              "string",
+              "null"
+            ],
+            "default": null
+          },
+          "level": {
+            "description": "Drop anything quieter than this: verbose, debug, info, warning, error, fatal.",
+            "type": [
+              "string",
+              "null"
+            ],
+            "default": null
+          },
+          "text": {
+            "description": "Filter by message text; substring and case-insensitive.",
+            "type": [
+              "string",
+              "null"
+            ],
+            "default": null
+          },
+          "seconds": {
+            "description": "How far back to read, in seconds.",
+            "type": "integer",
+            "default": 300
+          },
+          "limit": {
+            "description": "Maximum entries to return, newest first.",
+            "type": "integer",
+            "default": 200
+          }
+        },
+        "required": [
+          "deviceId"
+        ]
+      },
+      "annotations": {
+        "title": "Read device log",
+        "destructiveHint": false,
+        "openWorldHint": false,
+        "readOnlyHint": true
+      },
+      "execution": {
+        "taskSupport": "optional"
+      }
+    },
+    {
+      "name": "mobile_device_long_press",
+      "title": "Long press device",
+      "description": "Press and hold a booted device at logical point coordinates, for context menus, drag handles, and icon rearrangement.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "deviceId": {
+            "description": "Provider-qualified device ID.",
+            "type": "string"
+          },
+          "x": {
+            "description": "Horizontal logical point coordinate.",
+            "type": "number"
+          },
+          "y": {
+            "description": "Vertical logical point coordinate.",
+            "type": "number"
+          },
+          "duration": {
+            "description": "Hold duration in seconds.",
+            "type": "number",
+            "default": 1
+          }
+        },
+        "required": [
+          "deviceId",
+          "x",
+          "y"
+        ]
+      },
+      "annotations": {
+        "title": "Long press device",
+        "destructiveHint": false,
+        "openWorldHint": false
+      },
+      "execution": {
+        "taskSupport": "optional"
+      }
+    },
+    {
+      "name": "mobile_device_media_add",
+      "title": "Add photos or videos",
+      "description": "Copy images or videos from this machine into the device's photo library, so a photo picker or upload flow has something to find. Works on both platforms. iOS also accepts vCard files, which land in Contacts.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "deviceId": {
+            "description": "Provider-qualified device ID.",
+            "type": "string"
+          },
+          "paths": {
+            "description": "Absolute paths on this machine to the files to add.",
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          }
+        },
+        "required": [
+          "deviceId",
+          "paths"
+        ]
+      },
+      "annotations": {
+        "title": "Add photos or videos",
+        "openWorldHint": false
+      },
+      "execution": {
+        "taskSupport": "optional"
+      }
+    },
+    {
+      "name": "mobile_device_network_set",
+      "title": "Simulate network conditions",
+      "description": "Slow the connection down, to exercise timeouts, spinners and retry paths. Real only on an Android emulator: an iOS simulator shares the host's network, so this only changes what its status bar shows, and the result reports that as networkIsIndicatorOnly. Profiles, slowest first: gsm, gprs, edge, umts, hsdpa, lte, full.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "deviceId": {
+            "description": "Provider-qualified device ID.",
+            "type": "string"
+          },
+          "profile": {
+            "description": "Network profile name.",
+            "type": [
+              "string",
+              "null"
+            ],
+            "default": null
+          },
+          "latencyMs": {
+            "description": "Added round-trip latency in milliseconds; 0 removes it. Android only.",
+            "type": [
+              "integer",
+              "null"
+            ],
+            "default": null
+          }
+        },
+        "required": [
+          "deviceId"
+        ]
+      },
+      "annotations": {
+        "title": "Simulate network conditions",
+        "openWorldHint": false
+      },
+      "execution": {
+        "taskSupport": "optional"
+      }
+    },
+    {
+      "name": "mobile_device_notification_push",
+      "title": "Send a push notification",
+      "description": "Deliver a simulated remote push notification to an installed app, so notification handling can be exercised without a server or a signing certificate. iOS only: the Android emulator has no equivalent, and reaching an Android app this way means sending it a real FCM message. The payload is APNs JSON and must contain an 'aps' key, for example {\"aps\":{\"alert\":{\"title\":\"Hello\",\"body\":\"World\"}}}. The app must already have been granted notification permission, which only happens when the app itself asks; this reports that rather than reporting a delivery iOS silently dropped.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "deviceId": {
+            "description": "Provider-qualified device ID.",
+            "type": "string"
+          },
+          "bundleId": {
+            "description": "The bundle ID of the app to notify. It must already be installed.",
+            "type": "string"
+          },
+          "payload": {
+            "description": "The APNs payload as JSON, 4096 bytes or less, containing an 'aps' key.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "deviceId",
+          "bundleId",
+          "payload"
+        ]
+      },
+      "annotations": {
+        "title": "Send a push notification",
+        "openWorldHint": false
+      },
+      "execution": {
+        "taskSupport": "optional"
+      }
+    },
+    {
+      "name": "mobile_device_permission_list",
+      "title": "List app permissions",
+      "description": "Report the permissions an app holds. Granted is null when the platform will not say -- on iOS an app that has never been asked has no record, which is not the same as denied.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "deviceId": {
+            "description": "Provider-qualified device ID.",
+            "type": "string"
+          },
+          "bundleId": {
+            "description": "Bundle ID or Android package name of the app.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "deviceId",
+          "bundleId"
+        ]
+      },
+      "annotations": {
+        "title": "List app permissions",
+        "destructiveHint": false,
+        "openWorldHint": false,
+        "readOnlyHint": true
+      },
+      "execution": {
+        "taskSupport": "optional"
+      }
+    },
+    {
+      "name": "mobile_device_permission_set",
+      "title": "Grant or revoke a permission",
+      "description": "Grant, revoke, or reset one permission, so a permission-dependent screen can be reached without answering a system prompt by hand. Reset makes the app ask again next time. Names that work on both platforms: camera, microphone, location, location-always, contacts, calendar, reminders, photos, photos-add, media-library, motion, notifications. A platform's own name also works. The result reports what actually changed, read back from the device.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "deviceId": {
+            "description": "Provider-qualified device ID.",
+            "type": "string"
+          },
+          "bundleId": {
+            "description": "Bundle ID or Android package name of the app.",
+            "type": "string"
+          },
+          "permission": {
+            "description": "Permission name, canonical or platform-specific.",
+            "type": "string"
+          },
+          "action": {
+            "description": "One of grant, revoke, or reset.",
+            "type": "string",
+            "default": "grant"
+          }
+        },
+        "required": [
+          "deviceId",
+          "bundleId",
+          "permission"
+        ]
+      },
+      "annotations": {
+        "title": "Grant or revoke a permission",
+        "openWorldHint": false
+      },
+      "execution": {
+        "taskSupport": "optional"
+      }
+    },
+    {
+      "name": "mobile_device_presentation_get",
+      "title": "Read status bar overrides",
+      "description": "Report whether the status bar is fixed for screenshots, and with what. On iOS the values themselves come back; on Android only whether it is on, because SystemUI will confirm that and nothing more -- readable says which you got.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "deviceId": {
+            "description": "Provider-qualified device ID.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "deviceId"
+        ]
+      },
+      "annotations": {
+        "title": "Read status bar overrides",
+        "destructiveHint": false,
+        "openWorldHint": false,
+        "readOnlyHint": true
+      },
+      "execution": {
+        "taskSupport": "optional"
+      }
+    },
+    {
+      "name": "mobile_device_presentation_set",
+      "title": "Fix the status bar for screenshots",
+      "description": "Pin the clock, battery and signal so a screenshot taken now matches one taken next month -- otherwise every capture carries the wall clock and whatever the battery happened to be. Set enabled false to put the real values back. Fields left unset keep what they were showing, so a second call can adjust one of them. The change is confirmed against the device: both platforms accept these and silently ignore them under conditions this reports rather than hides.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "deviceId": {
+            "description": "Provider-qualified device ID.",
+            "type": "string"
+          },
+          "enabled": {
+            "description": "True to fix the status bar, false to restore the device's own values.",
+            "type": [
+              "boolean",
+              "null"
+            ],
+            "default": null
+          },
+          "time": {
+            "description": "Clock as 24-hour HH:mm, such as 09:41. Redrawn in the device's own format.",
+            "type": [
+              "string",
+              "null"
+            ],
+            "default": null
+          },
+          "batteryLevel": {
+            "description": "Battery percentage, 0 to 100.",
+            "type": [
+              "integer",
+              "null"
+            ],
+            "default": null
+          },
+          "batteryCharging": {
+            "description": "Whether to draw the charging bolt.",
+            "type": [
+              "boolean",
+              "null"
+            ],
+            "default": null
+          },
+          "wifiBars": {
+            "description": "Wi-Fi strength, 0 to 4.",
+            "type": [
+              "integer",
+              "null"
+            ],
+            "default": null
+          },
+          "cellularBars": {
+            "description": "Cellular strength, 0 to 4.",
+            "type": [
+              "integer",
+              "null"
+            ],
+            "default": null
+          },
+          "carrierName": {
+            "description": "Carrier name beside the signal bars. Sent to both platforms, but iOS cannot report it back so it is absent from the returned overrides, and devices with a notch have no room to draw it at all.",
+            "type": [
+              "string",
+              "null"
+            ],
+            "default": null
+          },
+          "hideNotifications": {
+            "description": "Android only: hide the notification icons. iOS does not draw them here.",
+            "type": [
+              "boolean",
+              "null"
+            ],
+            "default": null
+          }
+        },
+        "required": [
+          "deviceId"
+        ]
+      },
+      "annotations": {
+        "title": "Fix the status bar for screenshots",
+        "openWorldHint": false
+      },
+      "execution": {
+        "taskSupport": "optional"
+      }
+    },
+    {
+      "name": "mobile_device_press_button",
+      "title": "Press device button",
+      "description": "Press a hardware button on a booted device. iOS accepts home, lock, side-button, siri, and apple-pay; Android accepts home, back, apps, power, volume-up, volume-down, and menu.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "deviceId": {
+            "description": "Provider-qualified device ID.",
+            "type": "string"
+          },
+          "button": {
+            "description": "Button name. iOS: home, lock, side-button, siri, apple-pay. Android: home, back, apps, lock/power, volume-up, volume-down, menu.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "deviceId",
+          "button"
+        ]
+      },
+      "annotations": {
+        "title": "Press device button",
+        "destructiveHint": false,
+        "openWorldHint": false
+      },
+      "execution": {
+        "taskSupport": "optional"
+      }
+    },
+    {
+      "name": "mobile_device_press_key",
+      "title": "Press key",
+      "description": "Press one USB HID keyboard key on a booted device.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "deviceId": {
+            "description": "Provider-qualified device ID.",
+            "type": "string"
+          },
+          "keyCode": {
+            "description": "USB HID keyboard usage code, such as 40 for Return or 42 for Backspace.",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "deviceId",
+          "keyCode"
+        ]
+      },
+      "annotations": {
+        "title": "Press key",
+        "destructiveHint": false,
+        "openWorldHint": false
+      },
+      "execution": {
+        "taskSupport": "optional"
+      }
+    },
+    {
+      "name": "mobile_device_recording_start",
+      "title": "Start device recording",
+      "description": "Start a bounded H.264 MP4 screen recording on a booted device.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "deviceId": {
+            "description": "Provider-qualified device ID.",
+            "type": "string"
+          },
+          "timeoutSeconds": {
+            "description": "Maximum recording duration in seconds, from 1 through 3600.",
+            "type": "integer",
+            "default": 180
+          },
+          "outputPath": {
+            "description": "Optional absolute output path; omit to use the Mobile Canvas artifacts directory.",
+            "type": [
+              "string",
+              "null"
+            ],
+            "default": null
+          }
+        },
+        "required": [
+          "deviceId"
+        ]
+      },
+      "outputSchema": {
+        "type": "object",
+        "properties": {
+          "deviceId": {
+            "type": "string"
+          },
+          "isRecording": {
+            "type": "boolean"
+          },
+          "outputPath": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "startedAt": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time"
+          },
+          "timeoutSeconds": {
+            "type": [
+              "integer",
+              "null"
+            ]
+          }
+        }
+      },
+      "annotations": {
+        "title": "Start device recording",
+        "destructiveHint": false,
+        "openWorldHint": false
+      },
+      "execution": {
+        "taskSupport": "optional"
+      }
+    },
+    {
+      "name": "mobile_device_recording_status",
+      "title": "Get recording status",
+      "description": "Get current screen-recording status and output metadata for a device.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "deviceId": {
+            "description": "Provider-qualified device ID.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "deviceId"
+        ]
+      },
+      "outputSchema": {
+        "type": "object",
+        "properties": {
+          "deviceId": {
+            "type": "string"
+          },
+          "isRecording": {
+            "type": "boolean"
+          },
+          "outputPath": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "startedAt": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time"
+          },
+          "timeoutSeconds": {
+            "type": [
+              "integer",
+              "null"
+            ]
+          }
+        }
+      },
+      "annotations": {
+        "title": "Get recording status",
+        "openWorldHint": false,
+        "readOnlyHint": true
+      },
+      "execution": {
+        "taskSupport": "optional"
+      }
+    },
+    {
+      "name": "mobile_device_recording_stop",
+      "title": "Stop device recording",
+      "description": "Stop and finalize the active device recording, returning its persistent output path.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "deviceId": {
+            "description": "Provider-qualified device ID.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "deviceId"
+        ]
+      },
+      "outputSchema": {
+        "type": "object",
+        "properties": {
+          "deviceId": {
+            "type": "string"
+          },
+          "isRecording": {
+            "type": "boolean"
+          },
+          "outputPath": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "startedAt": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time"
+          },
+          "timeoutSeconds": {
+            "type": [
+              "integer",
+              "null"
+            ]
+          }
+        }
+      },
+      "annotations": {
+        "title": "Stop device recording",
+        "destructiveHint": false,
+        "openWorldHint": false
+      },
+      "execution": {
+        "taskSupport": "optional"
+      }
+    },
+    {
+      "name": "mobile_device_restart",
+      "title": "Restart virtual device",
+      "description": "Shut down and boot a device, waiting until it is ready.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "deviceId": {
+            "description": "Provider-qualified device ID.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "deviceId"
+        ]
+      },
+      "outputSchema": {
+        "type": "object",
+        "properties": {
+          "schemaVersion": {
+            "type": "string"
+          },
+          "id": {
+            "type": "string"
+          },
+          "platform": {
+            "type": "string"
+          },
+          "provider": {
+            "type": "string"
+          },
+          "nativeId": {
+            "type": "string"
+          },
+          "udid": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "name": {
+            "type": "string"
+          },
+          "state": {
+            "type": "string"
+          },
+          "isAvailable": {
+            "type": "boolean"
+          },
+          "isVirtual": {
+            "type": "boolean"
+          },
+          "runtimeId": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "runtimeName": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "osVersion": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "deviceTypeId": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "deviceTypeName": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "modelIdentifier": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "architecture": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "deviceSet": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "display": {
+            "type": [
+              "object",
+              "null"
+            ],
+            "properties": {
+              "pixelWidth": {
+                "type": "integer"
+              },
+              "pixelHeight": {
+                "type": "integer"
+              },
+              "pointWidth": {
+                "type": "number"
+              },
+              "pointHeight": {
+                "type": "number"
+              },
+              "scale": {
+                "type": "number"
+              },
+              "orientation": {
+                "type": "string"
+              },
+              "cornerRadius": {
+                "type": [
+                  "number",
+                  "null"
+                ]
+              },
+              "cornerCurve": {
+                "type": "string"
+              }
+            }
+          },
+          "capabilities": {
+            "type": "object",
+            "properties": {
+              "boot": {
+                "type": "boolean"
+              },
+              "shutdown": {
+                "type": "boolean"
+              },
+              "restart": {
+                "type": "boolean"
+              },
+              "erase": {
+                "type": "boolean"
+              },
+              "delete": {
+                "type": "boolean"
+              },
+              "reveal": {
+                "type": "boolean"
+              },
+              "tap": {
+                "type": "boolean"
+              },
+              "longPress": {
+                "type": "boolean"
+              },
+              "swipe": {
+                "type": "boolean"
+              },
+              "scroll": {
+                "type": "boolean"
+              },
+              "text": {
+                "type": "boolean"
+              },
+              "key": {
+                "type": "boolean"
+              },
+              "button": {
+                "type": "boolean"
+              },
+              "rotate": {
+                "type": "boolean"
+              },
+              "screenshot": {
+                "type": "boolean"
+              },
+              "liveStream": {
+                "type": "boolean"
+              },
+              "recording": {
+                "type": "boolean"
+              }
+            }
+          }
+        }
+      },
+      "annotations": {
+        "title": "Restart virtual device",
+        "destructiveHint": false,
+        "idempotentHint": true,
+        "openWorldHint": false
+      },
+      "execution": {
+        "taskSupport": "optional"
+      }
+    },
+    {
+      "name": "mobile_device_reveal",
+      "title": "Reveal virtual device",
+      "description": "Show a virtual device window. Reveals an iOS simulator in its selected Xcode host app; restarts a headless Android emulator with its native window.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "deviceId": {
+            "description": "Provider-qualified device ID.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "deviceId"
+        ]
+      },
+      "outputSchema": {
+        "type": "object",
+        "properties": {
+          "schemaVersion": {
+            "type": "string"
+          },
+          "id": {
+            "type": "string"
+          },
+          "platform": {
+            "type": "string"
+          },
+          "provider": {
+            "type": "string"
+          },
+          "nativeId": {
+            "type": "string"
+          },
+          "udid": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "name": {
+            "type": "string"
+          },
+          "state": {
+            "type": "string"
+          },
+          "isAvailable": {
+            "type": "boolean"
+          },
+          "isVirtual": {
+            "type": "boolean"
+          },
+          "runtimeId": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "runtimeName": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "osVersion": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "deviceTypeId": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "deviceTypeName": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "modelIdentifier": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "architecture": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "deviceSet": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "display": {
+            "type": [
+              "object",
+              "null"
+            ],
+            "properties": {
+              "pixelWidth": {
+                "type": "integer"
+              },
+              "pixelHeight": {
+                "type": "integer"
+              },
+              "pointWidth": {
+                "type": "number"
+              },
+              "pointHeight": {
+                "type": "number"
+              },
+              "scale": {
+                "type": "number"
+              },
+              "orientation": {
+                "type": "string"
+              },
+              "cornerRadius": {
+                "type": [
+                  "number",
+                  "null"
+                ]
+              },
+              "cornerCurve": {
+                "type": "string"
+              }
+            }
+          },
+          "capabilities": {
+            "type": "object",
+            "properties": {
+              "boot": {
+                "type": "boolean"
+              },
+              "shutdown": {
+                "type": "boolean"
+              },
+              "restart": {
+                "type": "boolean"
+              },
+              "erase": {
+                "type": "boolean"
+              },
+              "delete": {
+                "type": "boolean"
+              },
+              "reveal": {
+                "type": "boolean"
+              },
+              "tap": {
+                "type": "boolean"
+              },
+              "longPress": {
+                "type": "boolean"
+              },
+              "swipe": {
+                "type": "boolean"
+              },
+              "scroll": {
+                "type": "boolean"
+              },
+              "text": {
+                "type": "boolean"
+              },
+              "key": {
+                "type": "boolean"
+              },
+              "button": {
+                "type": "boolean"
+              },
+              "rotate": {
+                "type": "boolean"
+              },
+              "screenshot": {
+                "type": "boolean"
+              },
+              "liveStream": {
+                "type": "boolean"
+              },
+              "recording": {
+                "type": "boolean"
+              }
+            }
+          }
+        }
+      },
+      "annotations": {
+        "title": "Reveal virtual device",
+        "destructiveHint": false,
+        "idempotentHint": true,
+        "openWorldHint": false
+      },
+      "execution": {
+        "taskSupport": "optional"
+      }
+    },
+    {
+      "name": "mobile_device_rotate",
+      "title": "Rotate device",
+      "description": "Rotate a booted device to a new orientation.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "deviceId": {
+            "description": "Provider-qualified device ID.",
+            "type": "string"
+          },
+          "orientation": {
+            "description": "Target orientation: portrait, portrait-upside-down, landscape-left, or landscape-right.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "deviceId",
+          "orientation"
+        ]
+      },
+      "annotations": {
+        "title": "Rotate device",
+        "destructiveHint": false,
+        "openWorldHint": false
+      },
+      "execution": {
+        "taskSupport": "optional"
+      }
+    },
+    {
+      "name": "mobile_device_screenshot",
+      "title": "Capture device screenshot",
+      "description": "Capture a PNG screenshot from a booted device and return it as MCP image content.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "deviceId": {
+            "description": "Provider-qualified device ID.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "deviceId"
+        ]
+      },
+      "annotations": {
+        "title": "Capture device screenshot",
+        "openWorldHint": false,
+        "readOnlyHint": true
+      },
+      "execution": {
+        "taskSupport": "optional"
+      }
+    },
+    {
+      "name": "mobile_device_select",
+      "title": "Select canvas device",
+      "description": "Select a virtual device for one canvas panel and return its complete deployment target record.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "sessionId": {
+            "description": "Copilot session ID that owns the canvas.",
+            "type": "string"
+          },
+          "instanceId": {
+            "description": "Stable canvas instance ID.",
+            "type": "string"
+          },
+          "deviceId": {
+            "description": "Provider-qualified device ID from mobile_device_list.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "sessionId",
+          "instanceId",
+          "deviceId"
+        ]
+      },
+      "outputSchema": {
+        "type": "object",
+        "properties": {
+          "schemaVersion": {
+            "type": "string"
+          },
+          "id": {
+            "type": "string"
+          },
+          "platform": {
+            "type": "string"
+          },
+          "provider": {
+            "type": "string"
+          },
+          "nativeId": {
+            "type": "string"
+          },
+          "udid": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "name": {
+            "type": "string"
+          },
+          "state": {
+            "type": "string"
+          },
+          "isAvailable": {
+            "type": "boolean"
+          },
+          "isVirtual": {
+            "type": "boolean"
+          },
+          "runtimeId": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "runtimeName": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "osVersion": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "deviceTypeId": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "deviceTypeName": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "modelIdentifier": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "architecture": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "deviceSet": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "display": {
+            "type": [
+              "object",
+              "null"
+            ],
+            "properties": {
+              "pixelWidth": {
+                "type": "integer"
+              },
+              "pixelHeight": {
+                "type": "integer"
+              },
+              "pointWidth": {
+                "type": "number"
+              },
+              "pointHeight": {
+                "type": "number"
+              },
+              "scale": {
+                "type": "number"
+              },
+              "orientation": {
+                "type": "string"
+              },
+              "cornerRadius": {
+                "type": [
+                  "number",
+                  "null"
+                ]
+              },
+              "cornerCurve": {
+                "type": "string"
+              }
+            }
+          },
+          "capabilities": {
+            "type": "object",
+            "properties": {
+              "boot": {
+                "type": "boolean"
+              },
+              "shutdown": {
+                "type": "boolean"
+              },
+              "restart": {
+                "type": "boolean"
+              },
+              "erase": {
+                "type": "boolean"
+              },
+              "delete": {
+                "type": "boolean"
+              },
+              "reveal": {
+                "type": "boolean"
+              },
+              "tap": {
+                "type": "boolean"
+              },
+              "longPress": {
+                "type": "boolean"
+              },
+              "swipe": {
+                "type": "boolean"
+              },
+              "scroll": {
+                "type": "boolean"
+              },
+              "text": {
+                "type": "boolean"
+              },
+              "key": {
+                "type": "boolean"
+              },
+              "button": {
+                "type": "boolean"
+              },
+              "rotate": {
+                "type": "boolean"
+              },
+              "screenshot": {
+                "type": "boolean"
+              },
+              "liveStream": {
+                "type": "boolean"
+              },
+              "recording": {
+                "type": "boolean"
+              }
+            }
+          }
+        }
+      },
+      "annotations": {
+        "title": "Select canvas device",
+        "destructiveHint": false,
+        "idempotentHint": true,
+        "openWorldHint": false
+      },
+      "execution": {
+        "taskSupport": "optional"
+      }
+    },
+    {
+      "name": "mobile_device_settings_get",
+      "title": "Read device settings",
+      "description": "Read the device's appearance and accessibility text settings.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "deviceId": {
+            "description": "Provider-qualified device ID.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "deviceId"
+        ]
+      },
+      "annotations": {
+        "title": "Read device settings",
+        "destructiveHint": false,
+        "openWorldHint": false,
+        "readOnlyHint": true
+      },
+      "execution": {
+        "taskSupport": "optional"
+      }
+    },
+    {
+      "name": "mobile_device_settings_set",
+      "title": "Change device settings",
+      "description": "Switch dark mode or scale up text, to check a layout under conditions a user will hit. Settings left unset are left alone. Text size differs by platform: iOS takes a named contentSize such as 'large' or 'accessibility-extra-large', Android takes a numeric fontScale such as 1.3.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "deviceId": {
+            "description": "Provider-qualified device ID.",
+            "type": "string"
+          },
+          "appearance": {
+            "description": "'light' or 'dark'.",
+            "type": [
+              "string",
+              "null"
+            ],
+            "default": null
+          },
+          "fontScale": {
+            "description": "Android text scale, where 1.0 is the default.",
+            "type": [
+              "number",
+              "null"
+            ],
+            "default": null
+          },
+          "contentSize": {
+            "description": "iOS content size category, or 'increment'/'decrement' to step one.",
+            "type": [
+              "string",
+              "null"
+            ],
+            "default": null
+          },
+          "increaseContrast": {
+            "description": "Turn the increase-contrast accessibility setting on or off.",
+            "type": [
+              "boolean",
+              "null"
+            ],
+            "default": null
+          }
+        },
+        "required": [
+          "deviceId"
+        ]
+      },
+      "annotations": {
+        "title": "Change device settings",
+        "openWorldHint": false
+      },
+      "execution": {
+        "taskSupport": "optional"
+      }
+    },
+    {
+      "name": "mobile_device_shutdown",
+      "title": "Power off virtual device",
+      "description": "Power off a device without deleting or erasing it.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "deviceId": {
+            "description": "Provider-qualified device ID.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "deviceId"
+        ]
+      },
+      "outputSchema": {
+        "type": "object",
+        "properties": {
+          "schemaVersion": {
+            "type": "string"
+          },
+          "id": {
+            "type": "string"
+          },
+          "platform": {
+            "type": "string"
+          },
+          "provider": {
+            "type": "string"
+          },
+          "nativeId": {
+            "type": "string"
+          },
+          "udid": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "name": {
+            "type": "string"
+          },
+          "state": {
+            "type": "string"
+          },
+          "isAvailable": {
+            "type": "boolean"
+          },
+          "isVirtual": {
+            "type": "boolean"
+          },
+          "runtimeId": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "runtimeName": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "osVersion": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "deviceTypeId": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "deviceTypeName": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "modelIdentifier": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "architecture": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "deviceSet": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "display": {
+            "type": [
+              "object",
+              "null"
+            ],
+            "properties": {
+              "pixelWidth": {
+                "type": "integer"
+              },
+              "pixelHeight": {
+                "type": "integer"
+              },
+              "pointWidth": {
+                "type": "number"
+              },
+              "pointHeight": {
+                "type": "number"
+              },
+              "scale": {
+                "type": "number"
+              },
+              "orientation": {
+                "type": "string"
+              },
+              "cornerRadius": {
+                "type": [
+                  "number",
+                  "null"
+                ]
+              },
+              "cornerCurve": {
+                "type": "string"
+              }
+            }
+          },
+          "capabilities": {
+            "type": "object",
+            "properties": {
+              "boot": {
+                "type": "boolean"
+              },
+              "shutdown": {
+                "type": "boolean"
+              },
+              "restart": {
+                "type": "boolean"
+              },
+              "erase": {
+                "type": "boolean"
+              },
+              "delete": {
+                "type": "boolean"
+              },
+              "reveal": {
+                "type": "boolean"
+              },
+              "tap": {
+                "type": "boolean"
+              },
+              "longPress": {
+                "type": "boolean"
+              },
+              "swipe": {
+                "type": "boolean"
+              },
+              "scroll": {
+                "type": "boolean"
+              },
+              "text": {
+                "type": "boolean"
+              },
+              "key": {
+                "type": "boolean"
+              },
+              "button": {
+                "type": "boolean"
+              },
+              "rotate": {
+                "type": "boolean"
+              },
+              "screenshot": {
+                "type": "boolean"
+              },
+              "liveStream": {
+                "type": "boolean"
+              },
+              "recording": {
+                "type": "boolean"
+              }
+            }
+          }
+        }
+      },
+      "annotations": {
+        "title": "Power off virtual device",
+        "destructiveHint": false,
+        "idempotentHint": true,
+        "openWorldHint": false
+      },
+      "execution": {
+        "taskSupport": "optional"
+      }
+    },
+    {
+      "name": "mobile_device_sms_send",
+      "title": "Deliver a text message",
+      "description": "Deliver an inbound text message, as though it arrived over the network. Android only: an iOS simulator has no messaging stack. Useful for one-time-code flows and for interrupting the app under test with a notification it does not control.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "deviceId": {
+            "description": "Provider-qualified device ID.",
+            "type": "string"
+          },
+          "from": {
+            "description": "The sender's phone number.",
+            "type": "string"
+          },
+          "body": {
+            "description": "The message body.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "deviceId",
+          "from",
+          "body"
+        ]
+      },
+      "annotations": {
+        "title": "Deliver a text message",
+        "openWorldHint": false
+      },
+      "execution": {
+        "taskSupport": "optional"
+      }
+    },
+    {
+      "name": "mobile_device_swipe",
+      "title": "Swipe device",
+      "description": "Swipe or drag across a booted device using logical point coordinates and a duration.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "deviceId": {
+            "description": "Provider-qualified device ID.",
+            "type": "string"
+          },
+          "startX": {
+            "description": "Starting horizontal logical point coordinate.",
+            "type": "number"
+          },
+          "startY": {
+            "description": "Starting vertical logical point coordinate.",
+            "type": "number"
+          },
+          "endX": {
+            "description": "Ending horizontal logical point coordinate.",
+            "type": "number"
+          },
+          "endY": {
+            "description": "Ending vertical logical point coordinate.",
+            "type": "number"
+          },
+          "duration": {
+            "description": "Gesture duration in seconds.",
+            "type": "number",
+            "default": 0.35
+          }
+        },
+        "required": [
+          "deviceId",
+          "startX",
+          "startY",
+          "endX",
+          "endY"
+        ]
+      },
+      "annotations": {
+        "title": "Swipe device",
+        "destructiveHint": false,
+        "openWorldHint": false
+      },
+      "execution": {
+        "taskSupport": "optional"
+      }
+    },
+    {
+      "name": "mobile_device_tap",
+      "title": "Tap device",
+      "description": "Tap or long-press a booted device at logical point coordinates.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "deviceId": {
+            "description": "Provider-qualified device ID.",
+            "type": "string"
+          },
+          "x": {
+            "description": "Horizontal logical point coordinate.",
+            "type": "number"
+          },
+          "y": {
+            "description": "Vertical logical point coordinate.",
+            "type": "number"
+          },
+          "duration": {
+            "description": "Press duration in seconds; zero performs a tap.",
+            "type": "number",
+            "default": 0
+          }
+        },
+        "required": [
+          "deviceId",
+          "x",
+          "y"
+        ]
+      },
+      "annotations": {
+        "title": "Tap device",
+        "destructiveHint": false,
+        "openWorldHint": false
+      },
+      "execution": {
+        "taskSupport": "optional"
+      }
+    },
+    {
+      "name": "mobile_device_type_text",
+      "title": "Type text",
+      "description": "Type text into the focused control on a booted device, using clipboard paste for unsupported Unicode.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "deviceId": {
+            "description": "Provider-qualified device ID.",
+            "type": "string"
+          },
+          "text": {
+            "description": "Text to enter into the focused control on the device.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "deviceId",
+          "text"
+        ]
+      },
+      "annotations": {
+        "title": "Type text",
+        "destructiveHint": false,
+        "openWorldHint": false
+      },
+      "execution": {
+        "taskSupport": "optional"
+      }
+    },
+    {
+      "name": "mobile_device_ui_dump",
+      "title": "Read screen elements",
+      "description": "Read the accessibility hierarchy of whatever is on screen, as a tree of elements with labels, identifiers, roles and logical-point frames. Use this to understand a screen without a screenshot.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "deviceId": {
+            "description": "Provider-qualified device ID.",
+            "type": "string"
+          },
+          "includeRaw": {
+            "description": "Also return the untouched platform payload; useful when the normalized tree omits something.",
+            "type": "boolean",
+            "default": false
+          }
+        },
+        "required": [
+          "deviceId"
+        ]
+      },
+      "annotations": {
+        "title": "Read screen elements",
+        "destructiveHint": false,
+        "openWorldHint": false,
+        "readOnlyHint": true
+      },
+      "execution": {
+        "taskSupport": "optional"
+      }
+    },
+    {
+      "name": "mobile_device_ui_find",
+      "title": "Find screen elements",
+      "description": "Find on-screen elements by visible text, accessibility identifier, or role. Returns each match with its center point, so the result can be fed straight to a tap.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "deviceId": {
+            "description": "Provider-qualified device ID.",
+            "type": "string"
+          },
+          "text": {
+            "description": "Visible text or accessibility label to match; substring and case-insensitive unless exact is set.",
+            "type": [
+              "string",
+              "null"
+            ],
+            "default": null
+          },
+          "identifier": {
+            "description": "Accessibility identifier to match.",
+            "type": [
+              "string",
+              "null"
+            ],
+            "default": null
+          },
+          "role": {
+            "description": "Element role: button, text, field, image, switch, slider, link, cell, list, tab, checkbox, container, other.",
+            "type": [
+              "string",
+              "null"
+            ],
+            "default": null
+          },
+          "exact": {
+            "description": "Require the whole value to match rather than a substring.",
+            "type": "boolean",
+            "default": false
+          },
+          "limit": {
+            "description": "Maximum number of matches to return.",
+            "type": "integer",
+            "default": 20
+          }
+        },
+        "required": [
+          "deviceId"
+        ]
+      },
+      "annotations": {
+        "title": "Find screen elements",
+        "destructiveHint": false,
+        "openWorldHint": false,
+        "readOnlyHint": true
+      },
+      "execution": {
+        "taskSupport": "optional"
+      }
+    },
+    {
+      "name": "mobile_device_ui_tap",
+      "title": "Tap element",
+      "description": "Tap the first element matching a query. Prefer this over coordinate taps: it reads the live hierarchy, so it stays correct when layout, scroll position, or device size changes.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "deviceId": {
+            "description": "Provider-qualified device ID.",
+            "type": "string"
+          },
+          "text": {
+            "description": "Visible text or accessibility label to match; substring and case-insensitive unless exact is set.",
+            "type": [
+              "string",
+              "null"
+            ],
+            "default": null
+          },
+          "identifier": {
+            "description": "Accessibility identifier to match.",
+            "type": [
+              "string",
+              "null"
+            ],
+            "default": null
+          },
+          "role": {
+            "description": "Element role, for example button, field, or switch.",
+            "type": [
+              "string",
+              "null"
+            ],
+            "default": null
+          },
+          "exact": {
+            "description": "Require the whole value to match rather than a substring.",
+            "type": "boolean",
+            "default": false
+          }
+        },
+        "required": [
+          "deviceId"
+        ]
+      },
+      "annotations": {
+        "title": "Tap element",
+        "destructiveHint": false,
+        "openWorldHint": false
+      },
+      "execution": {
+        "taskSupport": "optional"
+      }
+    }
+  ]
+}

@@ -66,6 +66,7 @@ struct HidTests {
 		commandFramingAndFailurePolicy(runner)
 		contactCleanup(runner)
 		AccessibilityTests.run(runner)
+		FramePacingTests.run(runner)
 
 		runner.finish()
 	}

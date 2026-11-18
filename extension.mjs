@@ -1,15 +1,22 @@
 import { execFile } from "node:child_process";
+import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { sep } from "node:path";
 import { promisify } from "node:util";
 import { createCanvas, joinSession } from "@github/copilot-sdk/extension";
 import { resolveCommand } from "./lib/runtime.mjs";
+import { mobileCanvasBackend } from "./lib/backend.mjs";
+import { createAilohaCanvasConsent, withAilohaCanvas } from "./lib/ailoha/github-adapter.mjs";
+import { closeAilohaGithubOwners, createAilohaGithubTools } from "./lib/ailoha/github-tools.mjs";
+import { ailohaAppMcpCatalog, ailohaMcpCatalog, createAilohaMcpDispatcher } from "./lib/ailoha/mcp-host.mjs";
+import { createRuntimeCanvasHost, getRuntimeContextBinding } from "./lib/ailoha/runtime-backend.mjs";
 
 const execFileAsync = promisify(execFile);
 const extensionPath = process.env.EXTENSION_PATH || fileURLToPath(import.meta.url);
 const isPluginInstall = extensionPath.includes(`${sep}installed-plugins${sep}`);
 const canvasId = isPluginInstall ? "mobile-device" : "mobile-device-local";
 const canvasName = isPluginInstall ? "Mobile Device" : "Mobile Device (Local)";
+let session;
 
 // Resolved lazily and then cached: extracting the bundled binary should happen
 // on first use rather than at import time, so a resolution failure surfaces as
@@ -63,7 +70,7 @@ function targetAction(name, description, verb) {
   };
 }
 
-const canvas = createCanvas({
+const canvasOptions = {
   id: canvasId,
   displayName: canvasName,
   description: "View, create, boot, and interact with local iOS simulators and Android emulators.",
@@ -416,7 +423,28 @@ const canvas = createCanvas({
   onClose: async (ctx) => {
     await runCli(["canvas", "close", ...contextArgs(ctx)]);
   },
-});
+};
+const ownedAilohaHosts = new Set();
+const backend = mobileCanvasBackend();
+const githubTools = backend === "ailoha" ? createAilohaGithubTools({
+  descriptors: [...await ailohaMcpCatalog(), ...ailohaAppMcpCatalog()],
+  nameForDescriptor: isPluginInstall ? (name) => name
+    : (name) => name.replace(/^mobile_(device|app)_/, "mobile_$1_local_"),
+  getBinding: getRuntimeContextBinding,
+  createDispatcher: ({ binding, backendState }) => createAilohaMcpDispatcher({
+    binding, backendState, version: JSON.parse(readFileSync(new URL("./package.json", import.meta.url), "utf8")).version,
+  }),
+}) : null;
+const canvas = createCanvas(withAilohaCanvas(canvasOptions, {
+  backend,
+  createHost(options) {
+    const host = createRuntimeCanvasHost({ ...options, confirmDestructive: createAilohaCanvasConsent(() => session) });
+    ownedAilohaHosts.add(host);
+    return host;
+  },
+  onHostOpened: (scope) => githubTools.opened(scope),
+  onHostClosing: (scope) => githubTools.closing(scope),
+}));
 
 // The icon is a declaration field that has to be an extension-relative PNG path, but
 // createCanvas builds its declaration from a fixed field list that drops anything else, so it
@@ -424,4 +452,12 @@ const canvas = createCanvas({
 // tab in the desktop app draws its own glyph from the canvas type and ignores this.
 canvas.declaration.icon = "assets/icon.png";
 
-await joinSession({ canvases: [canvas] });
+session = await joinSession({
+  canvases: [canvas],
+  ...(githubTools ? { tools: githubTools.tools } : {}),
+  hooks: {
+    async onSessionEnd() {
+      await closeAilohaGithubOwners(githubTools, [...ownedAilohaHosts]);
+    },
+  },
+});

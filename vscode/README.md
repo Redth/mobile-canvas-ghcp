@@ -1,5 +1,23 @@
 # Mobile Canvas
 
+**Ailoha source preview:** the application setting `mobileCanvas.backend`
+defaults to `legacy`. Setting it to `ailoha` and reloading the window opts into
+the shared Target Host adapter once the reviewed package contains its approved
+public SDK graph. Missing pins/packages report unavailable; errors never fall
+back. Inventory/selection, advertised lifecycle, PNG, geometry-bound pointer
+gestures, ALHV display and scoped recording are wired. Recording starts only
+when the verified CLI advertises recovery. Optional Workspace project details use
+the current trusted local folder (or the active editor's folder in multi-root
+windows), asking only when ambiguous; they do not
+install instrumentation, verify a running agent or select an application.
+Remote/non-file inspection roots are unsupported. Read-only System inspection
+uses the selected Target Host target; App inspection requires a verified native
+instance explicitly selected in the canonical named context, never a workspace
+application guess. Keyboard/buttons and broader controls remain unsupported.
+Public SDK and
+refreshed native embedded-web artifacts are still release gates; this is not a
+Marketplace release. The feature list below describes the production default.
+
 **Build, run, and test mobile apps without leaving VS Code.**
 
 Mobile Canvas puts a live iOS Simulator or Android emulator in the Activity Bar.

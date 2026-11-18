@@ -22,6 +22,7 @@ export interface RetiringBridge {
 export class BridgeLifecycleCoordinator<TBridge extends RetiringBridge> {
   private generation = 0;
   private closing: Promise<void> = Promise.resolve();
+  private retiring: TBridge | undefined;
   private active: TBridge | undefined;
 
   get current(): TBridge | undefined {
@@ -59,14 +60,20 @@ export class BridgeLifecycleCoordinator<TBridge extends RetiringBridge> {
   /**
    * Retires the currently active bridge (if any) and waits for its teardown to finish. Chains
    * onto any previous retirement so overlapping calls still serialize: a bridge is only disposed
-   * and awaited after everything retired before it has fully closed.
+   * and awaited after everything retired before it has fully closed. Only a new explicit
+   * resolution may retry a failed close of the retained bridge.
    */
-  async retire(): Promise<void> {
+  async retire({ retryFailed = false, generation }: { retryFailed?: boolean; generation?: number } = {}): Promise<void> {
     const bridge = this.active;
     this.active = undefined;
     const previousClosing = this.closing;
+    const previousBridge = this.retiring;
     const closeThis = async () => {
-      await previousClosing;
+      try { await previousClosing; }
+      catch (error) {
+        if (!retryFailed || !previousBridge || (generation !== undefined && !this.isCurrent(generation))) throw error;
+        await previousBridge.closed();
+      }
       if (bridge) {
         bridge.dispose();
         await bridge.closed();
@@ -74,6 +81,8 @@ export class BridgeLifecycleCoordinator<TBridge extends RetiringBridge> {
     };
     const closing = closeThis();
     this.closing = closing;
+    this.retiring = bridge ?? previousBridge;
     await closing;
+    if (this.closing === closing) this.retiring = undefined;
   }
 }

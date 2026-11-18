@@ -41,6 +41,53 @@ export interface Provider {
   description?: string;
 }
 
+export interface CatalogDescriptor {
+  catalogId: string;
+  providerId: string;
+  name: string;
+  kind: "runtime" | "target-type" | "template" | "application" | "media";
+  revision?: string;
+  metadata?: JsonObject;
+}
+
+export interface RuntimeDescriptor {
+  runtimeId: string;
+  providerId: string;
+  name: string;
+  platform: string;
+  version: string;
+  architecture?: string;
+  state?: "available" | "installing" | "unavailable";
+  metadata?: JsonObject;
+}
+
+export interface TargetTypeDescriptor {
+  targetTypeId: string;
+  providerId: string;
+  name: string;
+  kind: "simulator" | "emulator" | "physical-device" | "desktop" | "browser" | "remote";
+  platform?: string;
+  configSchema?: JsonObject;
+  capabilities?: Capability[];
+}
+
+export interface TemplateDescriptor {
+  templateId: string;
+  providerId: string;
+  targetTypeId: string;
+  name: string;
+  runtimeId?: string;
+  description?: string;
+  configuration?: JsonObject;
+}
+
+export interface ProviderDiagnostics {
+  providerId: string;
+  state: Provider["state"];
+  checkedAt: string;
+  checks: { name: string; status: "pass" | "warn" | "fail"; detail?: string }[];
+}
+
 export interface Bounds {
   x: number;
   y: number;
@@ -95,6 +142,20 @@ export interface TargetListOptions extends RequestOptions {
   status?: TargetStatus;
 }
 
+/** Fresh read observations, not a token or authority for a later mutation. */
+export interface TargetCatalogSnapshot {
+  schema: "ailoha.target-catalog/v1";
+  capturedAt: string;
+  providers: Array<{
+    provider: Provider;
+    targets: Array<{ target: Target; capabilities: Capability[] }>;
+  }>;
+}
+
+export interface TargetCatalogOptions extends RequestOptions {
+  providerId?: string;
+}
+
 export type JsonValue = string | number | boolean | null | JsonValue[] | JsonObject;
 export interface JsonObject {
   [key: string]: JsonValue;
@@ -119,14 +180,45 @@ export interface LifecycleRequest {
 
 export interface LifecycleOptions extends RequestOptions {
   request?: LifecycleRequest;
+  /** Optional total request budget, no greater than the configured client ceiling. */
+  timeoutMs?: number;
 }
 
 /** A caller-side gate, not evidence that user consent has been obtained. */
 export interface ConfirmationOptions extends RequestOptions {
   confirmed: true;
+  timeoutMs?: number;
 }
 
 export interface ConfirmedLifecycleOptions extends LifecycleOptions, ConfirmationOptions {}
+
+export interface InstalledTargetApp {
+  appId: string;
+  state: "installed" | "running" | "stopped" | "installing" | "uninstalling";
+  name: string;
+  version: string;
+  buildNumber: string;
+  packageId: string;
+  theme?: string | null;
+  kind?: "user" | "system" | null;
+  processId?: number | null;
+  path?: string | null;
+  dataContainer?: string | null;
+}
+
+export interface TargetAppOp {
+  appOpId: string;
+  appId?: string;
+  mode: "allow" | "deny" | "foreground" | "default" | "ignored";
+  uidScoped?: boolean | null;
+}
+
+export interface AppLaunchRequest {
+  arguments?: string[];
+  environment?: Record<string, string>;
+  deepLink?: string;
+  requestId?: string;
+}
 
 export type OperationStatus =
   | "queued" | "running" | "succeeded" | "failed" | "cancelling" | "cancelled";
@@ -178,7 +270,8 @@ export interface ProblemDetails {
 export type ProtocolErrorCode =
   | "invalid_connection" | "invalid_options" | "invalid_identifier"
   | "invalid_request" | "confirmation_required" | "request_too_large"
-  | "incompatible_profile" | "host_identity_mismatch" | "target_identity_mismatch"
+  | "incompatible_profile" | "capability_not_supported" | "host_identity_mismatch" | "target_identity_mismatch"
+  | "provider_identity_mismatch" | "app_identity_mismatch"
   | "operation_identity_mismatch" | "operation_failed" | "operation_cancelled"
   | "invalid_response" | "credential_exposure" | "redirect_rejected"
   | "response_too_large" | "timeout" | "cancelled" | "transport_error"
@@ -192,6 +285,7 @@ export interface ProtocolErrorResult {
   problem?: ProblemDetails;
   operationId?: string;
   operation?: Operation;
+  transportCode?: string;
 }
 
 export class AilohaProtocolError extends Error {
@@ -202,16 +296,86 @@ export class AilohaProtocolError extends Error {
   readonly problem?: ProblemDetails;
   readonly operationId?: string;
   readonly operation?: Operation;
+  readonly transportCode?: string;
   toJSON(): ProtocolErrorResult;
+}
+
+export interface TargetArtifactContext {
+  targetId: string;
+  providerId?: string;
+}
+
+export interface TargetFileListing {
+  path: string;
+  nativePath?: string;
+  total: number;
+  files: Array<{
+    name: string;
+    type: "file" | "directory";
+    path?: string;
+    nativePath?: string;
+    nativeModified?: string;
+    size?: number;
+    "x-ailoha-target-host"?: TargetArtifactContext;
+  }>;
+}
+
+export interface TargetLogListing {
+  total?: number;
+  entries: Array<{
+    nativeTimestamp?: string;
+    nativeLevel?: string;
+    nativeSource?: string;
+    source: string;
+    message: string;
+    processId?: number | null;
+    subsystem?: string | null;
+    "x-ailoha-target-host"?: TargetArtifactContext;
+  }>;
+}
+
+export interface TargetCrashReport {
+  crashId: string;
+  nativeName?: string;
+  nativeTimestamp?: string;
+  nativeKind?: string | null;
+  appId?: string | null;
+  content?: string;
+  "x-ailoha-target-host"?: TargetArtifactContext;
 }
 
 export interface TargetHostClient {
   readonly connection: PublicConnection;
   getHostStatus(options?: RequestOptions): Promise<HostStatus>;
   listProviders(options?: RequestOptions): Promise<Provider[]>;
+  getTargetCatalogSnapshot(options?: TargetCatalogOptions): Promise<TargetCatalogSnapshot>;
+  listProviderCatalogs(providerId: string, options?: RequestOptions): Promise<CatalogDescriptor[]>;
+  listProviderRuntimes(providerId: string, options?: RequestOptions): Promise<RuntimeDescriptor[]>;
+  listProviderTargetTypes(providerId: string, options?: RequestOptions): Promise<TargetTypeDescriptor[]>;
+  listProviderTemplates(providerId: string, options?: RequestOptions): Promise<TemplateDescriptor[]>;
+  getProviderDiagnostics(providerId: string, options?: RequestOptions): Promise<ProviderDiagnostics>;
   listTargets(options?: TargetListOptions): Promise<Target[]>;
   getTarget(targetId: string, options?: RequestOptions): Promise<Target>;
   getTargetCapabilities(targetId: string, options?: RequestOptions): Promise<Capability[]>;
+  listTargetApps(targetId: string, options?: RequestOptions & { includeSystem?: boolean }): Promise<InstalledTargetApp[]>;
+  listTargetAppReferences(targetId: string, options?: RequestOptions): Promise<Array<{
+    appId: string; packageId?: string | null; "x-ailoha-target-host"?: TargetArtifactContext;
+  }>>;
+  getTargetApp(targetId: string, appId: string, options?: RequestOptions): Promise<InstalledTargetApp>;
+  launchTargetApp(targetId: string, appId: string, request?: AppLaunchRequest, options?: RequestOptions): Promise<Operation>;
+  terminateTargetApp(targetId: string, appId: string, options?: RequestOptions): Promise<Operation>;
+  uninstallTargetApp(targetId: string, appId: string, options: ConfirmationOptions): Promise<Operation>;
+  listTargetAppOps(targetId: string, appId: string, options?: RequestOptions): Promise<TargetAppOp[]>;
+  updateTargetAppOp(targetId: string, appId: string, appOpId: string, mode: TargetAppOp["mode"], options?: RequestOptions): Promise<TargetAppOp>;
+  queryTargetFiles(targetId: string, path: string, options?: RequestOptions): Promise<TargetFileListing>;
+  queryTargetLogs(targetId: string, query: {
+    appId?: string; text?: string; level?: string; limit?: string; since?: string; until?: string;
+  }, options?: RequestOptions): Promise<TargetLogListing>;
+  queryTargetCrashes(targetId: string, query: {
+    appId?: string; text?: string; limit?: string;
+  }, options?: RequestOptions):
+    Promise<{ total?: number; crashes: TargetCrashReport[] }>;
+  getTargetCrashDetail(targetId: string, crashId: string, options?: RequestOptions): Promise<TargetCrashReport>;
   listTargetSurfaces(targetId: string, options?: RequestOptions): Promise<Surface[]>;
   createTarget(request: TargetCreateRequest, options?: RequestOptions): Promise<Operation>;
   startTarget(targetId: string, options?: LifecycleOptions): Promise<Operation>;
@@ -231,3 +395,30 @@ export function connectTargetHost(
   connection: TargetHostConnection,
   options?: ClientOptions,
 ): Promise<TargetHostClient>;
+
+export interface OwnerTransportResponse<T = unknown> {
+  readonly status: number;
+  readonly location: string | null;
+  readonly retryAfterMs: number | null;
+  readonly contentType: string | null;
+  readonly body: T;
+}
+
+export interface OwnerTargetHostTransport {
+  response<T = unknown>(path: string, options?: {
+    method?: "GET" | "POST" | "PATCH" | "DELETE";
+    body?: string | Uint8Array;
+    signal?: AbortSignal;
+    timeoutMs?: number;
+  }): Promise<OwnerTransportResponse<T>>;
+}
+
+export interface OwnerTransportClient extends Omit<TargetHostClient, "connection" | "toJSON"> {
+  readonly connection: Readonly<{ hostId: string; profile: typeof TARGET_HOST_PROFILE }>;
+  toJSON(): Readonly<{ hostId: string; profile: typeof TARGET_HOST_PROFILE }>;
+}
+
+export function connectTargetHostTransport(
+  transport: OwnerTargetHostTransport,
+  options: ClientOptions & { hostId: string; profile?: typeof TARGET_HOST_PROFILE },
+): Promise<OwnerTransportClient>;

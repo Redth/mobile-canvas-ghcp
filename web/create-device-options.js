@@ -7,29 +7,34 @@ function platformKey(value) {
 
 function platformRuntimes(catalog, platform) {
   return (catalog?.runtimes || [])
-    .filter((runtime) => runtime.isAvailable && platformKey(runtime.platform) === platform);
+    .filter((runtime) => runtime.isAvailable && platformKey(runtime.platform) === platform
+      && (catalog.backend === "ailoha" ? runtime.isCreatable === true : runtime.isCreatable !== false));
 }
 
 function platformDeviceTypes(catalog, platform) {
   return (catalog?.deviceTypes || [])
-    .filter((type) => platformKey(type.platform) === platform);
+    .filter((type) => platformKey(type.platform) === platform
+      && (catalog.backend === "ailoha" ? type.isCreatable === true : type.isCreatable !== false));
 }
 
 export function creatablePlatforms(catalog) {
-  return CREATE_PLATFORM_ORDER.filter((platform) =>
-    platformRuntimes(catalog, platform).length > 0
-      && platformDeviceTypes(catalog, platform).length > 0);
+  return CREATE_PLATFORM_ORDER.filter((platform) => createOptions(catalog, platform).runtimes.length > 0);
 }
 
 export function createOptions(catalog, platform, runtimeId) {
   const key = platformKey(platform);
-  if (!key) return { runtimes: [], deviceTypes: [] };
+  if (!key || (catalog?.backend === "ailoha" && catalog.creationSupport?.supported !== true)) {
+    return { runtimes: [], deviceTypes: [] };
+  }
 
-  const runtimes = platformRuntimes(catalog, key);
+  const compatibleTypes = (runtime) => {
+    const supportedTypeIds = new Set(runtime?.supportedDeviceTypeIds || []);
+    return platformDeviceTypes(catalog, key)
+      .filter((type) => supportedTypeIds.size === 0 || supportedTypeIds.has(type.id));
+  };
+  const runtimes = platformRuntimes(catalog, key).filter((runtime) => compatibleTypes(runtime).length > 0);
   const runtime = runtimes.find((candidate) => candidate.id === runtimeId) || runtimes[0];
-  const supportedTypeIds = new Set(runtime?.supportedDeviceTypeIds || []);
-  const deviceTypes = platformDeviceTypes(catalog, key)
-    .filter((type) => supportedTypeIds.size === 0 || supportedTypeIds.has(type.id));
+  const deviceTypes = runtime ? compatibleTypes(runtime) : [];
 
   return { runtimes, deviceTypes };
 }

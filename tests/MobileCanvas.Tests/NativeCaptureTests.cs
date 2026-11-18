@@ -1,3 +1,4 @@
+using System.Diagnostics;
 using MobileCanvas.Contracts;
 using MobileCanvas.iOS;
 
@@ -34,6 +35,124 @@ public class NativeCaptureTests
 				"1311",
 			],
 			startInfo.ArgumentList);
+	}
+
+	[Theory]
+	[InlineData(1.0, 1320, 2868, 1920)]
+	[InlineData(0.9, 1320, 2868, 1920)]
+	[InlineData(0.5, 1320, 2868, 1434)]
+	[InlineData(1.0, 2868, 1320, 1920)]
+	[InlineData(1.0, 1080, 1920, null)]
+	[InlineData(1.0, 750, 1334, null)]
+	public void FramebufferArguments_CapUnscaledVideoAtTheDefaultCeiling(
+		double scale,
+		int pixelWidth,
+		int pixelHeight,
+		int? expectedMaxHeight)
+	{
+		var startInfo = IosScreenCaptureVideoSession.CreateFramebufferStartInfo(
+			"/tmp/mobile-screencap",
+			"SIMULATOR-UDID",
+			new StreamOptions { FramesPerSecond = 60, Scale = scale },
+			new DisplayGeometry { PixelWidth = pixelWidth, PixelHeight = pixelHeight });
+
+		var arguments = startInfo.ArgumentList.ToList();
+		var index = arguments.IndexOf("--max-height");
+		if (expectedMaxHeight is null)
+		{
+			Assert.Equal(-1, index);
+		}
+		else
+		{
+			Assert.True(index >= 0, "expected --max-height");
+			Assert.Equal(expectedMaxHeight.Value.ToString(), arguments[index + 1]);
+		}
+	}
+
+	[Fact]
+	public async Task FramebufferStartup_DrainsVideoWrittenBeforeReady()
+	{
+		// More than the 64 KB pipe buffer: a host that reads stdout only after `ready` deadlocks
+		// the helper here, because its write blocks before it can report ready.
+		const int bytesBeforeReady = 256 * 1024;
+		var startInfo = new ProcessStartInfo("/bin/sh")
+		{
+			RedirectStandardOutput = true,
+			RedirectStandardError = true,
+			UseShellExecute = false,
+		};
+		startInfo.ArgumentList.Add("-c");
+		startInfo.ArgumentList.Add(
+			$"head -c {bytesBeforeReady} /dev/zero; echo '{{\"type\":\"ready\",\"fps\":60}}' >&2; sleep 30");
+		var releases = 0;
+
+		var session = await IosScreenCaptureVideoSession.StartProcessAsync(
+			startInfo,
+			new StreamOptions(),
+			new DisplayGeometry(),
+			"framebuffer",
+			sourceDetail: null,
+			() => releases++,
+			CancellationToken.None,
+			TimeSpan.FromSeconds(5));
+		var received = 0;
+		try
+		{
+			using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(5));
+			await foreach (var chunk in session.ReadAsync(timeout.Token))
+			{
+				received += chunk.Length;
+				if (received >= bytesBeforeReady)
+					break;
+			}
+		}
+		finally
+		{
+			await session.DisposeAsync();
+		}
+
+		Assert.Equal(60, session.Descriptor.FramesPerSecond);
+		Assert.Equal(bytesBeforeReady, received);
+		Assert.Equal(1, releases);
+	}
+
+	[Fact]
+	public async Task FramebufferStartup_ReleasesWhenTheHelperExitsBeforeReady()
+	{
+		var startInfo = new ProcessStartInfo("/bin/sh")
+		{
+			RedirectStandardOutput = true,
+			RedirectStandardError = true,
+			UseShellExecute = false,
+		};
+		startInfo.ArgumentList.Add("-c");
+		startInfo.ArgumentList.Add("head -c 200000 /dev/zero; exit 3");
+		var releases = 0;
+
+		await Assert.ThrowsAsync<InvalidOperationException>(() =>
+			IosScreenCaptureVideoSession.StartProcessAsync(
+				startInfo,
+				new StreamOptions(),
+				new DisplayGeometry(),
+				"framebuffer",
+				sourceDetail: null,
+				() => releases++,
+				CancellationToken.None,
+				TimeSpan.FromSeconds(5)));
+
+		Assert.Equal(1, releases);
+	}
+
+	[Theory]
+	[InlineData("Device Hub", true, "Device Hub is not showing this device.")]
+	[InlineData("Simulator", false, "Simulator has no device windows open.")]
+	[InlineData(null, true, "The simulator host app is not showing this device.")]
+	public void CaptureWindowFailure_NamesTheSelectedHostApp(string? host, bool anyWindows, string expectedStart)
+	{
+		var message = IosSimulatorBackend.DescribeMissingCaptureWindow(host, anyWindows);
+
+		Assert.StartsWith(expectedStart, message);
+		Assert.Contains("Show simulator window", message);
 	}
 
 	[Fact]

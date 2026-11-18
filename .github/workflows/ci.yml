@@ -20,7 +20,12 @@ jobs:
         with:
           node-version: 22
           cache: npm
-          cache-dependency-path: vscode/package-lock.json
+          cache-dependency-path: |
+            package-lock.json
+            vscode/package-lock.json
+
+      - name: Install host packaging dependencies
+        run: npm ci --ignore-scripts --omit=optional
 
       - name: Test
         run: dotnet test MobileCanvas.slnx -c Release
@@ -69,7 +74,7 @@ jobs:
         run: npm run ailoha:manifest -- --require-clean --output .build/ailoha-source-manifest.json
 
       - name: Install VS Code extension dependencies
-        run: npm ci --prefix vscode --ignore-scripts
+        run: npm ci --prefix vscode --ignore-scripts --omit=optional
 
       - name: Test VS Code extension
         run: npm test --prefix vscode

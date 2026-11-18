@@ -87,7 +87,8 @@ struct MobileScreencap {
 
 			Framebuffer options:
 			  --udid <udid>            Simulator UDID. Required.
-			  --fps <n>                Target frame rate. Default 60.
+			  --fps <n>                Target frame rate and IOSurface poll rate. Default 60.
+			                           A static screen is re-sent at 5 FPS (or --fps if lower).
 			  --bitrate <bits>         Average bitrate ceiling. Default 16000000.
 			  --max-height <px>        Clamp the encoded height, preserving aspect ratio.
 

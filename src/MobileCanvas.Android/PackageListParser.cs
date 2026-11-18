@@ -67,11 +67,22 @@ public static class PackageListParser
 			line = line["package:".Length..];
 
 			string? build = null;
+			int? uid = null;
+			var uidMarker = line.LastIndexOf(" uid:", StringComparison.Ordinal);
+			if (uidMarker >= 0)
+			{
+				var value = line[(uidMarker + " uid:".Length)..].Split(' ', 2)[0];
+				if (int.TryParse(value, System.Globalization.NumberStyles.None,
+					System.Globalization.CultureInfo.InvariantCulture, out var parsedUid) && parsedUid >= 0)
+					uid = parsedUid;
+				line = string.Concat(line.AsSpan(0, uidMarker), line.AsSpan(uidMarker + " uid:".Length + value.Length));
+			}
 			var versionMarker = line.LastIndexOf(" versionCode:", StringComparison.Ordinal);
 			if (versionMarker >= 0)
 			{
-				build = line[(versionMarker + " versionCode:".Length)..].Trim();
-				line = line[..versionMarker];
+				var value = line[(versionMarker + " versionCode:".Length)..].Split(' ', 2)[0];
+				build = value.Trim();
+				line = string.Concat(line.AsSpan(0, versionMarker), line.AsSpan(versionMarker + " versionCode:".Length + value.Length));
 			}
 
 			var separator = line.LastIndexOf('=');
@@ -94,6 +105,7 @@ public static class PackageListParser
 				Running = pid is not null,
 				ProcessId = pid,
 				Path = path,
+				Uid = uid,
 			});
 		}
 

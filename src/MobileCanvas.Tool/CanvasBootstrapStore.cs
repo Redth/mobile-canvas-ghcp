@@ -66,6 +66,16 @@ internal sealed class CanvasBootstrapStore
 		}
 	}
 
+	/// <summary>Whether a browser is still signed in to this canvas.</summary>
+	public bool HasSession(CanvasContextKey key)
+	{
+		lock (_gate)
+		{
+			var now = DateTimeOffset.UtcNow;
+			return _sessions.Values.Any(session => session.Key == key && session.ExpiresAt >= now);
+		}
+	}
+
 	public void Close(CanvasContextKey key)
 	{
 		lock (_gate)

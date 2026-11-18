@@ -41,7 +41,10 @@ application rather than `/Library/Developer/CommandLineTools`.
 ## Optional accessibility and video fallbacks
 
 The bundled `mobile-screencap` helper provides the primary iOS input and video
-paths. Install Meta's `idb` package only when you need the accessibility
+paths. Its input helper attaches to one simulator only while that simulator is
+in use: it ends when the last open canvas showing the simulator closes or
+detaches, or after two minutes without input, and starts again on the next
+input. Install Meta's `idb` package only when you need the accessibility
 hierarchy, compatibility input, or the final video fallback:
 
 ```bash

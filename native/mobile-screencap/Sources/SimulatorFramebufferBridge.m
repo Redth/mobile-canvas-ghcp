@@ -225,6 +225,18 @@ static SimDevice *_Nullable MCFindDevice(
     return nil;
 }
 
+- (id _Nullable)liveSurface
+{
+    if (self.descriptor == nil) {
+        return nil;
+    }
+    id surface = [self immediatelyAvailableSurface];
+    if (surface != nil) {
+        self.currentSurface = surface;
+    }
+    return surface;
+}
+
 - (BOOL)startWithSurfaceChangedHandler:(MCSimulatorSurfaceChangedHandler)surfaceChangedHandler
                   frameRenderedHandler:(MCSimulatorFrameRenderedHandler)frameRenderedHandler
                                  error:(NSError **)error

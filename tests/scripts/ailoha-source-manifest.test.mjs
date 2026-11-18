@@ -4,6 +4,8 @@ import { readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import test from "node:test";
 import { fileURLToPath } from "node:url";
+import { writeFile } from "node:fs/promises";
+import { ownedTestDirectory } from "./fixtures/owned-test-directory.mjs";
 import {
   buildAilohaSourceManifest,
   computeAilohaSnapshot,
@@ -89,6 +91,17 @@ test("Ailoha source manifest is deterministic for an unchanged checkout", () => 
 
   assert.equal(first.snapshot.sha256, second.snapshot.sha256);
   assert.deepEqual(first.files, second.files);
+});
+
+test("active owned stage fixtures cannot enter a concurrent source snapshot", async (t) => {
+  const before = buildAilohaSourceManifest();
+  const directory = await ownedTestDirectory(t, "mobile-stage-");
+  await writeFile(join(directory, "local app.apk"), "active fixture");
+  const during = buildAilohaSourceManifest();
+
+  assert.equal(during.snapshot.sha256, before.snapshot.sha256);
+  assert.equal(during.source.dirty, before.source.dirty);
+  assert.deepEqual(during.files, before.files);
 });
 
 test("Ailoha source snapshot authenticates the feature surface inventory", () => {

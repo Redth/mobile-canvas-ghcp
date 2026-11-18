@@ -35,6 +35,9 @@ public sealed record InstalledApp
 	/// <summary>Where the installed bundle lives on the device.</summary>
 	public string? Path { get; init; }
 
+	/// <summary>Android package UID from the installed-package inventory, when available.</summary>
+	public int? Uid { get; init; }
+
 	/// <summary>
 	/// The app's writable data directory. Populated on iOS, where a simulator's container is a real
 	/// path on the host; null on Android, where the sandbox is only reachable through adb.

@@ -132,6 +132,13 @@ internal static class DeviceApi
 	internal static bool IsPublicPath(PathString path) =>
 		path == "/" ||
 		path == "/canvas-state.js" ||
+		path == "/ailoha-canvas-state.js" ||
+		path == "/ailoha-video-protocol.js" ||
+		path == "/ailoha-video-receiver.js" ||
+		path == "/ailoha-video-player.js" ||
+		path == "/ailoha-workspace-view.js" ||
+		path == "/ailoha-semantic-view.js" ||
+		path == "/inspection-panel.js" ||
 		path == "/create-device-options.js" ||
 		path == "/device-canvas.js" ||
 		path == "/device-canvas.css" ||
@@ -143,6 +150,27 @@ internal static class DeviceApi
 		app.MapGet(
 			"/canvas-state.js",
 			() => EmbeddedAsset("canvas-state.js", "text/javascript; charset=utf-8"));
+		app.MapGet(
+			"/ailoha-canvas-state.js",
+			() => EmbeddedAsset("ailoha-canvas-state.js", "text/javascript; charset=utf-8"));
+		app.MapGet(
+			"/ailoha-video-protocol.js",
+			() => EmbeddedAsset("ailoha-video-protocol.js", "text/javascript; charset=utf-8"));
+		app.MapGet(
+			"/ailoha-video-receiver.js",
+			() => EmbeddedAsset("ailoha-video-receiver.js", "text/javascript; charset=utf-8"));
+		app.MapGet(
+			"/ailoha-video-player.js",
+			() => EmbeddedAsset("ailoha-video-player.js", "text/javascript; charset=utf-8"));
+		app.MapGet(
+			"/ailoha-workspace-view.js",
+			() => EmbeddedAsset("ailoha-workspace-view.js", "text/javascript; charset=utf-8"));
+		app.MapGet(
+			"/ailoha-semantic-view.js",
+			() => EmbeddedAsset("ailoha-semantic-view.js", "text/javascript; charset=utf-8"));
+		app.MapGet(
+			"/inspection-panel.js",
+			() => EmbeddedAsset("inspection-panel.js", "text/javascript; charset=utf-8"));
 		app.MapGet(
 			"/create-device-options.js",
 			() => EmbeddedAsset("create-device-options.js", "text/javascript; charset=utf-8"));
@@ -214,7 +242,7 @@ internal static class DeviceApi
 
 		app.MapPost(
 			"/api/v1/canvas/close",
-			(CanvasCloseRequest request, CanvasBootstrapStore store, DeviceService devices, HttpContext context) =>
+			async (CanvasCloseRequest request, CanvasBootstrapStore store, DeviceService devices, HttpContext context) =>
 			{
 				RequireControl(context);
 				ValidateCanvasContext(request.SessionId, request.InstanceId);
@@ -222,17 +250,22 @@ internal static class DeviceApi
 				// Host applications restore an open renderer without invoking canvas.open again.
 				// Keep its grant and selection until explicit detach, but rotate the browser session.
 				store.Close(key);
+				if (devices.GetSelectedId(key) is { } deviceId)
+					await devices.ReleaseUnviewedInputAsync(key, deviceId, store.HasSession).ConfigureAwait(false);
 				return Results.NoContent();
 			});
 
 		app.MapPost(
 			"/api/v1/canvas/detach",
-			(CanvasBootstrapStore store, DeviceService devices, HttpContext context) =>
+			async (CanvasBootstrapStore store, DeviceService devices, HttpContext context) =>
 			{
 				var key = RequireCanvasContext(context);
+				var deviceId = devices.GetSelectedId(key);
 				devices.Detach(key);
 				store.Detach(key);
 				context.Response.Cookies.Delete(SessionCookie);
+				if (deviceId is not null)
+					await devices.ReleaseUnviewedInputAsync(key, deviceId, store.HasSession).ConfigureAwait(false);
 				return Results.NoContent();
 			});
 
