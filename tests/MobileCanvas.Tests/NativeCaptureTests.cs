@@ -69,8 +69,11 @@ public class NativeCaptureTests
 		}
 	}
 
-	[Fact]
-	public async Task FramebufferStartup_DrainsVideoWrittenBeforeReady()
+	[Theory]
+	[InlineData(false, "framebuffer")]
+	[InlineData(true, "framebuffer")]
+	[InlineData(true, "screencapturekit")]
+	public async Task FramebufferStartup_DrainsVideoWrittenBeforeReady(bool fragmented, string source)
 	{
 		// More than the 64 KB pipe buffer: a host that reads stdout only after `ready` deadlocks
 		// the helper here, because its write blocks before it can report ready.
@@ -82,15 +85,18 @@ public class NativeCaptureTests
 			UseShellExecute = false,
 		};
 		startInfo.ArgumentList.Add("-c");
+		var writeVideo = fragmented
+			? $"dd if=/dev/zero bs=1 count={bytesBeforeReady} 2>/dev/null"
+			: $"head -c {bytesBeforeReady} /dev/zero";
 		startInfo.ArgumentList.Add(
-			$"head -c {bytesBeforeReady} /dev/zero; echo '{{\"type\":\"ready\",\"fps\":60}}' >&2; sleep 30");
+			$"{writeVideo}; echo '{{\"type\":\"ready\",\"fps\":60}}' >&2; sleep 30");
 		var releases = 0;
 
 		var session = await IosScreenCaptureVideoSession.StartProcessAsync(
 			startInfo,
 			new StreamOptions(),
 			new DisplayGeometry(),
-			"framebuffer",
+			source,
 			sourceDetail: null,
 			() => releases++,
 			CancellationToken.None,
@@ -112,12 +118,97 @@ public class NativeCaptureTests
 		}
 
 		Assert.Equal(60, session.Descriptor.FramesPerSecond);
+		Assert.Equal(source, session.Descriptor.Source);
 		Assert.Equal(bytesBeforeReady, received);
 		Assert.Equal(1, releases);
 	}
 
 	[Fact]
-	public async Task FramebufferStartup_ReleasesWhenTheHelperExitsBeforeReady()
+	public async Task OutputPump_PreservesShortReadsBeforeAConsumerAttaches()
+	{
+		var expected = Enumerable.Range(0, 257).Select(value => (byte)value).ToArray();
+		using var stream = new FragmentedVideoStream(expected, maximumRead: 1);
+		await using var output = IosScreenCaptureVideoSession.OutputPump.Start(stream);
+		await stream.FullyRead.Task.WaitAsync(TimeSpan.FromSeconds(5));
+
+		using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(5));
+		using var received = new MemoryStream();
+		while (await output.WaitToReadAsync(timeout.Token))
+		{
+			while (output.TryRead(out var chunk))
+				received.Write(chunk.Span);
+		}
+
+		Assert.Equal(expected, received.ToArray());
+	}
+
+	[Theory]
+	[InlineData(1024)]
+	[InlineData(65535)]
+	public async Task OutputPump_BoundsBytesAndResumesWhenTheConsumerReads(int maximumRead)
+	{
+		const int capacity = IosScreenCaptureVideoSession.OutputBufferCapacity;
+		using var stream = new FragmentedVideoStream(new byte[capacity + 1], maximumRead);
+		await using var output = IosScreenCaptureVideoSession.OutputPump.Start(stream);
+		await stream.CapacityReached.Task.WaitAsync(TimeSpan.FromSeconds(5));
+
+		await Assert.ThrowsAsync<TimeoutException>(() =>
+			stream.FullyRead.Task.WaitAsync(TimeSpan.FromMilliseconds(100)));
+		Assert.Equal(capacity, stream.Position);
+
+		Assert.True(output.TryRead(out var first));
+		await stream.FullyRead.Task.WaitAsync(TimeSpan.FromSeconds(5));
+		var received = first.Length;
+		using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(5));
+		while (await output.WaitToReadAsync(timeout.Token))
+		{
+			while (output.TryRead(out var chunk))
+				received += chunk.Length;
+		}
+		Assert.Equal(capacity + 1, received);
+	}
+
+	[Fact]
+	public async Task OutputPump_DisposesWhileTheByteBudgetIsFull()
+	{
+		using var stream = new FragmentedVideoStream(
+			new byte[IosScreenCaptureVideoSession.OutputBufferCapacity + 1],
+			maximumRead: 1024);
+		var output = IosScreenCaptureVideoSession.OutputPump.Start(stream);
+		try
+		{
+			await stream.CapacityReached.Task.WaitAsync(TimeSpan.FromSeconds(5));
+		}
+		finally
+		{
+			await output.DisposeAsync().AsTask().WaitAsync(TimeSpan.FromSeconds(1));
+		}
+	}
+
+	private sealed class FragmentedVideoStream(byte[] bytes, int maximumRead) : MemoryStream(bytes)
+	{
+		public TaskCompletionSource CapacityReached { get; } =
+			new(TaskCreationOptions.RunContinuationsAsynchronously);
+		public TaskCompletionSource FullyRead { get; } =
+			new(TaskCreationOptions.RunContinuationsAsynchronously);
+
+		public override ValueTask<int> ReadAsync(
+			Memory<byte> buffer,
+			CancellationToken cancellationToken = default)
+		{
+			var result = base.ReadAsync(buffer[..Math.Min(maximumRead, buffer.Length)], cancellationToken);
+			if (Position >= IosScreenCaptureVideoSession.OutputBufferCapacity)
+				CapacityReached.TrySetResult();
+			if (Position == Length)
+				FullyRead.TrySetResult();
+			return result;
+		}
+	}
+
+	[Theory]
+	[InlineData(false)]
+	[InlineData(true)]
+	public async Task FramebufferStartup_ReleasesWhenTheHelperExitsBeforeReady(bool fragmented)
 	{
 		var startInfo = new ProcessStartInfo("/bin/sh")
 		{
@@ -126,10 +217,12 @@ public class NativeCaptureTests
 			UseShellExecute = false,
 		};
 		startInfo.ArgumentList.Add("-c");
-		startInfo.ArgumentList.Add("head -c 200000 /dev/zero; exit 3");
+		startInfo.ArgumentList.Add(fragmented
+			? "dd if=/dev/zero bs=1 count=200000 2>/dev/null; exit 3"
+			: "head -c 200000 /dev/zero; exit 3");
 		var releases = 0;
 
-		await Assert.ThrowsAsync<InvalidOperationException>(() =>
+		var exception = await Assert.ThrowsAsync<InvalidOperationException>(() =>
 			IosScreenCaptureVideoSession.StartProcessAsync(
 				startInfo,
 				new StreamOptions(),
@@ -140,6 +233,7 @@ public class NativeCaptureTests
 				CancellationToken.None,
 				TimeSpan.FromSeconds(5)));
 
+		Assert.Contains("exited before producing a frame", exception.Message);
 		Assert.Equal(1, releases);
 	}
 

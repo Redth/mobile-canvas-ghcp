@@ -57,3 +57,10 @@ export IDB_COMPANION_PATH="$(brew --prefix idb-companion)/bin/idb_companion"
 Screen Recording and Accessibility permissions are only required when Mobile
 Canvas must use its ScreenCaptureKit fallback. The canvas will offer direct
 links to the relevant macOS settings when those permissions are needed.
+
+Both the GitHub App canvas and VS Code use the same native capture startup path.
+It drains helper video while waiting for the readiness event on stderr, retaining
+up to 4 MiB of queued video for the viewer. This limit counts bytes, not pipe
+reads: macOS can return short reads even when the helper has more video to write.
+Once the queue fills, capture applies backpressure until the viewer reads it;
+video already received, including the first keyframe, is not dropped.
