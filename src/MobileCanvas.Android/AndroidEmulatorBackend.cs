@@ -78,7 +78,7 @@ public sealed partial class AndroidEmulatorBackend : IDeviceBackend, IAsyncDispo
 		_logger = logger;
 		_locator = locator;
 		_discovery = new EmulatorDiscovery(_locator, processRunner);
-		_recordings = new AndroidRecordingManager(this, logger);
+		_recordings = new AndroidRecordingManager(this, processRunner, logger);
 	}
 
 	public string Platform => DevicePlatforms.Android;
@@ -549,7 +549,7 @@ public sealed partial class AndroidEmulatorBackend : IDeviceBackend, IAsyncDispo
 	/// <c>-gpu host</c> is equally load-bearing: the same capture code measured 3 FPS against a
 	/// software-rendered AVD and 50 FPS with host GPU.
 	/// </remarks>
-	private async Task LaunchEmulatorAsync(
+	internal async Task LaunchEmulatorAsync(
 		string avdId,
 		bool wipeData,
 		bool showWindow,
@@ -574,8 +574,7 @@ public sealed partial class AndroidEmulatorBackend : IDeviceBackend, IAsyncDispo
 		foreach (var argument in arguments)
 			startInfo.ArgumentList.Add(argument);
 
-		var process = Process.Start(startInfo)
-			?? throw new InvalidOperationException($"Failed to start '{_locator.Emulator}'.");
+		var process = _processRunner.Start(startInfo);
 
 		// The emulator runs for the life of the device, so its pipes must be drained or it blocks on
 		// a full buffer partway through boot.
@@ -1154,7 +1153,7 @@ public sealed partial class AndroidEmulatorBackend : IDeviceBackend, IAsyncDispo
 		var display = await GetDisplayAsync(deviceId, cancellationToken).ConfigureAwait(false);
 
 		return await AndroidLiveVideoSession
-			.StartAsync(connection, options, display, _logger, cancellationToken)
+			.StartAsync(connection, options, display, _logger, _processRunner, cancellationToken)
 			.ConfigureAwait(false);
 	}
 
@@ -2037,10 +2036,9 @@ public sealed partial class AndroidEmulatorBackend : IDeviceBackend, IAsyncDispo
 	}
 
 	/// <summary>
-	/// Runs adb and returns raw stdout bytes. <see cref="IProcessRunner"/> decodes stdout as text,
-	/// which would corrupt a PNG, so binary output needs its own path.
+	/// Runs adb through the runner's caller-owned process path to preserve raw stdout bytes.
 	/// </summary>
-	private async Task<byte[]> RunAdbBinaryAsync(
+	internal async Task<byte[]> RunAdbBinaryAsync(
 		string serial,
 		string[] arguments,
 		CancellationToken cancellationToken)
@@ -2061,8 +2059,7 @@ public sealed partial class AndroidEmulatorBackend : IDeviceBackend, IAsyncDispo
 		foreach (var argument in arguments)
 			startInfo.ArgumentList.Add(argument);
 
-		using var process = Process.Start(startInfo)
-			?? throw new InvalidOperationException($"Failed to start '{_locator.Adb}'.");
+		using var process = _processRunner.Start(startInfo);
 
 		using var buffer = new MemoryStream();
 		var copy = process.StandardOutput.BaseStream.CopyToAsync(buffer, cancellationToken);
@@ -3858,7 +3855,7 @@ public sealed partial class AndroidEmulatorBackend : IDeviceBackend, IAsyncDispo
 	/// guards are still not enough on their own -- <c>exec-out</c> exits zero and writes the failing
 	/// command's own complaint to stdout -- so the caller checks the byte count as well.
 	/// </remarks>
-	private async Task<long> RunAdbToFileAsync(
+	internal async Task<long> RunAdbToFileAsync(
 		string serial,
 		string[] arguments,
 		string destination,
@@ -3881,8 +3878,7 @@ public sealed partial class AndroidEmulatorBackend : IDeviceBackend, IAsyncDispo
 		foreach (var argument in arguments)
 			startInfo.ArgumentList.Add(argument);
 
-		using var process = Process.Start(startInfo)
-			?? throw new InvalidOperationException($"Failed to start '{_locator.Adb}'.");
+		using var process = _processRunner.Start(startInfo);
 
 		long written;
 		var drainErrors = process.StandardError.ReadToEndAsync(cancellationToken);

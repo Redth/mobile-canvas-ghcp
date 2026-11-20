@@ -331,6 +331,14 @@ Video is deliberately split from input on both platforms:
 Raw Android frames are encoded before they reach the browser, so only ~1-2 Mbps
 crosses to the canvas instead of the 41-577 MiB/s the emulator emits.
 
+All .NET subprocess launches go through `IProcessRunner`: `RunAsync` collects
+text output, while `Start(ProcessStartInfo)` returns a caller-owned process for
+binary ADB transfers and long-lived emulator, capture, HID, recording, and host
+sessions. Callers keep responsibility for draining pipes, cancellation, and
+cleanup; binary stdout is never decoded as text. Custom runners must implement
+`Start` to support those workflows (the default rejects them rather than
+bypassing the runner). Both UI hosts use this same backend boundary.
+
 ## Development
 
 ```bash

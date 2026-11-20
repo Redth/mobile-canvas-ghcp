@@ -4,6 +4,7 @@ using System.Net.Http.Json;
 using System.Text.Json;
 using System.Text.Json.Serialization.Metadata;
 using MobileCanvas.Contracts;
+using MobileCanvas.Core;
 
 namespace MobileCanvas.Tool;
 
@@ -14,6 +15,16 @@ public sealed class DeviceHostClient
 	private readonly HostMetadataStore _metadataStore = new();
 	private readonly SemaphoreSlim _startLock = new(1, 1);
 	private HostMetadata? _metadata;
+	private readonly IProcessRunner _processRunner;
+
+	public DeviceHostClient() : this(new SystemProcessRunner())
+	{
+	}
+
+	public DeviceHostClient(IProcessRunner processRunner)
+	{
+		_processRunner = processRunner;
+	}
 
 	public async Task<HostHealth> StartAsync(CancellationToken cancellationToken = default)
 	{
@@ -903,14 +914,13 @@ public sealed class DeviceHostClient
 		}
 	}
 
-	private static void StartHostProcess()
+	private void StartHostProcess()
 	{
 		DevicePaths.EnsureHome();
 		var executable = Environment.ProcessPath
 			?? throw new InvalidOperationException("Could not determine the mobile-canvas executable path.");
 		var startInfo = CreateHostStartInfo(executable, AppContext.BaseDirectory);
-		var process = Process.Start(startInfo)
-			?? throw new InvalidOperationException("Failed to start the Mobile Canvas host.");
+		var process = _processRunner.Start(startInfo);
 		process.OutputDataReceived += (_, _) => { };
 		process.ErrorDataReceived += (_, _) => { };
 		process.BeginOutputReadLine();

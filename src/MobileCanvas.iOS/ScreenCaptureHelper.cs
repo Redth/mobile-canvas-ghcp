@@ -54,12 +54,13 @@ internal static class ScreenCaptureHelper
 
 	public static bool IsAvailable => NativeHelperLocator.IsAvailable;
 
-	public static async Task<IReadOnlyList<ScreencapWindow>> ListAsync(CancellationToken cancellationToken)
+	public static async Task<IReadOnlyList<ScreencapWindow>> ListAsync(
+		IProcessRunner processRunner, CancellationToken cancellationToken)
 	{
 		if (Path is not { } path)
 			return [];
 
-		var output = await RunAsync(path, ["list"], TimeSpan.FromSeconds(15), cancellationToken)
+		var output = await RunAsync(processRunner, path, ["list"], TimeSpan.FromSeconds(15), cancellationToken)
 			.ConfigureAwait(false);
 		if (output is null)
 			return [];
@@ -114,7 +115,8 @@ internal static class ScreenCaptureHelper
 	private static ScreencapDiagnostics? _cachedDiagnostics;
 	private static DateTimeOffset _cachedAt;
 
-	public static async Task<ScreencapDiagnostics> GetDiagnosticsAsync(CancellationToken cancellationToken)
+	public static async Task<ScreencapDiagnostics> GetDiagnosticsAsync(
+		IProcessRunner processRunner, CancellationToken cancellationToken)
 	{
 		if (TryUseCache(out var cached))
 			return cached;
@@ -125,7 +127,7 @@ internal static class ScreenCaptureHelper
 			if (TryUseCache(out var raced))
 				return raced;
 
-			var probed = await ProbeAsync(cancellationToken).ConfigureAwait(false);
+			var probed = await ProbeAsync(processRunner, cancellationToken).ConfigureAwait(false);
 			_cachedDiagnostics = probed;
 			_cachedAt = DateTimeOffset.UtcNow;
 			return probed;
@@ -153,7 +155,8 @@ internal static class ScreenCaptureHelper
 		return true;
 	}
 
-	private static async Task<ScreencapDiagnostics> ProbeAsync(CancellationToken cancellationToken)
+	private static async Task<ScreencapDiagnostics> ProbeAsync(
+		IProcessRunner processRunner, CancellationToken cancellationToken)
 	{
 		if (Path is not { } path)
 		{
@@ -166,6 +169,7 @@ internal static class ScreenCaptureHelper
 		// This command only preflights TCC state; unlike ScreenCaptureKit discovery, it cannot cause
 		// a Screen Recording prompt on a host where direct framebuffer capture already works.
 		var output = await RunAsync(
+				processRunner,
 				path,
 				["framebuffer-doctor"],
 				TimeSpan.FromSeconds(15),
@@ -179,7 +183,7 @@ internal static class ScreenCaptureHelper
 		}
 
 		// Compatibility with helpers built before direct framebuffer capture was introduced.
-		output = await RunAsync(path, ["doctor"], TimeSpan.FromSeconds(15), cancellationToken)
+		output = await RunAsync(processRunner, path, ["doctor"], TimeSpan.FromSeconds(15), cancellationToken)
 			.ConfigureAwait(false);
 		return output is null
 			? new ScreencapDiagnostics { Detail = $"{ExecutableName} did not respond." }
@@ -215,48 +219,26 @@ internal static class ScreenCaptureHelper
 	}
 
 	private static async Task<string?> RunAsync(
+		IProcessRunner processRunner,
 		string path,
 		string[] arguments,
 		TimeSpan timeout,
 		CancellationToken cancellationToken)
 	{
-		var startInfo = new ProcessStartInfo(path)
-		{
-			RedirectStandardOutput = true,
-			RedirectStandardError = true,
-			UseShellExecute = false,
-		};
-		foreach (var argument in arguments)
-			startInfo.ArgumentList.Add(argument);
-
-		using var process = new Process { StartInfo = startInfo };
+		using var timeoutSource = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+		timeoutSource.CancelAfter(timeout);
 		try
 		{
-			if (!process.Start())
-				return null;
+			var result = await processRunner.RunAsync(
+				new ProcessRequest(path, arguments), timeoutSource.Token).ConfigureAwait(false);
+			return result.StandardOutput;
 		}
 		catch (Exception exception) when (exception is System.ComponentModel.Win32Exception or InvalidOperationException)
 		{
 			return null;
 		}
-
-		using var timeoutSource = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
-		timeoutSource.CancelAfter(timeout);
-
-		var readTask = process.StandardOutput.ReadToEndAsync(timeoutSource.Token);
-		// stderr is redirected but not part of the result, and an undrained pipe eventually blocks
-		// the helper mid-write, which would hang the stdout read that is waiting on it.
-		var drainTask = process.StandardError.ReadToEndAsync(timeoutSource.Token);
-		try
-		{
-			var text = await readTask.ConfigureAwait(false);
-			await drainTask.ConfigureAwait(false);
-			await process.WaitForExitAsync(timeoutSource.Token).ConfigureAwait(false);
-			return text;
-		}
 		catch (OperationCanceledException)
 		{
-			TryKill(process);
 			// A caller cancelling (an aborted HTTP request, say) says nothing about permissions.
 			// Reporting it as a failed probe would cache a false "denied" result, so propagate
 			// instead and let only a genuine timeout report the helper as unresponsive.

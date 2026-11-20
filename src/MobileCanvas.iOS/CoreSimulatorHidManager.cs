@@ -15,11 +15,11 @@ internal sealed class CoreSimulatorHidManager : IAsyncDisposable
 	private readonly SemaphoreSlim _gate = new(1, 1);
 	private int _disposed;
 
-	public CoreSimulatorHidManager()
+	public CoreSimulatorHidManager(IProcessRunner processRunner)
 		: this(
 			NativeHelperLocator.Path,
-			static (helperPath, udid, cancellationToken) =>
-				CoreSimulatorHidSession.StartAsync(helperPath, udid, cancellationToken))
+			(helperPath, udid, cancellationToken) =>
+				CoreSimulatorHidSession.StartAsync(helperPath, udid, processRunner, cancellationToken))
 	{
 	}
 
@@ -185,6 +185,7 @@ internal sealed class CoreSimulatorHidSession : IAsyncDisposable
 	public static async Task<CoreSimulatorHidSession> StartAsync(
 		string helperPath,
 		string udid,
+		IProcessRunner processRunner,
 		CancellationToken cancellationToken)
 	{
 		if (!OperatingSystem.IsMacOS())
@@ -197,7 +198,7 @@ internal sealed class CoreSimulatorHidSession : IAsyncDisposable
 		SystemCoreSimulatorHidProcess? process = null;
 		try
 		{
-			process = SystemCoreSimulatorHidProcess.Start(helperPath, udid);
+			process = SystemCoreSimulatorHidProcess.Start(helperPath, udid, processRunner);
 			return await StartAsync(udid, process, StartupTimeout, cancellationToken)
 				.ConfigureAwait(false);
 		}
@@ -654,7 +655,8 @@ internal sealed class SystemCoreSimulatorHidProcess : ICoreSimulatorHidProcess
 	public bool HasExited => _process.HasExited;
 	public int? ExitCode => _process.HasExited ? _process.ExitCode : null;
 
-	public static SystemCoreSimulatorHidProcess Start(string helperPath, string udid)
+	public static SystemCoreSimulatorHidProcess Start(
+		string helperPath, string udid, IProcessRunner processRunner)
 	{
 		var startInfo = new ProcessStartInfo(helperPath)
 		{
@@ -671,14 +673,7 @@ internal sealed class SystemCoreSimulatorHidProcess : ICoreSimulatorHidProcess
 		startInfo.ArgumentList.Add("--udid");
 		startInfo.ArgumentList.Add(udid);
 
-		var process = new Process { StartInfo = startInfo };
-		if (!process.Start())
-		{
-			process.Dispose();
-			throw new InvalidOperationException(
-				$"Could not start {NativeHelperLocator.ExecutableName}.");
-		}
-		return new SystemCoreSimulatorHidProcess(process);
+		return new SystemCoreSimulatorHidProcess(processRunner.Start(startInfo));
 	}
 
 	public void Kill()

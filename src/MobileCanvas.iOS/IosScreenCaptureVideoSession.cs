@@ -18,10 +18,10 @@ namespace MobileCanvas.iOS;
 internal sealed class IosScreenCaptureVideoSession : ILiveVideoSession
 {
 	/// <summary>
-	/// Chunks buffered between the stdout pump and the consumer. Once full, the pump stops reading
+	/// Bytes buffered between the stdout pump and the consumer. Once full, the pump stops reading
 	/// and the helper skips frames instead of the host accumulating unbounded video.
 	/// </summary>
-	internal const int OutputChunkCapacity = 64;
+	internal const int OutputBufferCapacity = 4 * 1024 * 1024;
 
 	private readonly Process _process;
 	private readonly OutputPump _output;
@@ -49,6 +49,7 @@ internal sealed class IosScreenCaptureVideoSession : ILiveVideoSession
 		StreamOptions options,
 		DisplayGeometry display,
 		Action release,
+		IProcessRunner processRunner,
 		CancellationToken cancellationToken,
 		TimeSpan? startupTimeout = null) =>
 		StartProcessAsync(
@@ -58,6 +59,7 @@ internal sealed class IosScreenCaptureVideoSession : ILiveVideoSession
 			"framebuffer",
 			sourceDetail: null,
 			release,
+			processRunner,
 			cancellationToken,
 			startupTimeout ?? TimeSpan.FromSeconds(15));
 
@@ -67,6 +69,7 @@ internal sealed class IosScreenCaptureVideoSession : ILiveVideoSession
 		StreamOptions options,
 		DisplayGeometry display,
 		Action release,
+		IProcessRunner processRunner,
 		CancellationToken cancellationToken,
 		string? sourceDetail = null) =>
 		await StartProcessAsync(
@@ -76,6 +79,7 @@ internal sealed class IosScreenCaptureVideoSession : ILiveVideoSession
 			"screencapturekit",
 			sourceDetail,
 			release,
+			processRunner,
 			cancellationToken,
 			TimeSpan.FromSeconds(15)).ConfigureAwait(false);
 
@@ -176,15 +180,19 @@ internal sealed class IosScreenCaptureVideoSession : ILiveVideoSession
 		string source,
 		string? sourceDetail,
 		Action release,
+		IProcessRunner processRunner,
 		CancellationToken cancellationToken,
 		TimeSpan startupTimeout)
 	{
-		var process = new Process { StartInfo = startInfo };
-		if (!process.Start())
+		Process process;
+		try
 		{
-			process.Dispose();
+			process = processRunner.Start(startInfo);
+		}
+		catch
+		{
 			release();
-			throw new InvalidOperationException($"Could not start {ScreenCaptureHelper.ExecutableName}.");
+			throw;
 		}
 
 		// Drain stdout from the moment the helper starts. It may write video before `ready` reaches
@@ -329,7 +337,7 @@ internal sealed class IosScreenCaptureVideoSession : ILiveVideoSession
 		[EnumeratorCancellation] CancellationToken cancellationToken = default)
 	{
 		ObjectDisposedException.ThrowIf(_disposed, this);
-		var reader = _output.Reader;
+		var reader = _output;
 		while (await reader.WaitToReadAsync(cancellationToken).ConfigureAwait(false))
 		{
 			while (reader.TryRead(out var chunk))
@@ -366,26 +374,64 @@ internal sealed class IosScreenCaptureVideoSession : ILiveVideoSession
 	private readonly record struct ReadyEvent(int FramesPerSecond, int Width, int Height);
 
 	/// <summary>
-	/// Copies the helper's stdout into a bounded channel for the lifetime of the process.
+	/// Copies the helper's stdout into a byte-bounded queue for the lifetime of the process.
 	/// </summary>
-	private sealed class OutputPump : IAsyncDisposable
+	internal sealed class OutputPump : IAsyncDisposable
 	{
 		private readonly Channel<ReadOnlyMemory<byte>> _channel;
+		private readonly object _bufferLock = new();
+		private int _bufferedBytes;
+		private TaskCompletionSource? _spaceAvailable;
 		private readonly CancellationTokenSource _stop = new();
 		private Task _pump = Task.CompletedTask;
 
 		private OutputPump()
 		{
-			_channel = Channel.CreateBounded<ReadOnlyMemory<byte>>(
-				new BoundedChannelOptions(OutputChunkCapacity)
+			// A pipe read can return even one byte. Counting reads would exhaust the startup
+			// buffer long before its intended 4 MiB capacity and block the helper before ready.
+			_channel = Channel.CreateUnbounded<ReadOnlyMemory<byte>>(
+				new UnboundedChannelOptions
 				{
 					SingleReader = true,
 					SingleWriter = true,
-					FullMode = BoundedChannelFullMode.Wait,
 				});
 		}
 
-		public ChannelReader<ReadOnlyMemory<byte>> Reader => _channel.Reader;
+		public ValueTask<bool> WaitToReadAsync(CancellationToken cancellationToken) =>
+			_channel.Reader.WaitToReadAsync(cancellationToken);
+
+		public bool TryRead(out ReadOnlyMemory<byte> chunk)
+		{
+			if (!_channel.Reader.TryRead(out chunk))
+				return false;
+
+			TaskCompletionSource? spaceAvailable;
+			lock (_bufferLock)
+			{
+				_bufferedBytes -= chunk.Length;
+				spaceAvailable = _spaceAvailable;
+				_spaceAvailable = null;
+			}
+			spaceAvailable?.TrySetResult();
+			return true;
+		}
+
+		private async ValueTask<int> WaitForCapacityAsync(int maximumRead)
+		{
+			while (true)
+			{
+				Task wait;
+				lock (_bufferLock)
+				{
+					var remaining = OutputBufferCapacity - _bufferedBytes;
+					if (remaining > 0)
+						return Math.Min(maximumRead, remaining);
+					wait = (_spaceAvailable ??= new(
+						TaskCreationOptions.RunContinuationsAsynchronously)).Task;
+				}
+				await wait.WaitAsync(_stop.Token).ConfigureAwait(false);
+			}
+		}
 
 		public static OutputPump Start(Stream stream)
 		{
@@ -402,9 +448,13 @@ internal sealed class IosScreenCaptureVideoSession : ILiveVideoSession
 			{
 				while (true)
 				{
-					var read = await stream.ReadAsync(buffer, _stop.Token).ConfigureAwait(false);
+					var capacity = await WaitForCapacityAsync(buffer.Length).ConfigureAwait(false);
+					var read = await stream.ReadAsync(buffer.AsMemory(0, capacity), _stop.Token)
+						.ConfigureAwait(false);
 					if (read == 0)
 						break;
+					lock (_bufferLock)
+						_bufferedBytes += read;
 					await _channel.Writer.WriteAsync(buffer.AsMemory(0, read).ToArray(), _stop.Token)
 						.ConfigureAwait(false);
 				}
@@ -434,8 +484,8 @@ internal sealed class IosScreenCaptureVideoSession : ILiveVideoSession
 		public async ValueTask DisposeAsync()
 		{
 			await _stop.CancelAsync().ConfigureAwait(false);
-			// Free a writer parked on a full channel, then wait for the pump to observe cancellation.
-			while (_channel.Reader.TryRead(out _))
+			// Free a writer parked on the byte budget, then wait for cancellation.
+			while (TryRead(out _))
 			{
 			}
 			try
@@ -449,7 +499,7 @@ internal sealed class IosScreenCaptureVideoSession : ILiveVideoSession
 				// The pump reports its own failures through the channel.
 			}
 			_channel.Writer.TryComplete();
-			while (_channel.Reader.TryRead(out _))
+			while (TryRead(out _))
 			{
 			}
 			_stop.Dispose();

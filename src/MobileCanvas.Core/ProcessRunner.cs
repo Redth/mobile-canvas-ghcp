@@ -15,6 +15,13 @@ public sealed record ProcessResult(int ExitCode, string StandardOutput, string S
 public interface IProcessRunner
 {
 	Task<ProcessResult> RunAsync(ProcessRequest request, CancellationToken cancellationToken = default);
+
+	/// <summary>
+	/// Starts a caller-owned process for binary streams or long-lived sessions. The caller must
+	/// drain redirected pipes and manage cancellation, termination, and disposal.
+	/// </summary>
+	Process Start(ProcessStartInfo startInfo) =>
+		throw new NotSupportedException("This process runner does not support caller-owned processes.");
 }
 
 public sealed class ProcessExecutionException(
@@ -36,6 +43,10 @@ public sealed class ProcessExecutionException(
 
 public sealed class SystemProcessRunner : IProcessRunner
 {
+	public Process Start(ProcessStartInfo startInfo) =>
+		Process.Start(startInfo)
+			?? throw new InvalidOperationException($"Failed to start process '{startInfo.FileName}'.");
+
 	public async Task<ProcessResult> RunAsync(
 		ProcessRequest request,
 		CancellationToken cancellationToken = default)
@@ -69,8 +80,7 @@ public sealed class SystemProcessRunner : IProcessRunner
 				startInfo.Environment[pair.Key] = pair.Value;
 		}
 
-		using var process = Process.Start(startInfo)
-			?? throw new InvalidOperationException($"Failed to start process '{request.FileName}'.");
+		using var process = Start(startInfo);
 
 		var standardOutput = process.StandardOutput.ReadToEndAsync(cancellationToken);
 		var standardError = process.StandardError.ReadToEndAsync(cancellationToken);

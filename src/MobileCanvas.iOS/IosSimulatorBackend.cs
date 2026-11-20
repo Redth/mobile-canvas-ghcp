@@ -65,7 +65,7 @@ public sealed class IosSimulatorBackend : IDeviceBackend, IAsyncDisposable
 	internal IosSimulatorBackend(
 		IProcessRunner processRunner,
 		Func<CancellationToken, Task<string>> resolveDeveloperDirectory)
-		: this(processRunner, resolveDeveloperDirectory, new CoreSimulatorHidManager(), static () => Environment.TickCount64)
+		: this(processRunner, resolveDeveloperDirectory, new CoreSimulatorHidManager(processRunner), static () => Environment.TickCount64)
 	{
 	}
 
@@ -587,6 +587,7 @@ public sealed class IosSimulatorBackend : IDeviceBackend, IAsyncDisposable
 						options,
 						display,
 						static () => { },
+						_processRunner,
 						token,
 						startupTimeout),
 					cancellationToken).ConfigureAwait(false);
@@ -609,6 +610,7 @@ public sealed class IosSimulatorBackend : IDeviceBackend, IAsyncDisposable
 						options,
 						display,
 						static () => { },
+						_processRunner,
 						cancellationToken,
 						BuildCaptureFallbackDetail(framebufferUnavailableReason, null))
 						.ConfigureAwait(false);
@@ -710,7 +712,7 @@ public sealed class IosSimulatorBackend : IDeviceBackend, IAsyncDisposable
 	{
 		// Live capture must not turn a headless boot into a visible simulator host window. An already
 		// visible window remains a valid fallback, but opening one is reserved for RevealAsync.
-		var permissions = await ScreenCaptureHelper.GetDiagnosticsAsync(cancellationToken).ConfigureAwait(false);
+		var permissions = await ScreenCaptureHelper.GetDiagnosticsAsync(_processRunner, cancellationToken).ConfigureAwait(false);
 		if (!permissions.ScreenRecordingGranted)
 		{
 			return new CaptureWindowResult(
@@ -731,7 +733,7 @@ public sealed class IosSimulatorBackend : IDeviceBackend, IAsyncDisposable
 		string nativeId,
 		CancellationToken cancellationToken)
 	{
-		var windows = await ScreenCaptureHelper.ListAsync(cancellationToken).ConfigureAwait(false);
+		var windows = await ScreenCaptureHelper.ListAsync(_processRunner, cancellationToken).ConfigureAwait(false);
 		var match = windows.FirstOrDefault(window =>
 			string.Equals(window.Udid, nativeId, StringComparison.OrdinalIgnoreCase));
 		if (match is null)
@@ -2793,7 +2795,7 @@ public sealed class IosSimulatorBackend : IDeviceBackend, IAsyncDisposable
 
 		// Report the permission-free primary source separately from the TCC-gated fallback. Missing
 		// fallback grants only require attention when direct capture is unavailable.
-		var screencap = await ScreenCaptureHelper.GetDiagnosticsAsync(cancellationToken)
+		var screencap = await ScreenCaptureHelper.GetDiagnosticsAsync(_processRunner, cancellationToken)
 			.ConfigureAwait(false);
 		var screencapPath = ScreenCaptureHelper.Path;
 		var framebufferReady = screencapPath is not null && screencap.FramebufferAvailable;
