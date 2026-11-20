@@ -295,8 +295,7 @@ internal sealed class IosRecordingPlatform(IProcessRunner processRunner) : IIosR
 			startInfo.ArgumentList.Add(argument);
 		}
 
-		var process = Process.Start(startInfo)
-			?? throw new InvalidOperationException("Failed to start simctl screen recording.");
+		var process = processRunner.Start(startInfo);
 		process.OutputDataReceived += (_, _) => { };
 		process.ErrorDataReceived += (_, _) => { };
 		process.BeginOutputReadLine();

@@ -50,6 +50,7 @@ internal sealed class AndroidLiveVideoSession : ILiveVideoSession
 		StreamOptions options,
 		DisplayGeometry display,
 		ILogger logger,
+		IProcessRunner processRunner,
 		CancellationToken cancellationToken)
 	{
 		if (AndroidVideoEncoder.Path is not { } encoderPath)
@@ -90,7 +91,7 @@ internal sealed class AndroidLiveVideoSession : ILiveVideoSession
 			// extra row and column. The descriptor still reports the device's own geometry, matching
 			// iOS: the canvas maps pointer input in points and letterboxes on the device aspect ratio,
 			// so a sub-pixel crop of the transport frame is invisible to it.
-			encoder = StartEncoder(encoderPath, width, height, fps, options.AverageBitrate);
+			encoder = StartEncoder(processRunner, encoderPath, width, height, fps, options.AverageBitrate);
 			var ready = await WaitForReadyAsync(encoder, cancellationToken).ConfigureAwait(false);
 
 			var session = new AndroidLiveVideoSession(
@@ -159,7 +160,8 @@ internal sealed class AndroidLiveVideoSession : ILiveVideoSession
 		throw new InvalidOperationException("The emulator closed the screenshot stream before sending a frame.");
 	}
 
-	private static Process StartEncoder(string encoderPath, int width, int height, int fps, double bitrate)
+	private static Process StartEncoder(
+		IProcessRunner processRunner, string encoderPath, int width, int height, int fps, double bitrate)
 	{
 		var startInfo = new ProcessStartInfo(encoderPath)
 		{
@@ -182,8 +184,7 @@ internal sealed class AndroidLiveVideoSession : ILiveVideoSession
 		startInfo.ArgumentList.Add("--bitrate");
 		startInfo.ArgumentList.Add(((int)Math.Max(500_000, bitrate)).ToString());
 
-		return Process.Start(startInfo)
-			?? throw new InvalidOperationException($"Could not start {AndroidVideoEncoder.ExecutableName}.");
+		return processRunner.Start(startInfo);
 	}
 
 	/// <summary>

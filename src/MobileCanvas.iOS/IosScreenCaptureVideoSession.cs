@@ -49,6 +49,7 @@ internal sealed class IosScreenCaptureVideoSession : ILiveVideoSession
 		StreamOptions options,
 		DisplayGeometry display,
 		Action release,
+		IProcessRunner processRunner,
 		CancellationToken cancellationToken,
 		TimeSpan? startupTimeout = null) =>
 		StartProcessAsync(
@@ -58,6 +59,7 @@ internal sealed class IosScreenCaptureVideoSession : ILiveVideoSession
 			"framebuffer",
 			sourceDetail: null,
 			release,
+			processRunner,
 			cancellationToken,
 			startupTimeout ?? TimeSpan.FromSeconds(15));
 
@@ -67,6 +69,7 @@ internal sealed class IosScreenCaptureVideoSession : ILiveVideoSession
 		StreamOptions options,
 		DisplayGeometry display,
 		Action release,
+		IProcessRunner processRunner,
 		CancellationToken cancellationToken,
 		string? sourceDetail = null) =>
 		await StartProcessAsync(
@@ -76,6 +79,7 @@ internal sealed class IosScreenCaptureVideoSession : ILiveVideoSession
 			"screencapturekit",
 			sourceDetail,
 			release,
+			processRunner,
 			cancellationToken,
 			TimeSpan.FromSeconds(15)).ConfigureAwait(false);
 
@@ -176,15 +180,19 @@ internal sealed class IosScreenCaptureVideoSession : ILiveVideoSession
 		string source,
 		string? sourceDetail,
 		Action release,
+		IProcessRunner processRunner,
 		CancellationToken cancellationToken,
 		TimeSpan startupTimeout)
 	{
-		var process = new Process { StartInfo = startInfo };
-		if (!process.Start())
+		Process process;
+		try
 		{
-			process.Dispose();
+			process = processRunner.Start(startInfo);
+		}
+		catch
+		{
 			release();
-			throw new InvalidOperationException($"Could not start {ScreenCaptureHelper.ExecutableName}.");
+			throw;
 		}
 
 		// Drain stdout from the moment the helper starts. It may write video before `ready` reaches

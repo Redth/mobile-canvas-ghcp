@@ -1,3 +1,4 @@
+using System.Diagnostics;
 using MobileCanvas.Android;
 using MobileCanvas.Contracts;
 using MobileCanvas.Core;
@@ -7,6 +8,121 @@ namespace MobileCanvas.Tests;
 
 public sealed class AndroidEmulatorBackendTests
 {
+	[Theory]
+	[InlineData(0)]
+	[InlineData(7)]
+	public async Task BinaryAdb_UsesInjectedRunnerWithoutDecodingStdout(int exitCode)
+	{
+		if (OperatingSystem.IsWindows())
+			return;
+
+		using var sdk = new AndroidSdkFixture();
+		ProcessStartInfo? launched = null;
+		var runner = new RecordingProcessRunner(
+			(_, _) => throw new InvalidOperationException("Binary output must not use the text runner."),
+			startInfo =>
+			{
+				launched = startInfo;
+				return StartShell($"printf '\\000\\377\\200\\015\\012'; head -c 200000 /dev/zero >&2; exit {exitCode}");
+			});
+		await using var backend = new AndroidEmulatorBackend(
+			runner, NullLogger<AndroidEmulatorBackend>.Instance, new AndroidSdkLocator(sdk.Root));
+
+		var bytes = await backend.RunAdbBinaryAsync(
+			"emulator-5554", ["exec-out", "screencap", "-p"], CancellationToken.None);
+
+		Assert.Equal(exitCode == 0 ? new byte[] { 0, 255, 128, 13, 10 } : [], bytes);
+		Assert.Equal(new AndroidSdkLocator(sdk.Root).Adb, launched!.FileName);
+		Assert.Equal(["-s", "emulator-5554", "exec-out", "screencap", "-p"], launched.ArgumentList);
+		Assert.True(launched.RedirectStandardOutput);
+		Assert.True(launched.RedirectStandardError);
+		Assert.Empty(runner.Calls);
+	}
+
+	[Theory]
+	[InlineData("printf '\\000\\377\\200\\015\\012'", false, 5)]
+	[InlineData("true", false, 0)]
+	[InlineData("printf partial; echo denied >&2", true, 0)]
+	[InlineData("printf partial; exit 7", true, 0)]
+	public async Task AdbFileStream_UsesInjectedRunnerAndPreservesFailureCleanup(
+		string command, bool fails, long expectedLength)
+	{
+		if (OperatingSystem.IsWindows())
+			return;
+
+		using var sdk = new AndroidSdkFixture();
+		var destination = Path.Combine(sdk.Root, "download.bin");
+		var runner = new RecordingProcessRunner(
+			(_, _) => throw new InvalidOperationException("File output must not use the text runner."),
+			startInfo =>
+			{
+				Assert.Equal(["-s", "emulator-5554", "exec-out", "cat", "/sdcard/file.bin"], startInfo.ArgumentList);
+				return StartShell(command);
+			});
+		await using var backend = new AndroidEmulatorBackend(
+			runner, NullLogger<AndroidEmulatorBackend>.Instance, new AndroidSdkLocator(sdk.Root));
+
+		Task<long> Download() => backend.RunAdbToFileAsync(
+			"emulator-5554", ["exec-out", "cat", "/sdcard/file.bin"], destination, CancellationToken.None);
+
+		if (fails)
+		{
+			await Assert.ThrowsAsync<DeviceCapabilityException>(Download);
+			Assert.False(File.Exists(destination));
+		}
+		else
+		{
+			Assert.Equal(expectedLength, await Download());
+			Assert.Equal(expectedLength == 0 ? [] : new byte[] { 0, 255, 128, 13, 10 },
+				await File.ReadAllBytesAsync(destination));
+		}
+	}
+
+	[Fact]
+	public async Task EmulatorLaunch_UsesInjectedRunnerAndReportsImmediateFailure()
+	{
+		if (OperatingSystem.IsWindows())
+			return;
+
+		using var sdk = new AndroidSdkFixture();
+		Process? launched = null;
+		var runner = new RecordingProcessRunner(
+			(_, _) => throw new InvalidOperationException("Emulator launch must not use the text runner."),
+			startInfo =>
+			{
+				Assert.Equal(new AndroidSdkLocator(sdk.Root).Emulator, startInfo.FileName);
+				Assert.Contains("-no-window", startInfo.ArgumentList);
+				return launched = StartShell("exit 7");
+			});
+		await using var backend = new AndroidEmulatorBackend(
+			runner, NullLogger<AndroidEmulatorBackend>.Instance, new AndroidSdkLocator(sdk.Root));
+		try
+		{
+			var exception = await Assert.ThrowsAsync<InvalidOperationException>(() =>
+				backend.LaunchEmulatorAsync("Test_Device", false, false, CancellationToken.None));
+
+			Assert.Contains("code 7", exception.Message);
+			Assert.NotNull(launched);
+		}
+		finally
+		{
+			launched?.Dispose();
+		}
+	}
+
+	private static Process StartShell(string command)
+	{
+		var startInfo = new ProcessStartInfo("/bin/sh")
+		{
+			UseShellExecute = false,
+			RedirectStandardOutput = true,
+			RedirectStandardError = true,
+		};
+		startInfo.ArgumentList.Add("-c");
+		startInfo.ArgumentList.Add(command);
+		return new SystemProcessRunner().Start(startInfo);
+	}
+
 	[Fact]
 	public void HiddenLaunch_IncludesNoWindow()
 	{
@@ -503,9 +619,13 @@ public sealed class AndroidEmulatorBackendTests
 	}
 
 	private sealed class RecordingProcessRunner(
-		Func<ProcessRequest, CancellationToken, ProcessResult> run) : IProcessRunner
+		Func<ProcessRequest, CancellationToken, ProcessResult> run,
+		Func<ProcessStartInfo, Process>? start = null) : IProcessRunner
 	{
 		public List<(ProcessRequest Request, CancellationToken Token)> Calls { get; } = [];
+
+		public Process Start(ProcessStartInfo startInfo) =>
+			start?.Invoke(startInfo) ?? throw new InvalidOperationException("Unexpected process launch.");
 
 		public Task<ProcessResult> RunAsync(
 			ProcessRequest request,

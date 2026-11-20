@@ -192,8 +192,7 @@ internal sealed class IdbCompanionSession : IAsyncDisposable
 				startInfo.ArgumentList.Add(argument);
 			}
 
-			process = Process.Start(startInfo)
-				?? throw new InvalidOperationException("Failed to start idb_companion.");
+			process = processRunner.Start(startInfo);
 			process.OutputDataReceived += (_, _) => { };
 			process.ErrorDataReceived += (_, eventArgs) =>
 			{

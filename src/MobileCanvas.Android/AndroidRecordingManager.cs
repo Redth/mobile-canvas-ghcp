@@ -33,8 +33,8 @@ internal sealed class AndroidRecordingManager : IAsyncDisposable
 	private readonly ConcurrentDictionary<string, SemaphoreSlim> _startGates =
 		new(StringComparer.OrdinalIgnoreCase);
 
-	public AndroidRecordingManager(AndroidEmulatorBackend backend, ILogger logger)
-		: this(new AndroidRecordingPlatform(backend), logger)
+	public AndroidRecordingManager(AndroidEmulatorBackend backend, IProcessRunner processRunner, ILogger logger)
+		: this(new AndroidRecordingPlatform(backend, processRunner), logger)
 	{
 	}
 
@@ -425,7 +425,8 @@ internal interface IAndroidRecordingPlatform
 		CancellationToken cancellationToken);
 }
 
-internal sealed class AndroidRecordingPlatform(AndroidEmulatorBackend backend) : IAndroidRecordingPlatform
+internal sealed class AndroidRecordingPlatform(
+	AndroidEmulatorBackend backend, IProcessRunner processRunner) : IAndroidRecordingPlatform
 {
 	public Task<string> RequireSerialAsync(string deviceId, CancellationToken cancellationToken) =>
 		backend.RequireSerialAsync(deviceId, cancellationToken);
@@ -466,9 +467,7 @@ internal sealed class AndroidRecordingPlatform(AndroidEmulatorBackend backend) :
 		foreach (var argument in arguments)
 			startInfo.ArgumentList.Add(argument);
 
-		return new SystemRecordingProcess(
-			Process.Start(startInfo)
-				?? throw new InvalidOperationException("Failed to start screenrecord."));
+		return new SystemRecordingProcess(processRunner.Start(startInfo));
 	}
 
 	public Task<string?> RunAdbAsync(

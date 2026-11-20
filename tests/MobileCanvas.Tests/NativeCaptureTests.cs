@@ -1,5 +1,6 @@
 using System.Diagnostics;
 using MobileCanvas.Contracts;
+using MobileCanvas.Core;
 using MobileCanvas.iOS;
 
 namespace MobileCanvas.Tests;
@@ -85,6 +86,7 @@ public class NativeCaptureTests
 		startInfo.ArgumentList.Add(
 			$"head -c {bytesBeforeReady} /dev/zero; echo '{{\"type\":\"ready\",\"fps\":60}}' >&2; sleep 30");
 		var releases = 0;
+		var runner = new CaptureProcessRunner();
 
 		var session = await IosScreenCaptureVideoSession.StartProcessAsync(
 			startInfo,
@@ -93,6 +95,7 @@ public class NativeCaptureTests
 			"framebuffer",
 			sourceDetail: null,
 			() => releases++,
+			runner,
 			CancellationToken.None,
 			TimeSpan.FromSeconds(5));
 		var received = 0;
@@ -114,6 +117,46 @@ public class NativeCaptureTests
 		Assert.Equal(60, session.Descriptor.FramesPerSecond);
 		Assert.Equal(bytesBeforeReady, received);
 		Assert.Equal(1, releases);
+		Assert.Same(startInfo, runner.StartInfo);
+	}
+
+	[Fact]
+	public async Task CaptureStartup_ReleasesOwnershipWhenInjectedRunnerCannotLaunch()
+	{
+		var failure = new InvalidOperationException("launch refused");
+		var runner = new CaptureProcessRunner(failure);
+		var releases = 0;
+
+		var actual = await Assert.ThrowsAsync<InvalidOperationException>(() =>
+			IosScreenCaptureVideoSession.StartProcessAsync(
+				new ProcessStartInfo("must-not-launch"),
+				new StreamOptions(),
+				new DisplayGeometry(),
+				"framebuffer",
+				null,
+				() => releases++,
+				runner,
+				CancellationToken.None,
+				TimeSpan.FromSeconds(5)));
+
+		Assert.Same(failure, actual);
+		Assert.Equal(1, releases);
+	}
+
+	private sealed class CaptureProcessRunner(Exception? failure = null) : IProcessRunner
+	{
+		public ProcessStartInfo? StartInfo { get; private set; }
+
+		public Process Start(ProcessStartInfo startInfo)
+		{
+			StartInfo = startInfo;
+			if (failure is not null)
+				throw failure;
+			return new SystemProcessRunner().Start(startInfo);
+		}
+
+		public Task<ProcessResult> RunAsync(ProcessRequest request, CancellationToken cancellationToken = default) =>
+			throw new InvalidOperationException("Live capture must not use the text runner.");
 	}
 
 	[Fact]
@@ -137,6 +180,7 @@ public class NativeCaptureTests
 				"framebuffer",
 				sourceDetail: null,
 				() => releases++,
+				new SystemProcessRunner(),
 				CancellationToken.None,
 				TimeSpan.FromSeconds(5)));
 
